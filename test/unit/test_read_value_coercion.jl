@@ -395,7 +395,7 @@ end
   # the shortest rendering of the first fractional value past a million. An implementation built on
   # `parse` fails here, not somewhere quieter.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "a SQLite decimal parser rebuilds the written value, or declines (#648)" begin
+  @testset "a SQLite decimal parser rebuilds the written value, applies its scale and precision, or declines (#648, #1110)" begin
     D = PormG.QueryBuilder.Decimals
     J = PormG.QueryBuilder.JSON
     emit(v) = J.json(PormG.QueryBuilder._json_row(Dict{Symbol, Any}(:v => v)))
@@ -430,15 +430,17 @@ end
     @test parts(p(0)) == (0, 0, 0)
     @test parts(p(-0.0)) == (0, 0, 0)
 
-    # FAIL-OPEN — each of these comes back as the very same value, never a nearby Decimal:
-    @test p(1.0e-5) === 1.0e-5                   # 5 fractional digits in a scale-4 column
+    # #1110 — the declaration is APPLIED, as PostgreSQL applies it: more places than the scale are
+    # rounded away (these used to come back raw), and a value too wide for the precision raises.
+    @test parts(p(1.0e-5)) == (0, 0, 0)          # 5 fractional digits in a scale-4 column: rounds to 0
     # An off-grid arithmetic result. Built by arithmetic on purpose: a literal such as
     # `11.550000000000001` parses to the SAME double as `11.55`, so it would test nothing.
     offgrid = 0.1 + 0.2                          # 0.30000000000000004, not the double 0.3
     @test offgrid !== 0.3
-    @test p(offgrid) === offgrid
-    @test p(123456789012.5) === 123456789012.5   # 12 whole digits where 11 fit
-    @test p(123456789012) === 123456789012       # the same, as an INTEGER
+    @test parts(p(offgrid)) == (0, 3, -1)        # PostgreSQL's `0.3000` for that numeric(15, 4)
+    @test_throws PormG.StatementError p(123456789012.5)   # 12 whole digits where 11 fit
+    @test_throws PormG.StatementError p(123456789012)     # the same, as an INTEGER
+    # FAIL-OPEN — each of these comes back as the very same value, never a nearby Decimal:
     @test p(Inf) === Inf
     @test p(NaN) === NaN
     @test p("12.50") == "12.50"                  # NUMERIC keeps text only when it is not a number

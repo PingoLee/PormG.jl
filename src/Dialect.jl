@@ -4,7 +4,7 @@ using DataFrames
 import Tables
 # #648: `_parse_sqlite_decimal` builds a `Decimals.Decimal` through the three-argument constructor.
 import Decimals
-import Printf   # #1121: `_parse_sqlite_computed_decimal` rounds a double to 15 significant digits
+import Printf   # #1121, #1110: both decimal parsers read a double to 15 significant digits
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL, PormGAbstractType
 # Semantic error taxonomy (#239). Dialect raises three categories:
 #   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String"),
@@ -15,7 +15,10 @@ import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLT
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 #   UnsupportedConnectionError — a MySQL rendering a later phase of #1130 delivers (a cast target).
+# And one it READS: `StatementError` with SQLSTATE 22003, a SQLite value too wide for its declared
+# `numeric(p, s)` (#1110), the error PostgreSQL raises for the same row.
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError, UnsupportedConnectionError
+import PormG: StatementError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
@@ -423,32 +426,43 @@ Fail-open, like every parser in the table: anything that is not a bare `Period` 
 """
 _parse_postgres_interval(v::Any) = v isa Dates.Period ? Dates.CompoundPeriod(v) : v
 
-# Julia's shortest round-trip rendering of a finite `Float64`: always a decimal point (`1.0`, never
-# `1`), an exponent only past Julia's thresholds (`1.23456789e6`, `1.0e-5`). Anything else — `Inf`,
-# `NaN`, a shape a future Julia prints — fails the match and the cell is handed back unchanged.
-const _FLOAT64_SHORTEST = r"^(-?)([0-9]+)\.([0-9]+)(?:e([-+]?[0-9]+))?$"
+# `%.14e`: one digit, the point, fourteen digits — fifteen significant digits, correctly rounded. Both
+# decimal parsers read a double through it. Anything else (`Inf`, `NaN`) fails the match and the cell
+# is handed back unchanged.
+const _FLOAT64_15_DIGITS = r"^(-?)([0-9])\.([0-9]{14})e([-+][0-9]+)$"
 
 """
-    _parse_sqlite_decimal(v, precision, scale) -> Union{Decimals.Decimal, typeof(v)}
+    _parse_sqlite_decimal(v, precision, scale, label = nothing) -> Union{Decimals.Decimal, typeof(v)}
 
-The READ half of a `DecimalField` on SQLite (#648): the `Int64` or `Float64` SQLite's `NUMERIC`
-affinity stored, back to the exact `Decimals.Decimal` that was written — the type LibPQ already
-delivers for a PostgreSQL `numeric`.
+The READ half of a declared `numeric(precision, scale)` on SQLite: a `DecimalField` column (#648),
+and a `Cast` or `output_field` that declares one (#1110). It turns the `Int64` or `Float64` that
+SQLite's `NUMERIC` affinity holds into the `Decimals.Decimal` the declaration means, the type LibPQ
+already delivers for a PostgreSQL `numeric`, and it APPLIES the declaration as PostgreSQL does.
+SQLite reads `NUMERIC(p, s)` as an affinity only, so `CAST(100 AS NUMERIC(2,0))` is `100` there.
 
 Unlike the temporal parsers above, this does not invert slot 1's TEXT. SQLite converted that text to
-a number as it stored it, so this inverts the ENGINE's storage — and it is exact only because the
-column is narrow enough: the caller hands it only a declaration of at most
-`SQLITE_EXACT_DECIMAL_DIGITS` (15) digits, which `field_to_column` enforces. Distinct decimals of 15
-significant digits map to distinct doubles, so the shortest decimal that round-trips to the stored
-double — Julia's `string(::Float64)` — IS the decimal that was written, never a rounding of it.
+a number as it stored it, so this inverts the ENGINE's storage, and it is exact only because the
+declaration is narrow enough: the caller hands it only one of at most `SQLITE_EXACT_DECIMAL_DIGITS`
+(15) digits, which `field_to_column` enforces for a column and the read view for a cast
+(`_unapplied_decimal_width`). Distinct decimals of 15 significant digits map to distinct doubles, so
+the double's value to 15 significant digits IS the decimal SQLite holds for a stored value, and for a
+double SQLite computed it is the decimal PostgreSQL makes of it (`float8` to `numeric` keeps 15).
 
-- an `Integer` (NUMERIC stores a whole value as one) -> `Decimal`
-- a finite `Float64` whose shortest rendering fits `(precision, scale)` -> `Decimal`
-- everything else -> returned **unchanged**: a `String` (NUMERIC keeps text that is not a number),
-  `missing`, `Inf`/`NaN`, and a value that does NOT fit — more fractional digits than `scale` (an
-  off-grid arithmetic result such as `0.1 + 0.2`, i.e. `0.30000000000000004`), or more whole digits than
-  `precision - scale`. Rounding either to fit would be exactly the approximation a parser must never
-  produce, so the raw cell is the honest answer.
+- an `Integer` (NUMERIC stores a whole value as one), or a finite `Float64`, is **rounded to `scale`
+  places**, half away from zero, as PostgreSQL rounds a `numeric` (`1.555` at scale 2 is `1.56`;
+  Django's `quantize` rounds half to even instead). A value PormG's validated writes store already
+  fits, so this moves a value a cast computed, an `update` expression stored, or something else wrote
+  (`0.1 + 0.2` reads as `0.3` at scale 1);
+- a value that, rounded, needs more than `precision - scale` digits before the point raises
+  `StatementError` with `sqlstate = "22003"`, PostgreSQL's "numeric field overflow", on that row
+  (#1110). Its message names `label` (the projection or field) and the declared type, never the value
+  (#971). PostgreSQL raises it when the statement runs, this as the rows are read, so one handler
+  covers both engines;
+- everything else is returned **unchanged**: a `String` (NUMERIC keeps text that is not a number),
+  `missing`, a `Bool`, `Inf`/`NaN`.
+
+The raise is the one exception to the parser table's fail-open contract (`value_parser`): the parser
+recognises the value and refuses it, rather than failing to recognise it.
 
 **Not `parse(Decimal, …)` or `Decimal(::Float64)`.** `Decimals` 0.4.1 — the version every LibPQ
 environment resolves — throws on an exponent whose digits outnumber it (`"1.23456789e6"`, the
@@ -458,7 +472,7 @@ majors share. The result always has `q ≤ 0` (`10` is `Decimal(0, 10, 0)`, not 
 because 0.5 prints a positive exponent as `1E+1`; it is still `==` to LibPQ's normalized value, and
 it renders the same text, which is what `list(:json)` emits.
 """
-function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int)
+function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int, label = nothing)
     v isa Bool && return v
     if v isa Integer
         neg = v < 0
@@ -466,21 +480,41 @@ function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int)
         q = 0
     elseif v isa Float64
         isfinite(v) || return v
-        m = match(_FLOAT64_SHORTEST, string(v))
+        # 15 significant digits, as PostgreSQL turns a double into a `numeric`: the same digits as the
+        # shortest rendering for every value a 15-digit column holds, and the decimal a double SQLite
+        # computed means rather than its binary noise (`815.6949999999999` is `815.695`), so a cast
+        # rounds a tie as PostgreSQL does (#1110).
+        m = match(_FLOAT64_15_DIGITS, Printf.@sprintf("%.14e", v))
         m === nothing && return v
         neg = m[1] == "-"
         c = parse(BigInt, m[2] * m[3])
-        q = -length(m[3]) + (m[4] === nothing ? 0 : parse(Int, m[4]))
+        q = parse(Int, m[4]) - 14
     else
         return v
     end
     # Zero has no sign in `numeric`, and `-0.0` is the one double whose sign is not a digit.
     iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
     c, q = _canonical_coefficient(c, q)
-    # Fits the declaration, or it is not the value that was written.
-    -q <= scale || return v
-    ndigits(c) + q <= precision - scale || return v
+    if -q > scale
+        # Half away from zero on the magnitude: the dropped digits are at least half of the unit.
+        unit = BigInt(10)^(-q - scale)
+        c, dropped = divrem(c, unit)
+        2 * dropped >= unit && (c += 1)
+        iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
+        c, q = _canonical_coefficient(c, -scale)
+    end
+    ndigits(c) + q <= precision - scale || throw(_decimal_overflow_error(precision, scale, label))
     return Decimals.Decimal(neg ? 1 : 0, c, q)
+end
+
+# #1110: what PostgreSQL raises for a value too wide for its `numeric(p, s)` — SQLSTATE 22003, a
+# `StatementError` — built for the row SQLite returned unchecked. Never the value (#971).
+function _decimal_overflow_error(precision::Int, scale::Int, label)
+    where_ = label === nothing ? "a value" : "a value of `$(label)`"
+    return StatementError("SQLite",
+        "numeric field overflow: $(where_) needs more than $(precision - scale) digits before the " *
+        "point, so it does not fit its declared type numeric($(precision), $(scale))";
+        sqlstate = "22003")
 end
 
 # The canonical form of `c × 10^q` both decimal parsers build: no trailing zeros after the point, and
@@ -496,9 +530,6 @@ function _canonical_coefficient(c::BigInt, q::Int)
     end
     return c, q
 end
-
-# `%.14e`: one digit, the point, fourteen digits — fifteen significant digits, correctly rounded.
-const _FLOAT64_15_DIGITS = r"^(-?)([0-9])\.([0-9]{14})e([-+][0-9]+)$"
 
 """
     _parse_sqlite_computed_decimal(v) -> Union{Decimals.Decimal, typeof(v)}

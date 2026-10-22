@@ -2070,6 +2070,63 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A cast that overflows on a row raises 22003 on every engine, on those rows only (#1110)
+# `Cast("driverid", "numeric(2,0)")` holds drivers 1–99 and overflows from 100. PostgreSQL raises
+# "numeric field overflow" (SQLSTATE 22003) when the query runs; SQLite returned 100, 101, … as they
+# were, and now raises the same `StatementError` as it reads the row (`Dialect._parse_sqlite_decimal`).
+# Projected alone, under a CTE and in a `Subquery`, through `list()` and `DataFrame`. The drivers below
+# 100 read the same `Decimal` on both engines, checked against the `driverid` column itself.
+# Expected SQL, PostgreSQL: ("Tb"."driverid")::numeric(2,0); SQLite: CAST("Tb"."driverid" AS NUMERIC(2,0)).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1110: a numeric(p, s) cast that overflows on a row raises 22003 on every engine" begin
+    cast() = Cast("driverid", "numeric(2,0)")
+    overflow(f) = (e = try f(); nothing catch err; err end; e isa PormG.StatementError && e.sqlstate == "22003")
+    alone(lookup) = () -> (q = M.Driver.objects; q.filter(lookup); q.values("driverid", "x" => cast()); q)
+    function cte(lookup)
+        return () -> begin
+            q = M.Driver.objects
+            q.with("g" => M.Driver.objects.values("driverid", "v" => cast()),
+                   join_field = "driverid" => "driverid", join_type = "INNER")
+            q.filter(lookup)
+            q.values("driverid", "x" => "g__v")
+            q
+        end
+    end
+    function sub(lookup)
+        return () -> begin
+            inner = M.Driver.objects
+            inner.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"))
+            inner.values("t" => cast())
+            q = M.Driver.objects
+            q.filter(lookup)
+            q.values("driverid", "x" => PormG.QueryBuilder.Subquery(inner))
+            q
+        end
+    end
+
+    # The issue's query, on the drivers that overflow: both engines raise, whatever the terminal.
+    for (ctx, build) in (("alone", alone), ("cte", cte), ("subquery", sub))
+        @testset "$ctx: driverid >= 100 overflows" begin
+            @test overflow(() -> build("driverid__@gte" => 100)().list())
+            @test overflow(() -> build("driverid__@gte" => 100)() |> DataFrame)
+        end
+    end
+    @test !occursin("100", sprint(showerror, try alone("driverid" => 100)().list() catch e; e end))   # #971
+
+    # The drivers that fit read back the same values on both engines, as `Decimal`s.
+    for (ctx, build) in (("alone", alone), ("subquery", sub))
+        @testset "$ctx: driverid < 100 reads the driverid" begin
+            df = build("driverid__@lt" => 100)() |> DataFrame
+            @test nrow(df) == 99
+            @test all(x -> x isa PormG.QueryBuilder.Decimals.Decimal, df.x)
+            @test all(r -> r.x == r.driverid, eachrow(df))
+            rows = build("driverid__@lt" => 100)().list()
+            @test all(r -> r[:x] isa PormG.QueryBuilder.Decimals.Decimal && r[:x] == r[:driverid], rows)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cast to a single-precision float: refused on SQLite, a Float32 on PostgreSQL (#1215)
 # `real` means the value rounded to a 4-byte float. PostgreSQL computes it and its driver reads it back
 # as a `Float32`; SQLite has no 4-byte float and kept the double (`Float64`), a different type and, for

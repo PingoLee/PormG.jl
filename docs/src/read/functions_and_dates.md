@@ -941,6 +941,7 @@ explicit spelling that builds on every engine. Measured on PostgreSQL 16 and SQL
 | to a number, of a date, a timestamp or a time | an error, since none has a numeric value | builds, and raises when the query runs | **refused**: it casts the stored text and reads its leading digits, the year (`2009-03-29` → `2009`) or a time's hour (`06:00:00` → `6`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
+| to `numeric(p, s)`, of a column or a computed value too large on some rows (`Cast("driverid", "numeric(2,0)")`) | an overflow, on those rows | raises `StatementError` (SQLSTATE `22003`) when the query runs | raises the same `StatementError` as it reads those rows (#1110) |
 | to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) |
 | any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds |
 
@@ -984,10 +985,19 @@ What each row covers:
   which lets a whole operand through (#1040), single precision changes an integer's value (#1258).
   For a float on every engine, cast to a double: `"float8"`, `"float(25)"` to `"float(53)"`,
   `"double precision"` or `FloatField()`, a `Float64` on both;
-- **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).
-  A column or a computed value overflows on the rows that hold a large value and not on the others,
-  so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
-  `Greatest`, `Least` or `Case` with an `output_field`, which is one candidate value among the operands.
+- **an overflow**: only a literal is certain to overflow, so only a literal is refused when the query
+  is built (#1087). A column or a computed value overflows on the rows that hold a large value and
+  not on the others. PostgreSQL raises "numeric field overflow" on such a row when the query runs.
+  SQLite returns the value as it is, so PormG raises the same error as it reads the row (#1110):
+  `StatementError` with `e.sqlstate == "22003"` on both engines, whose message names the projection
+  and the declared type but never the value. The literal of a `Coalesce`, `Greatest`, `Least` or
+  `Case` with an `output_field` is not refused when the query is built, because it is one candidate
+  value among the operands. A row whose value overflows raises like any other. Three limits:
+  - a cast used only in a filter, an `ORDER BY` or a `GROUP BY` is never read back, so SQLite
+    compares the value as it is there;
+  - SQLite checks a declaration of at most 15 digits, the width it stores exactly;
+  - MySQL clamps an overflowing value to the largest one the type holds, with only a warning
+    ([Backends](../backends.md)).
 
 A `Case` with no `output_field` is read branch by branch, each `then` and its default as an operand
 of its own, since its value on a row is one of them (#1151, #1187):
@@ -1045,10 +1055,14 @@ M.Result.objects.filter("raceid" => 2).values(
 
 A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, a `DecimalField`) reads back
 as a `Decimals.Decimal` on every engine when its operand is a number (#1212). PostgreSQL's driver delivers
-one. SQLite computes a REAL, or an INTEGER when the operand is whole, and PormG builds the `Decimal`
-from it to 15 significant digits, as it does for a computed decimal (see
-[The type of a computed number](index.md#The-type-of-a-computed-number)). The declared scale is not a read parser: on PostgreSQL it
-rounds, and on SQLite a cast that would have to round is refused, as above.
+one, already rounded to the declared scale. SQLite computes a REAL, or an INTEGER when the operand is
+whole, and ignores the declaration, so PormG applies it as it reads the value (#1110): rounded to `s`
+places, half away from zero as PostgreSQL rounds, and refused with `StatementError` (SQLSTATE
+`22003`) when it then needs more than `p - s` digits before the point. A cast with no declared width
+(`"numeric"`, `"decimal"`), or one wider than 15 digits, is read to 15 significant digits instead, as
+a computed decimal is (see
+[The type of a computed number](index.md#The-type-of-a-computed-number)). A cast whose operand has more places than `s` is still refused
+on SQLite when the query is built, as above.
 
 ```julia
 using PormG.Functions: Cast, Round

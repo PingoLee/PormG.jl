@@ -79,6 +79,8 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # #1310: MySQL computes a date as the number its digits spell, so an
                                # operand the walk cannot name is refused beside one there.
                                :_types_temporal_operands,
+                               # #1110: MySQL applies a declared decimal itself (it clamps an overflow).
+                               :_unapplied_decimal_width,
                                # Phase 2c-1: a boolean declaration MySQL has no cast target for.
                                :_normalizes_boolean_cast])
 

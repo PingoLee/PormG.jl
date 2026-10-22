@@ -320,9 +320,12 @@ end
 # while PostgreSQL computed a `numeric` (#1121).
 """
     value_parser(kind, backend) -> Union{Function, Nothing}
+    value_parser(kind, backend, label) -> Union{Function, Nothing}
 
 The function that turns `backend`'s stored text for `kind` back into a Julia value, or `nothing`
-when the backend already delivers a typed value (or the kind is not one this table owns).
+when the backend already delivers a typed value (or the kind is not one this table owns). `label`
+names the projection or field the parser reads; a parser that can raise names it in its message, and
+every other parser ignores it.
 
 Every parser is **fail-open**: handed a value it does not recognise it returns it unchanged. So a
 wrong `kind` degrades to the raw value — exactly what SQLite returned before this table existed. The
@@ -330,6 +333,12 @@ column parsers never approximate. The two computed-number parsers (#1121) conver
 type the call means: a `Decimal` to a `Float64`, a double to a `Decimal` of 15 significant digits. No
 column records their kinds (a width-less `CDecimal`, a `CFloat64`), so they never run on a stored
 value.
+
+**One stated exception (#1110):** SQLite's declared-decimal parser (`CDecimal(p, s)`,
+`Dialect._parse_sqlite_decimal`) applies the declaration SQLite ignored. It rounds to `s` places, and
+a value that then needs more than `p - s` digits before the point raises `StatementError` with
+`sqlstate = "22003"`, the error PostgreSQL raises for that row. It recognises the value and refuses
+it, rather than failing to recognise it.
 """
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
 # #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
@@ -351,18 +360,24 @@ value_parser(::CBool,     ::PormGSQLite) = Dialect._parse_sqlite_bool
 # before that refusal) gets NO parser, so its cells arrive raw, as they always have: declining is the
 # fail-open answer, where parsing would dress a rounded double up as an exact value.
 #
+# #1110: the same width reaches it from a `Cast` or an `output_field` that declares `numeric(p, s)`
+# (`_unapplied_decimal_width`), and it applies the declaration SQLite ignored: it rounds to `s`, and a
+# value too wide for `p` raises `StatementError` (SQLSTATE 22003) on that row, naming `label`.
+#
 # #1121: a WIDTH-LESS decimal is never a column (`max_digits` is an `Int`): it is a computed number
 # that means a decimal — `Sum`/`Avg`/`Abs`/`Round` over a `DecimalField`, decimal arithmetic — which
 # SQLite computes as a REAL or an INTEGER. It reads as a `Decimal`, as PostgreSQL's `numeric` does,
 # through 15 significant digits (`Dialect._parse_sqlite_computed_decimal`, Django's rule). It claims
 # no exactness: the double is what SQLite computed.
-function value_parser(k::CDecimal, ::PormGSQLite)
+function value_parser(k::CDecimal, ::PormGSQLite, label = nothing)
   k.precision === nothing && k.scale === nothing && return Dialect._parse_sqlite_computed_decimal
   (k.precision === nothing || k.scale === nothing) && return nothing
   k.precision > Dialect.SQLITE_EXACT_DECIMAL_DIGITS && return nothing
   p, s = k.precision, k.scale
-  return v -> Dialect._parse_sqlite_decimal(v, p, s)
+  return v -> Dialect._parse_sqlite_decimal(v, p, s, label)
 end
+# Every other parser ignores the label: none of them raises.
+value_parser(k::CanonicalType, backend::PormGBackend, label) = value_parser(k, backend)
 # #1121: a computed number that means a float — `Avg`/`Sqrt`/`Mod` over an integer, any of the
 # `numeric` functions over a float, float arithmetic — reads as a `Float64`, as Django's
 # `convert_value` makes it one by `output_field`. PostgreSQL computes several of them as `numeric`

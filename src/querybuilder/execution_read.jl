@@ -1030,7 +1030,7 @@ end
 function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
   parsers = nothing
   for (name, kind) in built.object.projection_kinds
-    parser = value_parser(kind, connection)
+    parser = value_parser(kind, connection, name)   # #1110: a parser that raises names the projection
     parser === nothing && continue
     parsers === nothing && (parsers = Dict{Symbol,Function}())
     parsers[name] = parser

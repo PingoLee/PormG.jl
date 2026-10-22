@@ -4933,6 +4933,174 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"grid\" AS NUMERIC(10,1)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast int to scale 1 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"grid\" AS NUMERIC(10,1)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast int to numeric(2,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`driverid` AS DECIMAL(2,0)) > ?", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`driverid` AS DECIMAL(2,0)) > ?", params = [("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"driverid\")::numeric(2,0) > \$1", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"driverid\")::numeric(2,0) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"driverid\" AS NUMERIC(2,0)) > ?", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"driverid\" AS NUMERIC(2,0)) > ?", params = [("10.5", "Decimal")]),
+  ("Cast int to numeric(2,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast int to numeric(2,0) | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`driverid` AS DECIMAL(2,0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int to numeric(2,0) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`driverid` AS DECIMAL(2,0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"driverid\")::numeric(2,0) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int to numeric(2,0) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"driverid\")::numeric(2,0) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast int to numeric(2,0) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"driverid\" AS NUMERIC(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int to numeric(2,0) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"driverid\" AS NUMERIC(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast decimal to numeric(3,2) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS DECIMAL(3,2)) > ?", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS DECIMAL(3,2)) > ?", params = [("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::numeric(3,2) > \$1", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::numeric(3,2) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"points\" AS NUMERIC(3,2)) > ?", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"points\" AS NUMERIC(3,2)) > ?", params = [("10.5", "Decimal")]),
+  ("Cast decimal to numeric(3,2) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS DECIMAL(3,2)) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS DECIMAL(3,2)) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::numeric(3,2) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::numeric(3,2) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast decimal to numeric(3,2) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"points\" AS NUMERIC(3,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast decimal to numeric(3,2) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"points\" AS NUMERIC(3,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast float to numeric(3,1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS DECIMAL(3,1)) > ?", params = [("10", "Int64")]),
+  ("Cast float to numeric(3,1) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS DECIMAL(3,1)) > ?", params = [("\"10.5\"", "String")]),
+  ("Cast float to numeric(3,1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::numeric(3,1) > \$1", params = [("10", "Int64")]),
+  ("Cast float to numeric(3,1) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::numeric(3,1) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast float to numeric(3,1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast float to numeric(3,1) | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Cast float to numeric(3,1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast float to numeric(3,1) | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast float to numeric(3,1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS DECIMAL(3,1)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast float to numeric(3,1) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS DECIMAL(3,1)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast float to numeric(3,1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::numeric(3,1) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast float to numeric(3,1) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::numeric(3,1) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST((`Tb`.`grid` * ?) AS DECIMAL(2,0)) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST((`Tb`.`grid` * ?) AS DECIMAL(2,0)) > ?", params = [("10", "Int64"), ("10", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\" * \$2::bigint))::numeric(2,0) > \$3", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\" * \$2::bigint))::numeric(2,0) > \$3", params = [("10", "Int64"), ("10", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST((\"Tb\".\"grid\" * ?) AS NUMERIC(2,0)) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST((\"Tb\".\"grid\" * ?) AS NUMERIC(2,0)) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10.5", "Decimal")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((`R2`.`grid` * ?) AS DECIMAL(2,0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((`R2`.`grid` * ?) AS DECIMAL(2,0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\" * \$3::bigint))::numeric(2,0) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\" * \$3::bigint))::numeric(2,0) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((\"R2\".\"grid\" * ?) AS NUMERIC(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast F int * 10 to numeric(2,0) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((\"R2\".\"grid\" * ?) AS NUMERIC(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(`Tb`.`points`, ?) AS DECIMAL(4,2)) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(`Tb`.`points`, ?) AS DECIMAL(4,2)) > ?", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"points\", \$2::bigint))::numeric(4,2) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"points\", \$2::bigint))::numeric(4,2) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(\"Tb\".\"points\", ?) AS NUMERIC(4,2)) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(\"Tb\".\"points\", ?) AS NUMERIC(4,2)) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Decimal")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(`R2`.`points`, ?) AS DECIMAL(4,2)) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(`R2`.`points`, ?) AS DECIMAL(4,2)) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"points\", \$3::bigint))::numeric(4,2) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"points\", \$3::bigint))::numeric(4,2) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce decimal output numeric(4,2) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Cast float float4 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS FLOAT) > ?", params = [("10", "Int64")]),
   ("Cast float float4 | alone", :mysql, "v__@gt", "float 10.5") =>

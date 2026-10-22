@@ -1370,6 +1370,7 @@ _textless_number(::Any, ::SQLInstruction) = nothing
 # the projection reads the whole record through `_read_kind` (#1034 step 3). This view is the binder's
 # and the render's side typing (`_render_side_kind`, kept narrow on purpose, #1034 step 5b).
 _subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+  _reads_unapplied_declaration(p, instruc) ? nothing :   # #1110: a declared width is a numeric read kind
   _without_numeric_read(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 
 # #929 — the formatter of a subquery's one projected column, asked of the INNER instruction while

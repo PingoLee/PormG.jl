@@ -698,9 +698,24 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
   # stands in on the rows that have none: Django gives it its expression's `output_field`. So a stored
   # value reads as its operand's — `Lag("points", default = 0)` keeps the column's decimal width (#648) —
   # and only a computed number reads as what the whole call means, default included (#1121).
-  x isa WindowFunction && haskey(x.kwargs, "default") && _result_rule(x) === :operand &&
-    !_computes_number(x, instruc) && return _read_kind(x.column, instruc)
+  if x isa WindowFunction && haskey(x.kwargs, "default") && _result_rule(x) === :operand &&
+     !_computes_number(x, instruc)
+    k = _read_kind(x.column, instruc)
+    return _unapplied_window_default(x, k, instruc) ? _computed_meaning(k) : k
+  end
   return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+end
+
+# #1110: on an engine whose read path applies a decimal's width (`_unapplied_decimal_width`), a
+# `Lag`/`Lead` default is a value no column holds and no declaration covers: PostgreSQL's
+# `lag(numeric(4,2), 1, 999)` is a plain `numeric` and returns `999`. So a decimal read with a default
+# that is not NULL claims no width there, and the 15-digit parser reads both the column's values (the
+# same `Decimal`s) and the default, which the width would round or refuse.
+function _unapplied_window_default(x::WindowFunction, k, instruc::SQLInstruction)
+  (k isa CDecimal && k.precision !== nothing && instruc.connection !== nothing) || return false
+  _unapplied_decimal_width(instruc.connection) > 0 || return false
+  default = x.kwargs["default"]
+  return !_is_null_literal(default isa SQLText ? default.field : default)
 end
 
 function _literal_read_kind(x)
@@ -726,7 +741,9 @@ end
 function _read_view(k, x, instruc::SQLInstruction)
   if k isa Union{CFloat64,CDecimal} && _computes_number(x, instruc)
     stored = _declared_stored_decimal(x, instruc)
-    return stored === nothing ? _computed_meaning(k) : stored
+    stored === nothing || return stored
+    unapplied = _unapplied_declared_decimal(x, instruc)
+    return unapplied === nothing ? _computed_meaning(k) : unapplied
   end
   if x isa Union{FObject,WindowFunction}
     # #965: a function's boolean is the one its FORMATTER names (`_is_boolean_valued`), as the render's
@@ -758,6 +775,34 @@ function _declared_stored_decimal(x, instruc::SQLInstruction)
     _infer_kind(operand, instruc, _AllKinds()) == k || return nothing
   end
   return k
+end
+
+# #1110: a declared decimal the engine hands back without applying (`_unapplied_decimal_width`) keeps
+# its width, so the read path applies it: `Cast("driverid", "numeric(2,0)")` reads `100` on SQLite,
+# where PostgreSQL raises "numeric field overflow". Its parser rounds to the scale and raises on that
+# row. An engine that applies the declaration itself records the width-less decimal (#1212).
+function _unapplied_declared_decimal(x, instruc::SQLInstruction)
+  (x isa FObject && instruc.connection !== nothing && _declares_decimal(x, instruc)) || return nothing
+  k = _declared_kind(_declared_cast(x), instruc.connection)
+  (k isa CDecimal && k.precision !== nothing && k.scale !== nothing) || return nothing
+  return k.precision <= _unapplied_decimal_width(instruc.connection) ? k : nothing
+end
+
+# Whether `x`'s read kind is such a declaration, and not a value the engine stored at that width
+# (`_declared_stored_decimal`, #1276). A CTE column or a `Subquery` over one keeps the answer its body
+# recorded (`cte["unapplied"]`, `subquery_unapplied`). The plain projection of that column reads the
+# width, but a value composed over it (`Coalesce(CTE("c", "v"), 0)`, `Max(Subquery(…))`) is the
+# computed number the declaration means (#1212), and the comparison binder does not see it.
+_reads_unapplied_declaration(::Any, ::SQLInstruction) = false
+_reads_unapplied_declaration(x::FObject, instruc::SQLInstruction) =
+  _unapplied_declared_decimal(x, instruc) !== nothing && _declared_stored_decimal(x, instruc) === nothing
+_reads_unapplied_declaration(p::SubqueryObject, instruc::SQLInstruction) =
+  instruc.subquery_unapplied !== nothing && haskey(instruc.subquery_unapplied, p)
+function _reads_unapplied_declaration(ref::CTEReference, instruc::SQLInstruction)
+  occursin("__", ref.path) && return false
+  cte = get(instruc.object.ctes, ref.name, nothing)
+  unapplied = cte === nothing ? nothing : get(cte, "unapplied", nothing)
+  return unapplied isa Set{String} && ref.path in unapplied
 end
 
 # The numeric read view (#1121): the kinds the read path records for a computed number.
@@ -817,7 +862,10 @@ end
 # and differs per engine only for a number this view leaves out (`Round` over an integer).
 function _numeric_read_record(x::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction)
   recorded = _recorded_read_kind(x, instruc)
-  return recorded === false ? nothing : _numeric_view(recorded)
+  recorded === false && return nothing
+  # #1110: a declared width the read path applies is still the computed number it declares.
+  _reads_unapplied_declaration(x, instruc) && return _computed_meaning(recorded)
+  return _numeric_view(recorded)
 end
 _numeric_meaning_record(x, instruc::SQLInstruction, ::_MeaningKinds) = _numeric_read_record(x, instruc)
 _numeric_meaning_record(x, ::SQLInstruction, ::Union{_ReadKinds,_AllKinds}) = nothing
@@ -875,6 +923,7 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_K
   kind === nothing || return kind
   body = get(cte, "query", nothing)
   body isa SQLObjectHandler || return nothing
+  _reads_unapplied_declaration(ref, instruc) && return nothing   # #1110: a numeric read kind
   return _without_numeric_read(get(body.object.projection_kinds, Symbol(ref.path), nothing))
 end
 _cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
@@ -892,6 +941,20 @@ function _subquery_projection_kind(handler::SQLObjectHandler, inner::SQLInstruct
   length(vals) == 1 || return nothing
   v = only(vals)
   return _expression_kind(v isa SQLText ? v : v.field, inner)
+end
+# #1110: whether the subquery's one projection reads as a declaration the engine left unapplied,
+# asked of the inner instruction in the same `built` window as its kind.
+function _subquery_projection_unapplied(handler::SQLObjectHandler, inner::SQLInstruction)::Bool
+  vals = handler.object.values
+  length(vals) == 1 || return false
+  v = only(vals)
+  return _reads_unapplied_declaration(v isa SQLText ? v : v.field, inner)
+end
+function _record_subquery_unapplied!(instruc::SQLInstruction, p::SubqueryObject, unapplied::Bool)
+  unapplied || return nothing
+  instruc.subquery_unapplied === nothing && (instruc.subquery_unapplied = IdDict{SubqueryObject,Bool}())
+  instruc.subquery_unapplied[p] = true
+  return nothing
 end
 function _record_subquery_all_kind!(instruc::SQLInstruction, p::SubqueryObject, kind)
   kind isa CanonicalType || return nothing

@@ -69,13 +69,13 @@ import PormG: @pormg_debug
 
 
 # Date Part Wrappers
-function YEAR(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function YEAR(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT(column, Dict{String,Any}("part" => "YEAR"), conn)
 end
-function MONTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function MONTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT(column, Dict{String,Any}("part" => "MONTH"), conn)
 end
-function DAY(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function DAY(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT(column, Dict{String,Any}("part" => "DAY"), conn)
 end
 # #562 — `@date` is the one transform whose two resolution ladders did not merely differ in
@@ -95,7 +95,10 @@ end
 function DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "strftime('%Y-%m-%d', $(column))"
 end
-function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+# MySQL (#1130 phase 2c-3a): `DATE` is a type there, as on PostgreSQL.
+DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@date"); "CAST($(column) AS DATE)")
+function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
 end
 # #571 — the PostgreSQL date-part arms cast to `integer`. `EXTRACT(...)` is `numeric` on
@@ -117,6 +120,11 @@ end
 function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "((strftime('%m', $(column)) - 1) / 4) + 1"
 end
+# MySQL (#1130 phase 2c-3a): its own `QUARTER`, and the quadrimester from `MONTH`, each an INT.
+QUARTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@quarter"); "QUARTER($(column))")
+QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@quadrimester"); "(((MONTH($(column)) - 1) DIV 4) + 1)")
 
 # #527 — the SQL-side image of `DATETIME_FORMAT` (#79, `constants.jl`), for SQLite.
 #
@@ -625,11 +633,28 @@ end
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   format_str = format["format"]
   entry = get(date_format_map, format_str, nothing)
-  if entry === nothing
-    supported = join(sort(collect(keys(date_format_map))), ", ")
-    throw(BackendCapabilityError("ToChar: format \"$(format_str)\" is not supported on SQLite. Supported formats: $(supported)"))
-  end
+  entry === nothing && throw(_tochar_format_refusal("SQLite", format_str))
   return "strftime('$(entry.sqlite)', $(column))"
+end
+_tochar_format_refusal(engine::String, format_str) = BackendCapabilityError("ToChar: format \"$(format_str)\" is not " *
+  "supported on $(engine). Supported formats: $(join(sort(collect(keys(date_format_map))), ", "))")
+# MySQL (#1130 phase 2c-3a): only a key renders, through `DATE_FORMAT`, as on SQLite. `%f` is six digits
+# where a key's `.SSS` is three, so such a key keeps its output's first `length(key)` characters (a
+# key is as long as its text): the operand renders once, so a bound one stays in step. A duration is a
+# count of microseconds on MySQL, which `DATE_FORMAT` would read as no date at all: refused, naming
+# `Cast(x, "text")`, which reads its `HH:MM:SS` text (phase 2b).
+function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL)
+  format_str = format["format"]
+  get(format, "temporal_kind", nothing) === :interval && throw(QueryBuildError(
+    "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: " *
+    "use Cast(x, \"text\") for its HH:MM:SS text."))
+  entry = get(date_format_map, format_str, nothing)
+  entry === nothing && throw(_tochar_format_refusal("MySQL", format_str))
+  # A date key over a time reads today's date there (`DATE_FORMAT(TIME '10:00', '%Y')`); its time keys
+  # are the time's own.
+  any(c -> occursin(c, entry.mysql), ("%Y", "%m", "%d")) && _refuse_date_of_time(format, "ToChar(…, \"$(format_str)\")")
+  sql = "DATE_FORMAT($(column), '$(entry.mysql)')"
+  return Base.endswith(format_str, ".SSS") ? "LEFT($(sql), $(length(format_str)))" : sql
 end
 
 # #1147 step 2 — `bigint` (set by the build from `_sums_bigint`): PostgreSQL's `sum(bigint)` is a
@@ -1252,11 +1277,63 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   elseif up in ("WEEK", "ISOYEAR", "ISODOW")
     return _sqlite_iso_week_part(up, column)
   else
-    throw(BackendCapabilityError("Unsupported extract part for SQLite: $part"))
+    throw(_extract_part_refusal("SQLite", part))
   end
 
   return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
 end
+
+# An `Extract` part an engine does not compute: a feature it has only in part (an `Extract` part, a
+# `ToChar` format), so no table row. One builder for the engines that refuse one.
+_extract_part_refusal(engine::String, part) = BackendCapabilityError("Unsupported extract part for $(engine): $part")
+
+# MySQL (#1130 phase 2c-3a): each part with MySQL's own date functions, to PostgreSQL's meaning, and
+# each rendering its operand once (so a bound operand's markers stay in step). Measured on 8.4:
+# - YEAR … SECOND are `EXTRACT`, an INT; SECOND truncates (`04.125` → 4), as PostgreSQL's `trunc` does;
+# - the ISO and week parts match Julia's `Dates` on every day 1999-12-20 … 2031-01-10: `WEEK(x, 3)` is
+#   the ISO week, `YEARWEEK(x, 3) DIV 100` its year, `WEEKDAY` counts from Monday = 0 and `DAYOFWEEK`
+#   from Sunday = 1;
+# - MICROSECONDS and MILLISECONDS include the seconds, as PostgreSQL's do: `SECOND_MICROSECOND` is
+#   `SSffffff` as one number (`04.125` → 4125000);
+# - EPOCH is `TIMESTAMPDIFF` from 1970, a DECIMAL exact to the microsecond before 1970 too, where
+#   `UNIX_TIMESTAMP` answers 0; over a `DurationField` (its microseconds, #1130) it is the count over
+#   10^6. Over a time it has no one-evaluation spelling (`TIMESTAMPDIFF` reads a bound TIME as another
+#   value), so a time, or an operand the build cannot type (`temporal_kind`), is refused here.
+# - a date part of a TIME is read from TODAY's date there (`EXTRACT(YEAR FROM TIME '10:00')` is this
+#   year, `DAYOFWEEK` today's), a value that changes every day where PostgreSQL refuses a time's date
+#   part: refused on MySQL. A column is refused earlier, by its field (#1070); this is an expression.
+# CENTURY, DECADE, MILLENNIUM, JULIAN and TIMEZONE* are refused, as SQLite's gaps are: a UTC DATETIME
+# has no zone, and the others would be arithmetic PormG invents.
+const _MYSQL_EXTRACT_NATIVE = Dict(
+  "YEAR" => "EXTRACT(YEAR FROM %s)", "MONTH" => "EXTRACT(MONTH FROM %s)", "DAY" => "EXTRACT(DAY FROM %s)",
+  "HOUR" => "EXTRACT(HOUR FROM %s)", "MINUTE" => "EXTRACT(MINUTE FROM %s)", "SECOND" => "EXTRACT(SECOND FROM %s)",
+  "QUARTER" => "QUARTER(%s)", "DOW" => "(DAYOFWEEK(%s) - 1)", "ISODOW" => "(WEEKDAY(%s) + 1)",
+  "DOY" => "DAYOFYEAR(%s)", "WEEK" => "WEEK(%s, 3)", "ISOYEAR" => "(YEARWEEK(%s, 3) DIV 100)",
+  # A DECIMAL, as PostgreSQL's `numeric` reads back as a `Decimal`.
+  "MICROSECONDS" => "CAST(EXTRACT(SECOND_MICROSECOND FROM %s) AS DECIMAL(65,0))",
+  "MILLISECONDS" => "(EXTRACT(SECOND_MICROSECOND FROM %s) / 1000)",
+)
+const _MYSQL_CALENDAR_PARTS = ("YEAR", "MONTH", "DAY", "QUARTER", "DOW", "ISODOW", "DOY", "WEEK", "ISOYEAR")
+function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
+  part = format["part"]
+  up = extract_part(part)
+  kind = get(format, "temporal_kind", nothing)
+  kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
+  template = get(_MYSQL_EXTRACT_NATIVE, up, nothing)
+  template === nothing || return replace(template, "%s" => column)
+  if up == "EPOCH"
+    kind in (:date, :datetime) && return "(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', $(column)) / 1000000)"
+    kind === :interval && return "($(column) / 1000000)"
+    kind === :time && throw(_extract_part_refusal("MySQL", "$(part) of a time"))
+    throw(_extract_part_refusal("MySQL", "$(part) of a value PormG cannot type (cast it: Cast(x, \"timestamp\"))"))
+  end
+  throw(_extract_part_refusal("MySQL", part))
+end
+# A date read from a TIME, which MySQL answers from today's date (see above).
+_mysql_date_of_time_refusal(label::String) = QueryBuildError(
+  "$(label) over a time is not supported on MySQL, which reads a time's date as today's: a time has no date.")
+_refuse_date_of_time(format::Dict{String,Any}, label::String) =
+  get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
 
 # #636 — the ISO-8601 parts on SQLite, numbered exactly as PostgreSQL's `WEEK`, `ISOYEAR` and
 # `ISODOW` are. SQLite's own `%W` is NOT the ISO week (it counts Monday-started weeks from the first
@@ -1287,6 +1364,9 @@ end
 function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "(CAST(strftime('%w', $(column)) AS INTEGER) + 1)"
 end
+# MySQL's `DAYOFWEEK` is already Django's numbering, 1 = Sunday.
+WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@week_day"); "DAYOFWEEK($(column))")
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""

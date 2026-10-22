@@ -13,7 +13,8 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs,
+    Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -296,12 +297,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `Abs` (phase 2c-2) and `create` (phase 3) fail before a statement is sent.
+        # SQL: none — `Extract` (phase 2c-3) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
             # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Result.objects.values("a" => Abs("grid")).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.Dialect.ABS
+            e = try; M.Race.objects.values("a" => Extract("date", "year")).list(); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.Dialect.EXTRACT
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
@@ -523,6 +524,63 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # A duration beside a number would read the duration as its count: refused before any SQL.
             e = try; M.Result.objects.values("c" => Coalesce("fastestlaptime", 0)).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("over an interval and a value of another type", msg(e))
+        end
+
+        # What: the math functions answer as Julia does over the same rows, each read as the type its call
+        #       means: a float over a float, a `Decimal` over a decimal, an integer kept by `Abs`/`Round`.
+        # SQL: `ROUND(CAST((`Tb`.`points` / ?) AS DECIMAL(65,30)), ?)` over a float; `ROUND(x, ?)` over a
+        #      DECIMAL and `ROUND(`Tb`.`laps`, ?)` with a negative precision; `FLOOR`/`CEIL`/`SQRT`/`POWER`/
+        #      `MOD`/`EXP`/`LN`/`ABS` bare.
+        # Why: MySQL rounds a DOUBLE half to even (`ROUND(2.5E0)` is 2), computes `Sqrt` over a decimal as a
+        #      DOUBLE and `Floor` over one as a BIGINT; `Round` means half away from zero, and each reads as
+        #      its call's type on every engine (#1121; #1130 phase 2c-2). `points / 4` holds the ties 1.5,
+        #      2.25 and 2.5 in these rows.
+        @testset "math functions answer as their meaning (phase 2c-2)" begin
+            base = Dict(r[:resultid] => r for r in M.Result.objects.values("resultid", "grid", "points", "laps").list())
+            away(x, d = 0) = round(x, RoundNearestTiesAway; digits = d)
+            q = F("points") / 4
+            dq = Cast(F("points") / 4, "numeric(10,2)")
+            rows = M.Result.objects.values("resultid",
+                "r0" => Round(q), "r1" => Round(q, 1), "rn" => Round(q * -1), "rg" => Round("laps", -1),
+                "rd" => Round(dq, 1), "fd" => Floor(dq), "cd" => Ceil(dq), "sd" => Sqrt(dq), "pd" => Power(dq, 2),
+                "a" => Abs(F("grid") * -1), "f" => Floor(q), "c" => Ceil(q), "s" => Sqrt("grid"), "p" => Power("grid", 2),
+                "m" => Mod("laps", 7), "e" => Exp("grid"), "l" => Ln("laps")).order_by("resultid").list()
+            @test length(rows) == 7
+            @test sort(unique(base[id][:points] / 4 for id in keys(base))) == [0.0, 1.0, 1.5, 2.25, 2.5]
+            for r in rows
+                b = base[r[:resultid]]
+                x = b[:points] / 4
+                @test (r[:resultid], r[:r0], r[:r1], r[:rn]) == (r[:resultid], away(x), away(x, 1), away(-x))
+                @test r[:r0] isa Float64 && r[:r1] isa Float64
+                @test r[:rg] == Int(away(b[:laps], -1)) && r[:rg] isa Integer
+                @test r[:rd] isa Decimal && Float64(r[:rd]) == away(x, 1)
+                @test r[:fd] isa Decimal && Float64(r[:fd]) == floor(x) && r[:cd] isa Decimal && Float64(r[:cd]) == ceil(x)
+                @test r[:sd] isa Decimal && isapprox(Float64(r[:sd]), sqrt(x); rtol = 1e-14)
+                @test r[:pd] isa Decimal && Float64(r[:pd]) == x^2
+                @test r[:a] == b[:grid] && r[:a] isa Integer
+                @test r[:f] === floor(x) && r[:c] === ceil(x)
+                @test r[:s] isa Float64 && isapprox(r[:s], sqrt(b[:grid]); rtol = 1e-15)
+                @test r[:p] === Float64(b[:grid])^2 && r[:m] === Float64(rem(b[:laps], 7))
+                @test isapprox(r[:e], exp(b[:grid]); rtol = 1e-15) && isapprox(r[:l], log(b[:laps]); rtol = 1e-15)
+            end
+            # Literal ties, half away from zero; the last one rounds the double's shortest digits.
+            one = only(M.Result.objects.filter("resultid" => 1).values("a" => Round(Value(2.5)), "b" => Round(Value(-2.5)),
+                "c" => Round(Value(1.25), 1), "d" => Round(Value(2.675), 2), "e" => Round(Value(125), -1)).list())
+            @test (one[:a], one[:b], one[:c], one[:d], one[:e]) === (3.0, -3.0, 1.3, 2.68, 130)
+            # A rounded float orders as the number it is.
+            ordered = M.Result.objects.values("resultid", "v" => Round(q, 1)).order_by("v", "resultid").list()
+            @test issorted([r[:v] for r in ordered])
+            # No value, as on SQLite: the square root of a negative number, the logarithm of 0, a remainder by 0.
+            nul = only(M.Result.objects.filter("resultid" => 1).values("s" => Sqrt(Value(-1.0)), "l" => Ln(Value(0)),
+                "m" => Mod("laps", 0)).list())
+            @test nul[:s] === missing && nul[:l] === missing && nul[:m] === missing
+            # An overflow is an error, as on PostgreSQL.
+            e = try; M.Result.objects.filter("resultid" => 1).values("e" => Exp(Value(1000))).list(); nothing; catch err; err; end
+            @test e isa PormG.PormGError
+            # `Abs` over a date difference: the day count, as Julia counts it.
+            days = M.Result.objects.values("resultid", "raceid__date", "driverid__dob",
+                "v" => Abs(F("driverid__dob") - F("raceid__date"))).order_by("resultid").list()
+            @test length(days) == 7 && all(r -> r[:v] == abs(Dates.value(r[:driverid__dob] - r[:raceid__date])), days)
         end
     finally
         for t in _MYR_TABLES

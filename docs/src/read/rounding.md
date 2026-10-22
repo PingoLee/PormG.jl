@@ -75,19 +75,21 @@ M.Result.objects.filter("raceid" => 2).values("avg_grid" => Avg("grid")).list()
 a `Decimal` over a `DecimalField`, a `Float64` over a float, and an integer over an integer.
 
 `Round(x, d)` rounds half away from zero. PostgreSQL rounds a `numeric` (a float becomes one at 15
-significant digits first), and SQLite rounds the stored double. The two agree except at a decimal tie
-whose double lies just below it (#1061):
+significant digits first), and SQLite rounds the stored double. MySQL rounds a double half to even
+(its `ROUND(2.5E0)` is `2`), so PormG rounds a float there as a `DECIMAL(65,30)`, half away from zero,
+from the double's shortest digits (#1130). The engines agree except at a decimal tie whose double
+lies just below it (#1061):
 
-| `Round(Value(v), 2)` | PostgreSQL | SQLite |
-|---|---|---|
-| `2.675` | `2.68` | `2.67` |
-| `1.555` | `1.56` | `1.55` |
+| `Round(Value(v), 2)` | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|
+| `2.675` | `2.68` | `2.67` | `2.68` |
+| `1.555` | `1.56` | `1.55` | `1.56` |
 
 A test that pins a rounded tie is therefore engine-specific. `Round(x)`, to a whole number, gives the
-same value on both engines. A text operand is refused on every engine, because the query does not
+same value on every engine. A text operand is refused on every engine, because the query does not
 say what it means: it raises `QueryBuildError`. A negative `d` rounds to tens, hundreds, … where the
-engine has it (`Round(125, -1)` is `130` on PostgreSQL), and raises `BackendCapabilityError` on SQLite,
-whose `ROUND` has no negative precision.
+engine has it (`Round(125, -1)` is `130` on PostgreSQL and MySQL), and raises `BackendCapabilityError`
+on SQLite, whose `ROUND` has no negative precision.
 
 Division keeps the type of its operands, so an integer divided by an integer is an integer quotient
 on both engines (#1147, #1196). Divide by a float to keep the fraction:
@@ -228,4 +230,5 @@ UUID or a date, is refused into every number field on every engine
 | Django | PostgreSQL's column rounds on write. On SQLite, a converter quantizes a decimal column on read. `DecimalValidator` refuses extra places only in `full_clean()`, not on `save()` |
 | **PormG** | **refuses on the engine that would not honor it**, refuses a value with extra places on every write, refuses an expression `update` writes with extra places on that engine (#1279), and names the explicit spelling |
 
-MySQL (#1130) is in progress, and no query renders there yet. Its rows join these rules as it lands.
+MySQL (#1130) is in progress. `Round` follows the rules above there; the other rows join them as
+its phases land.

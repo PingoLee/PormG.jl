@@ -650,7 +650,7 @@ query = M.Driver.objects
 query.values(
     "driverid",
     "squared" => Power("driverid", 2),
-    "rounded" => Round(Value(10.556)),        # 11 on both engines
+    "rounded" => Round(Value(10.556)),        # 11 on every engine
     "abs_val" => Abs("number")
 )
 query.filter("driverid" => 1)
@@ -666,6 +666,14 @@ value reads back as the operand's type on both engines: a `Float64` over a float
 decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
 [The type of a computed number](index.md#The-type-of-a-computed-number).
 
+On MySQL (#1130) each is MySQL's own function, and over an integer it keeps it. Over a decimal MySQL
+computes `Sqrt`, `Exp`, `Ln` and `Power` as a double and `Floor`/`Ceil` as a `BIGINT`; each reads
+back as the `Decimal` it means, through 15 significant digits for the double ones, as on SQLite.
+
+A value with no answer is an engine's own: `Sqrt` of a negative number, `Ln` of 0 and `Mod(x, 0)`
+raise on PostgreSQL and read as `missing` on SQLite and MySQL. An `Exp` or `Power` too large for a
+double raises on PostgreSQL and MySQL and reads as `Inf` on SQLite.
+
 ### Rounding to decimal places
 
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders
@@ -673,15 +681,24 @@ decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
 the stored double. Either way the result reads back as its operand's type on both engines: a
 `DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). Over an integer the places add
 nothing, so `Round("grid")` and `Round("grid", 2)` are that integer on both engines, and
-`Round("grid") / 2` divides as integers, as `Floor("grid") / 2` does (#1196). The two engines agree except at a decimal tie
-whose double sits just below it. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
+`Round("grid") / 2` divides as integers, as `Floor("grid") / 2` does (#1196).
 
-| `Round(v, 2)` | PostgreSQL | SQLite |
-|---|---|---|
-| `2.675` | `2.68` | `2.67` |
-| `1.555` | `1.56` | `1.55` |
-| `1.005` | `1.01` | `1.0` |
-| a `numeric(10,3)` `2.675` | `2.68` | `2.67` (SQLite holds a REAL, #648) |
+MySQL rounds a decimal half away from zero but a double half to even (its `ROUND(2.5E0)` is `2`), so
+on MySQL PormG rounds a float as `ROUND(CAST(x AS DECIMAL(65,30)), n)`: half away from zero, the
+rule `Round` means, read back as a `Float64`. The cast takes the double's shortest digits where
+PostgreSQL reads a double at 15 significant digits, so a double that needs more can round the other
+way at a tie: `Round(815.6949999999999, 2)` is `815.69` on MySQL. The cast also clamps a float of
+`1e35` or more to the largest value the type holds.
+
+The engines agree except at a decimal tie whose double sits just below it. Measured on PostgreSQL
+16.15, SQLite 3.45.1 and MySQL 8.4:
+
+| `Round(v, 2)` | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|
+| `2.675` | `2.68` | `2.67` | `2.68` |
+| `1.555` | `1.56` | `1.55` | `1.56` |
+| `1.005` | `1.01` | `1.0` | `1.01` |
+| a `numeric(10,3)` `2.675` | `2.68` | `2.67` (SQLite holds a REAL, #648) | `2.68` |
 
 PostgreSQL's is the exact answer. On SQLite, which PormG supports for development and tests, the last
 digit of such a tie can differ, so a test that pins a rounded tie value is engine-specific (#1061).
@@ -693,7 +710,7 @@ Two cases raise when the query is built:
 
 - **Text** (a text column, a string, a JSON value) raises `QueryBuildError` on every engine: text is
   not a number, so say it holds one. Cast it first: `Round(Cast(x, FloatField()), n)`.
-- **A negative `n`** rounds to tens, hundreds, … on PostgreSQL (`Round(125, -1)` is `130`). SQLite's
+- **A negative `n`** rounds to tens, hundreds, … on PostgreSQL and MySQL (`Round(125, -1)` is `130`). SQLite's
   `ROUND` has no negative precision (it reads one as 0), so on SQLite it raises
   `BackendCapabilityError` (see [Backend Capabilities](@ref)).
 

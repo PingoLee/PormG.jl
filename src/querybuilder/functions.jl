@@ -1431,7 +1431,10 @@ Each engine rounds with its own `ROUND`, as Django's `Round` does: PostgreSQL re
 `Decimal`), and SQLite `ROUND(x, d)`, which rounds the stored double. The two agree except at a
 decimal tie whose double sits just below it: `Round(2.675, 2)` is `2.68` on PostgreSQL and `2.67` on
 SQLite. PostgreSQL's is the exact answer; on SQLite, a development engine for PormG, the last digit of
-such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both.
+such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both. MySQL
+rounds a double half to even, so there a float is rounded as `ROUND(CAST(x AS DECIMAL(65,30)), d)`,
+half away from zero from the double's shortest digits (#1130); a float of `1e35` or more is clamped
+by that cast.
 
 The value reads back as its operand's type on both engines (#1121): a `Float64` over a float and a
 `Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`. Over an
@@ -1443,7 +1446,7 @@ Text is not a number to round: `Round(x, d)` with `d ≠ 0` over a text column, 
 value raises `QueryBuildError` when the query is built (on SQLite a negative `d` meets the capability
 error first), because the query does not say the text holds a number. Cast it first: `Round(Cast(x, FloatField()), d)`.
 
-A negative `precision` rounds to tens, hundreds, …: `Round(125, -1)` is `130` on PostgreSQL. SQLite's
+A negative `precision` rounds to tens, hundreds, …: `Round(125, -1)` is `130` on PostgreSQL and MySQL. SQLite's
 `ROUND` has no negative precision (it reads one as 0), so there the query raises
 `BackendCapabilityError` when it is built (#1044, #1167). Over an integer the result stays that
 integer type.

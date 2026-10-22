@@ -1942,7 +1942,8 @@ end
     @test err isa PormG.BackendCapabilityError
     msg = _ccd_msg(err)
     @test occursin("Round(…, $(d))", msg) && occursin("rounding to a negative number of places", msg)
-    @test occursin("which SQLite does not support (supported on PostgreSQL)", msg)
+    # MySQL has the feature too (#1130 phase 2c-2).
+    @test occursin("which SQLite does not support (supported on PostgreSQL, MySQL)", msg)
     @test occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
     @test _ccd_refusal(expr; conn = _CCD_PG) === nothing
     q = (q = CCD.Ccd_driver.objects; q.values("x" => expr); q)

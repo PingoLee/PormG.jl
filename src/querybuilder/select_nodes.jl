@@ -818,6 +818,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
         delete!(deferred_kwargs, "precision")
         resolved_kwargs["precision"] = 0
       end
+    elseif v.function_name == "ROUND" && _expression_kind(v.column, instruc) isa CDecimal
+      # #1130: an engine whose `ROUND` rounds a double half to even (MySQL) rounds only a known decimal
+      # as it is; `Dialect.ROUND` reads this, and the other engines ignore it.
+      resolved_kwargs["decimal_operand"] = true
     end
   end
   # #1150: `NullIf(a, b)` is `a` or NULL, so it has `a`'s type — but PostgreSQL resolves it with `b`

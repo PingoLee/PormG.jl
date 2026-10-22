@@ -916,3 +916,119 @@ end
   @test occursin("THEN CAST(? AS DECIMAL(4,2)) ELSE CAST(? AS DECIMAL(2,1)) END", replace(r[:sql_text], r"\s+" => " "))
   @test r[:parameters] == Any[5, parse(Decimal, "10.25"), parse(Decimal, "5.5")]
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL math: each function is MySQL's own (#1130 phase 2c-2)
+# Measured on 8.4: `ABS`/`FLOOR`/`CEIL`/`ROUND` keep an integer exactly (a `BIGINT` past 2^53 too) and
+# `ROUND` takes a negative precision (`ROUND(125, -1)` is 130). Expected: `ABS(x)`, `FLOOR(x)`, `CEIL(x)`,
+# `SQRT(x)`, `EXP(x)`, `LN(x)`, `POWER(a, ?)`, `MOD(a, ?)` bare; `Round` over an integer `ROUND(x)` with
+# its places dropped, or `ROUND(x, ?)` for a negative precision, which builds on MySQL and stays refused
+# on SQLite (`BackendCapabilityError`).
+# Why: before phase 2c-2 each raised a `MethodError` on MySQL; PostgreSQL's `::numeric` casts would be
+# needless there, since MySQL computes each over an integer as an integer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL math: each function is MySQL's own, an integer kept" begin
+  QB = PormG.QueryBuilder
+  R = _MR_MY.Result
+  proj(build) = (r = _mr_inspect(build()); (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")),
+                                             r[:parameters]))
+  @test proj(() -> R.objects.values("v" => QB.Abs("grid"))) == ("ABS(`Tb`.`grid`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Floor("points"))) == ("FLOOR(`Tb`.`points`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Ceil("grid"))) == ("CEIL(`Tb`.`grid`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Sqrt("grid"))) == ("SQRT(`Tb`.`grid`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Exp("points"))) == ("EXP(`Tb`.`points`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Ln("points"))) == ("LN(`Tb`.`points`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Power("grid", 2))) == ("POWER(`Tb`.`grid`, ?)", Any[2])
+  @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3))) == ("MOD(`Tb`.`grid`, ?)", Any[3])
+  @test proj(() -> R.objects.values("v" => QB.Round("grid", 2))) == ("ROUND(`Tb`.`grid`)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Round("grid", -1))) == ("ROUND(`Tb`.`grid`, ?)", Any[-1])
+  # An integer value that comes from parameters is typed by the function it stands in (`ABS(?)`,
+  # `ABS(COALESCE(?, ?))` and `ABS(CASE WHEN `x` > ? THEN ? ELSE ? END)` are a DOUBLE, `ROUND(?)` a
+  # DECIMAL, measured), so an integer operand is stated as one with `+ 0` (a `BIGINT UNSIGNED` stays
+  # one, where `CAST(? AS SIGNED)` wraps). A bare column, and a float operand, are left as they are.
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(125), -1))) == ("ROUND((? + 0), ?)", Any[125, -1])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-5)))) == ("ABS((? + 0))", Any[-5])
+  @test proj(() -> R.objects.values("v" => QB.Floor(QB.Value(5)))) == ("FLOOR((? + 0))", Any[5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce(QB.Value(-5), QB.Value(1))))) == ("ABS((COALESCE(?, ?) + 0))", Any[-5, 1])
+  @test proj(() -> R.objects.values("v" => QB.Ceil(QB.Greatest(QB.Value(5), QB.Value(6))))) ==
+        ("CEIL((GREATEST(COALESCE(?, ?), COALESCE(?, ?)) + 0))", Any[5, 6, 6, 5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-2.5)))) == ("ABS(?)", Any[-2.5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Case(QB.When("grid__@gt" => 5, then = QB.Value(5)), default = QB.Value(1))))) ==
+        ("ABS((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END + 0))", Any[5, 5, 1])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce("position", 0)))) == ("ABS((COALESCE(`Tb`.`position`, ?) + 0))", Any[0])
+  # `Mod` means a float (Django's `NumericOutputFieldMixin`), and MySQL's `MOD(<int>, <double>)` is a
+  # DOUBLE: never typed an integer, so a quotient keeps its fraction and a `Round` over it is cast.
+  @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3) / 2)) == ("(MOD(`Tb`.`grid`, ?) / ?)", Any[3, 2])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Mod("grid", "points"), 1))) ==
+        ("ROUND(CAST(MOD(`Tb`.`grid`, `Tb`.`points`) AS DECIMAL(65,30)), ?)", Any[1])
+  @test PormG._supports(MrMockMySQL(), :negative_round_precision)
+  e = try; _mr_inspect(_MR_SL.Result.objects.values("v" => QB.Round("grid", -1))); nothing; catch err; err; end
+  @test e isa PormG.BackendCapabilityError
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL Round rounds a DECIMAL, half away from zero (#1130 phase 2c-2)
+# MySQL's `ROUND` rounds a DOUBLE half to even (measured: `ROUND(2.5E0)` is 2, `ROUND(1.25E0, 1)` is 1.2)
+# and a DECIMAL half away from zero (2.5 → 3), which is what `Round` means. Expected: over a float, a
+# float literal or an operand the walk names as a float (`Sqrt`), `ROUND(CAST(x AS DECIMAL(65,30)), ?)`;
+# over a known decimal (a cast, a `Sum` of one, a `Decimal` literal) and an integer, MySQL's `ROUND` as
+# it is; PostgreSQL's and SQLite's renders unchanged.
+# Why: a plain `ROUND` over a float would answer 2 where PostgreSQL and SQLite answer 3.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL Round rounds a DECIMAL, half away from zero" begin
+  QB = PormG.QueryBuilder
+  R = _MR_MY.Result
+  dec() = QB.Cast("grid", "numeric(10,2)")
+  proj(build) = (r = _mr_inspect(build()); (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")),
+                                             r[:parameters]))
+  @test proj(() -> R.objects.values("v" => QB.Round("points", 1))) == ("ROUND(CAST(`Tb`.`points` AS DECIMAL(65,30)), ?)", Any[1])
+  @test proj(() -> R.objects.values("v" => QB.Round("points"))) == ("ROUND(CAST(`Tb`.`points` AS DECIMAL(65,30)), ?)", Any[0])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(2.5)))) == ("ROUND(CAST(? AS DECIMAL(65,30)), ?)", Any[2.5, 0])
+  @test proj(() -> R.objects.values("v" => QB.Round("points", -1))) == ("ROUND(CAST(`Tb`.`points` AS DECIMAL(65,30)), ?)", Any[-1])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Sqrt(dec()), 2))) ==
+        ("ROUND(CAST(SQRT(CAST(`Tb`.`grid` AS DECIMAL(10,2))) AS DECIMAL(65,30)), ?)", Any[2])
+  @test proj(() -> R.objects.values("v" => QB.Round(dec(), 1))) == ("ROUND(CAST(`Tb`.`grid` AS DECIMAL(10,2)), ?)", Any[1])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Sum(dec()), 1))) == ("ROUND(SUM(CAST(`Tb`.`grid` AS DECIMAL(10,2))), ?)", Any[1])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(parse(Decimal, "2.5"))))) ==
+        ("ROUND(CAST(? AS DECIMAL(2,1)), ?)", Any[parse(Decimal, "2.5"), 0])
+  @test occursin("ROUND((\"Tb\".\"points\")::numeric, \$1::integer)",
+                 _mr_inspect(_MR_PG.Result.objects.values("v" => QB.Round("points", 1)))[:sql_text])
+  @test occursin("ROUND(\"Tb\".\"points\", ?)", _mr_inspect(_MR_SL.Result.objects.values("v" => QB.Round("points", 1)))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL math: the type MySQL computes, and the one each read means (#1130 phase 2c-2)
+# Measured on 8.4: `SQRT`/`EXP`/`LN`/`POWER` are a DOUBLE over any operand; `FLOOR`/`CEIL` a BIGINT over
+# an integer and over a decimal; `ABS` keeps an `INT`; `ROUND` of a DECIMAL (cast or not) is a DECIMAL;
+# `MOD` keeps both operands' type, which the first alone cannot name, so it is the float it means.
+# Expected: `_computed_kind` names each, and a width-less decimal
+# (a computed number that means a decimal, #1121) reads through the 15-significant-digit parser, so a
+# DOUBLE `Sqrt` over a decimal and a BIGINT `Floor` over one both read as a `Decimal`; a declared width
+# gets no parser, since MySQL applies it.
+# Why: without the parser `Sqrt(<decimal>)` read back as a `Float64` and `Floor(<decimal>)` as an `Int64`
+# on MySQL only, where PostgreSQL and SQLite read a `Decimal`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL math: computed kinds and the width-less decimal read" begin
+  QB = PormG.QueryBuilder
+  my = MrMockMySQL()
+  ck(fn, rule, k) = QB._computed_kind(Val(fn), rule, k, my)
+  wl = PormG.CDecimal(nothing, nothing)
+  @test ck(:SQRT, :numeric, PormG.CDecimal(10, 2)) == PormG.CFloat64()
+  @test ck(:POWER, :numeric, PormG.CInt32()) == PormG.CFloat64()
+  @test ck(:FLOOR, :promoting, PormG.CInt32()) == PormG.CInt64()
+  @test ck(:FLOOR, :promoting, PormG.CDecimal(10, 2)) == wl
+  @test ck(:CEIL, :promoting, PormG.CFloat64()) == PormG.CFloat64()
+  @test ck(:ABS, :promoting, PormG.CInt32()) == PormG.CInt32()
+  for k in (PormG.CInt32(), PormG.CDecimal(10, 2), PormG.CFloat64())   # `MOD(<int>, <double>)` is a DOUBLE
+    @test (k, ck(:MOD, :numeric, k)) == (k, PormG.CFloat64())
+  end
+  @test ck(:ROUND, :numeric, PormG.CInt64()) == PormG.CInt64()
+  @test ck(:ROUND, :numeric, PormG.CFloat64()) == wl
+  parse_dec = PormG.value_parser(wl, my)
+  @test parse_dec(1.5968719422671311) == parse(Decimal, "1.59687194226713")
+  @test parse_dec(6.5024999999999995) == parse(Decimal, "6.5025")
+  @test parse_dec(-3) == Decimal(1, 3, 0)
+  d = parse(Decimal, "2.55")
+  @test parse_dec(d) === d && parse_dec(missing) === missing
+  @test PormG.value_parser(PormG.CDecimal(10, 2), my) === nothing
+end

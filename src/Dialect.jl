@@ -537,7 +537,8 @@ end
 The read half of a computed number that means a decimal, on SQLite (#1121): `Sum`/`Avg`/`Abs`/`Round`
 over a `DecimalField`, decimal arithmetic. SQLite computes it as a REAL, or as an INTEGER when its
 NUMERIC operands were stored whole; PostgreSQL computes a `numeric`, which the driver delivers as a
-`Decimals.Decimal`. This makes SQLite's answer that type too.
+`Decimals.Decimal`. This makes SQLite's answer that type too. MySQL reads one through it as well
+(#1130): it computes `Sqrt`/`Power` over a decimal as a DOUBLE and `Floor`/`Ceil` as a `BIGINT`.
 
 - an `Integer` -> the `Decimal` of that integer;
 - a finite `Float64` -> its value to **15 significant digits**, as Django's SQLite converter builds a
@@ -1530,6 +1531,41 @@ function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres
 end
 function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "MOD($(columns[1]), $(columns[2]))"
+end
+
+# MySQL (#1130). Each math function is MySQL's own, bare (measured on 8.4). Over an integer `ABS`,
+# `FLOOR`, `CEIL` and `ROUND` keep it exactly (a `BIGINT` past 2^53 too), so `integer_kind` adds
+# no cast, only the `+ 0` that types an operand made of parameters (`_mysql_integer_operand`). `SQRT`/`EXP`/`LN`/`POWER` compute a DOUBLE whatever the operand, and `FLOOR`/`CEIL`
+# a `BIGINT` over a decimal; the read parser turns either into the decimal it means (#1121).
+# `SQRT(-1)`, `LN(0)` and `MOD(x, 0)` are NULL, as on SQLite; an overflowing `EXP`/`POWER` raises.
+ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
+FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
+CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
+# MySQL types a value that comes from parameters by the function it stands in when it prepares the
+# statement, not by the values bound: over integers `ABS(?)`, `ABS(COALESCE(?, ?))`, `FLOOR(GREATEST(…))`
+# and `ABS(CASE WHEN `x` > ? THEN ? ELSE ? END)` are a DOUBLE and `ROUND(?)` a DECIMAL (measured on 8.4).
+# So an integer operand is stated as one by `+ 0`, which keeps it a `BIGINT` (or a `BIGINT UNSIGNED`,
+# where `CAST(? AS SIGNED)` would wrap one past 2^63) and never changes its value; a bare column
+# reference is typed by its column and stays as it is.
+const _MYSQL_COLUMN_REFERENCE = r"^`[^`]+`(\.`[^`]+`)?$"
+_mysql_integer_operand(column::String, format::Dict{String,Any}) =
+  get(format, "integer_kind", nothing) === nothing || occursin(_MYSQL_COLUMN_REFERENCE, column) ? column : "($(column) + 0)"
+SQRT(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "SQRT($(column))"
+EXP(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "EXP($(column))"
+LN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "LN($(column))"
+POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "POWER($(columns[1]), $(columns[2]))"
+MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "MOD($(columns[1]), $(columns[2]))"
+
+# `ROUND` on MySQL rounds a DECIMAL or an integer half away from zero, but a DOUBLE half to even
+# (`ROUND(2.5E0)` is 2, `ROUND(1.25E0, 1)` is 1.2), so anything the build does not know to be a decimal
+# or an integer (`decimal_operand`, `integer_kind`) is rounded as `DECIMAL(65,30)`: half away from
+# zero, as `Round` means and as PostgreSQL's `::numeric` rounds. The cast takes the double's shortest
+# digits (`2.675` → `2.68`), and clamps a value from 1e35 up to the largest it holds.
+function ROUND(column::String, format::Dict{String,Any}, conn::PormGMySQL)
+  precision = get(format, "precision", 0)
+  places = (precision isa AbstractString || precision != 0) ? ", $(precision)" : ""
+  exact = get(format, "integer_kind", nothing) !== nothing || get(format, "decimal_operand", false) === true
+  return exact ? "ROUND($(_mysql_integer_operand(column, format))$(places))" : "ROUND(CAST($(column) AS DECIMAL(65,30))$(places))"
 end
 
 function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})

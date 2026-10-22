@@ -401,4 +401,10 @@ value_parser(::CBool, ::PormGMySQL) = Dialect._parse_sqlite_bool
 value_parser(::CInterval, ::PormGMySQL) = Dialect._parse_mysql_interval
 value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : nothing
 value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
+# A computed number that means a decimal (#1121, phase 2c-2): MySQL computes `Sqrt`/`Power`/`Exp`/`Ln`
+# over a decimal as a DOUBLE and `Floor`/`Ceil` over one as a `BIGINT`, so a width-less decimal reads
+# through SQLite's computed-decimal parser (15 significant digits; a `Decimal` passes unchanged). A
+# declared width is MySQL's own to apply (`_unapplied_decimal_width`), so it gets no parser.
+value_parser(k::CDecimal, ::PormGMySQL) =
+  k.precision === nothing && k.scale === nothing ? Dialect._parse_sqlite_computed_decimal : nothing
 value_parser(::CanonicalType, ::PormGBackend) = nothing

@@ -1418,6 +1418,9 @@ end
 _result_rule(::Val{:ABS}) = :promoting
 # #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
 _computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+# #1130: so does MySQL's `ABS` over a column (an `INT` stays an `INT`, measured on 8.4); over another
+# integer expression `Dialect.ABS` adds `+ 0`, a `BIGINT`, which this names as the integer it is.
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = k
 
 """
     Round(column, precision=0)
@@ -1429,9 +1432,12 @@ Each engine rounds with its own `ROUND`, as Django's `Round` does: PostgreSQL re
 `Decimal`), and SQLite `ROUND(x, d)`, which rounds the stored double. The two agree except at a
 decimal tie whose double sits just below it: `Round(2.675, 2)` is `2.68` on PostgreSQL and `2.67` on
 SQLite. PostgreSQL's is the exact answer; on SQLite, a development engine for PormG, the last digit of
-such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both.
+such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both. MySQL
+rounds a double half to even, so there a float is rounded as `ROUND(CAST(x AS DECIMAL(65,30)), d)`,
+half away from zero from the double's shortest digits (#1130); a float of `1e35` or more is clamped
+by that cast.
 
-The value reads back as its operand's type on both engines (#1121): a `Float64` over a float and a
+The value reads back as its operand's type on every engine (#1121): a `Float64` over a float and a
 `Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`. Over an
 integer it is that integer, whatever the places (#1196): PostgreSQL renders `ROUND(x::numeric)` cast
 back to the operand's type and SQLite the integer itself, so it reads back as an integer (its width
@@ -1441,7 +1447,7 @@ Text is not a number to round: `Round(x, d)` with `d ≠ 0` over a text column, 
 value raises `QueryBuildError` when the query is built (on SQLite a negative `d` meets the capability
 error first), because the query does not say the text holds a number. Cast it first: `Round(Cast(x, FloatField()), d)`.
 
-A negative `precision` rounds to tens, hundreds, …: `Round(125, -1)` is `130` on PostgreSQL. SQLite's
+A negative `precision` rounds to tens, hundreds, …: `Round(125, -1)` is `130` on PostgreSQL and MySQL. SQLite's
 `ROUND` has no negative precision (it reads one as 0), so there the query raises
 `BackendCapabilityError` when it is built (#1044, #1167). Over an integer the result stays that
 integer type.
@@ -1460,6 +1466,10 @@ _output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
 # #1196: over an integer `Dialect.ROUND` renders that integer on both engines (`integer_kind`).
 _computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 _computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGSQLite) = _sqlite_number_kind(k)
+# #1130: MySQL's `ROUND` over an integer is a `BIGINT`; over anything else `Dialect.ROUND` rounds a
+# DECIMAL (the operand itself, or cast to one), so it is a decimal whatever the operand.
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Any, ::PormGMySQL) = CDecimal(nothing, nothing)
 
 """
     NullIf(field1, field2)
@@ -1702,6 +1712,9 @@ function Mod(x, y)
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:MOD}) = :numeric
+# #1130: MySQL's `MOD` keeps its operands' type, which `_computed_kind` cannot name from the first
+# operand alone (`MOD(<int>, <double>)` is a DOUBLE). So it takes the `:numeric` arm, a float, as on
+# SQLite: never an integer, which would make `Mod("grid", 3) / 2` divide with `DIV`.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # #31: PostgreSQL full-text search, after `django.contrib.postgres.search`. Four `FObject`s, rendered by

@@ -511,19 +511,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F date + Day(1) | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | alone", :sqlite) =>
@@ -835,19 +835,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs F date - date | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs F date - date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Coalesce F date + Hour(1), date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | alone", :sqlite) =>
@@ -1519,19 +1519,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | alone", :sqlite) =>
@@ -1573,19 +1573,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg decimal | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg decimal | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg decimal | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | alone", :sqlite) =>
@@ -2041,235 +2041,235 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Round float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Round float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Round decimal | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round decimal | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Round decimal | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs decimal | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Mod int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Mod int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Mod int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs bigint | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs bigint | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs bigint | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int places | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int places | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int places | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round bigint | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round bigint | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
   ("Round int / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
   ("Round int / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
   ("Round int / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | alone", :sqlite) =>
@@ -2311,163 +2311,163 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor decimal | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Exp int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Exp int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Exp int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
   ("Ln float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
   ("Ln float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
   ("Ln float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast bool to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | alone", :sqlite) =>
@@ -2545,19 +2545,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Concat float | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | alone", :sqlite) =>
@@ -2689,19 +2689,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor F int + 1 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int + 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int + 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | alone", :sqlite) =>
@@ -2743,19 +2743,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor F int & 3 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int & 3 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int & 3 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int & 3 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | alone", :sqlite) =>
@@ -3031,37 +3031,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor Subquery int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor Subquery int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor Subquery int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor Subquery int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F decimal / 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | alone", :sqlite) =>
@@ -3121,19 +3121,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int numeric / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :sqlite) =>
@@ -3193,37 +3193,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Case float col to scale 0 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case decimal to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case decimal to integer | alone", :sqlite) =>
@@ -3517,127 +3517,127 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast F float * 1.5 numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float output decimal | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float output decimal | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float output decimal | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output decimal | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output decimal | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output decimal | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int float8 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | alone", :sqlite) =>
@@ -3697,37 +3697,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case F float * 1.5 output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
   ("Case decimal output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
   ("Case decimal output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
   ("Case decimal output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case float literal output integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case float literal output integer | alone", :sqlite) =>
@@ -3859,325 +3859,325 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce F float * 1.5 output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
   ("Least float int output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
   ("Least float int output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
   ("Least float int output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case Floor output integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round scale 2 to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round scale 2 to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round scale 2 to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(3, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(3, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(3, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(3,1)\") of the FloatField `points` means the value rounded to the scale of numeric(3,1); SQLite computes"),
   ("Cast float to numeric(3,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(3,1)\") of the FloatField `points` means the value rounded to the scale of numeric(3,1); SQLite computes"),
   ("Cast float to numeric(3,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast float to numeric(3,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(3,1)\") of the FloatField `points` means the value rounded to the scale of numeric(3,1); SQLite computes"),
   ("Cast float to numeric(3,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(4, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Cast float float4 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | alone", :sqlite) =>
@@ -4291,139 +4291,139 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
   ("Case F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 1 col to scale 2 | subquery", :sqlite) =>
@@ -4435,13 +4435,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE scale 3 col to scale 2 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
   ("Cast CTE scale 3 col to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
   ("Cast CTE scale 3 col to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 3 col to scale 2 | subquery", :sqlite) =>
@@ -4453,13 +4453,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 2 | subquery", :sqlite) =>
@@ -4471,13 +4471,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 1 | subquery", :sqlite) =>
@@ -4579,73 +4579,73 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce decimal output numeric(12,4) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(12, 4)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Least decimal output numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | alone", :sqlite) =>
@@ -5015,12 +5015,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=date has no MySQL read parser")],
   ("F bare hop date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
-  ("F decimal * 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("F decimal * 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("F decimal * 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("F date + Day(1) | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("F date + Day(1) | subquery", :mysql) =>
@@ -5129,18 +5123,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("Sum decimal | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Sum decimal | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Sum decimal | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Avg decimal | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Avg decimal | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Avg decimal | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Max hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Max hop date | cte", :mysql) =>
@@ -5165,12 +5147,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=date has no MySQL read parser")],
   ("NullIf date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
-  ("Cast float to scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float to scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float to scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
@@ -5183,30 +5159,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
-  ("F decimal / 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("F decimal / 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("F decimal / 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int numeric / 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int numeric / 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int numeric / 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float col to scale 0 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float col to scale 0 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float col to scale 0 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float literal to scale 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float literal to scale 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Case float literal to scale 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Coalesce date Date(zoned) | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Coalesce date Date(zoned) | subquery", :mysql) =>
@@ -5217,182 +5169,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Coalesce date zoned output date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
-  ("Cast F float * 1.5 numeric | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast F float * 1.5 numeric | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast F float * 1.5 numeric | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float output decimal | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float output decimal | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float output decimal | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output decimal | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output decimal | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output decimal | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case float output decimal | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case float output decimal | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case float output decimal | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Max Cast F float numeric | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Max Cast F float numeric | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Max Cast F float numeric | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Case date output date default text | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Case date output date default text | cte", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Case date output date default text | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest float int output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least float int output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least float int output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least float int output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case int output scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case int output scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case int output scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case decimal output scale 2 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Max decimal to scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Max decimal to scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast Max decimal to scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to scale 1 | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to numeric(2,0) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to numeric(2,0) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int to numeric(2,0) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to numeric(3,2) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to numeric(3,2) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal to numeric(3,2) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float to numeric(3,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float to numeric(3,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float to numeric(3,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast F int * 10 to numeric(2,0) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast F int * 10 to numeric(2,0) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast F int * 10 to numeric(2,0) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(4,2) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(4,2) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(4,2) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float DecimalField(10,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float DecimalField(10,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast float DecimalField(10,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField(10,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField(10,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast int DecimalField(10,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Case F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Coalesce decimal output numeric(10,2) | alone", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Coalesce decimal output numeric(10,2) | cte", :mysql) =>
@@ -5404,30 +5186,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("Coalesce decimal output DecimalField() | cte", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Coalesce decimal output DecimalField() | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(12,4) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(12,4) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric(12,4) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Coalesce decimal output numeric | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest decimal output numeric(12,4) | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest decimal output numeric(12,4) | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Greatest decimal output numeric(12,4) | subquery", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least decimal output numeric | alone", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least decimal output numeric | cte", :mysql) =>
-    [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Least decimal output numeric | subquery", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Subquery Max hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],

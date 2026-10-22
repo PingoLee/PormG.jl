@@ -355,7 +355,8 @@ const postgres_type_map_reverse = Dict{String, String}(
 #
 # The contract: for a fixed instant, every key renders the SAME text on every engine, and that
 # text is what `Dates.format` produces for the matching Julia mask — `HH` is 24-hour on each. MySQL's
-# `DATE_FORMAT` has no three-digit fraction, so `Dialect.EXTRACT_DATE` cuts its `%f` to `.SSS`. The
+# `DATE_FORMAT` has no three-digit fraction, so `Dialect.EXTRACT_DATE` cuts its `%f` to `.SSS`; the
+# MySQL half is measured by the date testset of `test/integration/test_mysql_reads.jl`. The
 # in-engine measurement is `vr_run_tochar_formats` (`test/unit/helper_value_repr_cases.jl`), whose
 # oracle table must name every key here; an entry with an unverified half cannot be added.
 #

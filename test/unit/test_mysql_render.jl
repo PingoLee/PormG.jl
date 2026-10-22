@@ -1061,10 +1061,16 @@ end
   ts() = QB.Cast("date", "timestamp")
   @test proj(() -> RA.objects.values("v" => QB.Extract(ts(), "second"))) == "EXTRACT(SECOND FROM CAST(`Tb`.`date` AS DATETIME(3)))"
   @test proj(() -> RA.objects.values("v" => QB.Extract(ts(), "microseconds"))) ==
-        "EXTRACT(SECOND_MICROSECOND FROM CAST(`Tb`.`date` AS DATETIME(3)))"
+        "CAST(EXTRACT(SECOND_MICROSECOND FROM CAST(`Tb`.`date` AS DATETIME(3))) AS DECIMAL(65,0))"
   @test proj(() -> RA.objects.values("v" => QB.Extract(ts(), "milliseconds"))) ==
         "(EXTRACT(SECOND_MICROSECOND FROM CAST(`Tb`.`date` AS DATETIME(3))) / 1000)"
   @test proj(() -> _MR_MY.Result.objects.values("v" => QB.Extract("fastestlaptime", "epoch"))) == "(`Tb`.`fastestlaptime` / 1000000)"
+  # The operand's kind comes from the type walk, so an expression is spelled by its type too: a
+  # duration expression is its microseconds, and a `Coalesce` of timestamps a timestamp.
+  @test proj(() -> _MR_MY.Result.objects.values("v" => QB.Extract(F("fastestlaptime") * 2, "epoch"))) ==
+        "(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000)"
+  @test proj(() -> RA.objects.values("v" => QB.Extract(QB.Coalesce(ts(), ts()), "epoch"))) ==
+        "(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', COALESCE(CAST(`Tb`.`date` AS DATETIME(3)), CAST(`Tb`.`date` AS DATETIME(3)))) / 1000000)"
   # The transforms: `@week_day` is Django's 1 = Sunday, which MySQL's `DAYOFWEEK` already is.
   @test proj(() -> RA.objects.values("v" => "date__@week_day")) == "DAYOFWEEK(`Tb`.`date`)"
   @test proj(() -> RA.objects.values("v" => "date__@quadrimester")) == "(((MONTH(`Tb`.`date`) - 1) DIV 4) + 1)"
@@ -1077,8 +1083,24 @@ end
   @test occursin("Unsupported extract part for MySQL: century", capability(() -> RA.objects.values("v" => QB.Extract("date", "century"))))
   @test occursin("Unsupported extract part for MySQL: julian", capability(() -> RA.objects.values("v" => QB.Extract("date", "julian"))))
   @test occursin("epoch of a time", capability(() -> RA.objects.values("v" => QB.Extract(QB.Cast("date", "time"), "epoch"))))
-  # The integer a part is: `Floor(Extract(…))` keeps it, and `@year + 1` adds an integer.
-  @test PormG.QueryBuilder._integer_transform_kind(MrMockMySQL()) == PormG.CInt64()
+  @test !occursin("Cast(x", capability(() -> RA.objects.values("v" => QB.Extract(QB.Cast("date", "time"), "epoch"))))
+  # A date part of a time expression reads TODAY's date on MySQL (measured: `EXTRACT(YEAR FROM TIME
+  # '10:00')` is this year): refused there, where PostgreSQL refuses a time's date part too. Its time
+  # parts are the time's own.
+  date_of_time(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                         e isa PormG.QueryBuildError && occursin("over a time is not supported on MySQL", sprint(showerror, e)))
+  tm() = QB.Cast("date", "time")
+  for part in ("year", "dow", "week", "quarter", "doy")
+    @test (part, date_of_time(() -> RA.objects.values("v" => QB.Extract(tm(), part)))) == (part, true)
+  end
+  @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "YYYY-MM-DD")))
+  @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "DD/MM/YYYY")))
+  @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "HH:MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%H:%i')"
+  @test proj(() -> RA.objects.values("v" => QB.Extract(tm(), "hour"))) == "EXTRACT(HOUR FROM CAST(`Tb`.`date` AS TIME(6)))"
+  # A part is an integer, so a quotient over one divides as integers (`DIV`, phase 2b), where an
+  # untyped side would be refused.
+  @test proj(() -> RA.objects.values("v" => F("date__@quarter") / 2)) == "(QUARTER(`Tb`.`date`) DIV ?)"
+  @test proj(() -> RA.objects.values("v" => F("date__@year") / 2)) == "(EXTRACT(YEAR FROM `Tb`.`date`) DIV ?)"
   # PostgreSQL and SQLite render their own, unchanged.
   @test occursin("EXTRACT(EPOCH FROM \"Tb\".\"date\")", _mr_inspect(_MR_PG.Race.objects.values("v" => QB.Extract("date", "epoch")))[:sql_text])
   @test occursin("Unsupported extract part for SQLite: epoch", capability(() -> _MR_SL.Race.objects.values("v" => QB.Extract("date", "epoch"))))
@@ -1103,9 +1125,16 @@ end
   @test tc("YYYY-MM-DD HH:MI:SS") == "DATE_FORMAT(`Tb`.`date`, '%Y-%m-%d %H:%i:%s')"
   @test tc("YYYY-MM-DDTHH:MI:SS.SSS") == "LEFT(DATE_FORMAT(`Tb`.`date`, '%Y-%m-%dT%H:%i:%s.%f'), 23)"
   @test tc("HH:MI:SS.SSS") == "LEFT(DATE_FORMAT(`Tb`.`date`, '%H:%i:%s.%f'), 12)"
-  # Every key has a MySQL spelling, and a `.SSS` key's text is as long as the key.
+  # Every key renders its own spelling, and a `.SSS` key is cut to its own length: the text a key
+  # stands for is exactly as long as the key (`Dates.format` of a fixed instant, the oracle).
+  stamp = DateTime(2009, 3, 29, 6, 5, 4, 125)
+  jmask(k) = replace(k, "YYYY" => "yyyy", "MM" => "mm", "DD" => "dd", "MI" => "MM", ".SSS" => ".sss")
   for (key, entry) in PormG.date_format_map
-    @test (key, isempty(entry.mysql)) == (key, false)
+    sql = tc(key)
+    want = Base.endswith(key, ".SSS") ? "LEFT(DATE_FORMAT(`Tb`.`date`, '$(entry.mysql)'), $(length(key)))" :
+                                        "DATE_FORMAT(`Tb`.`date`, '$(entry.mysql)')"
+    @test (key, sql) == (key, want)
+    @test (key, length(Dates.format(stamp, jmask(key)))) == (key, length(key))
   end
   e = try; _mr_inspect(RA.objects.values("v" => QB.ToChar("date", "Day"))); nothing; catch err; err; end
   @test e isa PormG.BackendCapabilityError && occursin("ToChar: format \"Day\" is not supported on MySQL", sprint(showerror, e))

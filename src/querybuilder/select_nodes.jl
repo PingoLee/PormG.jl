@@ -514,20 +514,20 @@ function _relation_key_field(field::PormGField, instruc::SQLInstruction)
   return nothing
 end
 
-# Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
-# row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,
-# unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
-# untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
-# valid SQL. A relation is checked against the key it holds (#1068); a many-to-many has no column.
 # The temporal kind a date function's operand has, from the type walk (a column, a literal, an
-# expression), for the engines that spell a part by it (`Dialect.EXTRACT` on MySQL); `nothing` when the
-# walk names no date or time.
+# expression), for the engines that spell a part by it (MySQL's date arms in `Dialect`); `nothing` when
+# the walk names no date or time.
 _temporal_hint(::CDate) = :date
 _temporal_hint(::CDateTime) = :datetime
 _temporal_hint(::CTime) = :time
 _temporal_hint(::CInterval) = :interval
 _temporal_hint(::Any) = nothing
 
+# Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
+# row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,
+# unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
+# untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
+# valid SQL. A relation is checked against the key it holds (#1068); a many-to-many has no column.
 function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   found = _temporal_row_of(v)
   found === nothing && return nothing
@@ -834,9 +834,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   end
   # #1130: an engine whose date functions read a duration as no date (MySQL stores it as microseconds)
-  # spells `Extract`'s EPOCH and refuses `ToChar` by the operand's temporal kind; `Dialect.EXTRACT` and
-  # `Dialect.EXTRACT_DATE` read this, and the other engines ignore it.
-  if v isa FObject && v.function_name in ("EXTRACT", "EXTRACT_DATE")
+  # and a time's date as today's spells `Extract`'s EPOCH and refuses what has no meaning by the
+  # operand's temporal kind; MySQL's date arms in `Dialect` read this, and the other engines ignore it.
+  if v isa FObject && v.function_name in ("EXTRACT", "EXTRACT_DATE", "WEEK_DAY", "QUARTER", "QUADRIMESTER", "DATE")
     temporal = _temporal_hint(_expression_kind(v.column, instruc))
     temporal === nothing || (resolved_kwargs["temporal_kind"] = temporal)
   end

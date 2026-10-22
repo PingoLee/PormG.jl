@@ -565,6 +565,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
                 t = utc(races[r[:raceid]][:start_at])
                 @test (r[:h], r[:mi], r[:s]) === (hour(t), minute(t), second(t))
                 @test r[:us] == second(t) * 1_000_000 + millisecond(t) * 1000 && Float64(r[:ms]) == second(t) * 1000 + millisecond(t)
+                @test r[:us] isa Decimal && r[:ms] isa Decimal   # as PostgreSQL's `numeric` reads
                 @test Float64(r[:e]) == Dates.datetime2unix(t)
             end
             @test any(r -> millisecond(utc(races[r[:raceid]][:start_at])) != 0, stamped)   # the fraction is exercised
@@ -598,6 +599,11 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test e isa PormG.BackendCapabilityError && occursin("epoch of a time", msg(e))
             e = try; M.Result.objects.values("v" => ToChar("fastestlaptime", "HH:MI:SS")).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("ToChar over an interval", msg(e))
+            # A time's date would be TODAY's on MySQL: refused; its time keys are the time's own.
+            e = try; M.Race.objects.values("v" => Extract(Cast("start_at", "time"), "year")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("over a time is not supported on MySQL", msg(e))
+            hm = only(M.Race.objects.filter("raceid" => first_stamp).values("v" => ToChar(Cast("start_at", "time"), "HH:MI")).list())[:v]
+            @test hm == Dates.format(t, "HH:MM")
         end
 
         # What: the math functions answer as Julia does over the same rows, each read as the type its call

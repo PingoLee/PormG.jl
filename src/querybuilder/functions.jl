@@ -1039,9 +1039,11 @@ Extracts a component (`"year"`, `"month"`, `"dow"`, …) from a date/time column
 `DOW`, `DOY`, `EPOCH`, `HOUR`, `ISODOW`, `ISOYEAR`, `JULIAN`, `MICROSECONDS`, `MILLENNIUM`,
 `MILLISECONDS`, `MINUTE`, `MONTH`, `QUARTER`, `SECOND`, `TIMEZONE`, `TIMEZONE_HOUR`,
 `TIMEZONE_MINUTE`, `WEEK`, `YEAR`. Anything else — PostgreSQL's synonyms such as `"years"` or
-`"hr"` included — raises `InvalidValueError` when the expression is built, on both engines.
+`"hr"` included — raises `InvalidValueError` when the expression is built, on every engine.
 SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`,
-numbered as PostgreSQL numbers them, and raises `BackendCapabilityError` for the rest.
+numbered as PostgreSQL numbers them, and raises `BackendCapabilityError` for the rest. MySQL runs
+those and `QUARTER`, `EPOCH`, `MILLISECONDS` and `MICROSECONDS` with PostgreSQL's meaning (#1130),
+and raises `BackendCapabilityError` for the rest and for the `EPOCH` of a time.
 
 The part must be one the column holds, checked against the field the column is declared as when
 the query is built, on both engines (#1070). It raises `QueryBuildError` otherwise:
@@ -1249,12 +1251,14 @@ milliseconds render as written). The full list:
 
 !!! warning "Any other format is PostgreSQL-only"
     A format outside that table is passed to `to_char` as written (so a native template such as
-    `"HH12:MI AM"` works on PostgreSQL), and raises `BackendCapabilityError` on SQLite, naming
-    the supported formats — `strftime` cannot spell an arbitrary `to_char` template.
+    `"HH12:MI AM"` works on PostgreSQL), and raises `BackendCapabilityError` on SQLite and MySQL,
+    naming the supported formats — `strftime` and `DATE_FORMAT` cannot spell an arbitrary `to_char`
+    template.
 
 !!! note "Time zone"
     On PostgreSQL `to_char` renders a `timestamptz` in the session time zone; on SQLite the stored
-    text is UTC. Keep the session in UTC for the two engines to agree on the hour.
+    text is UTC, and on MySQL PormG opens the session in UTC. Keep the PostgreSQL session in UTC for
+    the engines to agree on the hour.
 
 ```julia
 using PormG.Functions: ToChar, Count
@@ -1262,7 +1266,7 @@ using PormG.Functions: ToChar, Count
 # Races per month
 query.values("month" => ToChar("date", "YYYY-MM"), "n" => Count("raceid"))
 
-# A race start as the canonical timestamp text, identical on both engines
+# A race start as the canonical timestamp text, identical on every engine
 query.values("start" => ToChar("start_at", "YYYY-MM-DDTHH:MI:SS.SSS"))
 ```
 

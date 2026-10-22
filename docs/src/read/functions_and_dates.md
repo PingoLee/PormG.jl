@@ -1171,7 +1171,8 @@ SQLite — see [PostgreSQL](../postgres.md).
 MySQL also renders `QUARTER`, `EPOCH`, `MILLISECONDS` and `MICROSECONDS`, each with PostgreSQL's
 meaning: the two fractions count the seconds too (`04.125` is `4125` milliseconds), and `EPOCH` is the
 seconds since 1970 as a `Decimal`, exact before 1970 as well. `EPOCH` of a time, or of an expression
-PormG cannot type, raises `BackendCapabilityError` there; cast it to a timestamp first. `CENTURY`,
+PormG cannot type, raises `BackendCapabilityError` there (cast an untyped value to a timestamp first). A
+date part of a time expression raises `QueryBuildError` on MySQL, which reads a time's date as today's. `CENTURY`,
 `DECADE`, `MILLENNIUM`, `JULIAN` and the `TIMEZONE` fields raise `BackendCapabilityError` on MySQL,
 whose timestamps store no zone (#1130).
 

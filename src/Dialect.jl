@@ -96,7 +96,8 @@ function DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "strftime('%Y-%m-%d', $(column))"
 end
 # MySQL (#1130 phase 2c-3a): `DATE` is a type there, as on PostgreSQL.
-DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CAST($(column) AS DATE)"
+DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@date"); "CAST($(column) AS DATE)")
 function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
 end
@@ -120,8 +121,10 @@ function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLit
   return "((strftime('%m', $(column)) - 1) / 4) + 1"
 end
 # MySQL (#1130 phase 2c-3a): its own `QUARTER`, and the quadrimester from `MONTH`, each an INT.
-QUARTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "QUARTER($(column))"
-QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "(((MONTH($(column)) - 1) DIV 4) + 1)"
+QUARTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@quarter"); "QUARTER($(column))")
+QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@quadrimester"); "(((MONTH($(column)) - 1) DIV 4) + 1)")
 
 # #527 — the SQL-side image of `DATETIME_FORMAT` (#79, `constants.jl`), for SQLite.
 #
@@ -647,6 +650,9 @@ function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL
     "use Cast(x, \"text\") for its HH:MM:SS text."))
   entry = get(date_format_map, format_str, nothing)
   entry === nothing && throw(_tochar_format_refusal("MySQL", format_str))
+  # A date key over a time reads today's date there (`DATE_FORMAT(TIME '10:00', '%Y')`); its time keys
+  # are the time's own.
+  any(c -> occursin(c, entry.mysql), ("%Y", "%m", "%d")) && _refuse_date_of_time(format, "ToChar(…, \"$(format_str)\")")
   sql = "DATE_FORMAT($(column), '$(entry.mysql)')"
   return Base.endswith(format_str, ".SSS") ? "LEFT($(sql), $(length(format_str)))" : sql
 end
@@ -1293,6 +1299,9 @@ _extract_part_refusal(engine::String, part) = BackendCapabilityError("Unsupporte
 #   `UNIX_TIMESTAMP` answers 0; over a `DurationField` (its microseconds, #1130) it is the count over
 #   10^6. Over a time it has no one-evaluation spelling (`TIMESTAMPDIFF` reads a bound TIME as another
 #   value), so a time, or an operand the build cannot type (`temporal_kind`), is refused here.
+# - a date part of a TIME is read from TODAY's date there (`EXTRACT(YEAR FROM TIME '10:00')` is this
+#   year, `DAYOFWEEK` today's), a value that changes every day where PostgreSQL refuses a time's date
+#   part: refused on MySQL. A column is refused earlier, by its field (#1070); this is an expression.
 # CENTURY, DECADE, MILLENNIUM, JULIAN and TIMEZONE* are refused, as SQLite's gaps are: a UTC DATETIME
 # has no zone, and the others would be arithmetic PormG invents.
 const _MYSQL_EXTRACT_NATIVE = Dict(
@@ -1300,23 +1309,31 @@ const _MYSQL_EXTRACT_NATIVE = Dict(
   "HOUR" => "EXTRACT(HOUR FROM %s)", "MINUTE" => "EXTRACT(MINUTE FROM %s)", "SECOND" => "EXTRACT(SECOND FROM %s)",
   "QUARTER" => "QUARTER(%s)", "DOW" => "(DAYOFWEEK(%s) - 1)", "ISODOW" => "(WEEKDAY(%s) + 1)",
   "DOY" => "DAYOFYEAR(%s)", "WEEK" => "WEEK(%s, 3)", "ISOYEAR" => "(YEARWEEK(%s, 3) DIV 100)",
-  "MICROSECONDS" => "EXTRACT(SECOND_MICROSECOND FROM %s)",
+  # A DECIMAL, as PostgreSQL's `numeric` reads back as a `Decimal`.
+  "MICROSECONDS" => "CAST(EXTRACT(SECOND_MICROSECOND FROM %s) AS DECIMAL(65,0))",
   "MILLISECONDS" => "(EXTRACT(SECOND_MICROSECOND FROM %s) / 1000)",
 )
+const _MYSQL_CALENDAR_PARTS = ("YEAR", "MONTH", "DAY", "QUARTER", "DOW", "ISODOW", "DOY", "WEEK", "ISOYEAR")
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   part = format["part"]
   up = extract_part(part)
+  kind = get(format, "temporal_kind", nothing)
+  kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
   template = get(_MYSQL_EXTRACT_NATIVE, up, nothing)
   template === nothing || return replace(template, "%s" => column)
   if up == "EPOCH"
-    kind = get(format, "temporal_kind", nothing)
     kind in (:date, :datetime) && return "(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', $(column)) / 1000000)"
     kind === :interval && return "($(column) / 1000000)"
-    throw(_extract_part_refusal("MySQL", "$(part) of a time, or of a value PormG cannot type " *
-                                        "(cast it: Cast(x, \"timestamp\"))"))
+    kind === :time && throw(_extract_part_refusal("MySQL", "$(part) of a time"))
+    throw(_extract_part_refusal("MySQL", "$(part) of a value PormG cannot type (cast it: Cast(x, \"timestamp\"))"))
   end
   throw(_extract_part_refusal("MySQL", part))
 end
+# A date read from a TIME, which MySQL answers from today's date (see above).
+_mysql_date_of_time_refusal(label::String) = QueryBuildError(
+  "$(label) over a time is not supported on MySQL, which reads a time's date as today's: a time has no date.")
+_refuse_date_of_time(format::Dict{String,Any}, label::String) =
+  get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
 
 # #636 — the ISO-8601 parts on SQLite, numbered exactly as PostgreSQL's `WEEK`, `ISOYEAR` and
 # `ISODOW` are. SQLite's own `%W` is NOT the ISO week (it counts Monday-started weeks from the first
@@ -1348,7 +1365,8 @@ function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "(CAST(strftime('%w', $(column)) AS INTEGER) + 1)"
 end
 # MySQL's `DAYOFWEEK` is already Django's numbering, 1 = Sunday.
-WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "DAYOFWEEK($(column))"
+WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  (_refuse_date_of_time(format, "@week_day"); "DAYOFWEEK($(column))")
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""

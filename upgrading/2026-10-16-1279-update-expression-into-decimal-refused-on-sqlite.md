@@ -10,7 +10,8 @@
 A `DecimalField(max_digits = 10, decimal_places = 2)` column is `numeric(10, 2)` on both engines, and
 assigning a value to it means the value rounded to 2 places. PostgreSQL's column rounds it. SQLite's
 column has NUMERIC affinity: it stores the double its arithmetic produced, every digit of it, and the
-read path returns such a cell as a `Float64` rather than a `Decimal`. A later filter then matches
+read path returned such a cell as a `Float64` rather than a `Decimal` (since #1110 it reads the cell
+rounded to the field's scale, but the stored value keeps every digit). A later filter then matches
 different rows on each engine. A literal was already refused on every engine when it had too many
 places (#761); an expression was not checked. Measured through `update` on PostgreSQL 16 and SQLite
 3.54:

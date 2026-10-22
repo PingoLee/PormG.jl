@@ -651,6 +651,15 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
+        # #1110. A cast to `numeric(p, s)` overflowing on a row raises `StatementError` (SQLSTATE
+        # 22003): PostgreSQL's server raises it when the query runs, and on SQLite PormG raises it as
+        # it reads the row. The SQLite raise is the read parser's, so it is driven here directly with
+        # the row's value; `test/integration/test_sql_functions.jl` runs the query on both engines.
+        "read/functions_and_dates.md — a numeric(p, s) cast overflowing on a row raises StatementError on SQLite (#1110)",
+        StatementError,
+        () -> PormG.value_parser(PormG.CDecimal(2, 0), DocErrMockSQLite(), "x")(100),
+    ),
+    (
         # #835. `Concat` renders no cast on either engine, so a non-text `output_field` is refused
         # when the expression is built — before any query or connection exists.
         "read/functions_and_dates.md — a non-text output_field on Concat raises (#835)",

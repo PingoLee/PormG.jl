@@ -7,9 +7,9 @@
 # #800 — the read parser a model FIELD's values need on this connection, or `nothing`. The per-field
 # twin of `_projection_parsers`: a row a write hands back carries no projection record, but its
 # columns are the model's own, so the field says what each one is. `_pg_bulk_returned!` shares it.
-function _field_value_parser(f::PormGField, connection)::Union{Function,Nothing}
+function _field_value_parser(f::PormGField, connection, name)::Union{Function,Nothing}
   kind = _field_read_kind(f)   # #965: a boolean reads as a `Bool` on SQLite too
-  return kind === nothing ? nothing : value_parser(kind, connection)
+  return kind === nothing ? nothing : value_parser(kind, connection, name)   # #1110: a raise names the field
 end
 
 # Build a Dict{Symbol,Any} from a result row, mapping physical column names back to the
@@ -32,7 +32,7 @@ function _row_to_field_keyed_dict(row, model::PormGModel, connection)::Dict{Symb
   for (fname, f) in model.fields
     key = Symbol(fname)
     haskey(dict, key) || continue
-    parser = _field_value_parser(f, connection)
+    parser = _field_value_parser(f, connection, fname)
     parser === nothing || (dict[key] = parser(dict[key]))
   end
   return dict

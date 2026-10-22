@@ -185,6 +185,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Value Representation Table (#564)" include("unit/test_value_repr_table.jl")
     @testset "Read Value Coercion (#564)" include("unit/test_read_value_coercion.jl")
+    @testset "SQLite numeric(p, s) Applied On Read (#1110)" include("unit/test_sqlite_decimal_overflow_1110.jl")
     @testset "Value Representation Property (#564)" include("unit/test_value_repr_property.jl")
     @testset "Migrations applied_at Canonical Form (#570)" include("unit/test_migrations_applied_at.jl")
     @testset "Migration History Writes Bind Values (#846)" include("unit/test_migration_history_binding.jl")

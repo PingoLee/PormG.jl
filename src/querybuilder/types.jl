@@ -224,11 +224,12 @@ const ConnType = Union{_SQLEngine,Nothing}
 # have that same no-kind.
 const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing}}
 # #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3 step
-# 2c: `"divisions"` the division answers of each computed column that has one. Both are per build
+# 2c: `"divisions"` the division answers of each computed column that has one; #1110: `"unapplied"`
+# the columns whose read kind is a declared decimal the engine left unapplied. All are per build
 # (`_build_cte_custom_model`).
 """CTE configuration dictionary."""
 const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,
-                                  Dict{String,CanonicalType},Dict{String,CTEDivision}}}
+                                  Dict{String,CanonicalType},Dict{String,CTEDivision},Set{String}}}
 
 # #487 — one materialized JOIN, typed by KIND.
 #
@@ -619,6 +620,10 @@ end
   # same window): `subquery_kinds` is the READ kind, which names no integer or float, so
   # `Floor(Subquery(<integer>))` was `numeric` on PostgreSQL. Same keying and laziness as above.
   subquery_all_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
+  # #1110 — the subqueries whose read kind (`subquery_kinds`) is a declared decimal the engine left
+  # unapplied (`_reads_unapplied_declaration`): the projection applies its width on read, a value
+  # composed over it is the computed number it means. Same keying and laziness as above.
+  subquery_unapplied::Union{Nothing,IdDict{SubqueryObject,Bool}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
@@ -927,7 +932,7 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "kinds", "divisions") && continue  # transient per-build artifacts; re-materialized each build
+      k in ("model", "kinds", "divisions", "unapplied") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh

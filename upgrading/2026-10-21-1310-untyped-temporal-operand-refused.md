@@ -54,8 +54,10 @@ A time of day (`TimeField`) is not covered.
 PostgreSQL resolves the operands' types itself, so its SQL does not change. It still raises at the
 server when the types have no operator or common type, as `CASE` over an interval and a `bigint` does.
 
-MySQL renders none of these shapes yet: `Case`, `Coalesce`, JSON lookups and `Extract` are later
-phases of #1130. The refusal is in place for when they render.
+On MySQL, `Case` and `Coalesce` render since #1130 phase 2c-1, and their shapes above meet this
+refusal there. A `Case` or a `Coalesce` of a duration and a number (`case_lap` below) is refused on
+MySQL before any arithmetic, since MySQL stores a duration as its count of microseconds. JSON lookups
+and `Extract` are later phases of #1130; the refusal is in place for when they render.
 
 Examples, where `case_lap = Case(When("rank" => 1, then = F("fastestlaptime")), default = 0)` on
 `Result`:

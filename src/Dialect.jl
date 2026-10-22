@@ -1009,6 +1009,14 @@ function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn:
   (isnothing(output_field) || output_field == "") && return sql
   return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
 end
+# MySQL (#1130 phase 2c): `CAST(… AS T)` to the target `cast_type_sql` maps the name to. A declaration
+# with no faithful target there (a boolean, an interval) is decided before this renders, by the build
+# (`_mysql_declared_output` in querybuilder/select_nodes.jl), which hands it a format without one.
+function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGMySQL)
+  output_field = get(format, "output_field", nothing)
+  (isnothing(output_field) || output_field == "") && return sql
+  return "CAST($(sql) AS $(cast_type_sql(output_field, conn; context = "output_field")))"
+end
 
 # A window frame clause (#713) is SQL grammar, not a value, so it cannot be a bind parameter — the
 # #691 / #696 defect class a third time. `WindowOver(frame=)` used to write the caller's string into
@@ -1297,7 +1305,7 @@ end
 # A single bare `When` reaches these two arms. They ignored `output_field` until #822, so
 # `Case(When(…); output_field = DateField())` rendered no cast on either engine while the vector form
 # cast on both — and the read path, which takes the declared type at its word, disagreed with the SQL.
-function CASE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function CASE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return _output_field_cast("""CASE $(column) ELSE $(format["else"]) END""", format, conn)
 end
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1313,13 +1321,20 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
     return resp
   end
 end
+# MySQL (#1130 phase 2c): SQLite's body, cast through `_output_field_cast` (`CAST(… AS T)`).
+CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+  _output_field_cast("""CASE
+    $(join(column, "\n"))
+    ELSE $(format["else"])
+    END
+    """, format, conn)
 
-function WHEN(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function WHEN(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "WHEN $(column) THEN $(format["then"])" |> string
 end
 
 # #852: each casts to its `output_field` on both engines — see `_output_field_cast`.
-function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return _output_field_cast("COALESCE($(join(columns, ", ")))", format, conn)
 end
 
@@ -1344,6 +1359,14 @@ function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite
   return _output_field_cast("MIN($(join(columns, ", ")))", format, conn)
 end
 
+# MySQL (#1130 phase 2c): its own `GREATEST`/`LEAST` (`MAX`/`MIN` are aggregates there), which return
+# NULL if any argument is NULL, as SQLite's do (measured on 8.4: `GREATEST(1, NULL, 3)` is NULL), so
+# the operands arrive as the same NULL-skipping COALESCE rotations (#844, `_greatest_skips_nulls`).
+GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+  _output_field_cast("GREATEST($(join(columns, ", ")))", format, conn)
+LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+  _output_field_cast("LEAST($(join(columns, ", ")))", format, conn)
+
 # #1150 — `NullIf(a, b)` is `a` or NULL, so it has `a`'s type. PostgreSQL resolves it with `b` for the
 # `=` it is defined by, so over an integer `a` and a fraction `b` (`integer_kind`, set by the build)
 # it is a `numeric` there; PormG casts it back to `a`'s type, which is exact. SQLite returns `a` itself.
@@ -1355,6 +1378,9 @@ end
 function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "NULLIF($(columns[1]), $(columns[2]))"
 end
+# MySQL keeps `a`'s type whatever `b` is (measured on 8.4: `NULLIF(<BIGINT 5>, 4.5)` is the integer 5),
+# so `integer_kind` asks nothing of it, as on SQLite.
+NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "NULLIF($(columns[1]), $(columns[2]))"
 
 function LOWER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "LOWER($(column))"

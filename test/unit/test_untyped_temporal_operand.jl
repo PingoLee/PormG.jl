@@ -16,8 +16,10 @@ after a review found it. #1310 refuses the shape instead, when the walk has not 
 | a side the walk cannot name that holds one (`Case`, `Coalesce`, `Max` over it), beside anything | builds | refused |
 | equality, `@in`, a number beside a number (`F("meta__round") * 2`) | builds | builds |
 
-Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders none of these shapes
-yet (#1130's later phases), so its refusal is pinned through its constructor here.
+Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders the conditionals
+(`Case`, `Coalesce`) since #1130 phase 2c-1, so those shapes are checked live on MySQL below; JSON key
+lookups, math and window functions are later phases, so the rest of its refusal is pinned through its
+constructor here.
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -180,6 +182,14 @@ end
       e = _utt_refusal(expr; conn = _UTT_SL, filter)
       @test e isa QueryBuildError
       @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side", e.msg)
+      # #1130 phase 2c-1: MySQL renders the conditionals, so a shape with no JSON key, math or window
+      # function reaches its refusal live, naming MySQL.
+      if !any(w -> occursin(w, label), ("key", "Floor", "Lag"))
+        m = _utt_refusal(expr; conn = _UTT_MY, filter)
+        @test m isa QueryBuildError
+        @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side, is not " *
+                       "supported on MySQL", m.msg)
+      end
     end
   end
 end

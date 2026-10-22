@@ -942,6 +942,12 @@ end
   @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3))) == ("MOD(`Tb`.`grid`, ?)", Any[3])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", 2))) == ("ROUND(`Tb`.`grid`)", Any[])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", -1))) == ("ROUND(`Tb`.`grid`, ?)", Any[-1])
+  # A bare integer parameter is typed by the function it stands in (`ABS(?)` is a DOUBLE, `ROUND(?)` a
+  # DECIMAL, measured), so it is stated as the integer it is; a float one, and a column, are not.
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(125), -1))) == ("ROUND(CAST(? AS SIGNED), ?)", Any[125, -1])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-5)))) == ("ABS(CAST(? AS SIGNED))", Any[-5])
+  @test proj(() -> R.objects.values("v" => QB.Floor(QB.Value(5)))) == ("FLOOR(CAST(? AS SIGNED))", Any[5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-2.5)))) == ("ABS(?)", Any[-2.5])
   @test PormG._supports(MrMockMySQL(), :negative_round_precision)
   e = try; _mr_inspect(_MR_SL.Result.objects.values("v" => QB.Round("grid", -1))); nothing; catch err; err; end
   @test e isa PormG.BackendCapabilityError

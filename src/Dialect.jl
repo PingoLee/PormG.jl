@@ -1538,9 +1538,14 @@ end
 # nothing of them. `SQRT`/`EXP`/`LN`/`POWER` compute a DOUBLE whatever the operand, and `FLOOR`/`CEIL`
 # a `BIGINT` over a decimal; the read parser turns either into the decimal it means (#1121).
 # `SQRT(-1)`, `LN(0)` and `MOD(x, 0)` are NULL, as on SQLite; an overflowing `EXP`/`POWER` raises.
-ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(column))"
-FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(column))"
-CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(column))"
+ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
+FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
+CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
+# MySQL types a bare parameter by the function it stands in when it prepares the statement, not by the
+# value bound: `ABS(?)`, `FLOOR(?)` and `CEIL(?)` are a DOUBLE and `ROUND(?)` a DECIMAL over an integer
+# (measured on 8.4). So an integer literal there (`Round(Value(125), -1)`) is stated as one.
+_mysql_integer_operand(column::String, format::Dict{String,Any}) =
+  column == "?" && get(format, "integer_kind", nothing) !== nothing ? "CAST(? AS SIGNED)" : column
 SQRT(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "SQRT($(column))"
 EXP(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "EXP($(column))"
 LN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "LN($(column))"
@@ -1556,7 +1561,7 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   precision = get(format, "precision", 0)
   places = (precision isa AbstractString || precision != 0) ? ", $(precision)" : ""
   exact = get(format, "integer_kind", nothing) !== nothing || get(format, "decimal_operand", false) === true
-  return exact ? "ROUND($(column)$(places))" : "ROUND(CAST($(column) AS DECIMAL(65,30))$(places))"
+  return exact ? "ROUND($(_mysql_integer_operand(column, format))$(places))" : "ROUND(CAST($(column) AS DECIMAL(65,30))$(places))"
 end
 
 function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})

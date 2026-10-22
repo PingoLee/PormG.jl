@@ -273,6 +273,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
                                 (occursin(" EXCLUDE ", frame), :window_frame_exclusion))
         needed && !_supports(conn, feature) && throw(_capability_error(conn, feature, "frame = $(repr(frame))"))
       end
+      frame = Dialect.engine_frame_sql(frame, conn)
     end
     push!(parts, frame)
   end

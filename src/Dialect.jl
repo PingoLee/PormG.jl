@@ -1067,6 +1067,20 @@ end
 const _FRAME_TOKEN_RE = r"'[^']*+'|[A-Za-z]++|\d++(?:\.\d++)?+|\S"
 const _FRAME_INTERVAL_RE = r"^'\s*+(\d++)\s++([a-z]++)\s*+'$"
 const _FRAME_INTERVAL_UNITS = ("microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "year")
+
+# The frame `window_frame_sql` spells, in each engine's grammar. PostgreSQL's (and SQLite's, which
+# renders no frame yet) is that spelling. MySQL (#1130 phase 2c-3b) writes an interval offset
+# `INTERVAL <n> <UNIT>`, unquoted and singular, and has no MILLISECOND unit, so milliseconds are
+# counted in microseconds: `INTERVAL '7 days' PRECEDING` is `INTERVAL 7 DAY PRECEDING` there.
+engine_frame_sql(frame::String, ::Union{PormGPostgres,PormGSQLite}) = frame
+function engine_frame_sql(frame::String, ::PormGMySQL)
+  return replace(frame, r"INTERVAL '(\d+) ([a-z]+)'" => function (m)
+    n, unit = match(r"INTERVAL '(\d+) ([a-z]+)'", m).captures
+    unit = Base.endswith(unit, "s") && chop(unit) in _FRAME_INTERVAL_UNITS ? chop(unit) : unit
+    unit == "millisecond" && return "INTERVAL $(parse(Int, n) * 1000) MICROSECOND"
+    return "INTERVAL $(n) $(uppercase(unit))"
+  end)
+end
 # The longest real spelling — two intervals and an EXCLUDE — is about 110 characters.
 const _FRAME_MAX_LENGTH = 200
 

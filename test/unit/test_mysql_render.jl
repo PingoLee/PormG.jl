@@ -1217,6 +1217,14 @@ end
         ("LAST_VALUE(`Tb`.`grid`) OVER (ORDER BY `Tb`.`resultid` ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)", Any[])
   @test proj(() -> R.objects.values("v" => QB.LastValue("grid"; over = by(frame = "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW")))) ==
         ("LAST_VALUE(`Tb`.`grid`) OVER (ORDER BY `Tb`.`resultid` ASC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)", Any[])
+  # An interval offset in MySQL's grammar: unquoted, singular, and milliseconds counted in microseconds
+  # (MySQL has no MILLISECOND unit); PostgreSQL keeps its quoted interval.
+  rng(frame) = proj(() -> R.objects.values("v" => QB.LastValue("grid"; over = by(frame = frame))))[1]
+  @test occursin("RANGE BETWEEN INTERVAL 7 DAY PRECEDING AND CURRENT ROW)", rng("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))
+  @test occursin("RANGE BETWEEN INTERVAL 1 WEEK PRECEDING AND INTERVAL 5000 MICROSECOND FOLLOWING)",
+                 rng("RANGE BETWEEN INTERVAL '1 week' PRECEDING AND INTERVAL '5 milliseconds' FOLLOWING"))
+  @test occursin("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW",
+                 _mr_inspect(_MR_PG.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))))[:sql_text])
   @test PormG._supports(MrMockMySQL(), :window_functions)
   refused(frame) = (e = try; _mr_inspect(R.objects.values("v" => QB.LastValue("grid"; over = by(frame = frame)))); nothing; catch err; err; end;
                     e isa PormG.BackendCapabilityError ? sprint(showerror, e) : e)

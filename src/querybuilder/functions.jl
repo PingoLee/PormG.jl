@@ -547,12 +547,13 @@ Window `LAST_VALUE(x)` — the value of `x` in the last row of the window frame.
     WindowOver(
         partition_by = ["constructorid"],
         order_by     = ["positionorder"],
-        frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL only
+        frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL and MySQL
     )
     ```
 
-    `frame` is PostgreSQL-only (`BackendCapabilityError` on SQLite). On SQLite, drop the
-    `order_by` so the whole partition is one frame, or compute the value another way.
+    `frame` renders on PostgreSQL and MySQL (`BackendCapabilityError` on SQLite; on MySQL a `GROUPS`
+    frame or an `EXCLUDE` clause raises it too). On SQLite, drop the `order_by` so the whole partition
+    is one frame, or compute the value another way.
 
 See also [`FirstValue`](@ref), [Window Functions](@ref).
 """
@@ -1572,8 +1573,10 @@ Pads a string on the left with `fill` until it is `len` characters long — `LPa
 "text"), 3, "0")` turns `44` into `"044"`. A string longer than `len` is cut to its first `len`
 characters, a `fill` of several characters repeats and is cut where the length is reached
 (`LPad("code", 6, "xy")` over `"HAM"` is `"xyxHAM"`), an empty `fill` pads nothing, and a NULL
-string is NULL. The same on PostgreSQL (`LPAD`) and SQLite, which has no `LPAD` and calls a
-function PormG registers on every connection it opens (`pormg_lpad`).
+string is NULL. The same on PostgreSQL (`LPAD`), on SQLite, which has no `LPAD` and calls a
+function PormG registers on every connection it opens (`pormg_lpad`), and on MySQL (`LPAD`, an empty
+literal fill rendered as the cut, since MySQL's pads to `""`; a fill column empty on a row gives `""`
+there, #1130).
 
 `column` is a column path or an expression, and it must be text: PostgreSQL has no `lpad` over a
 number, a date, a time, a boolean, a uuid or a JSON document, so such a column raises

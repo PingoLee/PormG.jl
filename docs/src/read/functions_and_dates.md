@@ -405,6 +405,12 @@ every race.
 | `LPad("field", len, fill = " ")` | Pad on the left to `len` characters | `"car" => LPad(Cast("number", "text"), 3, "0")` |
 | `RPad("field", len, fill = " ")` | Pad on the right to `len` characters | `"code" => RPad("code", 5, ".")` |
 
+`Length` counts characters on every engine (MySQL renders `CHAR_LENGTH`, since its own `LENGTH` counts
+bytes). `Lower` and `Upper` fold every letter on PostgreSQL and MySQL, and ASCII letters only on SQLite.
+`LPad`/`RPad` cut a longer value to `len` and repeat a longer fill as PostgreSQL does. With an empty
+literal fill they pad nothing and cut to `len`; on MySQL a fill taken from a column that is empty on a
+row gives `""` instead (#1130).
+
 ```julia
 using PormG.Functions: Concat, Value, Lower, Upper, Length
 

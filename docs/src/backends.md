@@ -32,7 +32,9 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no | yes |
 | `no_key_locks` | `select_for_update(no_key = true)` (SQLite takes no row lock at all, so it renders no clause, as for every `select_for_update`) | yes | no | no |
 | `negative_round_precision` | `Round(x, d)` with a negative `d` (SQLite's `ROUND` reads it as 0) | yes | no | yes |
-| `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 | no |
+| `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 | yes |
+| `window_groups_frame` | a window `frame` that starts with `GROUPS` | yes | no | no |
+| `window_frame_exclusion` | a window `frame` with an `EXCLUDE` clause | yes | no | no |
 | `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 | no |
 | `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 | no |
 | `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it | from 9.6 | yes | no |

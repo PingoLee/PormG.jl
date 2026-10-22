@@ -1136,13 +1136,13 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Max F datetime - datetime | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT MAX(CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"start_at\")) * 86400000) AS INTEGER)) AS _pormg_ms)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
   ("Abs F date - date | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "ABS(DATEDIFF(`Tb`.`date`, `Tb`.`date`)) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "ABS((DATEDIFF(`Tb`.`date`, `Tb`.`date`) + 0)) > ?", params = [("10", "Int64")]),
   ("Abs F date - date | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"date\" - \"Tb\".\"date\")) > \$1", params = [("10", "Int64")]),
   ("Abs F date - date | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ABS(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
   ("Abs F date - date | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(DATEDIFF(`R2`.`date`, `R2`.`date`)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((DATEDIFF(`R2`.`date`, `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs F date - date | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((\"R2\".\"date\" - \"R2\".\"date\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs F date - date | subquery", :sqlite, "w__@gt", "10") =>
@@ -3582,13 +3582,13 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("F int / int | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" / \"R2\".\"laps\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "FLOOR((`Tb`.`grid` + ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "FLOOR(((`Tb`.`grid` + ?) + 0)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(((\"Tb\".\"grid\" + \$2::bigint))::numeric)::bigint > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"grid\" + ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((`R2`.`grid` + ?)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((`R2`.`grid` + ?) + 0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((\"R2\".\"grid\" + \$3::bigint))::numeric)::bigint as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | subquery", :sqlite, "w__@gt", "10") =>
@@ -3630,13 +3630,13 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("F int << 1 | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" << ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "FLOOR((`Tb`.`grid` & ?)) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "FLOOR(((`Tb`.`grid` & ?) + 0)) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(((\"Tb\".\"grid\" & \$2::bigint))::numeric)::bigint > \$3", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"grid\" & ?)) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((`R2`.`grid` & ?)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((`R2`.`grid` & ?) + 0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((\"R2\".\"grid\" & \$3::bigint))::numeric)::bigint as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | subquery", :sqlite, "w__@gt", "10") =>
@@ -3858,13 +3858,13 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast Sum F date - date / 2 int | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER)) / ?) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "FLOOR((SELECT\n    `R2`.`grid` as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "FLOOR(((SELECT\n    `R2`.`grid` as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) + 0)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(((SELECT\n    \"R2\".\"grid\" as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n))::numeric)::integer > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((SELECT\n    \"R2\".\"grid\" as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((SELECT\n    `R4`.`grid` as `t`\nFROM `result` as `R4`\nWHERE `R4`.`resultid` = `R3`.`resultid`\nLIMIT ? \n)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((SELECT\n    `R4`.`grid` as `t`\nFROM `result` as `R4`\nWHERE `R4`.`resultid` = `R3`.`resultid`\nLIMIT ? \n) + 0)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((SELECT\n    \"R4\".\"grid\" as \"t\"\nFROM \"result\" as \"R4\"\nWHERE \"R4\".\"resultid\" = \"R3\".\"resultid\"\nLIMIT \$3 \n))::numeric)::integer as \"t\"\nFROM \"result\" as \"R3\"\nWHERE \"R3\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | subquery", :sqlite, "w__@gt", "10") =>

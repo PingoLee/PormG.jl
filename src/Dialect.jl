@@ -1541,13 +1541,15 @@ end
 ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
 FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
 CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
-# MySQL types an operand made of parameters alone by the function it stands in when it prepares the
-# statement, not by the values bound: over integers `ABS(?)`, `FLOOR(GREATEST(…))` and
-# `ABS(COALESCE(?, ?))` are a DOUBLE and `ROUND(?)` a DECIMAL (measured on 8.4). So an integer operand
-# that names no column (every MySQL identifier is backquoted) is stated as one by `+ 0`, which keeps
-# it a `BIGINT` (or a `BIGINT UNSIGNED`, where `CAST(? AS SIGNED)` would wrap one past 2^63).
+# MySQL types a value that comes from parameters by the function it stands in when it prepares the
+# statement, not by the values bound: over integers `ABS(?)`, `ABS(COALESCE(?, ?))`, `FLOOR(GREATEST(…))`
+# and `ABS(CASE WHEN `x` > ? THEN ? ELSE ? END)` are a DOUBLE and `ROUND(?)` a DECIMAL (measured on 8.4).
+# So an integer operand is stated as one by `+ 0`, which keeps it a `BIGINT` (or a `BIGINT UNSIGNED`,
+# where `CAST(? AS SIGNED)` would wrap one past 2^63) and never changes its value; a bare column
+# reference is typed by its column and stays as it is.
+const _MYSQL_COLUMN_REFERENCE = r"^`[^`]+`(\.`[^`]+`)?$"
 _mysql_integer_operand(column::String, format::Dict{String,Any}) =
-  get(format, "integer_kind", nothing) !== nothing && !occursin('`', column) ? "($(column) + 0)" : column
+  get(format, "integer_kind", nothing) === nothing || occursin(_MYSQL_COLUMN_REFERENCE, column) ? column : "($(column) + 0)"
 SQRT(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "SQRT($(column))"
 EXP(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "EXP($(column))"
 LN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "LN($(column))"

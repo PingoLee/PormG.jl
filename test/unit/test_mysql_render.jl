@@ -942,10 +942,10 @@ end
   @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3))) == ("MOD(`Tb`.`grid`, ?)", Any[3])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", 2))) == ("ROUND(`Tb`.`grid`)", Any[])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", -1))) == ("ROUND(`Tb`.`grid`, ?)", Any[-1])
-  # An integer operand made of parameters alone is typed by the function it stands in (`ABS(?)` and
-  # `ABS(COALESCE(?, ?))` are a DOUBLE, `ROUND(?)` a DECIMAL, measured), so it is stated as the integer
-  # it is with `+ 0` (a `BIGINT UNSIGNED` stays one, where `CAST(? AS SIGNED)` wraps). A float one, and
-  # an operand that names a column, are typed by MySQL and left as they are.
+  # An integer value that comes from parameters is typed by the function it stands in (`ABS(?)`,
+  # `ABS(COALESCE(?, ?))` and `ABS(CASE WHEN `x` > ? THEN ? ELSE ? END)` are a DOUBLE, `ROUND(?)` a
+  # DECIMAL, measured), so an integer operand is stated as one with `+ 0` (a `BIGINT UNSIGNED` stays
+  # one, where `CAST(? AS SIGNED)` wraps). A bare column, and a float operand, are left as they are.
   @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(125), -1))) == ("ROUND((? + 0), ?)", Any[125, -1])
   @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-5)))) == ("ABS((? + 0))", Any[-5])
   @test proj(() -> R.objects.values("v" => QB.Floor(QB.Value(5)))) == ("FLOOR((? + 0))", Any[5])
@@ -953,7 +953,9 @@ end
   @test proj(() -> R.objects.values("v" => QB.Ceil(QB.Greatest(QB.Value(5), QB.Value(6))))) ==
         ("CEIL((GREATEST(COALESCE(?, ?), COALESCE(?, ?)) + 0))", Any[5, 6, 6, 5])
   @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-2.5)))) == ("ABS(?)", Any[-2.5])
-  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce("position", 0)))) == ("ABS(COALESCE(`Tb`.`position`, ?))", Any[0])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Case(QB.When("grid__@gt" => 5, then = QB.Value(5)), default = QB.Value(1))))) ==
+        ("ABS((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END + 0))", Any[5, 5, 1])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce("position", 0)))) == ("ABS((COALESCE(`Tb`.`position`, ?) + 0))", Any[0])
   # `Mod` means a float (Django's `NumericOutputFieldMixin`), and MySQL's `MOD(<int>, <double>)` is a
   # DOUBLE: never typed an integer, so a quotient keeps its fraction and a `Round` over it is cast.
   @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3) / 2)) == ("(MOD(`Tb`.`grid`, ?) / ?)", Any[3, 2])

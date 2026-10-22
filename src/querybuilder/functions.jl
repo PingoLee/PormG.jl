@@ -1418,6 +1418,8 @@ end
 _result_rule(::Val{:ABS}) = :promoting
 # #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
 _computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+# #1130: so does MySQL's `ABS` (an `INT` stays an `INT`, measured on 8.4).
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = k
 
 """
     Round(column, precision=0)
@@ -1460,6 +1462,10 @@ _output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
 # #1196: over an integer `Dialect.ROUND` renders that integer on both engines (`integer_kind`).
 _computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 _computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGSQLite) = _sqlite_number_kind(k)
+# #1130: MySQL's `ROUND` over an integer is a `BIGINT`; over anything else `Dialect.ROUND` rounds a
+# DECIMAL (the operand itself, or cast to one), so it is a decimal whatever the operand.
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Any, ::PormGMySQL) = CDecimal(nothing, nothing)
 
 """
     NullIf(field1, field2)
@@ -1702,6 +1708,9 @@ function Mod(x, y)
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:MOD}) = :numeric
+# #1130: MySQL's `MOD` keeps its operands' type (an integer over integers, a DECIMAL over a decimal, a
+# DOUBLE over a float), named here from the first operand, as every `_computed_kind` is.
+_computed_kind(::Val{:MOD}, ::Symbol, k, ::PormGMySQL) = _mysql_number_kind(k)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # #31: PostgreSQL full-text search, after `django.contrib.postgres.search`. Four `FObject`s, rendered by

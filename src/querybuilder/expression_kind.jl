@@ -608,8 +608,13 @@ _numeric_rank(::Any) = nothing
 # dropped: a sum of `numeric(10,2)` values is not a `numeric(10,2)`.
 _computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
-# No method for any other backend (#1034 phase 3 step 2a, #1129 item 2): what an engine computes is
-# that engine's fact, so a third backend (#1130) gets a `MethodError` naming it rather than "unknown".
+# MySQL (#1130, measured on 8.4) renders them bare too. `SQRT`/`EXP`/`LN`/`POWER` are a DOUBLE over
+# any operand; `FLOOR`/`CEIL` a `BIGINT` over an integer, and over a decimal a `BIGINT` or a DECIMAL by
+# its precision, which the width-less decimal names. `Abs`, `Round` and `Mod` keep more of their
+# operand's type, beside their constructors (`functions.jl`).
+_computed_kind(::Val, rule::Symbol, k, ::PormGMySQL) = rule === :numeric ? CFloat64() : _mysql_number_kind(k)
+# A backend with no method here (#1034 phase 3 step 2a, #1129 item 2) gets a `MethodError` naming
+# this fact rather than "unknown": what an engine computes is that engine's fact.
 # A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else
 # is not a number this names. Over a `DecimalField` SQLite computes a REAL or an INTEGER from its
 # NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call.
@@ -620,6 +625,12 @@ _sqlite_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
 _sqlite_number_kind(::CFloat64) = CFloat64()
 _sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)
 _sqlite_number_kind(::Any) = nothing
+# The same for a number MySQL computes over `k`: an integer function result is a `BIGINT`, a decimal
+# one a DECIMAL whose width the operation may change, a float one a DOUBLE.
+_mysql_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
+_mysql_number_kind(::CFloat64) = CFloat64()
+_mysql_number_kind(::CDecimal) = CDecimal(nothing, nothing)
+_mysql_number_kind(::Any) = nothing
 
 # A `:promoting`/`:numeric` function's kind: what this engine computes (`_computed_kind`, from the
 # first operand), or what the call means (`_output_kind`, from every operand). An instruction over

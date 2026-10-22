@@ -1093,8 +1093,17 @@ end
   for part in ("year", "dow", "week", "quarter", "doy")
     @test (part, date_of_time(() -> RA.objects.values("v" => QB.Extract(tm(), part)))) == (part, true)
   end
+  # The transforms that read a date: each refused over a time expression.
+  for (name, node) in ("@week_day" => QB.WEEK_DAY, "@quarter" => QB.QUARTER, "@quadrimester" => QB.QUADRIMESTER,
+                       "@date" => QB.DATE)
+    @test (name, date_of_time(() -> RA.objects.values("v" => node(tm())))) == (name, true)
+  end
   @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "YYYY-MM-DD")))
-  @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "DD/MM/YYYY")))
+  # A key with a date component — a year, a month, a day — is refused; a minute (`MI`, `%i`) is not.
+  for key in ("DD/MM/YYYY", "MM", "DD", "YYYY")
+    @test (key, date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), key)))) == (key, true)
+  end
+  @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%i')"
   @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "HH:MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%H:%i')"
   @test proj(() -> RA.objects.values("v" => QB.Extract(tm(), "hour"))) == "EXTRACT(HOUR FROM CAST(`Tb`.`date` AS TIME(6)))"
   # A part is an integer, so a quotient over one divides as integers (`DIV`, phase 2b), where an

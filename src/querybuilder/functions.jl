@@ -1043,7 +1043,8 @@ Extracts a component (`"year"`, `"month"`, `"dow"`, …) from a date/time column
 SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`,
 numbered as PostgreSQL numbers them, and raises `BackendCapabilityError` for the rest. MySQL runs
 those and `QUARTER`, `EPOCH`, `MILLISECONDS` and `MICROSECONDS` with PostgreSQL's meaning (#1130),
-and raises `BackendCapabilityError` for the rest and for the `EPOCH` of a time.
+and raises `BackendCapabilityError` for the rest and for the `EPOCH` of a time. A date part of a time
+expression raises `QueryBuildError` there, since MySQL reads a time's date as today's.
 
 The part must be one the column holds, checked against the field the column is declared as when
 the query is built, on both engines (#1070). It raises `QueryBuildError` otherwise:

@@ -14,7 +14,7 @@ if !isdefined(Main, :PormG)
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs,
-    Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract
+    Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract, ToChar, Upper
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -297,12 +297,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `Extract` (phase 2c-3) and `create` (phase 3) fail before a statement is sent.
+        # SQL: none — `Upper` (phase 2c-3b) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
             # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Race.objects.values("a" => Extract("date", "year")).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.Dialect.EXTRACT
+            e = try; M.Driver.objects.values("a" => Upper("surname")).list(); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.Dialect.UPPER
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
@@ -524,6 +524,80 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # A duration beside a number would read the duration as its count: refused before any SQL.
             e = try; M.Result.objects.values("c" => Coalesce("fastestlaptime", 0)).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("over an interval and a value of another type", msg(e))
+        end
+
+        # What: the date parts answer as Julia's `Dates` does over the same rows, and the `@` transforms
+        #       filter by them; every `ToChar` key renders the text `Dates.format` does.
+        # SQL: `EXTRACT(YEAR FROM `Tb`.`date`)`, `WEEK(x, 3)`, `(YEARWEEK(x, 3) DIV 100)`, `(WEEKDAY(x) + 1)`,
+        #      `(DAYOFWEEK(x) - 1)`, `DAYOFWEEK(x)` for `@week_day`, `EXTRACT(SECOND_MICROSECOND FROM x)`,
+        #      `(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', x) / 1000000)` for EPOCH, `DATE_FORMAT(x, …)`.
+        # Why: MySQL's default `WEEK` mode is no ISO week, its `MICROSECOND` drops the seconds PostgreSQL
+        #      counts, `UNIX_TIMESTAMP` answers 0 before 1970, and `DATE_FORMAT`'s `%f` is six digits
+        #      (#1130 phase 2c-3a).
+        @testset "date parts answer as Julia's Dates (phase 2c-3a)" begin
+            utc(z) = z === missing ? missing : DateTime(z, TimeZones.UTC)
+            races = Dict(r[:raceid] => r for r in M.Race.objects.values("raceid", "date", "start_at").list())
+            @test length(races) == 3
+            rows = M.Race.objects.values("raceid",
+                "y" => Extract("date", "year"), "m" => Extract("date", "month"), "d" => Extract("date", "day"),
+                "w" => Extract("date", "week"), "iy" => Extract("date", "isoyear"), "idow" => Extract("date", "isodow"),
+                "dow" => Extract("date", "dow"), "doy" => Extract("date", "doy"), "q" => Extract("date", "quarter"),
+                "wd" => "date__@week_day", "qm" => "date__@quadrimester", "dt" => "start_at__@date",
+                "ep" => Extract("date", "epoch")).order_by("raceid").list()
+            @test length(rows) == 3
+            for r in rows
+                d = races[r[:raceid]][:date]
+                thursday = d + Day(4 - dayofweek(d))
+                @test (r[:y], r[:m], r[:d], r[:w], r[:iy], r[:idow], r[:dow], r[:doy], r[:q], r[:wd], r[:qm]) ===
+                      (year(d), month(d), day(d), week(d), year(thursday), dayofweek(d), dayofweek(d) % 7,
+                       dayofyear(d), quarterofyear(d), dayofweek(d) % 7 + 1, (month(d) - 1) ÷ 4 + 1)
+                s = utc(races[r[:raceid]][:start_at])
+                @test isequal(r[:dt], s === missing ? missing : Date(s))
+                @test r[:ep] isa Decimal && Float64(r[:ep]) == Dates.datetime2unix(DateTime(d))
+            end
+            # The time of day of a timestamp, its fraction counted as PostgreSQL counts it, and its epoch.
+            stamped = M.Race.objects.filter("start_at__@isnull" => false).values("raceid",
+                "h" => Extract("start_at", "hour"), "mi" => Extract("start_at", "minute"), "s" => Extract("start_at", "second"),
+                "ms" => Extract("start_at", "milliseconds"), "us" => Extract("start_at", "microseconds"),
+                "e" => Extract("start_at", "epoch")).order_by("raceid").list()
+            @test length(stamped) == 2
+            for r in stamped
+                t = utc(races[r[:raceid]][:start_at])
+                @test (r[:h], r[:mi], r[:s]) === (hour(t), minute(t), second(t))
+                @test r[:us] == second(t) * 1_000_000 + millisecond(t) * 1000 && Float64(r[:ms]) == second(t) * 1000 + millisecond(t)
+                @test Float64(r[:e]) == Dates.datetime2unix(t)
+            end
+            @test any(r -> millisecond(utc(races[r[:raceid]][:start_at])) != 0, stamped)   # the fraction is exercised
+            # EPOCH before 1970, where `UNIX_TIMESTAMP` answers 0: every date of birth but one.
+            dobs = M.Driver.objects.values("driverid", "dob", "e" => Extract("dob", "epoch")).order_by("driverid").list()
+            @test count(r -> r[:dob] < Date(1970), dobs) >= 5
+            @test all(r -> Float64(r[:e]) == Dates.datetime2unix(DateTime(r[:dob])), dobs)
+            # A duration's EPOCH is its seconds.
+            laps = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("resultid", "fastestlaptime",
+                "e" => Extract("fastestlaptime", "epoch")).list()
+            @test !isempty(laps) && all(r -> Float64(r[:e]) == Dates.tons(r[:fastestlaptime]) / 1e9, laps)
+            # The transforms filter by the same parts.
+            dates = [r[:date] for r in values(races)]
+            @test M.Race.objects.filter("date__@year" => 1991).count() == count(d -> year(d) == 1991, dates)
+            @test M.Race.objects.filter("date__@month" => 3).count() == count(d -> month(d) == 3, dates)
+            @test M.Race.objects.filter("date__@week_day" => 1).count() == count(d -> dayofweek(d) == 7, dates)
+            @test M.Race.objects.filter("date__@quarter" => 4).count() == count(d -> quarterofyear(d) == 4, dates)
+            @test M.Race.objects.filter("date__@week" => week(Date(1991, 10, 20))).count() == 1
+            # Every `ToChar` key renders what `Dates.format` does for the same instant.
+            jmask(k) = replace(k, "YYYY" => "yyyy", "MM" => "mm", "DD" => "dd", "MI" => "MM", ".SSS" => ".sss")
+            first_stamp = first(stamped)[:raceid]
+            t = utc(races[first_stamp][:start_at])
+            for key in sort(collect(keys(PormG.date_format_map)))
+                got = only(M.Race.objects.filter("raceid" => first_stamp).values("v" => ToChar("start_at", key)).list())[:v]
+                @test (key, got) == (key, Dates.format(t, jmask(key)))
+            end
+            # What MySQL has no spelling of is refused before any SQL.
+            e = try; M.Race.objects.values("v" => Extract("date", "century")).list(); nothing; catch err; err; end
+            @test e isa PormG.BackendCapabilityError && occursin("Unsupported extract part for MySQL", msg(e))
+            e = try; M.Race.objects.values("v" => Extract("time", "epoch")).list(); nothing; catch err; err; end
+            @test e isa PormG.BackendCapabilityError && occursin("epoch of a time", msg(e))
+            e = try; M.Result.objects.values("v" => ToChar("fastestlaptime", "HH:MI:SS")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("ToChar over an interval", msg(e))
         end
 
         # What: the math functions answer as Julia does over the same rows, each read as the type its call

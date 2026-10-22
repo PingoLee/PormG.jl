@@ -1164,12 +1164,19 @@ query.values(
 ```
 
 The part is case-insensitive (`"year"` and `"YEAR"` are the same). `YEAR`, `MONTH`, `DAY`, `HOUR`,
-`MINUTE`, `SECOND`, `DOW`, `DOY`, `WEEK`, `ISOYEAR` and `ISODOW` run on both engines, numbered as
+`MINUTE`, `SECOND`, `DOW`, `DOY`, `WEEK`, `ISOYEAR` and `ISODOW` run on every engine, numbered as
 PostgreSQL numbers them. Any other PostgreSQL `EXTRACT` field raises `BackendCapabilityError` on
 SQLite — see [PostgreSQL](../postgres.md).
 
+MySQL also renders `QUARTER`, `EPOCH`, `MILLISECONDS` and `MICROSECONDS`, each with PostgreSQL's
+meaning: the two fractions count the seconds too (`04.125` is `4125` milliseconds), and `EPOCH` is the
+seconds since 1970 as a `Decimal`, exact before 1970 as well. `EPOCH` of a time, or of an expression
+PormG cannot type, raises `BackendCapabilityError` there; cast it to a timestamp first. `CENTURY`,
+`DECADE`, `MILLENNIUM`, `JULIAN` and the `TIMEZONE` fields raise `BackendCapabilityError` on MySQL,
+whose timestamps store no zone (#1130).
+
 A part that is not an `EXTRACT` field at all raises `InvalidValueError` when the expression is
-built, on both engines. The field is a keyword in the SQL and cannot be a bind parameter, so PormG
+built, on every engine. The field is a keyword in the SQL and cannot be a bind parameter, so PormG
 only ever writes a spelling from its own list, never the text it was given. The accepted fields are
 `CENTURY`, `DAY`, `DECADE`, `DOW`, `DOY`, `EPOCH`, `HOUR`, `ISODOW`, `ISOYEAR`, `JULIAN`,
 `MICROSECONDS`, `MILLENNIUM`, `MILLISECONDS`, `MINUTE`, `MONTH`, `QUARTER`, `SECOND`, `TIMEZONE`,
@@ -1201,10 +1208,12 @@ query.values(
 )
 ```
 
-`ToChar` renders `to_char(x, …)` on PostgreSQL and `strftime(…)` on SQLite, and every format in
-the table below produces the **same text on both engines** for a given instant. PormG spells the
-format for each engine itself: `HH` is the 24-hour clock on both, and the `T` separator and the
-`.SSS` milliseconds render as written.
+`ToChar` renders `to_char(x, …)` on PostgreSQL, `strftime(…)` on SQLite and `DATE_FORMAT(x, …)` on
+MySQL, and every format in the table below produces the **same text on every engine** for a given
+instant. PormG spells the format for each engine itself: `HH` is the 24-hour clock on each, and the
+`T` separator and the `.SSS` milliseconds render as written. On MySQL `ToChar` over a `DurationField`
+raises `QueryBuildError`, since a duration is its microseconds there: `Cast(x, "text")` gives its
+`HH:MM:SS` text.
 
 | `format` | renders as |
 |---|---|
@@ -1216,7 +1225,7 @@ format for each engine itself: `HH` is the 24-hour clock on both, and the `T` se
 | `"YYYY-MM-DDTHH:MI:SS"`, `"YYYY-MM-DDTHH:MI:SS.SSS"` | `2009-03-29T06:00:00`, `2009-03-29T06:00:00.000` |
 
 ```julia
-# The 2009 Australian Grand Prix started at 06:00 UTC — the same string on either engine
+# The 2009 Australian Grand Prix started at 06:00 UTC — the same string on every engine
 query = M.Race.objects
 query.filter("raceid" => 1)
 query.values("start" => ToChar("start_at", "YYYY-MM-DDTHH:MI:SS.SSS"))
@@ -1230,10 +1239,10 @@ not `"2009"` or `"March 2009"`. A pattern lookup takes a fragment of that text i
 
 !!! warning "Any other format is PostgreSQL-only"
     A format outside the table is passed to `to_char` as written — a native template such as
-    `"HH12:MI AM"` works on PostgreSQL — and raises `BackendCapabilityError` on SQLite, naming
-    the supported formats. On PostgreSQL `to_char` renders a `timestamptz` in the session time
+    `"HH12:MI AM"` works on PostgreSQL — and raises `BackendCapabilityError` on SQLite and MySQL,
+    naming the supported formats. On PostgreSQL `to_char` renders a `timestamptz` in the session time
     zone, which PormG opens in UTC. Do not override it with `-c TimeZone=…` in the connection's
-    `options`, or the two engines will disagree on the hour.
+    `options`, or the engines will disagree on the hour.
 
 ---
 

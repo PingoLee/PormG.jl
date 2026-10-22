@@ -525,14 +525,22 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Max Joined date | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(\"rc\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"rc\" ON (\"rc\".\"raceid\" = \"R2\".\"raceid\") \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("transform @year | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @year | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @year | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @year | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM `R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @year | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM \"R2\".\"start_at\")::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @year | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%Y', \"R2\".\"start_at\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("transform @date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @date | alone", :mysql, "v__@gt", "date 2009-03-29") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @date | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
@@ -541,6 +549,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("transform @date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`start_at` AS DATE) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("transform @date | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("transform @date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
@@ -549,14 +561,22 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("transform @date | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%d', \"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("transform @hour | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @hour | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @hour | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @hour | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM `R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @hour | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM \"R2\".\"start_at\")::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @hour | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%H', \"R2\".\"start_at\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("ToChar YYYY-MM | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
+  ("ToChar YYYY-MM | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value is invalid, it must be in the format YYYY-MM"),
   ("ToChar YYYY-MM | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | alone", :postgres, "v__@gt", "text pole") =>
@@ -565,6 +585,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value is invalid, it must be in the format YYYY-MM"),
+  ("ToChar YYYY-MM | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
+  ("ToChar YYYY-MM | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value is invalid, it must be in the format YYYY-MM"),
   ("ToChar YYYY-MM | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | subquery", :postgres, "w__@gt", "text pole") =>
@@ -573,10 +597,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | subquery", :sqlite, "w__@gt", "text pole") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value is invalid, it must be in the format YYYY-MM"),
+  ("Extract year | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM `Tb`.`date`) > ?", params = [("10", "Int64")]),
   ("Extract year | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM \"Tb\".\"date\")::integer > \$1", params = [("10", "Int64")]),
   ("Extract year | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract year | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM `R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM \"R2\".\"date\")::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year | subquery", :sqlite, "w__@gt", "10") =>
@@ -1103,10 +1131,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop datetime + interval | subquery", :sqlite, "w__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"R2_1\".\"start_at\") + ((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0)) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F @year + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM `Tb`.`start_at`) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM \"Tb\".\"start_at\")::integer + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F @year + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(YEAR FROM `R2`.`start_at`) + ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(YEAR FROM \"R2\".\"start_at\")::integer + \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | subquery", :sqlite, "w__@gt", "10") =>
@@ -3093,10 +3125,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (ROUND((\"R2\".\"grid\")::numeric)::integer / \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round int / 2 | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\") / ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor year part | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "FLOOR((EXTRACT(YEAR FROM `Tb`.`date`) + 0)) > ?", params = [("10", "Int64")]),
   ("Floor year part | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((EXTRACT(YEAR FROM \"Tb\".\"date\")::integer)::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Floor year part | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Floor year part | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((EXTRACT(YEAR FROM `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor year part | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((EXTRACT(YEAR FROM \"R2\".\"date\")::integer)::numeric)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor year part | subquery", :sqlite, "w__@gt", "10") =>
@@ -3671,10 +3707,16 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
   ("Sum F int + epoch / 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))) / \$2::double precision))::integer > \$3", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2.0", "Float64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::double precision))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v__@gt", "10") =>
@@ -6043,14 +6085,20 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"date\" - \"R2\".\"date\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast F date - date int | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast transform @year int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(EXTRACT(YEAR FROM `Tb`.`start_at`) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM \"Tb\".\"start_at\")::integer)::integer > \$1", params = [("10", "Int64")]),
   ("Cast transform @year int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Cast transform @year int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast transform @year int | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast transform @year int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(YEAR FROM `R2`.`start_at`) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast transform @year int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(YEAR FROM \"R2\".\"start_at\")::integer)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast transform @year int | subquery", :sqlite, "w__@gt", "10") =>

@@ -349,91 +349,91 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @year | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @year | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @year | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("transform @date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("transform @date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("transform @date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @hour | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @hour | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @hour | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @hour | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("ToChar YYYY-MM | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
   ("ToChar YYYY-MM | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
   ("ToChar YYYY-MM | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
   ("ToChar YYYY-MM | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Extract year | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract year | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract year | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F bare float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | alone", :sqlite) =>
@@ -799,19 +799,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F @year + 1 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | cte", :postgres) =>
     (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
   ("F @year + 1 | cte", :sqlite) =>
     (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
   ("F @year + 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
   ("F @year + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :sqlite) =>
@@ -2275,19 +2275,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor year part | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor year part | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor year part | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor year part | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Avg int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | alone", :sqlite) =>
@@ -2779,127 +2779,127 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum F bigint + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F bigint + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F bigint + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum F int + epoch / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum F int + epoch / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Round Sum F int + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / Count int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / Count int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F int + epoch / Count int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast Sum F interval + interval / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
@@ -4777,19 +4777,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast transform @year int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :sqlite) =>
@@ -5008,6 +5008,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("Max Joined date | cte", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Max Joined date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("transform @date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("transform @date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("F bare hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],

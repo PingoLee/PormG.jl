@@ -488,6 +488,9 @@ end
 # `QUARTER`/`QUADRIMESTER`/`WEEK_DAY` as an `integer` too), SQLite computes a 64-bit integer.
 _integer_transform_kind(::PormGPostgres) = CInt32()
 _integer_transform_kind(::PormGSQLite) = CInt64()
+# MySQL (#1130 phase 2c-3a): `EXTRACT`, `QUARTER`, `DAYOFWEEK`, … are an INT, which MySQL.jl hands back
+# as an `Int64` (measured on 8.4).
+_integer_transform_kind(::PormGMySQL) = CInt64()
 _integer_transform_kind(::Any) = nothing
 
 """

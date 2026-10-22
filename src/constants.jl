@@ -353,31 +353,32 @@ const postgres_type_map_reverse = Dict{String, String}(
 # used it as the SQLite mask AND passed the key through to `to_char` verbatim, and neither half had
 # been evaluated on its engine.
 #
-# The contract: for a fixed instant, every key renders the SAME text on both engines, and that
-# text is what `Dates.format` produces for the matching Julia mask — `HH` is 24-hour on both. The
+# The contract: for a fixed instant, every key renders the SAME text on every engine, and that
+# text is what `Dates.format` produces for the matching Julia mask — `HH` is 24-hour on each. MySQL's
+# `DATE_FORMAT` has no three-digit fraction, so `Dialect.EXTRACT_DATE` cuts its `%f` to `.SSS`. The
 # in-engine measurement is `vr_run_tochar_formats` (`test/unit/helper_value_repr_cases.jl`), whose
 # oracle table must name every key here; an entry with an unverified half cannot be added.
 #
 # `Dialect.SQLITE_CANONICAL_DATETIME_MASK` is the `YYYY-MM-DDTHH:MI:SS.SSS` row's SQLite mask plus
 # the `+00:00` UTC suffix — one canonical spelling, derived rather than restated.
-const date_format_map = Dict{String, NamedTuple{(:postgres, :sqlite), Tuple{String, String}}}(
-  "YYYY" => (postgres = "YYYY", sqlite = "%Y"),
-  "MM"   => (postgres = "MM",   sqlite = "%m"),
-  "DD"   => (postgres = "DD",   sqlite = "%d"),
-  "HH"   => (postgres = "HH24", sqlite = "%H"),
-  "MI"   => (postgres = "MI",   sqlite = "%M"),
-  "SS"   => (postgres = "SS",   sqlite = "%S"),
-  "YYYY-MM-DD" => (postgres = "YYYY-MM-DD", sqlite = "%Y-%m-%d"),
-  "YYYY-MM"    => (postgres = "YYYY-MM",    sqlite = "%Y-%m"),
-  "YYYY-MM-DD HH:MI:SS"     => (postgres = "YYYY-MM-DD HH24:MI:SS",    sqlite = "%Y-%m-%d %H:%M:%S"),
-  "YYYY-MM-DD HH:MI:SS.SSS" => (postgres = "YYYY-MM-DD HH24:MI:SS.MS", sqlite = "%Y-%m-%d %H:%M:%f"),
-  "YYYY-MM-DDTHH:MI:SS"     => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS",    sqlite = "%Y-%m-%dT%H:%M:%S"),
-  "YYYY-MM-DDTHH:MI:SS.SSS" => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS.MS", sqlite = "%Y-%m-%dT%H:%M:%f"),
-  "HH:MI:SS"     => (postgres = "HH24:MI:SS",    sqlite = "%H:%M:%S"),
-  "HH:MI:SS.SSS" => (postgres = "HH24:MI:SS.MS", sqlite = "%H:%M:%f"),
-  "HH:MI"        => (postgres = "HH24:MI",       sqlite = "%H:%M"),
-  "DD/MM/YYYY" => (postgres = "DD/MM/YYYY", sqlite = "%d/%m/%Y"),
-  "DD-MM-YYYY" => (postgres = "DD-MM-YYYY", sqlite = "%d-%m-%Y"),
+const date_format_map = Dict{String, NamedTuple{(:postgres, :sqlite, :mysql), Tuple{String, String, String}}}(
+  "YYYY" => (postgres = "YYYY", sqlite = "%Y", mysql = "%Y"),
+  "MM"   => (postgres = "MM",   sqlite = "%m", mysql = "%m"),
+  "DD"   => (postgres = "DD",   sqlite = "%d", mysql = "%d"),
+  "HH"   => (postgres = "HH24", sqlite = "%H", mysql = "%H"),
+  "MI"   => (postgres = "MI",   sqlite = "%M", mysql = "%i"),
+  "SS"   => (postgres = "SS",   sqlite = "%S", mysql = "%s"),
+  "YYYY-MM-DD" => (postgres = "YYYY-MM-DD", sqlite = "%Y-%m-%d", mysql = "%Y-%m-%d"),
+  "YYYY-MM"    => (postgres = "YYYY-MM",    sqlite = "%Y-%m", mysql = "%Y-%m"),
+  "YYYY-MM-DD HH:MI:SS"     => (postgres = "YYYY-MM-DD HH24:MI:SS",    sqlite = "%Y-%m-%d %H:%M:%S", mysql = "%Y-%m-%d %H:%i:%s"),
+  "YYYY-MM-DD HH:MI:SS.SSS" => (postgres = "YYYY-MM-DD HH24:MI:SS.MS", sqlite = "%Y-%m-%d %H:%M:%f", mysql = "%Y-%m-%d %H:%i:%s.%f"),
+  "YYYY-MM-DDTHH:MI:SS"     => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS",    sqlite = "%Y-%m-%dT%H:%M:%S", mysql = "%Y-%m-%dT%H:%i:%s"),
+  "YYYY-MM-DDTHH:MI:SS.SSS" => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS.MS", sqlite = "%Y-%m-%dT%H:%M:%f", mysql = "%Y-%m-%dT%H:%i:%s.%f"),
+  "HH:MI:SS"     => (postgres = "HH24:MI:SS",    sqlite = "%H:%M:%S", mysql = "%H:%i:%s"),
+  "HH:MI:SS.SSS" => (postgres = "HH24:MI:SS.MS", sqlite = "%H:%M:%f", mysql = "%H:%i:%s.%f"),
+  "HH:MI"        => (postgres = "HH24:MI",       sqlite = "%H:%M", mysql = "%H:%i"),
+  "DD/MM/YYYY" => (postgres = "DD/MM/YYYY", sqlite = "%d/%m/%Y", mysql = "%d/%m/%Y"),
+  "DD-MM-YYYY" => (postgres = "DD-MM-YYYY", sqlite = "%d-%m-%Y", mysql = "%d-%m-%Y"),
 )
 
 

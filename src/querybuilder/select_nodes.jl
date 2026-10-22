@@ -519,6 +519,15 @@ end
 # unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
 # untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
 # valid SQL. A relation is checked against the key it holds (#1068); a many-to-many has no column.
+# The temporal kind a date function's operand has, from the type walk (a column, a literal, an
+# expression), for the engines that spell a part by it (`Dialect.EXTRACT` on MySQL); `nothing` when the
+# walk names no date or time.
+_temporal_hint(::CDate) = :date
+_temporal_hint(::CDateTime) = :datetime
+_temporal_hint(::CTime) = :time
+_temporal_hint(::CInterval) = :interval
+_temporal_hint(::Any) = nothing
+
 function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   found = _temporal_row_of(v)
   found === nothing && return nothing
@@ -823,6 +832,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       # as it is; `Dialect.ROUND` reads this, and the other engines ignore it.
       resolved_kwargs["decimal_operand"] = true
     end
+  end
+  # #1130: an engine whose date functions read a duration as no date (MySQL stores it as microseconds)
+  # spells `Extract`'s EPOCH and refuses `ToChar` by the operand's temporal kind; `Dialect.EXTRACT` and
+  # `Dialect.EXTRACT_DATE` read this, and the other engines ignore it.
+  if v isa FObject && v.function_name in ("EXTRACT", "EXTRACT_DATE")
+    temporal = _temporal_hint(_expression_kind(v.column, instruc))
+    temporal === nothing || (resolved_kwargs["temporal_kind"] = temporal)
   end
   # #1150: `NullIf(a, b)` is `a` or NULL, so it has `a`'s type — but PostgreSQL resolves it with `b`
   # for the `=` it is defined by, so `NULLIF(<integer>, 0.5)` is a `numeric` there and keeps the half

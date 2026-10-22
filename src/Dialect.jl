@@ -1534,8 +1534,8 @@ function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 # MySQL (#1130). Each math function is MySQL's own, bare (measured on 8.4). Over an integer `ABS`,
-# `FLOOR`, `CEIL` and `ROUND` keep it exactly (a `BIGINT` past 2^53 too), so `integer_kind` asks
-# nothing of them. `SQRT`/`EXP`/`LN`/`POWER` compute a DOUBLE whatever the operand, and `FLOOR`/`CEIL`
+# `FLOOR`, `CEIL` and `ROUND` keep it exactly (a `BIGINT` past 2^53 too), so `integer_kind` adds
+# no cast, only the `+ 0` that types an operand made of parameters (`_mysql_integer_operand`). `SQRT`/`EXP`/`LN`/`POWER` compute a DOUBLE whatever the operand, and `FLOOR`/`CEIL`
 # a `BIGINT` over a decimal; the read parser turns either into the decimal it means (#1121).
 # `SQRT(-1)`, `LN(0)` and `MOD(x, 0)` are NULL, as on SQLite; an overflowing `EXP`/`POWER` raises.
 ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"

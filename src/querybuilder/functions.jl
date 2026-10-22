@@ -1418,7 +1418,8 @@ end
 _result_rule(::Val{:ABS}) = :promoting
 # #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
 _computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
-# #1130: so does MySQL's `ABS` (an `INT` stays an `INT`, measured on 8.4).
+# #1130: so does MySQL's `ABS` over a column (an `INT` stays an `INT`, measured on 8.4); over another
+# integer expression `Dialect.ABS` adds `+ 0`, a `BIGINT`, which this names as the integer it is.
 _computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = k
 
 """

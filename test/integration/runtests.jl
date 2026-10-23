@@ -2,8 +2,8 @@
 # julia -t auto --project=test/integration test/integration/runtests.jl
 include("common_setup.jl")
 
-# MySQL (#1130) is in progress: phases 1 to 3a deliver the connection, the reads and single-row writes,
-# not migrations, so this suite's bootstrap cannot run there yet. Its three files run on their own.
+# MySQL (#1130) is in progress: phases 1 to 3b deliver the connection, the reads, single-row writes and
+# upserts, not migrations, so this suite's bootstrap cannot run there yet. Its three files run on their own.
 by_engine(postgres = true, sqlite = true, mysql = false) || error(
     "the full integration suite does not run on MySQL yet (#1130: no migrations); run " *
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl`, " *

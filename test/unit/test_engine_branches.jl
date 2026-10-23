@@ -57,12 +57,13 @@ const _EB_REVIEWED = Dict(
   #     temporal chains (a shift, a difference, a day-count shift) became one method per engine when
   #     MySQL gained its own (#1130 phase 2b), 8 → 2. execution_write's `insert` read-back, joined
   #     `update` and `update` count became engine facts when MySQL gained writes (#1130 phase 3a),
-  #     11 → 5: the two upsert chains (phase 3b) and the SQLite id reservation remain;
+  #     11 → 5, and the two upsert chains became one method per engine with the upserts (phase 3b),
+  #     5 → 1: the SQLite id reservation remains;
   #   - one-engine quirks whose other arm is the engine-neutral path: execution_write 75 (consume a
   #     reserved SQLite id), projection_types 16 (SQLite's literal affinity), select_nodes 166 (window
   #     frames, a gap in PormG on SQLite).
   "src/querybuilder/execution_bulk.jl" => 7,
-  "src/querybuilder/execution_write.jl" => 5,
+  "src/querybuilder/execution_write.jl" => 1,
   "src/querybuilder/expression_render.jl" => 2,
   "src/querybuilder/many_to_many.jl" => 2,
   "src/querybuilder/projection_types.jl" => 1,

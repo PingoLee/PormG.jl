@@ -197,6 +197,82 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 
 end
 
+# The unique keys a row of `model` can collide on (#1267): the primary key, each `unique` field
+# (a `OneToOneField` included), each declared `UniqueConstraint`, and the `(owner, related)` index of
+# an auto many-to-many join table. `kind` is `:pk`, `:field` or `:constraint`, or `:text` for a
+# functional or partial constraint, whose SQL text PormG cannot evaluate against a row.
+function _unique_keys(model::PormGModel)::Vector{@NamedTuple{fields::Vector{String}, kind::Symbol}}
+  keys = @NamedTuple{fields::Vector{String}, kind::Symbol}[]
+  for name in model.field_names
+    f = model.fields[name]
+    if f.primary_key
+      push!(keys, (fields = [name], kind = :pk))
+    elseif hasproperty(f, :unique) && f.unique === true
+      push!(keys, (fields = [name], kind = :field))
+    end
+  end
+  for c in Models._declared_unique_constraints(model)
+    push!(keys, (fields = c.fields, kind = Models._unique_holds_text(c) ? :text : :constraint))
+  end
+  # The join table's own index is not a declared constraint: its columns name its two fields.
+  auto = Models._auto_join_unique_columns(model)
+  if auto !== nothing
+    by_column = Dict(Models.model_column(model, f) => f for f in model.field_names)
+    push!(keys, (fields = [by_column[auto[1]], by_column[auto[2]]], kind = :constraint))
+  end
+  return keys
+end
+
+# Whether the row about to be inserted (`insert`, after `_prepare_row_insert!` filled its defaults) can
+# conflict on `key`. `given` holds the fields the caller wrote, before that fill. A key over SQL text
+# always can. A member PormG mints and the caller left out (an auto id, a UUID `auto_add`) is a new
+# value, so the key cannot. Otherwise every member must hold a value: one the INSERT binds that is not
+# NULL, or a database default. A NULL member never conflicts. (A generated column is PostgreSQL's,
+# #1032, so no MySQL row reaches here with one.)
+function _can_conflict(key, model::PormGModel, insert::AbstractDict, given)::Bool
+  key.kind === :text && return true
+  any(name -> !(name in given) && _is_minted_value(model.fields[name]), key.fields) && return false
+  return all(key.fields) do name
+    haskey(insert, name) && return !(insert[name] === nothing || insert[name] === missing)
+    f = model.fields[name]
+    return hasproperty(f, :db_default) && f.db_default !== nothing
+  end
+end
+
+# A value no other row holds when the caller leaves it out: an id the database generates, or a UUID
+# PormG mints (`auto_add`), primary key or not.
+_is_minted_value(f)::Bool = _is_pormg_minted_bulk_primary_key(f) ||
+  (f.type == "UUID" && hasproperty(f, :auto_add) && f.auto_add === true)
+
+# MySQL's upsert names no target (no `upsert_conflict_target` row), so before any SQL (#1267):
+#   - the lookup must be one of the model's unique keys, exactly. PostgreSQL and SQLite raise for any
+#     other lookup when the INSERT runs; MySQL would insert a duplicate without a word;
+#   - for `update_or_create`, no other key may be one the row can conflict on: `ON DUPLICATE KEY UPDATE`
+#     would update the row THAT key matched (measured: a conflict on `code` rewrote another driver).
+# `get_or_create` never updates a row, so a conflict on another key raises `IntegrityError` there, as
+# on PostgreSQL.
+function _refuse_unnamed_upsert_target(op::String, model::PormGModel, target_fields::Vector{String},
+                                       insert::AbstractDict, given, connection)
+  _supports(connection, :upsert_conflict_target) && return nothing
+  keys = _unique_keys(model)
+  target = Set(target_fields)
+  any(k -> k.kind !== :text && Set(k.fields) == target, keys) || throw(QueryBuildError(
+    "$(op) on $(model.name) requires its lookup field(s) ($(join(target_fields, ", "))) to be a unique key " *
+    "of the model: the primary key, a `unique = true` field, or a plain (not partial or functional) " *
+    "UniqueConstraint over exactly those fields. $(_backend_name(connection)) finds the existing row by " *
+    "its unique keys. For a lookup that is not unique, use filter(...).first(), then create(...)."))
+  op == "update_or_create" || return nothing
+  # A key over the lookup's fields and more can only match the lookup's own row: not another conflict.
+  others = [k for k in keys if !(target ⊆ Set(k.fields)) && _can_conflict(k, model, insert, given)]
+  isempty(others) && return nothing
+  names = join(unique(k.kind === :text ? "a functional or partial UniqueConstraint" :
+                      "($(join(k.fields, ", ")))" for k in others), ", ")
+  throw(_capability_error(connection, :upsert_conflict_target, "update_or_create on $(model.name)";
+    why = "This row can also conflict on $(names), and $(_backend_name(connection))'s ON DUPLICATE KEY " *
+          "UPDATE would update the row that key matches. Leave those fields NULL or unset, or use " *
+          "filter(...).first(), then update(...) or create(...)."))
+end
+
 # Row-level upsert (#30) behind `objects.update_or_create`. Builds the same INSERT body as insert()
 # via _prepare_row_insert!, appends `ON CONFLICT (target) DO UPDATE SET set…` (reusing #123's
 # Dialect.on_conflict_clause), and returns `(PormGRow, created::Bool)`.
@@ -211,6 +287,8 @@ end
 #                UPDATE, so: pre-check existence by the target, run the upsert, read the row back by
 #                the target — all on one pinned connection under BEGIN IMMEDIATE + the writer lock,
 #                which serializes writers so `existed` is race-free.
+#   MySQL      — no RETURNING; the statement's own report, then the row read back by the target
+#                (`_run_update_or_create(::PormGMySQL, …)`).
 function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     set_fields::Vector{String}, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
@@ -224,8 +302,10 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
 
   !settings.change_data && throw(_write_not_allowed("update_or_create", conn_key))
 
+  given = Set{String}(keys(real_obj.insert))
   quoted_field_columns, param_values, _, _ =
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+  _refuse_unnamed_upsert_target("update_or_create", model, target_fields, real_obj.insert, given, connection)
 
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
 
@@ -243,65 +323,138 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   $(clause)
   """
 
-  if connection isa PormGPostgres
-    # Atomic upsert; `(xmax = 0)` distinguishes the inserted vs updated tuple version.
-    exec_sql = sql * " RETURNING *, (xmax = 0) AS \"__pormg_created\";"
-    if show_query !== :execute
-      return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
-    end
-    result = fetch(settings, exec_sql, parameters)
-    dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection)
-    # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
-    created_raw = pop!(dict, Symbol("__pormg_created"), false)
-    created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
-    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
-    # write supplied an explicit primary key.
-    return (PormGRow(dict, model), created)
+  return _run_update_or_create(connection, settings, real_obj, model, sql, parameters, safe_table_name,
+                               target_fields, show_query)
+end
 
-  elseif connection isa PormGSQLite
-    if show_query !== :execute
-      # Honest to what executes: INSERT + ON CONFLICT, no RETURNING (created detection is out-of-band).
-      return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
-    end
-
-    # Conflict-target WHERE on the physical target columns. The placeholder is a positional `?`
-    # (this branch is SQLite-only), so the WHERE text is stable and is built once; the pre-check and
-    # read-back each bind a FRESH parameter object (no cross-fetch reuse). The bound values are the
-    # formatted lookup values — matching exactly what the INSERT bound.
-    target_where = join(
-      ["$(safe_column_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
-      " AND ")
-    precheck_sql = "SELECT 1 FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
-    readback_sql = "SELECT * FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
-    make_target_params = () -> begin
-      tp = get_parameter(connection)
-      set_context!(tp, :where)
-      for f in target_fields
-        add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formatter)
-      end
-      tp
-    end
-
-    do_upsert = () -> begin
-      existed = !isempty(fetch(settings, precheck_sql, make_target_params()) |> Tables.rowtable)
-      fetch(settings, sql, parameters)
-      rows = fetch(settings, readback_sql, make_target_params()) |> Tables.rowtable
-      dict = isempty(rows) ?
-        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        _row_to_field_keyed_dict(rows[1], model, connection)
-      (dict, !existed)
-    end
-
-    # Pre-check + upsert + read-back must share one connection under one BEGIN IMMEDIATE.
-    dict, created = transaction_connection_for(settings) !== nothing ?
-      do_upsert() : run_in_transaction(do_upsert, settings)
-
-    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
-    # write supplied an explicit primary key.
-    return (PormGRow(dict, model), created)
-  else
-    throw(_unsupported_conn("update_or_create()", connection))
+# Run the upsert `sql` built above and return `(PormGRow, created)`, one method per engine.
+function _run_update_or_create(connection::PormGPostgres, settings, real_obj, model, sql, parameters,
+                               safe_table_name, target_fields, show_query)
+  # Atomic upsert; `(xmax = 0)` distinguishes the inserted vs updated tuple version.
+  exec_sql = sql * " RETURNING *, (xmax = 0) AS \"__pormg_created\";"
+  if show_query !== :execute
+    return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
   end
+  result = fetch(settings, exec_sql, parameters)
+  dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection)
+  # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
+  created_raw = pop!(dict, Symbol("__pormg_created"), false)
+  created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
+  # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+  # write supplied an explicit primary key.
+  return (PormGRow(dict, model), created)
+end
+
+function _run_update_or_create(connection::PormGSQLite, settings, real_obj, model, sql, parameters,
+                               safe_table_name, target_fields, show_query)
+  if show_query !== :execute
+    # Honest to what executes: INSERT + ON CONFLICT, no RETURNING (created detection is out-of-band).
+    return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
+  end
+
+  # Conflict-target WHERE on the physical target columns. The placeholder is a positional `?`
+  # (this branch is SQLite-only), so the WHERE text is stable and is built once; the pre-check and
+  # read-back each bind a FRESH parameter object (no cross-fetch reuse). The bound values are the
+  # formatted lookup values — matching exactly what the INSERT bound.
+  target_where = join(
+    ["$(safe_column_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
+    " AND ")
+  precheck_sql = "SELECT 1 FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
+  readback_sql = "SELECT * FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
+  make_target_params = () -> begin
+    tp = get_parameter(connection)
+    set_context!(tp, :where)
+    for f in target_fields
+      add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formatter)
+    end
+    tp
+  end
+
+  do_upsert = () -> begin
+    existed = !isempty(fetch(settings, precheck_sql, make_target_params()) |> Tables.rowtable)
+    fetch(settings, sql, parameters)
+    rows = fetch(settings, readback_sql, make_target_params()) |> Tables.rowtable
+    dict = isempty(rows) ?
+      Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
+      _row_to_field_keyed_dict(rows[1], model, connection)
+    (dict, !existed)
+  end
+
+  # Pre-check + upsert + read-back must share one connection under one BEGIN IMMEDIATE.
+  dict, created = transaction_connection_for(settings) !== nothing ?
+    do_upsert() : run_in_transaction(do_upsert, settings)
+
+  # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+  # write supplied an explicit primary key.
+  return (PormGRow(dict, model), created)
+end
+
+# MySQL (#1267): `INSERT … AS __pormg_new ON DUPLICATE KEY UPDATE`, whose target
+# `_refuse_unnamed_upsert_target` has checked is the one key the row can conflict on. `created` comes
+# from the statement's own report, measured on 8.4 under the `found_rows` flag the pool connects with:
+# an insert counts 1, a duplicate it changed 2, a duplicate already holding those values 1. The OK
+# packet's id is the inserted row's AUTO_INCREMENT value (generated or supplied), the matched row's
+# id on a changed duplicate, and 0 on an unchanged one. So with an AUTO_INCREMENT primary key,
+# `count == 1 && id != 0` is an insert, exactly (`_odku_created`). Without one the OK packet says 0 for
+# both an insert and an unchanged duplicate, and two plain reads by the target decide: a pre-check, and
+# after the statement a read that misses a row committed after the snapshot. Neither takes a lock (a
+# `FOR UPDATE` on a missing key deadlocked two sessions creating different keys, measured). Under
+# REPEATABLE READ they leave one race: a row another session deletes between the pre-check and the
+# statement, which then inserts it again, is reported as existing.
+function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model, sql, parameters,
+                               safe_table_name, target_fields, show_query)
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
+  end
+  pk = get_model_pk_field(model)
+  counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)])
+  do_upsert = () -> begin
+    existed = counts_insert ? false :
+      !isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
+                                                 safe_table_name, connection)...) |> Tables.rowtable)
+    result = fetch(settings, sql, parameters)
+    count = backend_num_affected_rows(connection, result)
+    # Without AUTO_INCREMENT, a count of 1 is an insert or an unchanged hit. A plain read tells them apart
+    # for a row the pre-check could not see (committed after this transaction's REPEATABLE READ snapshot):
+    # it misses that row and sees this transaction's own insert (measured).
+    if !counts_insert && !existed && count == 1
+      existed = isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
+                                                          safe_table_name, connection)...) |> Tables.rowtable)
+    end
+    created = _odku_created(counts_insert, existed, count,
+                            counts_insert ? backend_last_insert_id(connection, result) : 0)
+    # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
+    # a row another session committed after it, when this statement hit it unchanged (measured). The
+    # ODKU already locked that row, so the read waits on nothing.
+    rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields,
+                                             safe_table_name, connection; lock = true)...) |> Tables.rowtable
+    isempty(rows) && throw(StatementError(_backend_name(connection),
+      "update_or_create: the statement reported success, but the $(model.name) row could not be read " *
+      "back: a trigger may have dropped it, or the lookup does not match what was stored."))
+    (_row_to_field_keyed_dict(rows[1], model, connection), created)
+  end
+  # The statement and its read-back share one connection, so the report and the row are this call's.
+  dict, created = transaction_connection_for(settings) !== nothing ?
+    do_upsert() : run_in_transaction(do_upsert, settings)
+  return (PormGRow(dict, model), created)
+end
+
+# Whether one row's `ON DUPLICATE KEY UPDATE` inserted, from its report (the table above): with an
+# AUTO_INCREMENT primary key (`counts_insert`), a count of 1 and a non-zero id; otherwise the pre-check
+# found no row, and the count is not the 2 of a duplicate it changed.
+_odku_created(counts_insert::Bool, existed::Bool, count::Integer, id::Integer)::Bool =
+  counts_insert ? (count == 1 && id != 0) : (!existed && count != 2)
+
+# `<head> FROM <table> WHERE <target> = <the value the INSERT bound> … LIMIT 1`, on a fresh parameter
+# object each call: a statement's parameters are never reused across fetches. `lock` makes it a
+# locking read (`FOR SHARE`), which reads the latest committed row rather than the snapshot.
+function _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock::Bool = false)
+  params = get_parameter(connection)
+  set_context!(params, :where)
+  where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = " *
+                    "$(add_parameter!(params, real_obj.insert[f] |> model.fields[f].formatter))" for f in target_fields],
+                   " AND ")
+  return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1$(lock ? " FOR SHARE" : "");", params)
 end
 
 # A missing unique constraint on the ON CONFLICT target surfaces as a driver error at execution
@@ -384,18 +537,32 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     _format_single(model.fields[f], f, v, "get_or_create")
   end
 
-  fetch_by_target = () -> _get_or_create_lookup(model, target_fields, target_values).first()
+  # `lock` makes it a locking read (`FOR SHARE`), which reads the latest committed row: MySQL's re-read
+  # after a duplicate inside a transaction, whose snapshot may predate the winner (#1267). The failed
+  # INSERT already holds that lock on the duplicate, so it waits on nothing; `FOR UPDATE` would ask for
+  # more, and two sessions that lost the same race deadlocked on it (measured, 1213).
+  fetch_by_target = (; lock::Bool = false) -> begin
+    lock || return _get_or_create_lookup(model, target_fields, target_values).first()
+    table = safe_table_identifier(Models.model_table_name(model), connection)
+    rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields, table, connection;
+                                             lock = true)...) |> Tables.rowtable
+    isempty(rows) ? nothing : PormGRow(_row_to_field_keyed_dict(rows[1], model, connection), model)
+  end
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
   # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
-  # when we actually insert.
+  # when we actually insert. MySQL has no targeted DO NOTHING (no `upsert_conflict_target` row): its
+  # miss is a plain INSERT, and the lookup must be a unique key of the model, checked here (#1267).
   build_insert = (parameters) -> begin
     set_context!(parameters, :select)
+    given = Set{String}(keys(real_obj.insert))
     quoted_field_columns, param_values, _, _ =
       _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+    _refuse_unnamed_upsert_target("get_or_create", model, target_fields, real_obj.insert, given, connection)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
-    clause  = Dialect.on_conflict_clause(:nothing, qtarget, String[], connection)
+    clause  = _supports(connection, :upsert_conflict_target) ?
+      Dialect.on_conflict_clause(:nothing, qtarget, String[], connection) : ""
     """
     INSERT INTO $(safe_table_name) (
       $(join(quoted_field_columns, ", "))
@@ -420,62 +587,10 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     existing = fetch_by_target()
     existing !== nothing && return (existing, false)
 
-    # Miss → create, guarded by ON CONFLICT DO NOTHING against a concurrent insert of the same key.
+    # Miss → create, guarded against a concurrent insert of the same key (`_create_on_miss`).
     parameters = get_parameter(connection)
     insert_sql = build_insert(parameters)
-
-    if connection isa PormGPostgres
-      exec_sql = insert_sql * " RETURNING *;"
-      result = try
-        fetch(settings, exec_sql, parameters)
-      catch e
-        _rethrow_conflict_target_error(e, model, target_fields)
-      end
-      rows = Tables.rowtable(result)
-      if !isempty(rows)
-        dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
-        # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
-        # this write supplied an explicit primary key.
-        return (PormGRow(dict, model), true)
-      end
-      # Lost the insert race → the row exists now; return the winner, created == false.
-      raced = fetch_by_target()
-      # #1299: not the caller's call, so not a `UsageError`. The usual cause is a race: the conflicting
-      # row was there when the INSERT skipped and another session deleted it before this read (a
-      # winner not yet visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization
-      # failure). The same call retried can succeed, which is what `OperationalError` signals. A
-      # trigger or rule that skips the insert leaves the same empty RETURNING and fails every retry,
-      # so the message names it rather than claiming the race.
-      raced === nothing &&
-        throw(OperationalError(_backend_name(connection),
-          "get_or_create: the insert returned no row, and the $(model.name) row could not be read back. " *
-          "Usually another session deleted the conflicting row in between, and retrying the call can " *
-          "succeed; a trigger or rule that skips the insert gives the same result on every retry."))
-      return (raced, false)
-
-    elseif connection isa PormGSQLite
-      try
-        fetch(settings, insert_sql, parameters)         # INSERT ... ON CONFLICT DO NOTHING
-      catch e
-        _rethrow_conflict_target_error(e, model, target_fields)
-      end
-      row = fetch_by_target()
-      # #1299: not the caller's call, so not a `UsageError`, and no race either: the serialized write
-      # lock (below) keeps every other writer out between the INSERT and this read. So the insert
-      # stored nothing the lookup finds (a trigger that drops the row, or a PormG fault), and a retry
-      # fails the same way: `StatementError`, the landing type for such a fault on the statement path.
-      row === nothing &&
-        throw(StatementError(_backend_name(connection),
-          "get_or_create: the insert reported success, but the $(model.name) row could not be read back: " *
-          "a trigger may have dropped it, or the lookup does not match what was stored."))
-      # Under the serialized write lock (the transaction below) no writer can interleave between the
-      # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
-      # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
-      # write supplied an explicit primary key.
-      return (row, true)
-    else
-      throw(_unsupported_conn("get_or_create()", connection))
-    end
+    return _create_on_miss(connection, settings, model, insert_sql, parameters, fetch_by_target, target_fields)
   end
 
   # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
@@ -484,6 +599,89 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     return transaction_connection_for(settings) !== nothing ? do_goc() : run_in_transaction(do_goc, settings)
   end
   return do_goc()
+end
+
+# get_or_create's miss: run `insert_sql` and return `(PormGRow, created)`, one method per engine.
+function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql, parameters, fetch_by_target,
+                         target_fields)
+  exec_sql = insert_sql * " RETURNING *;"
+  result = try
+    fetch(settings, exec_sql, parameters)
+  catch e
+    _rethrow_conflict_target_error(e, model, target_fields)
+  end
+  rows = Tables.rowtable(result)
+  if !isempty(rows)
+    dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
+    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
+    # this write supplied an explicit primary key.
+    return (PormGRow(dict, model), true)
+  end
+  # Lost the insert race → the row exists now; return the winner, created == false.
+  raced = fetch_by_target()
+  # #1299: not the caller's call, so not a `UsageError`. The usual cause is a race: the conflicting
+  # row was there when the INSERT skipped and another session deleted it before this read (a
+  # winner not yet visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization
+  # failure). The same call retried can succeed, which is what `OperationalError` signals. A
+  # trigger or rule that skips the insert leaves the same empty RETURNING and fails every retry,
+  # so the message names it rather than claiming the race.
+  raced === nothing &&
+    throw(OperationalError(_backend_name(connection),
+      "get_or_create: the insert returned no row, and the $(model.name) row could not be read back. " *
+      "Usually another session deleted the conflicting row in between, and retrying the call can " *
+      "succeed; a trigger or rule that skips the insert gives the same result on every retry."))
+  return (raced, false)
+end
+
+function _create_on_miss(connection::PormGSQLite, settings, model, insert_sql, parameters, fetch_by_target,
+                         target_fields)
+  try
+    fetch(settings, insert_sql, parameters)         # INSERT ... ON CONFLICT DO NOTHING
+  catch e
+    _rethrow_conflict_target_error(e, model, target_fields)
+  end
+  row = fetch_by_target()
+  # #1299: not the caller's call, so not a `UsageError`, and no race either: the serialized write
+  # lock (`_get_or_create`'s transaction) keeps every other writer out between the INSERT and this read. So the insert
+  # stored nothing the lookup finds (a trigger that drops the row, or a PormG fault), and a retry
+  # fails the same way: `StatementError`, the landing type for such a fault on the statement path.
+  row === nothing &&
+    throw(StatementError(_backend_name(connection),
+      "get_or_create: the insert reported success, but the $(model.name) row could not be read back: " *
+      "a trigger may have dropped it, or the lookup does not match what was stored."))
+  # Under the serialized write lock (`_get_or_create`'s transaction) no writer can interleave between the
+  # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
+  # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+  # write supplied an explicit primary key.
+  return (row, true)
+end
+
+# MySQL (#1267): a plain INSERT, guarded by the unique index the lookup must be. A concurrent insert of
+# the same key makes it raise `IntegrityError`; the row is then re-read by the lookup and returned with
+# `created = false`, Django's own recovery. MySQL rolls back only the failed statement, so an open
+# transaction stays usable (measured). Inside a transaction the re-read is a locking one: a plain read
+# sees the transaction's REPEATABLE READ snapshot, which misses a winner committed after it (measured).
+# When the re-read finds nothing, the conflict was on another key, and the `IntegrityError` is the
+# answer, as PostgreSQL gives for a conflict on a key that is not the target.
+function _create_on_miss(connection::PormGMySQL, settings, model, insert_sql, parameters, fetch_by_target,
+                         target_fields)
+  try
+    fetch(settings, insert_sql, parameters)
+  catch e
+    e isa IntegrityError || rethrow()
+    raced = fetch_by_target(; lock = transaction_connection_for(settings) !== nothing)
+    raced === nothing && rethrow()
+    return (raced, false)
+  end
+  row = fetch_by_target()
+  # The INSERT succeeded and this read sees it (it committed, or it is the open transaction's own), so
+  # a row the lookup does not find was dropped by a trigger, or the lookup does not match what was
+  # stored (#1299), as on SQLite.
+  row === nothing &&
+    throw(StatementError(_backend_name(connection),
+      "get_or_create: the insert reported success, but the $(model.name) row could not be read back: " *
+      "a trigger may have dropped it, or the lookup does not match what was stored."))
+  return (row, true)
 end
 
 # Escape a value for interpolation inside a single-quoted SQL literal (#59). `db_table` is

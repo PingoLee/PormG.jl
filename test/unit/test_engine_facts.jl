@@ -88,7 +88,10 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # 1093 wrap around a subquery on the table a mutation writes.
                                :_insert_returns_rows, :_inserted_row_query, :_update_row_count,
                                :_update_from_sql, :_affected_row_count, :_locks_cascade_parents,
-                               :_materializes_target_key_set, :_assigns_set_in_order])
+                               :_materializes_target_key_set, :_assigns_set_in_order,
+                               # Phase 3b (upserts): a miss serialized by nothing but the unique
+                               # index.
+                               :_serializes_get_or_create])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -173,6 +176,8 @@ end
   # Phase 3a: MySQL has no RETURNING, and reads a mutation's own table through a derived table.
   @test !_EF_QB._insert_returns_rows(_EfMy()) && _EF_QB._materializes_target_key_set(_EfMy())
   @test !_EF_QB._materializes_target_key_set(_EfPg()) && !_EF_QB._materializes_target_key_set(_EfSl())
-  # Upserts are phase 3b's.
-  @test_throws MethodError _EF_QB._serializes_get_or_create(_EfMy())
+  # Phase 3b: no lock between the get and the insert.
+  @test !_EF_QB._serializes_get_or_create(_EfMy())
+  # Bulk writes are phase 3c's.
+  @test_throws MethodError _EF_QB._bulk_binds_column_arrays(_EfMy())
 end

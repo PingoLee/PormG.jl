@@ -2332,6 +2332,13 @@ end
 # UniqueConstraint and a CheckConstraint cannot share a name whichever is applied first.
 _declared_unique_constraints(model::PormGModel) =
   get(get(model.cache, "unique_constraints", Dict{String, Any}()), "constraints", UniqueConstraint[])
+# The `(owner, related)` columns of an auto many-to-many join table's own unique index, or `nothing`
+# for any other model: the index PormG adds there is no declared constraint (#1267 reads it as a key).
+function _auto_join_unique_columns(model::PormGModel)::Union{Tuple{String, String}, Nothing}
+  auto = model.cache === nothing ? nothing : get(model.cache, "many_to_many_auto", nothing)
+  auto === nothing && return nothing
+  return (String(auto["owner_column"]), String(auto["related_column"]))
+end
 _constraint_names(model::PormGModel, kind::Symbol)::Set{String} = kind === :unique ?
   Set{String}(String(c.name) for c in _declared_unique_constraints(model) if c.name !== nothing) :
   Set{String}(c.name for c in declared_check_constraints(model))

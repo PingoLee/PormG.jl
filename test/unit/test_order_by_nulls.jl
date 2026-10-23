@@ -48,6 +48,18 @@ PormG.config["order_nulls_pg"] = PormG.Configuration.Settings(
   change_data = true,
 )
 
+# The same table on the old SQLite, for the full-render key test (#1130).
+DriverNullsOldModel = Model("drivers_nulls",
+  id = IDField(),
+  surname = CharField(),
+  nationality = CharField(null=true),
+)
+DriverNullsOldModel.connect_key = "order_nulls_old_sl"
+PormG.config["order_nulls_old_sl"] = PormG.Configuration.Settings(
+  connections = MockOldSQLite_OrderNulls(),
+  change_data = true,
+)
+
 @testset "ORDER BY NULL-placement normalization (#75)" begin
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -130,5 +142,19 @@ PormG.config["order_nulls_pg"] = PormG.Configuration.Settings(
     q_ovr2.order_by(SQLOrder(SQLField("nationality", "nationality"); orientation="DESC", nulls=:last))
     sql_ovr2 = q_ovr2.list(show_query=:sql)
     @test occursin("DESC NULLS LAST", sql_ovr2)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # #1130: below 3.30 an alias that a FROM column also names is keyed on the projection. Inside an
+  # expression SQLite reads a name as a FROM column before a result alias (#894), so the key
+  # `("nationality" IS NULL)` over `values("nationality" => "surname")` tested the nationality column
+  # and placed the surnames' NULLs by it, silently. Expected: the key is the projection's SQL there,
+  # and the alias where no column has the name.
+  # ─────────────────────────────────────────────────────────────────────────
+  @testset "SQLite < 3.30: an alias a FROM column also names is keyed on the projection (#1130)" begin
+    sql = DriverNullsOldModel.objects.values("nationality" => "surname").order_by("-nationality").list(show_query=:sql)
+    @test occursin("ORDER BY (\"Tb\".\"surname\" IS NULL) DESC, \"nationality\" DESC", sql)
+    sql = DriverNullsOldModel.objects.values("nat2" => "nationality").order_by("-nat2").list(show_query=:sql)
+    @test occursin("ORDER BY (\"nat2\" IS NULL) DESC, \"nat2\" DESC", sql)
   end
 end

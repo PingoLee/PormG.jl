@@ -70,13 +70,15 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
 end
 
 # Two modules on their own MySQL key: `Lap`'s ForeignKey targets a model the base module does not
-# define, so the shadowed-alias guard must find `driver`'s columns through the relation.
+# define, so the NULL key over a shadowed alias must find `driver`'s columns through the relation.
 PormG.config["mr_my_cross"] = PormG.Configuration.Settings(connections = MrMockMySQL(), change_data = true,
                                                            db_def_folder = "mr_my_cross")
 module MrMyCrossA
 import PormG
 import PormG.Models
-Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField())
+Team = Models.Model(teamid = Models.IDField(), name = Models.CharField(), country = Models.CharField())
+Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField(),
+  teamid = Models.ForeignKey(Team, pk_field = "teamid", on_delete = "RESTRICT", null = true))
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 module MrMyCrossB
@@ -385,49 +387,135 @@ end
   # function, so a rename there cannot route MySQL past the refusal.
   build_select = read(joinpath(@__DIR__, "..", "..", "src", "querybuilder", "build_select.jl"), String)
   @test occursin("_order_term_sql(order_expr, orientation, placement, instruc.connection", build_select)
-  @test occursin("ORDER BY (`position` IS NULL) DESC, `position` DESC",
+  @test occursin("ORDER BY (`Tb`.`position` IS NULL) DESC, `position` DESC",
                  _mr_inspect(_MR_MY.Result.objects.values("position").order_by("-position"))[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL NULL placement: an alias that is also a FROM column's name is refused
-# Inside `(alias IS NULL)` MySQL reads a name as a FROM column before a result alias (measured on
-# 8.4), so `values("laps" => "position").order_by("-laps")` would test the never-NULL `laps` column and
-# sort the NULL positions last, silently. Expected: that refused with QueryBuildError before any SQL,
-# on a joined table's column too; a rename no column shares, an aggregate alias, and a projection
-# that IS the column of its name build; PostgreSQL and SQLite build the shadowing shape as before.
+# MySQL NULL placement: an alias a FROM column also names is keyed on the projection
+# Inside `(alias IS NULL)` MySQL reads a name as a FROM column before a result alias (measured on 8.4),
+# so `values("laps" => "position").order_by("-laps")` would test the never-NULL `laps` column and sort
+# the NULL positions last, silently. Expected: the key is the projection's own SQL wherever a table the
+# query reads has a column of that name (the base table, a joined model, a CTE, a `cjoin_on` table, a
+# join an `order_by` path or an `on()` adds after ORDER BY, a model of another module) and for every kind
+# of projection (a column, an aggregate, a window, a bound expression, a `Value`), re-binding the
+# projection's values where the key prints; the alias otherwise; PostgreSQL and SQLite 3.45 unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "MySQL NULL placement: an alias that is also a FROM column's name is refused" begin
-  refused(q) = try; _mr_inspect(q); false; catch e; e isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, e)); end
-  @test refused(_MR_MY.Result.objects.values("laps" => "position").order_by("-laps"))
-  # `surname` is a column of the joined `driver` table, not of `result`.
-  @test refused(_MR_MY.Result.objects.values("surname" => "raceid__name", "driverid__nationality").order_by("surname"))
-  # These name no other column, or are that column under its own name: they build.
-  @test !refused(_MR_MY.Result.objects.values("pos2" => "position").order_by("-pos2"))
-  @test !refused(_MR_MY.Result.objects.values("driverid", "total" => Sum("laps")).order_by("total"))
-  @test !refused(_MR_MY.Result.objects.values("position").order_by("-position"))
-  @test !refused(_MR_MY.Result.objects.values("surname" => "driverid__surname").order_by("surname"))
-  @test !refused(_MR_MY.Result.objects.values("laps" => "position").order_by("resultid"))
-  # A CTE's projection and a `cjoin_on` table's column shadow the same way.
+@testset "MySQL NULL placement: an alias a FROM column also names is keyed on the projection" begin
+  order_of(q) = (s = rstrip(_mr_inspect(q)[:sql_text]); s[first(findlast("\nORDER BY ", s))+1:end])
+  key(q) = (s = order_of(q); s[length("ORDER BY ")+1:first(findfirst(" IS NULL)", s))-1])
+  @test order_of(_MR_MY.Result.objects.values("laps" => "position").order_by("-laps")) ==
+        "ORDER BY (`Tb`.`position` IS NULL) DESC, `laps` DESC"
+  # A projection that IS the column of its name is keyed on it too: a joined table's column of the same
+  # name would make the bare name ambiguous (MySQL error 1052).
+  @test order_of(_MR_MY.Result.objects.values("position").order_by("-position")) ==
+        "ORDER BY (`Tb`.`position` IS NULL) DESC, `position` DESC"
+  # A name no table has keeps the alias, as before.
+  @test order_of(_MR_MY.Result.objects.values("pos2" => "position").order_by("-pos2")) ==
+        "ORDER BY (`pos2` IS NULL) DESC, `pos2` DESC"
+  @test key(_MR_MY.Result.objects.values("driverid", "total" => Sum("laps")).order_by("total")) == "(`total`"
+  # A joined model's column: `name` is the race's.
+  @test key(_MR_MY.Result.objects.values("name" => "position", "raceid__year").order_by("name")) == "(`Tb`.`position`"
+  # A join added AFTER this term: by a later `order_by` path, and by `on()`, which `build` materializes
+  # after ORDER BY.
+  @test key(_MR_MY.Result.objects.values("surname" => "position").order_by("-surname", "driverid__nationality")) ==
+        "(`Tb`.`position`"
+  q = _MR_MY.Result.objects.values("surname" => "position", "resultid")
+  q.on("driverid", "nationality" => "Brazilian")
+  @test key(q.order_by("-surname")) == "(`Tb`.`position`"
+  # A CTE's projection, and a `cjoin_on` table's column.
   q = _MR_MY.Result.objects
   q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
-  @test refused(q.values("surname" => "position", "br_driver" => CTE("br", "driverid")).order_by("-surname"))
-  # Declared but not joined (nothing projects it), the CTE is not in FROM, so its names collide with nothing.
-  q = _MR_MY.Result.objects
-  q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
-  @test !refused(q.values("surname" => "position", "resultid").order_by("-surname"))
+  @test key(q.values("surname" => "position", "br_driver" => CTE("br", "driverid")).order_by("-surname")) == "(`R1`.`position`"
   q = _MR_MY.Result.objects.values("surname" => "position", "d_name" => Joined("d", "forename"))
   q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
-  @test refused(q.order_by("-surname"))
-  # A joined model defined in another module is found through the relation itself.
-  @test refused(MrMyCrossB.Lap.objects.values("surname" => "position", "driverid__nationality").order_by("-surname"))
-  @test !refused(MrMyCrossB.Lap.objects.values("pos2" => "position", "driverid__nationality").order_by("-pos2"))
-  # … and through a reverse relation: `lap`, defined in the other module, has the `position` column.
-  @test refused(MrMyCrossA.Driver.objects.values("position" => "surname", "laps__lapid").order_by("-position"))
-  # The other engines build the shadowing shape: PostgreSQL places NULLs natively, and SQLite only
-  # emulates below 3.30.
-  @test !refused(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))
-  @test !refused(_MR_SL.Result.objects.values("laps" => "position").order_by("-laps"))
+  @test key(q.order_by("-surname")) == "(`Tb`.`position`"
+  # Declared but not joined (nothing projects it), the CTE is not in FROM, so its names shadow nothing.
+  q = _MR_MY.Result.objects
+  q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+  @test key(q.values("surname" => "position", "resultid").order_by("-surname")) == "(`surname`"
+  # A joined model defined in another module is found through the relation, forward and reverse.
+  @test key(MrMyCrossB.Lap.objects.values("surname" => "position", "driverid__nationality").order_by("-surname")) ==
+        "(`Tb`.`position`"
+  @test key(MrMyCrossB.Lap.objects.values("pos2" => "position", "driverid__nationality").order_by("-pos2")) == "(`pos2`"
+  @test key(MrMyCrossA.Driver.objects.values("position" => "surname", "laps__lapid").order_by("-position")) ==
+        "(`Tb`.`surname`"
+  # Each hop of a later path counts, not only its last (`surname` is the driver's, two hops from `lap`);
+  # its last segment is a column even when it is a ForeignKey, so `driverid__teamid` joins no team and
+  # the team's `country` shadows nothing.
+  @test key(MrMyCrossB.Lap.objects.values("surname" => "position").order_by("-surname", "driverid__teamid__name")) ==
+        "(`Tb`.`position`"
+  @test key(MrMyCrossB.Lap.objects.values("country" => "position").order_by("-country", "driverid__teamid")) == "(`country`"
+  # A relation path a `cjoin_on` ON clause names is joined after ORDER BY too: `year` is the race's.
+  q = _MR_MY.Result.objects.values("year" => "position", "resultid")
+  q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid"), Joined("d", "dob") == F("raceid__date")])
+  @test key(q.order_by("-year")) == "(`Tb`.`position`"
+  # A `cjoin_on` path's last segment is a column too: `driverid__teamid` joins no team, so `country`
+  # shadows nothing.
+  q = MrMyCrossB.Lap.objects.values("country" => "position")
+  q.cjoin_on("Lap", alias = "l2", on = [Joined("l2", "lapid") == F("lapid"), Joined("l2", "position") == F("driverid__teamid")])
+  @test key(q.order_by("-country")) == "(`country`"
+  # A CTE a later term orders by is joined when that term renders: `br` has a `surname`.
+  for later in ("br__surname", CTE("br", "surname"))
+    q = _MR_MY.Result.objects
+    q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+    @test key(q.values("surname" => "position", "resultid").order_by("-surname", later)) == "(`R1`.`position`"
+  end
+  # … or reads it inside a window or a `Case` condition.
+  QB = _MR_QB
+  for later in (QB.SQLOrder(QB.SQLField(QB.Rank(over = QB.WindowOver(order_by = ["br__surname"])), "rk")),
+                QB.SQLOrder(QB.SQLField(QB.Rank(over = QB.WindowOver(partition_by = [CTE("br", "surname")])), "rk")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(CTE("br", "surname") => F("grid"), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                # A `When` condition keeps its path as written.
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When("br__surname" => F("grid"), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(QB.Q(CTE("br", "surname") => F("grid")), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(QB.Qor(CTE("br", "surname") => F("grid"), "grid" => F("laps")),
+                                                         then = F("grid"))], default = F("laps")), "c")),
+                # … on the value side of a condition too.
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When("grid" => CTE("br", "surname"), then = F("grid"))],
+                                                default = F("laps")), "c")))
+    q = _MR_MY.Result.objects
+    q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+    @test key(q.values("surname" => "position", "resultid").order_by("-surname", later)) == "(`R1`.`position`"
+  end
+  # Whatever that look-ahead misses is refused once every join exists, never run: a term that kept its
+  # alias in the key is rechecked against the finished statement's tables. A later term that joins the
+  # driver through a nested query's `OuterRef` is one; ordered first, it has joined it in time.
+  ex = QB.SQLOrder(QB.SQLField(QB.Exists(_MR_MY.Driver.objects.filter("driverid" => QB.OuterRef("driverid"),
+                                                                       "surname" => QB.OuterRef("driverid__surname"))), "ex"))
+  err = try; _mr_inspect(_MR_MY.Result.objects.values("surname" => "position").order_by("-surname", ex)); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, err))
+  @test endswith(order_of(_MR_MY.Result.objects.values("surname" => "position").order_by(ex, "-surname")),
+                 "(`Tb`.`position` IS NULL) DESC, `surname` DESC")
+  q = _MR_MY.Result.objects.values("pos2" => "position").order_by("-pos2")
+  instruc = QB.build(q.object)
+  @test instruc.alias_null_keys == ["pos2"]
+  @test QB._refuse_late_shadowed_null_key(q.object, instruc) === nothing
+  push!(instruc.alias_null_keys, "laps")
+  err = try; QB._refuse_late_shadowed_null_key(q.object, instruc); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, err)) &&
+        occursin("MySQL", sprint(showerror, err))
+  # A term that names the projection by its path (`order_by("date__@year")` over `"name" => "date__@year"`).
+  @test key(_MR_MY.Race.objects.values("name" => "date__@year").order_by("-date__@year")) == "(EXTRACT(YEAR FROM `Tb`.`date`)"
+  # Every kind of projection: an aggregate, a window.
+  @test key(_MR_MY.Result.objects.values("driverid", "laps" => Max("position")).order_by("laps")) == "(MAX(`Tb`.`position`)"
+  @test key(_MR_MY.Result.objects.values("resultid", "laps" => _MR_QB.Rank(over = _MR_QB.WindowOver(order_by = ["-points"]))).order_by("laps")) ==
+        "(CAST(RANK() OVER (ORDER BY `Tb`.`points` DESC) AS SIGNED)"
+  # A projection that binds: the key binds its values again, where its markers print (SELECT 101,
+  # WHERE 202, ORDER BY 101), and a `Value` the same.
+  insp = _mr_inspect(_MR_MY.Result.objects.filter("grid__@gt" => 202).values("laps" => F("grid") + 101).order_by("-laps"))
+  @test endswith(rstrip(insp[:sql_text]), "ORDER BY ((`Tb`.`grid` + ?) IS NULL) DESC, `laps` DESC")
+  assert_marker_count(insp, :sqlite)
+  assert_bound_in_text_order(insp, Any[101, 202, 101])
+  insp = _mr_inspect(_MR_MY.Result.objects.values("resultid", "grid" => _MR_QB.Value(303), "g2" => F("grid") + 404).order_by("g2", "grid"))
+  @test endswith(rstrip(insp[:sql_text]), "ORDER BY (`g2` IS NULL) ASC, `g2` ASC, \n  (? IS NULL) ASC, `grid` ASC")
+  assert_bound_in_text_order(insp, Any[303, 404, 303])
+  # PostgreSQL places NULLs natively, and SQLite 3.45 does too: no key, the alias as before.
+  @test occursin("ORDER BY \"laps\" DESC NULLS FIRST", _mr_inspect(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))[:sql_text])
+  @test occursin("ORDER BY \"laps\" DESC NULLS FIRST", _mr_inspect(_MR_SL.Result.objects.values("laps" => "position").order_by("-laps"))[:sql_text])
   # A path MySQL does not render yet says so, rather than reporting a PormG bug.
   msg = sprint(showerror, _MR_QB._unsupported_conn("date/interval arithmetic", MrMockMySQL()))
   @test occursin("not rendered for MySQL yet", msg) && !occursin("PormG bug", msg)

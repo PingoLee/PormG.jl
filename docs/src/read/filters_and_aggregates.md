@@ -826,8 +826,10 @@ M.Driver.objects.values("surname", "nationality").order_by(
 user-supplied sort-direction string forwarded as-is — raises a `QueryBuildError` at construction
 instead of reaching the SQL.
 
-On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG emits the portable
-`(field IS NULL)` sort prefix, so the placement is identical there too.
+On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax), and on MySQL, PormG emits
+the portable `(field IS NULL)` sort prefix, so the placement is identical there too. When the term is
+a projected name that a table in the query also has as a column, the prefix holds the projection's
+SQL rather than the name, which those engines would read as the column there.
 
 !!! note
     `nulls` normalization and the `SQLOrder(...; nulls=…)` override apply to the query's top-level

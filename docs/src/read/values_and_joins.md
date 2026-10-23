@@ -456,6 +456,10 @@ query.order_by("driverid__surname")     # ORDER BY "Tb_1"."surname" ASC NULLS LA
     sort consistent with the column the query actually returns. If you meant the underlying column,
     name it explicitly (`order_by("-points")`) or choose an alias that shadows nothing.
 
+    The NULL placement follows the alias too. MySQL and SQLite before 3.30 place NULLs with an
+    `(expr IS NULL)` sort key, and would read the name there as the column, so PormG puts the
+    projection's own SQL in that key.
+
 !!! note "Two projections may not share an output name"
     `.values("x" => "grid", "x" => "points")` raises `QueryBuildError` at the `values()` call — two
     columns under one name are indistinguishable to whatever reads the result, and on SQLite the

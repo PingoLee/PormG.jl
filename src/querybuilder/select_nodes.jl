@@ -114,47 +114,64 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, c
                 null_flag = null_flag)
 end
 
-# #1130: an ordering on a projection is printed as its alias, and on an engine that emulates the NULL
-# placement the alias is also inside the sort key, `(alias IS NULL)`. MySQL reads a name inside an
-# ORDER BY EXPRESSION as a FROM column before a result alias (measured on 8.4; a bare `ORDER BY alias`
-# reads the alias), so when a FROM table has a column of that name the key tests that column, and the
-# NULLs land where MySQL puts them, silently: `values("laps" => "position").order_by("-laps")`. Until
-# the key is rendered over the projection itself (phase 2b, which edits the ordering renderer), such a
-# query is refused. A projection that IS that column (`values("position")`, `"surname" =>
-# "driverid__surname"`) reads the same value under either name, so it builds.
-function _refuse_shadowed_null_key_alias(object::SQLObject, instruc::SQLInstruction)
-  (isempty(object.order) || !_refuses_shadowed_null_key_alias(instruc.connection)) && return nothing
-  outputs = Dict{String,Any}()
-  for p in object.values
-    p isa SQLField && (outputs[something(p.custom_as, p._as)] = p.field)
+# #1130: the NULL sort key of an ORDER BY term printed as the projection named `name`, where a table the
+# query reads has a column of that name (`get_order_query`): the projection's SQL as the SELECT list
+# rendered it, with the values it bound bound again under `:order`, where the key's markers print. The
+# text is reused rather than the node rendered again, so the key is the projection by construction, a
+# path's join, a function's typed render and a literal's bind alike.
+#
+# Measured on MySQL 8.4: the key reads the projection for a column, an aggregate and a window, bound or
+# not. Under DISTINCT, or GROUP BY, MySQL can also require the columns the key computes from to be
+# projected or grouped, so a key over `position + 1`, a `CASE` or `LAG(position)` there is its error
+# 3065 or 1055 (`RANK()` and an aggregate pass): loud, on that engine only, and left to it (#1087).
+function _projection_null_key(name::AbstractString, instruc::SQLInstruction)::String
+  for i in eachindex(instruc.select)
+    isassigned(instruc.select, i) || continue
+    value = instruc.select[i]
+    _projection_output_name(value) == name || continue
+    sql = value.field
+    sql isa AbstractString || break
+    copy_parameters_to!(instruc, :order, get(instruc.projection_params, name, Any[]))
+    return String(sql)
   end
-  isempty(outputs) && return nothing
-  columns = nothing   # the FROM tables' column names, read once, on the first term that needs them
-  for o in object.order
-    f = o.field
-    (f isa SQLField && f.field isa String && haskey(outputs, f.field)) || continue
-    name = f.field
-    source = outputs[name]
-    source isa String && last(split(source, "__")) == name && continue
-    columns === nothing && (columns = _from_column_names(object, instruc))
-    name in columns || continue
-    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
-      "query reads has a column with that name. MySQL places NULLs with an `($(name) IS NULL)` sort key, and " *
-      "reads `$(name)` there as that column, not as the projection, so the NULLs would sort in the wrong place. " *
-      "Project it under a name no column has, e.g. \e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
-  end
-  return nothing
+  throw(QueryBuildError("PormG internal error: order_by(\"$(name)\") names a projection whose SQL was not " *
+                        "rendered. This is a PormG bug; please report it."))
 end
 
 # The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
 # and each joined CTE's projections. A joined model is found by its table among the models the base
 # model reaches through its relations (forward and reverse, any depth, whatever module defines them),
 # the `cjoin_on` targets, and the models of the base model's module.
+#
+# Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
+# that point (#404 fixes that order): an `order_by` path a later term resolves, the relation paths a
+# `cjoin_on` ON clause names, and the `cjoin`/`on()` paths. Each hop of such a path is walked without
+# joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
+# (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
   end
+  column_hops(path) = (segs = split(String(first(split(lstrip(path, '-'), "__@"))), "__"); segs[1:end-1])
+  hops = Iterators.flatten((
+    (split(p, "__") for p in keys(object.custom_join)),
+    (column_hops(p) for p in _projected_paths(object.order)),
+    (segs[1:end-1] for segs in instruc.cjoin_on_paths)))
+  for segs in hops
+    model = object.model
+    for (i, seg) in enumerate(segs)
+      step = _relation_step(object, model, seg, i == 1)
+      step === nothing && break
+      model = step[2]
+      push!(tables, Models.model_table_name(model))
+    end
+  end
+  # A CTE a later term orders by is joined when that term renders: `order_by("br__surname")`, which
+  # `_resolve_cte_string_paths!` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or
+  # one read inside a window, a `Case` condition or a function. What this walk misses is caught after
+  # every join exists (`_refuse_late_shadowed_null_key`), so a gap is a refusal, never a wrong order.
+  _order_cte_names!(tables, object.order)
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
     push!(tables, Models.model_table_name(aj.target))
@@ -195,6 +212,44 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     end
   end
   return cols
+end
+
+# The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it. A
+# path into a CTE is one by then, inside a window or a `When` condition too (`_resolve_cte_string_paths!`).
+_order_cte_names!(out::Set{String}, x::CTEReference) = (push!(out, x.name); out)
+_order_cte_names!(out::Set{String}, x::Union{SQLOrder,SQLField}) = _order_cte_names!(out, x.field)
+_order_cte_names!(out::Set{String}, x::FExpression) =
+  (_order_cte_names!(out, x.field_name); _order_cte_names!(out, x.operand))
+_order_cte_names!(out::Set{String}, x::FObject) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, collect(values(x.kwargs))))
+_order_cte_names!(out::Set{String}, x::WindowFunction) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, x.over.partition_by);
+   _order_cte_names!(out, x.over.order_by))
+_order_cte_names!(out::Set{String}, x::OperObject) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, x.values))
+_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, x.filters)
+_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, x.or)
+_order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)
+_order_cte_names!(out::Set{String}, ::Any) = out
+
+# #1130: the check behind `_from_column_names`' look-ahead. `get_order_query` decides each alias term's
+# NULL key while ORDER BY renders, before the `cjoin`/`on()` and `cjoin_on` joins exist; here, at the end
+# of `build`, every join does. A term that kept its alias in the key (`instruc.alias_null_keys`) whose
+# name a table of the statement does have as a column after all would place its NULLs by that column,
+# so it is refused rather than run: a join the look-ahead did not foresee is a loud error, never a
+# silent order.
+function _refuse_late_shadowed_null_key(object::SQLObject, instruc::SQLInstruction)
+  isempty(instruc.alias_null_keys) && return nothing
+  columns = _from_column_names(object, instruc)
+  for name in instruc.alias_null_keys
+    name in columns || continue
+    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
+      "query reads has a column with that name. $(_backend_name(instruc.connection)) places NULLs with an " *
+      "`($(name) IS NULL)` sort key and reads `$(name)` there as that column, and PormG could not tell in time " *
+      "to key it on the projection. Project it under a name no column has, e.g. " *
+      "\e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
+  end
+  return nothing
 end
 
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}

@@ -102,6 +102,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
   _guard_select_condition_collision(values, instruc)   # #706
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
+    mark = parameter_mark(instruc)   # #1130: what this projection binds, for `projection_params`
 
     # SQLText (from Value(x)) is a literal value, not a column reference.
     # Handle it separately: parameterize via _get_select_query(::SQLText) 
@@ -126,6 +127,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # (#882's reason). A `Subquery` over it inherits the kind through the inner build's record.
         kind = _read_kind(v_copy, instruc)
         kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
+        instruc.projection_params[alias] = bound_since(mark)
       end
       continue
     end
@@ -274,6 +276,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         name === nothing || (instruc.projection_kinds[Symbol(name)] = kind)
       end
     end
+    out = _projection_output_name(instruc.select[i])
+    out === nothing || (instruc.projection_params[out] = bound_since(mark))
   end
 
   # #194: the coarse warn that used to sit here is gone — the precise guard is
@@ -390,6 +394,7 @@ _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
+  from_columns = nothing   # #1130: the FROM tables' column names, read on the first term that needs them
   for v in object.order
     found_in_select = false
     v_field_copy = deepcopy(v.field)
@@ -536,6 +541,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     order_expr = nothing
     interval_name = nothing   # the alias `order_expr` re-renders, for the old-SQLite NULL flag
     interval_node = nothing   # #1313: or the term's own expression, rendered in its milliseconds
+    alias_name = nothing      # #1130: the projection this term prints by its output name
     # #1115: whether an unprojected term joins GROUP BY. Only the render branch below can say no — the
     # alias, memo and projected-name branches never hold an aggregate or a window.
     groups_term = true
@@ -550,6 +556,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # `values("time" => Max("time")); order_by("time")` would sort by the raw column.
       interval = _render_projected_interval_ms(v_field_copy._as, instruc)
       interval === nothing || (order_expr = first(interval); interval_name = v_field_copy._as)
+      alias_name = v_field_copy._as
       v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
     # #478: bound INSIDE the condition, so the hit cannot outlive the branch that consumes it. The
     # `else` arm below resolves through `_get_select_query`, which reaches
@@ -584,6 +591,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
            (projected_as = _projected_output_name(instruc, order_cache_key)) !== nothing
       interval = _render_projected_interval_ms(projected_as, instruc)   # #894, as above
       interval === nothing || (order_expr = first(interval); interval_name = projected_as)
+      alias_name = projected_as
       v_field_copy.field = quote_identifier(projected_as, instruc.connection)
       found_in_select = true
     else
@@ -656,6 +664,20 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       interval_node === nothing ||
         (null_flag = with_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
                                 group_key = groups_term))
+    end
+    # #1130: the flag of a term printed as its alias, where a table the query reads has a column of
+    # that name. Inside an expression MySQL, and SQLite before 3.30, read the name as that column
+    # before the alias, so `(laps IS NULL)` over `values("laps" => "position")` tested the never-NULL
+    # `laps` column and the NULLs sorted where the engine puts them, silently. The flag is the
+    # projection's own SQL instead. A bare `ORDER BY laps` reads the alias, so the term keeps it.
+    if order_expr === nothing && alias_name !== nothing && _emulates_nulls_order(instruc.connection)
+      from_columns === nothing && (from_columns = _from_column_names(object, instruc))
+      if alias_name in from_columns
+        order_expr = v_field_copy.field
+        null_flag = _projection_null_key(alias_name, instruc)
+      else
+        push!(instruc.alias_null_keys, alias_name)   # rechecked once every join exists
+      end
     end
     push!(instruc.order, order_expr === nothing ?
       _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection) :

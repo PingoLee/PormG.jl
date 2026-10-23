@@ -444,6 +444,11 @@ PormG.Migrations.migrate("my_db", destructive=true)
 Several instances calling `migrate()` at once queue on its lock; `lock_wait`, `lock_timeout` and
 `statement_timeout` bound how long they wait and what they block. See [Deploying](deploying.md).
 
+On MySQL, where each DDL statement commits on its own, a plan of more than one statement needs
+`migrate("my_db"; atomic = false)`: a failure part-way leaves the statements before it applied, and
+the next `makemigrations()` plans the rest ([Deploying](deploying.md)).
+
+
 To tolerate "a destructive plan is present — skip it rather than fail", catch the error:
 ```julia
 try

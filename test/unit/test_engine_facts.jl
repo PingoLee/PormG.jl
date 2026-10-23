@@ -97,7 +97,15 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_bulk_binds_column_arrays, :_overrides_generated_identity, :_allocate_ids,
                                :_allocates_ids_in_transaction, :_counts_skips_from_report,
                                # Phase 3c-2 (bulk_update): a `VALUES ROW(…)` derived table.
-                               :_values_row_prefix])
+                               :_values_row_prefix,
+                               # Phase 4a (migrations on a schema created from nothing): alters in
+                               # place, adopts no index it did not create, compares index names
+                               # case-insensitively, its own ignore list, a parenthesized DEFAULT
+                               # expression, and check()'s two engine readers.
+                               :_rebuilds_table, :_adopts_indexes, :_composite_name_key,
+                               :_builtin_ignore_tables, :_builtin_ignore_tables_name,
+                               :_parenthesizes_db_default, :_expression_default_findings,
+                               :_invalid_index_findings])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -186,6 +194,9 @@ end
   @test !_EF_QB._serializes_get_or_create(_EfMy())
   # Phase 3c-1: a bulk INSERT binds one parameter per cell, and counts its skips from MySQL's report.
   @test !_EF_QB._bulk_binds_column_arrays(_EfMy()) && _EF_QB._counts_skips_from_report(_EfMy())
-  # Migrations are phase 4's.
-  @test_throws MethodError PormG.Migrations._rebuilds_table(_EfMy())
+  # Phase 4a: MySQL alters in place and adopts no index it did not create; renaming an index is an
+  # alter, which phase 4b decides.
+  @test !PormG.Migrations._rebuilds_table(_EfMy()) && !PormG.Migrations._adopts_indexes(_EfMy())
+  @test PormG.Migrations._composite_name_key(_EfMy(), "Result_Idx") == "result_idx"
+  @test_throws MethodError PormG.Migrations._can_rename_index(_EfMy())
 end

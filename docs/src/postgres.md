@@ -248,7 +248,7 @@ returns a different answer, so a test suite running on SQLite fails where produc
 
 These run on SQLite too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
 
-- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) are **PostgreSQL-only** — SQLite supports only the default frame.
+- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) render on PostgreSQL (and MySQL) — SQLite supports only the default frame.
 - **[Subqueries and CTEs](read/subqueries_and_ctes.md)** — `.with(...)` and its `"<cte>__<column>"` columns, correlated subqueries, `Exists`/`OuterRef`, and CTE joins.
 - **[Filters and Aggregates](read/filters_and_aggregates.md)** and **[Functions and Dates](read/functions_and_dates.md)** — the `Sum`/`Count`/`Max`, date-bucket, and SQL-function surface.
 - **[Field Expressions](read/field_expressions.md)** — `F("...")` database-side arithmetic and field-to-field comparisons.

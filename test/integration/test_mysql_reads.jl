@@ -658,7 +658,8 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
                 "nv" => NthValue("grid", 2; over = ord()),
                 "lv" => LastValue("grid"; over = WindowOver(order_by = ["resultid"], frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING")),
                 "pr" => FirstValue("grid"; over = WindowOver(order_by = ["resultid"], frame = "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")),
-                "rd" => FirstValue("resultid"; over = WindowOver(order_by = ["raceid__date"], frame = "RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW"))
+                "rd" => FirstValue("raceid__date"; over = WindowOver(order_by = ["raceid__date"], frame = "RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW")),
+                "ep" => RPad("driverid__surname", 3, "")
                 ).order_by("resultid").list()
             @test length(rows) == n
             pts = [r[:points] for r in res]
@@ -675,9 +676,9 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
                 @test (i, r[:fv]) == (i, first_of_race)
                 @test isequal(r[:nv], i >= 2 ? res[2][:grid] : missing)
                 @test (i, r[:lv], r[:pr]) == (i, res[n][:grid], res[max(i - 1, 1)][:grid])
-                window = [x[:resultid] for x in res if b[:raceid__date] - Day(30) <= x[:raceid__date] <= b[:raceid__date]]
-                firstid = first(x[:resultid] for x in sort(res; by = x -> (x[:raceid__date], x[:resultid])) if x[:resultid] in window)
-                @test (i, r[:rd]) == (i, firstid)
+                # The earliest date within 30 days before this row's: the same for every peer.
+                @test (i, r[:rd]) == (i, minimum(x[:raceid__date] for x in res if b[:raceid__date] - Day(30) <= x[:raceid__date] <= b[:raceid__date]))
+                @test (i, r[:ep]) == (i, first(b[:driverid__surname], 3))
             end
             # GROUPS and EXCLUDE are frames MySQL does not have: refused before any SQL.
             e = try; M.Result.objects.values("v" => LastValue("grid"; over = WindowOver(order_by = ["resultid"],

@@ -102,10 +102,16 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
                      params = Any[8, "!", "o", "0"])
             @test (e.lp[1], e.cw[1], e.rp[1]) == ("***Prost", "Prost!", "Pr0st")
             @test all(c -> c[1] isa String, (e.lp, e.cw, e.rp))
-            # A statement MySQL will not prepare still runs (over the text protocol).
-            PormG.run_in_transaction(pool) do
-                @test rows("SELECT COUNT(*) AS n FROM $(t)").n[1] == 1
-            end
+            # A row-returning statement MySQL will not prepare (error 1295, measured) runs over the
+            # text protocol instead; and SQL that opens with a comment is still decoded.
+            @test rows("SHOW WARNINGS") isa DataFrame
+            c = rows("/* a note */ -- and a line\nSELECT t FROM $(t)")
+            @test c.t[1] == "Räikkönen's long text" && c.t[1] isa String
+            # A JSON column reports the binary character set, and is text.
+            run("ALTER TABLE $(t) ADD COLUMN j JSON")
+            run("UPDATE $(t) SET j = ? WHERE id = ?"; params = Any["{\"a\": 1}", 1])
+            js = rows("SELECT j FROM $(t) WHERE id = ?"; params = Any[1])
+            @test js.j[1] isa String && occursin("\"a\"", js.j[1])
         finally
             run("DROP TABLE IF EXISTS $(t)")
         end

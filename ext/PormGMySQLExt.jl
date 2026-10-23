@@ -296,18 +296,21 @@ Base.iterate(r::MySQLResult, i::Int = 1) =
 # expression whose length a parameter sets is typed a BLOB too (`LPAD(s, ?, …)`, `CONCAT_WS('', s, ?)`),
 # while a VARBINARY column (no BLOB type) arrives as text. The character set is the one that says it:
 # 63 is `binary`. Measured on 8.4. MySQL.jl keeps it only on a prepared statement's column definitions.
+# One exception: a JSON column reports `binary` too (MySQL stores it as a binary BLOB), and is text.
 const _BINARY_CHARSET = 63
-_by_charset(v::Vector{UInt8}, charset::Integer) = charset == _BINARY_CHARSET ? v : String(v)
-_by_charset(v::String, charset::Integer) = charset == _BINARY_CHARSET ? Vector{UInt8}(codeunits(v)) : v
-_by_charset(v, ::Integer) = v
+const _JSON_TYPE = 245
+_is_binary_column(c) = Int(c.charset) == _BINARY_CHARSET && Int(c.type) != _JSON_TYPE
+_by_charset(v::Vector{UInt8}, binary::Bool) = binary ? v : String(v)
+_by_charset(v::String, binary::Bool) = binary ? Vector{UInt8}(codeunits(v)) : v
+_by_charset(v, ::Bool) = v
 
-function _materialize(cursor, charsets::Union{Nothing,Vector{<:Integer}} = nothing)::MySQLResult
+function _materialize(cursor, binary::Union{Nothing,Vector{Bool}} = nothing)::MySQLResult
   schema = Tables.schema(cursor)
   names = schema === nothing ? Symbol[] : collect(Symbol, schema.names)
   raw = [Any[] for _ in names]
   for row in cursor, (j, name) in enumerate(names)
     v = _read_value(Tables.getcolumn(row, j), name)
-    push!(raw[j], charsets === nothing ? v : _by_charset(v, charsets[j]))
+    push!(raw[j], binary === nothing ? v : _by_charset(v, binary[j]))
   end
   # Narrow each column to the types it holds (`String`, `Union{Missing, Int64}`, …), as a driver
   # result would be, so `DataFrame(result)` gets typed columns.
@@ -343,8 +346,9 @@ end
 # A statement that returns rows is prepared even without parameters (#1130 phase 2c-3b), so its cells
 # are decoded by their columns' character sets (`_by_charset`): one more round trip for a read with
 # no parameters. Prepared as MySQL.jl's own parameterized `execute` does, then closed. One MySQL will
-# not prepare (error 1295) runs over the text protocol, as every other statement does.
-const _RETURNS_ROWS = r"^\s*(\(|SELECT\b|WITH\b|SHOW\b)"i
+# not prepare (error 1295, `SHOW WARNINGS`) runs over the text protocol, as every other statement does.
+# Leading comments are skipped (`/* … */`, `-- …`, `# …`), so raw SQL that opens with one is decoded too.
+const _RETURNS_ROWS = r"^(?:\s+|/\*.*?\*/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*(\(|SELECT\b|WITH\b|SHOW\b)"is
 const _UNPREPARABLE_ERRNO = 1295
 function _run(conn::MySQL.Connection, sql::String, bound)
   return _with_bare_interrupt() do
@@ -358,7 +362,7 @@ function _run(conn::MySQL.Connection, sql::String, bound)
       if stmt !== nothing
         try
           cursor = DBInterface.execute(stmt, bound === nothing ? () : bound)
-          return _materialize(cursor, Int[Int(c.charset) for c in stmt.columns])
+          return _materialize(cursor, Bool[_is_binary_column(c) for c in stmt.columns])
         finally
           DBInterface.close!(stmt)
         end

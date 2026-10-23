@@ -1077,7 +1077,7 @@ function engine_frame_sql(frame::String, ::PormGMySQL)
   return replace(frame, r"INTERVAL '(\d+) ([a-z]+)'" => function (m)
     n, unit = match(r"INTERVAL '(\d+) ([a-z]+)'", m).captures
     unit = Base.endswith(unit, "s") && chop(unit) in _FRAME_INTERVAL_UNITS ? chop(unit) : unit
-    unit == "millisecond" && return "INTERVAL $(parse(Int, n) * 1000) MICROSECOND"
+    unit == "millisecond" && return "INTERVAL $(parse(BigInt, n) * 1000) MICROSECOND"   # never wraps
     return "INTERVAL $(n) $(uppercase(unit))"
   end)
 end

@@ -440,7 +440,7 @@ spec_default = WindowOver(
 spec_full = WindowOver(
     partition_by=["constructorid"],
     order_by=["positionorder"],
-    frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL only
+    frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL and MySQL
 )
 
 query = M.Result.objects
@@ -497,7 +497,7 @@ ORDER BY "constructorid" ASC, "positionorder" ASC
 ```
 
 !!! warning
-    Explicit frame strings render on PostgreSQL and MySQL. Passing `frame=` on a SQLite connection throws a `BackendCapabilityError` with a helpful message. MySQL has `ROWS` and `RANGE` frames but no `GROUPS` frame and no `EXCLUDE` clause: either raises `BackendCapabilityError` there (the `window_groups_frame` and `window_frame_exclusion` rows of [Backend Capabilities](@ref)). A `RANGE` interval offset is written in PostgreSQL's spelling, `INTERVAL '7 days'`, and PormG renders MySQL's `INTERVAL 7 DAY` for it.
+    Explicit frame strings render on PostgreSQL and MySQL. Passing `frame=` on a SQLite connection throws a `BackendCapabilityError` with a helpful message. MySQL has `ROWS` and `RANGE` frames but no `GROUPS` frame and no `EXCLUDE` clause: either raises `BackendCapabilityError` there (the `window_groups_frame` and `window_frame_exclusion` rows of [Backend Capabilities](@ref)). A `RANGE` interval offset is written in PostgreSQL's spelling, `INTERVAL '7 days'`, and PormG renders MySQL's `INTERVAL 7 DAY` for it. MySQL takes a `RANGE` offset over exactly one `ORDER BY` key, so a window ordered with `nulls` (which MySQL orders by an extra `IS NULL` key) and a `RANGE` offset fails there with server error 3587.
 
 **Frame unit — `ROWS` vs `RANGE`**
 

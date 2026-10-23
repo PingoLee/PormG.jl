@@ -375,9 +375,9 @@ Both list arguments accept a bare scalar, so `partition_by = "raceid"` and
 `partition_by = ["raceid"]` are equivalent. An entry of any other type raises
 `QueryBuildError`.
 
-!!! warning "`frame` is PostgreSQL-only"
-    Passing `frame` on a SQLite connection raises `BackendCapabilityError`. Everything else
-    here works on both backends (SQLite ≥ 3.25.0).
+!!! warning "`frame` renders on PostgreSQL and MySQL"
+    Passing `frame` on a SQLite connection raises `BackendCapabilityError`, and on MySQL a `GROUPS`
+    frame or an `EXCLUDE` clause does. Everything else here works on every backend (SQLite ≥ 3.25.0).
 
 ```julia
 using PormG.Functions: WindowOver, Rank

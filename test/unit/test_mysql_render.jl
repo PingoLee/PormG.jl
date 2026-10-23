@@ -1223,6 +1223,9 @@ end
   @test occursin("RANGE BETWEEN INTERVAL 7 DAY PRECEDING AND CURRENT ROW)", rng("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))
   @test occursin("RANGE BETWEEN INTERVAL 1 WEEK PRECEDING AND INTERVAL 5000 MICROSECOND FOLLOWING)",
                  rng("RANGE BETWEEN INTERVAL '1 week' PRECEDING AND INTERVAL '5 milliseconds' FOLLOWING"))
+  # The count never wraps: past the 64-bit range it stays the number written, for the server to refuse.
+  @test occursin("INTERVAL 9300000000000000000 MICROSECOND PRECEDING",
+                 rng("RANGE BETWEEN INTERVAL '9300000000000000 milliseconds' PRECEDING AND CURRENT ROW"))
   @test occursin("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW",
                  _mr_inspect(_MR_PG.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))))[:sql_text])
   @test PormG._supports(MrMockMySQL(), :window_functions)

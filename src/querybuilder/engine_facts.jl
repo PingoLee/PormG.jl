@@ -74,6 +74,36 @@ _casts_bind_parameters(::PormGMySQL) = false   # MySQL.jl binds typed values; `?
 # the row back out-of-band, because `RETURNING` can hang there for some table shapes (#48).
 _insert_returns_rows(::PormGPostgres) = true
 _insert_returns_rows(::PormGSQLite) = false
+_insert_returns_rows(::PormGMySQL) = false   # MySQL has no `RETURNING` (#1266)
+
+# The statement that reads back the row an `INSERT` just wrote, on the same connection, when the
+# engine does not return it (`_insert_returns_rows`): `(sql, params)`, or `nothing` when there is no
+# key to read it by. PostgreSQL's `RETURNING *` carries the row. SQLite reads `last_insert_rowid()`,
+# which is per connection. MySQL keys on the primary key: an `AUTO_INCREMENT` one by the value the
+# INSERT's OK packet reports (`backend_last_insert_id`), which is the generated id or the one the
+# caller supplied; any other by the value the INSERT bound. Not `LAST_INSERT_ID()`: it changes only
+# when the server generates the value, so after a supplied id it names an older row (measured, #1266).
+_inserted_row_query(::PormGPostgres, model, insert, result, table) = nothing
+_inserted_row_query(::PormGSQLite, model, insert, result, table) =
+  ("SELECT * FROM $(table) WHERE rowid = last_insert_rowid();", nothing)
+function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
+  pk = get_model_pk_field(model)
+  pk === nothing && return nothing
+  name = String(pk)
+  field = model.fields[name]
+  value = if _is_auto_generated_bulk_primary_key(field)
+    id = backend_last_insert_id(conn, result)
+    id == 0 ? nothing : id
+  else
+    haskey(insert, name) ? _format_single(field, name, insert[name], "insert") : nothing
+  end
+  value === nothing && return nothing
+  params = get_parameter(conn)
+  set_context!(params, :where)
+  marker = add_parameter!(params, value)
+  column = safe_column_identifier(Models.model_column(model, name), conn)
+  return ("SELECT * FROM $(table) WHERE $(column) = $(marker)", params)
+end
 
 # A bulk statement binds one ARRAY per column (`unnest($n::<type>[])`, #672) rather than one
 # parameter per cell, so a chunk's parameter count does not grow with its rows.
@@ -98,6 +128,51 @@ _serializes_get_or_create(::PormGSQLite) = true
 # writers are already serialized for the whole transaction, so nothing can change under it.
 _locks_cascade_parents(::PormGPostgres) = true
 _locks_cascade_parents(::PormGSQLite) = false
+# MySQL locks rows as PostgreSQL does (InnoDB row locks, `FOR UPDATE` / `FOR SHARE`), and its writers
+# are not serialized, so a parent could change under the cascade the same way (#1130).
+_locks_cascade_parents(::PormGMySQL) = true
+
+# A mutation's own target in a subquery of its predicate — `UPDATE t … WHERE "Tb"."pk" IN (SELECT …
+# FROM t …)`, the selection half of a joined update or delete (#765) — is read through a derived
+# table: MySQL refuses a statement that reads the table it writes (error 1093) and accepts it once the
+# subquery is materialized first (measured on 8.4, #1130). PostgreSQL and SQLite read it as written.
+_materializes_target_key_set(::PormGPostgres) = false
+_materializes_target_key_set(::PormGSQLite) = false
+_materializes_target_key_set(::PormGMySQL) = true
+
+# A joined UPDATE whose SET reads a joined table (`update("x" => F("fk__col"))`): PostgreSQL and SQLite
+# (3.33+) name the joined tables in `UPDATE … FROM`; MySQL lists them after `UPDATE` and qualifies each
+# SET column with the target's alias, since an unqualified one is ambiguous there once a joined table
+# has a column of that name (measured on 8.4: the multi-table form updates and counts the matched
+# rows). Both are an inner join, with the join conditions in WHERE.
+_update_from_sql(::PormGPostgres, table, alias, set_parts, from_clause, where_sql) =
+  _update_from_clause_sql(table, alias, set_parts, from_clause, where_sql)
+_update_from_sql(::PormGSQLite, table, alias, set_parts, from_clause, where_sql) =
+  _update_from_clause_sql(table, alias, set_parts, from_clause, where_sql)
+_update_from_sql(::PormGMySQL, table, alias, set_parts, from_clause, where_sql) = """
+  UPDATE $(table) AS $(alias), $(from_clause)
+  SET $(join((string(alias, ".", p) for p in set_parts), ", "))
+  WHERE $(where_sql)
+  """
+
+# What `update()` returns: the rows its UPDATE matched (Django's semantics), a row whose value did not
+# change included. PostgreSQL's result carries the count. SQLite's `changes()` must run on the same
+# connection as the UPDATE, so the pair is pinned: the active transaction's connection, or one
+# `run_in_transaction` leases. MySQL's OK packet carries it, and the pool connects with `found_rows`, so
+# it is the matched rows there too (measured on 8.4: 2 for two rows set to the value they had).
+_update_row_count(conn::PormGPostgres, settings, sql, parameters) =
+  backend_num_affected_rows(conn, fetch(settings, sql, parameters))
+function _update_row_count(conn::PormGSQLite, settings, sql, parameters)
+  count_changes = () -> begin
+    fetch(settings, sql, parameters)
+    rows = fetch(settings, "SELECT changes()") |> DataFrames.DataFrame
+    Int(rows[1, 1])
+  end
+  return transaction_connection_for(settings) !== nothing ? count_changes() :
+         run_in_transaction(count_changes, settings)
+end
+_update_row_count(conn::PormGMySQL, settings, sql, parameters) =
+  backend_num_affected_rows(conn, fetch(settings, sql, parameters))
 
 # `select_for_update()` takes a real row lock. On SQLite the clause renders `""` (#26), so the guard
 # that exists because of the lock itself — no `distinct()` — does not apply. The transaction

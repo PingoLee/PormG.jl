@@ -19,7 +19,7 @@ transaction, so a failure part-way through leaves the database untouched.
   see the guard table below.
 - `table_alias::Union{Nothing, SQLTableAlias} = nothing`: accepted for call-signature compatibility
   with the other terminals; the delete path does not read it.
-- `connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing`: execute against this connection
+- `connection::Union{Nothing, _SQLEngine} = nothing`: execute against this connection
   pool instead of the one on the model's settings (those two abstract types are the backend markers
   the concrete pools subtype). Only the pool is overridden; the settings, and therefore the dialect
   and the `change_data` flag, still come from the model's `connect_key`. Whether the delete joins a
@@ -138,7 +138,7 @@ See also [`show_query`](@ref), [`inspect_query`](@ref), and [Deleting Records](w
 """
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-    connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, 
+    connection::Union{Nothing, _SQLEngine} = nothing, 
     show_query::Symbol = :execute,
     allow_delete_all::Bool = false)
   model = objct.object.model
@@ -369,6 +369,9 @@ function delete(objct::SQLObjectHandler;
         # INITIALLY DEFERRED, so the collector's intermediate states (a child DELETEd before its
         # parent, a SET_NULL applied mid-sweep) are legal there. Defer on SQLite too, or enforcement
         # would reject an ordering PostgreSQL accepts. Resets at COMMIT; no-op on PostgreSQL.
+        # MySQL has no deferral (#1272): nothing runs here, and every statement is checked as it runs,
+        # so the order below is what keeps them valid — the SET_NULL/SET_DEFAULT updates before any
+        # DELETE, and children before their parents (`topological_sort`, which refuses a cycle there).
         #
         # INSIDE the try, not between it and the BEGIN: `with_transaction(…, conn=conn)` releases
         # nothing on failure (conn_acquired = false), so a throw in that gap would skip the terminal
@@ -508,7 +511,7 @@ function process_collector!(collector::DeletionCollector)
   collect_fast_deletes!(collector)
   
   # Topologically sort models for deletion
-  collector.sorted_models = topological_sort(collector.dependencies)
+  collector.sorted_models = topological_sort(collector.dependencies; connection = collector.connection)
 end
 
 function should_check_related_existence(collector::DeletionCollector)::Bool
@@ -694,13 +697,23 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   end
 end
 
-function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
+# Children first: the reverse of a parents-first walk. A cycle in `dependencies` — two tables whose
+# rows reference each other, or one table's rows referencing others of the same table — has no order
+# in which every statement leaves the foreign keys satisfied. Refused as a `QueryBuildError` on every
+# engine. On an engine whose foreign keys cannot be checked at COMMIT (MySQL, `:deferred_foreign_keys`),
+# it is that missing feature PormG would need, so the refusal names it there (#1272).
+function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}}; connection = nothing)
   result = Vector{PormGModel}()
   temp_mark = Set{PormGModel}()
   perm_mark = Set{PormGModel}()
   
   function visit(node)
     if node in temp_mark
+      connection === nothing || _supports(connection, :deferred_foreign_keys) ||
+        throw(_capability_error(connection, :deferred_foreign_keys,
+          "Deleting rows of $(node.name) whose foreign keys form a cycle (rows that reference rows of the same table, or tables that reference each other)";
+          why = "Every statement of a delete is checked as it runs, so no order of them leaves those keys satisfied. " *
+                "Delete the rows in an order you choose, one level at a time, or declare the foreign key ON DELETE CASCADE in the schema."))
       throw(QueryBuildError("Circular dependency detected in model relationships"))
     end
     
@@ -793,6 +806,10 @@ function _affected_row_count(connection::PormGSQLite, result, conn)::Int
   changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
   return Int((changes |> DataFrames.DataFrame)[1, 1])
 end
+# MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
+# DELETE's count is its rows, and an UPDATE's includes a row whose value did not change (#1130).
+_affected_row_count(connection::PormGMySQL, result, conn)::Int =
+  (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
 _require_statement_conn(conn) = conn === nothing &&
   error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
 
@@ -832,7 +849,7 @@ _require_statement_conn(conn) = conn === nothing &&
 # `:join` at all (every cascade arm is a join-free `"<fk>__@in"` filter). It does move
 # `:parameter_buckets` (a root's ON value reports under `:where`), which is public `:dict` output.
 # ─────────────────────────────────────────────────────────────────────────────
-function _collector_predicate(connection::Union{PormGPostgres, PormGSQLite},
+function _collector_predicate(connection::_SQLEngine,
     keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
@@ -921,7 +938,7 @@ function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
   return [m for m in reverse(collector.sorted_models) if m in parents && haskey(collector.objects, m)]
 end
 
-function lock_objects(connection::PormGPostgres, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
     show_query::Symbol, conn)
   isempty(keys) && error(_emsg("PormG internal error in delete(): lock_objects was called with no keys for $(model.name) — this should not happen; please report it."))
   where_sql, parameters, alias = _collector_predicate(connection, keys)
@@ -990,7 +1007,7 @@ end
 # its whole ancestor chain. (A self-referential root still builds its own join-free child entries
 # once each — they are entries of the root model.)
 # ─────────────────────────────────────────────────────────────────────────────
-function lock_related_objects(connection::PormGPostgres, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+function lock_related_objects(connection::Union{PormGPostgres, PormGMySQL}, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
     show_query::Symbol, conn)
   results = Any[]
   locked = quote_identifier("__pormg_locked", connection)
@@ -1026,14 +1043,14 @@ A collected entry's query, built fresh into `parameters` for a row predicate. Th
 stripped from a private copy: the entry's `:key` projection is what a child's `"<fk>__@in"` reads,
 but a row predicate has no projection (#765, the #668 move).
 """
-function _build_entry(connection::Union{PormGPostgres, PormGSQLite}, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
+function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
   work = deepcopy(key[:objct].object)
   empty!(work.values)
   # #1002: a row predicate — `pk IN (…)` and an `EXISTS` fence — so a repeated row is invisible.
   return build(work, connection=connection, parameters=parameters, semi_join=true)
 end
 
-function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): delete_objects was called with no keys for $(model.name) — this should not happen; please report it."))
@@ -1073,7 +1090,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, conn)
+function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, conn)
   # Update field values using query object like CASCADE
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): update_field was called with no keys for $(model.name) — this should not happen; please report it."))

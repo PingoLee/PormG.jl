@@ -35,6 +35,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 | yes |
 | `window_groups_frame` | a window `frame` that starts with `GROUPS` | yes | no | no |
 | `window_frame_exclusion` | a window `frame` with an `EXCLUDE` clause | yes | no | no |
+| `deferred_foreign_keys` | foreign keys checked at `COMMIT`, so a transaction may write a child before its parent; `without_foreign_keys` | yes | yes | no |
 | `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 | no |
 | `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 | no |
 | `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it | from 9.6 | yes | no |
@@ -53,19 +54,19 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 
 Some promises PormG makes hold because the engine underneath provides something, not because PormG
 computes them. They hold on PostgreSQL and SQLite, each in its own way. A backend added later states
-its own column here: where it cannot keep a promise, PormG refuses or documents the difference rather
-than emulating it.
+its own column here (MySQL's is in progress): where it cannot keep a promise, PormG refuses or
+documents the difference rather than emulating it.
 
-| Promise | PostgreSQL | SQLite |
-|---|---|---|
-| Atomic migrations: `migrate` applies a plan whole, and a failed statement leaves nothing applied ([Migrations](migrations/workflow.md)) | transactional DDL | transactional DDL, inside `BEGIN IMMEDIATE` |
-| Two instances running `migrate` at once apply a plan once ([Deploying](migrations/deploying.md)) | an advisory lock | the database write lock (`BEGIN IMMEDIATE`) |
-| Writes return their row: `create`, `get_or_create` and `update_or_create` return what they wrote, generated columns included ([Creating rows](write/create.md)) | `INSERT … RETURNING *` | no `RETURNING`: the `INSERT`, then a `SELECT` of the row on the same connection, in one transaction |
-| Upserts: `bulk_insert(on_conflict = …)`, `update_or_create`, and a race-safe `get_or_create` ([Bulk operations](write/bulk.md)) | `INSERT … ON CONFLICT` | `INSERT … ON CONFLICT` (SQLite 3.24 or later); `get_or_create` also runs under the write lock |
-| Row locks: `select_for_update()` locks the rows it reads until the transaction ends ([Transactions](write/transaction.md)) | `FOR UPDATE` (and `of`, `nowait`, `skip_locked`, `no_key`); refused outside a transaction | no lock clause: inside `run_in_transaction` / `atomic` the transaction's `BEGIN IMMEDIATE` holds the database write lock until it ends; refused outside a transaction, as on PostgreSQL |
-| A transaction may write a child before its parent; foreign keys are checked at `COMMIT` ([Transactions](write/transaction.md)) | the foreign keys PormG's migrations create are `DEFERRABLE INITIALLY DEFERRED` | `PRAGMA defer_foreign_keys` in the transactions PormG opens (`run_in_transaction`, `atomic`, `delete`) |
-| Case-sensitive text: `@contains`, `@startswith`, `@endswith` and a plain equality respect case ([Filters](read/filters_and_aggregates.md)) | a deterministic collation (the default) | `BINARY` comparison, and `PRAGMA case_sensitive_like = ON`, which PormG sets |
-| A query waits without blocking other tasks ([Async](async.md)) | non-blocking driver I/O, in parallel across connections | one worker task, shared by every SQLite database in the process, runs statements one at a time; the calling task yields while it waits |
+| Promise | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|
+| Atomic migrations: `migrate` applies a plan whole, and a failed statement leaves nothing applied ([Migrations](migrations/workflow.md)) | transactional DDL | transactional DDL, inside `BEGIN IMMEDIATE` | not yet: migrations are a later phase ([#1268](https://github.com/PingoLee/PormG.jl/issues/1268)) |
+| Two instances running `migrate` at once apply a plan once ([Deploying](migrations/deploying.md)) | an advisory lock | the database write lock (`BEGIN IMMEDIATE`) | not yet: migrations are a later phase |
+| Writes return their row: `create`, `get_or_create` and `update_or_create` return what they wrote, generated columns included ([Creating rows](write/create.md)) | `INSERT … RETURNING *` | no `RETURNING`: the `INSERT`, then a `SELECT` of the row on the same connection, in one transaction | no `RETURNING`: the `INSERT`, then a `SELECT` of the row by its primary key (the `AUTO_INCREMENT` id the `INSERT` reports, or the key it supplied) on the same connection, in one transaction. `create` today; `get_or_create` and `update_or_create` are upserts, below |
+| Upserts: `bulk_insert(on_conflict = …)`, `update_or_create`, and a race-safe `get_or_create` ([Bulk operations](write/bulk.md)) | `INSERT … ON CONFLICT` | `INSERT … ON CONFLICT` (SQLite 3.24 or later); `get_or_create` also runs under the write lock | not yet ([#1267](https://github.com/PingoLee/PormG.jl/issues/1267)) |
+| Row locks: `select_for_update()` locks the rows it reads until the transaction ends ([Transactions](write/transaction.md)) | `FOR UPDATE` (and `of`, `nowait`, `skip_locked`, `no_key`); refused outside a transaction | no lock clause: inside `run_in_transaction` / `atomic` the transaction's `BEGIN IMMEDIATE` holds the database write lock until it ends; refused outside a transaction, as on PostgreSQL | `FOR UPDATE` (and `of`, `nowait`, `skip_locked`; `no_key` is refused); refused outside a transaction |
+| A transaction may write a child before its parent; foreign keys are checked at `COMMIT` ([Transactions](write/transaction.md)) | the foreign keys PormG's migrations create are `DEFERRABLE INITIALLY DEFERRED` | `PRAGMA defer_foreign_keys` in the transactions PormG opens (`run_in_transaction`, `atomic`, `delete`) | **no**: InnoDB checks a foreign key at each statement ([#1272](https://github.com/PingoLee/PormG.jl/issues/1272)), so a child written before its parent raises `IntegrityError` at once. `delete()` runs children first, as on every engine; a delete whose rows' foreign keys form a cycle, and `without_foreign_keys`, raise `BackendCapabilityError` (`deferred_foreign_keys`) |
+| Case-sensitive text: `@contains`, `@startswith`, `@endswith` and a plain equality respect case ([Filters](read/filters_and_aggregates.md)) | a deterministic collation (the default) | `BINARY` comparison, and `PRAGMA case_sensitive_like = ON`, which PormG sets | the `utf8mb4_0900_bin` collation of the columns PormG creates and of each connection ([#1265](https://github.com/PingoLee/PormG.jl/issues/1265)) |
+| A query waits without blocking other tasks ([Async](async.md)) | non-blocking driver I/O, in parallel across connections | one worker task, shared by every SQLite database in the process, runs statements one at a time; the calling task yields while it waits | each statement runs on a task of its own, in parallel across connections; the calling task yields while it waits |
 
 Two promises are PormG's own meaning rather than an engine's, and hold on every backend by
 construction: `F("grid") / 2` divides integers as integers, and a NULL `Concat` operand is skipped.
@@ -74,12 +75,13 @@ A backend whose operator computes something else gets a different rendering, not
 
 ## MySQL (in progress)
 
-MySQL support is being built in phases ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). The capability table above has its column; the guarantees table gains one when the writes and migrations phases decide its promises. What works today:
+MySQL support is being built in phases ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). The capability table and the guarantees table above have its column; a promise a later phase delivers says so there. What works today:
 
 - `adapter: MySQL` in `connection.yml` ([connection.yml](configuration/connection_yml.md)), with `using MySQL` (MySQL.jl 2.0) loading the extension.
 - **MySQL 8.4 or newer.** A connection to an older server is refused when it opens, with a `BackendCapabilityError` naming both versions. A MariaDB server is refused with an `InvalidConfigurationError`: it is planned as a separate backend.
 - The connection pool, raw `fetch` with `?` placeholders, `run_in_transaction` / `atomic`, and `with_advisory_lock` (`GET_LOCK`).
 - Server errors arrive as `IntegrityError`, `OperationalError` or `StatementError`, classified by MySQL's error number.
+- **Single-row writes and deletes**: `create`, `update` (it returns the rows it matched, a row it left unchanged included), `save`, and `delete` with its cascades. A joined filter's selection is read through a derived table, since MySQL refuses a subquery on the table an `UPDATE` or `DELETE` writes (error 1093); an `update` whose `SET` reads a joined table renders MySQL's multi-table `UPDATE t AS a, … SET a.col = …`.
 - **Plain-column reads** through `M.Model.objects`: `filter` (comparisons, `__@in` lists and subqueries, `Q`/`Qor`, the pattern lookups), joins along relation paths, `on()` and `cjoin_on`, `values`, `order_by`, `limit`/`offset`, `distinct`, `count` (plain, distinct, sliced), `exists`, `first`, `list`, `Exists`/`Subquery`/CTEs over the same, `Sum`/`Avg`/`Count`/`Max`/`Min` with `HAVING`, and `select_for_update` inside a transaction.
 
 What a read means on MySQL:
@@ -107,7 +109,7 @@ What a read means on MySQL:
 - **Text and binary values** read back by their column's character set: text as a `String`, a binary type as a `Vector{UInt8}`. MySQL marks every column of a binary collation (PormG's `utf8mb4_0900_bin`) with its binary flag, and MySQL.jl 2.0 decides by that flag, so PormG prepares every statement that returns rows, even one without parameters, to read the character set from its column definitions. A read with no parameters costs one more round trip for it.
 - **Window functions** render MySQL's own (`Rank`, `DenseRank` and `RowNumber` cast to a signed integer, so they read back as an `Int64`). `ROWS` and `RANGE` frames render, a `RANGE` interval in MySQL's `INTERVAL 7 DAY` spelling; a `GROUPS` frame or an `EXCLUDE` clause raises `BackendCapabilityError`. A window's `ORDER BY` without `nulls` sorts NULLs first ascending, as SQLite does.
 
-Not yet: writes (`create`, `update`, `delete`, bulk), migrations and `inspectdb`. Each fails before any SQL is sent, with a `MethodError` at the first part of the query builder that MySQL does not have yet, or an `UnsupportedConnectionError` that says so.
+Not yet: upserts (`get_or_create`, `update_or_create`, `bulk_insert(on_conflict = …)`), the other bulk writes, migrations and `inspectdb`. Each fails before any SQL is sent, with a `MethodError` at the first part of the query builder that MySQL does not have yet, or an `UnsupportedConnectionError` that says so.
 
 Each connection runs in UTC (`time_zone = '+00:00'`), with `utf8mb4`, the `utf8mb4_0900_bin` connection collation, and MySQL 8.4's default `sql_mode`, so neither the server's global settings nor a DBA's change to them alters what a statement means. A statement whose connection is lost is never retried: MySQL reports the same error whether or not the statement ran ([MySQL.jl#248](https://github.com/JuliaDatabases/MySQL.jl/issues/248)). That includes a connection the server closed while it sat idle in the pool past the server's `wait_timeout` (8 hours by default, often less on a hosted server): its next statement raises `OperationalError`, and the pool renews the connection after it. `idle_timeout:` does not prevent this: it closes only the overflow connections above `pool_size` ([Advanced Configuration](configuration/advanced.md)), and the base connections stay open however long they sit idle. Keep the server's `wait_timeout` above the application's longest idle period, or expect the first statement after such a gap to fail once with `OperationalError` while the pool renews the connection.
 

@@ -8,6 +8,7 @@ import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: PormGMySQL, _SQLEngine  # #1130: the MySQL marker, and every engine for the shared funnels
 import PormG: _backend_name  # #1129: an engine's name for a message, falling back to its type's name
+import PormG: _capability_error  # #1272: MySQL has no deferred foreign keys for without_foreign_keys
 import PormG: @pormg_debug
 # #721: `PormG.sqlite_bind_value` (`value_repr.jl`) is included AFTER this module, so it is named
 # qualified inside a function body and resolved at call time — `Generator.jl`'s spelling.
@@ -2936,8 +2937,10 @@ end
 Run `f()` in a transaction with foreign-key enforcement **suspended**, on a single pinned connection.
 
 **Try a plain [`atomic`](@ref) first.** Inside a transaction PormG already defers foreign-key checks
-to `COMMIT` on both backends, so a block that is *transiently* inconsistent — writing children before
-their parents — commits without any special handling. Reach for this only when that is not enough:
+to `COMMIT` on PostgreSQL and SQLite, so a block that is *transiently* inconsistent — writing children
+before their parents — commits without any special handling. MySQL checks a foreign key at each
+statement and has no deferral, so there this raises `BackendCapabilityError` (`deferred_foreign_keys`):
+write the parents first. Reach for this only when that is not enough:
 a repair that must leave a violation in place, or a test that plants one deliberately.
 
 It is still **one** transaction on both backends: nothing inside `f()` commits until the whole block
@@ -3068,6 +3071,14 @@ function without_foreign_keys(f::Function, pool::PormGPostgres; check_on_exit::B
     f()
   end
 end
+
+# MySQL (#1272): InnoDB checks a foreign key at the statement and cannot defer it. `FOREIGN_KEY_CHECKS = 0`
+# switches the check off, and switching it back on does not recheck the rows written meanwhile
+# (measured on 8.4), so there is no check at exit to stand behind the block as SQLite's
+# `foreign_key_check` does. Refused before any transaction opens, naming the missing feature.
+without_foreign_keys(f::Function, pool::PormGMySQL; check_on_exit::Bool = true) =
+  throw(_capability_error(pool, :deferred_foreign_keys, "without_foreign_keys";
+    why = "Write the parent rows before their children, in one atomic block."))
 
 without_foreign_keys(f::Function, settings::PormGSettings; check_on_exit::Bool = true) =
   without_foreign_keys(f, settings.connections; check_on_exit = check_on_exit)

@@ -1357,3 +1357,84 @@ end
     @test (first(sql, 40), occursin(R, sql)) == (first(sql, 40), false)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL single-row writes: the INSERT, its read-back key, UPDATE and the joined forms (#1130 phase 3a)
+# MySQL has no RETURNING, so `create` runs the INSERT and reads the row back on the same connection.
+# Expected: the INSERT text; the read-back keyed on the id the INSERT's OK packet reports for an
+# AUTO_INCREMENT pk (never `LAST_INSERT_ID()`, which keeps an older id after a supplied one), and on the
+# bound value for any other pk; `nothing` with no key. A simple UPDATE as on every engine; a joined
+# filter's selection read through a derived table (MySQL error 1093 otherwise); a SET that reads a joined
+# table in MySQL's multi-table form with the SET qualified. PostgreSQL and SQLite render as before.
+# ─────────────────────────────────────────────────────────────────────────────
+struct MrInsertResult; id::Int; end
+PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
+
+@testset "MySQL single-row writes: INSERT, the read-back key, UPDATE and its joined forms" begin
+  my = MrMockMySQL()
+  ins = _MR_MY.Driver.objects.create("forename" => "Ayrton", "surname" => "Senna", "nationality" => "Brazilian",
+                                     "dob" => Date(1960, 3, 21); show_query = :dict)
+  # The column order follows the row's fields; the shape does not.
+  @test startswith(ins[:sql_text], "INSERT INTO `driver` (\n  ") && endswith(ins[:sql_text], ") VALUES (\n  ?, ?, ?, ?\n)\n")
+  @test !occursin("RETURNING", ins[:sql_text]) && ins[:parameter_count] == 4
+  # The read-back: an AUTO_INCREMENT pk by the OK packet's id, a generated or supplied one alike.
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(42), "`driver`")
+  @test rb[1] == "SELECT * FROM `driver` WHERE `driverid` = ?" && rb[2].select_params == Any[] && rb[2].where_params == Any[42]
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 500), MrInsertResult(500), "`driver`")
+  @test rb[2].where_params == Any[500]
+  @test _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(0), "`driver`") === nothing
+  # SQLite keeps its rowid read-back; PostgreSQL's RETURNING carries the row.
+  @test _MR_QB._inserted_row_query(MrMockSQLite(), _MR_SL.Driver, Dict{String,Any}(), nothing, "\"driver\"") ==
+        ("SELECT * FROM \"driver\" WHERE rowid = last_insert_rowid();", nothing)
+  @test _MR_QB._inserted_row_query(MrMockPostgres(), _MR_PG.Driver, Dict{String,Any}(), nothing, "\"driver\"") === nothing
+  @test occursin("RETURNING *", _MR_PG.Driver.objects.create("forename" => "A", "surname" => "B", "nationality" => "C",
+                                                              "dob" => Date(1960, 1, 1); show_query = :sql))
+
+  upd = _MR_MY.Result.objects.filter("grid" => 1).update("laps" => 5; show_query = :dict)
+  @test upd[:sql_text] == "UPDATE `result` AS `Tb`\nSET `laps` = ?\nWHERE `Tb`.`grid` = ?\n" && upd[:parameters] == Any[5, 1]
+  # A joined filter: the selection through a derived table, then the fence; markers in text order.
+  upd = _MR_MY.Result.objects.filter("driverid__nationality" => "British").update("laps" => 5; show_query = :dict)
+  @test occursin("WHERE `Tb`.`resultid` IN (SELECT * FROM (SELECT DISTINCT `Tb`.`resultid`\n  FROM `result` as `Tb`", upd[:sql_text])
+  @test occursin(") AS `__pormg_keys`)\n  AND EXISTS (SELECT 1 FROM (SELECT 1) AS `__pormg_anchor`", upd[:sql_text])
+  assert_marker_count(upd, :sqlite)
+  @test upd[:parameters] == Any[5, "British", "British"]
+  # PostgreSQL and SQLite read the subquery as written.
+  for models in (_MR_PG, _MR_SL)
+    sql = models.Result.objects.filter("driverid__nationality" => "British").update("laps" => 5; show_query = :sql)
+    @test occursin("IN (SELECT DISTINCT \"Tb\".\"resultid\"", sql) && !occursin("__pormg_keys", sql)
+  end
+  # A SET that reads a joined table: MySQL's multi-table UPDATE, the SET qualified.
+  upd = _MR_MY.Result.objects.filter("grid" => 3).update("laps" => F("raceid__year"); show_query = :dict)
+  @test upd[:sql_text] == "UPDATE `result` AS `Tb`, `race` AS `Tb_1`\nSET `Tb`.`laps` = `Tb_1`.`year`\n" *
+                          "WHERE `Tb`.`raceid` = `Tb_1`.`raceid` AND `Tb`.`grid` = ?\n"
+  @test occursin("FROM \"race\" AS \"Tb_1\"",
+                 _MR_PG.Result.objects.filter("grid" => 3).update("laps" => F("raceid__year"); show_query = :sql))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL has no deferred foreign keys: the shapes that need them are refused, naming it (#1272)
+# InnoDB checks a foreign key at each statement. Expected: a delete whose rows' foreign keys form a
+# cycle raises BackendCapabilityError naming `deferred_foreign_keys` and MySQL on MySQL, and the
+# QueryBuildError it always raised on PostgreSQL and SQLite; `without_foreign_keys` is refused on a
+# MySQL pool before any transaction opens; the capability row answers per engine.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL has no deferred foreign keys: cycles and without_foreign_keys are refused" begin
+  deps = Dict{PormG.PormGModel,Set{PormG.PormGModel}}(_MR_MY.Result => Set([_MR_MY.Result]))
+  err = try; _MR_QB.topological_sort(deps; connection = MrMockMySQL()); nothing; catch e; e; end
+  @test err isa PormG.BackendCapabilityError && occursin("MySQL", sprint(showerror, err)) &&
+        occursin("checked at COMMIT", sprint(showerror, err))
+  for conn in (MrMockPostgres(), MrMockSQLite(), nothing)
+    err = try; _MR_QB.topological_sort(deps; connection = conn); nothing; catch e; e; end
+    @test err isa PormG.QueryBuildError && occursin("Circular dependency", sprint(showerror, err))
+  end
+  # Children first when there is no cycle, on every engine.
+  deps = Dict{PormG.PormGModel,Set{PormG.PormGModel}}(_MR_MY.Result => Set([_MR_MY.Race, _MR_MY.Driver]))
+  order = _MR_QB.topological_sort(deps; connection = MrMockMySQL())
+  @test first(order) === _MR_MY.Result && Set(order[2:end]) == Set([_MR_MY.Race, _MR_MY.Driver])
+  err = try; PormG.ConnectionPool.without_foreign_keys(() -> error("ran"), MrMockMySQL()); nothing; catch e; e; end
+  @test err isa PormG.BackendCapabilityError && occursin("without_foreign_keys", sprint(showerror, err))
+  @test !PormG.Kernel._supports(MrMockMySQL(), :deferred_foreign_keys)
+  # Its writers are not serialized, so a cascade locks its parents first, as on PostgreSQL (#770).
+  @test _MR_QB._locks_cascade_parents(MrMockMySQL()) && !_MR_QB._locks_cascade_parents(MrMockSQLite())
+  @test PormG.Kernel._supports(MrMockPostgres(), :deferred_foreign_keys) && PormG.Kernel._supports(MrMockSQLite(), :deferred_foreign_keys)
+end

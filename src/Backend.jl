@@ -89,6 +89,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_drain_connection!(pool, conn)              -> Bool: is `conn` back to a clean, reusable state (#315)
 #   backend_num_affected_rows(pool, result)            -> Int matched-row count (PG)
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
+#   backend_last_insert_id(pool, result)               -> Int the AUTO_INCREMENT value an INSERT wrote (MySQL; #1266)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
@@ -104,7 +105,7 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_execute, :backend_execute_async, :backend_is_connection_error,
            :backend_is_permanent_connect_error,
            :backend_cancel_query!, :backend_drain_connection!,
-           :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
+           :backend_num_affected_rows, :backend_num_rows, :backend_last_insert_id, :backend_copy_in!,
            :backend_sqlite_version, :backend_mysql_version)
   @eval begin
     function $fn end

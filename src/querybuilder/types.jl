@@ -2081,7 +2081,7 @@ end
 mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
   settings::PormGSettings  # Connection settings
-  connection::Union{PormGPostgres,PormGSQLite}  # Database connection
+  connection::_SQLEngine  # Database connection
   objects::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel,Set{PormGModel}}  # Model dependencies
   # One entry per cascade path, exactly like `objects` (#459 (a)). This used to hold a BARE

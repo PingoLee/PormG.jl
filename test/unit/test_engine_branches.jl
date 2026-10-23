@@ -52,15 +52,17 @@ const _EB_REVIEWED = Dict(
   # fact (`querybuilder/engine_facts.jl`). What remains here is compliant or a recorded quirk:
   #   - `if isa PormGPostgres … elseif isa PormGSQLite … else throw(_unsupported_conn(…))` chains,
   #     which name both engines and refuse any other (execution_bulk, execution_write, many_to_many,
-  #     expression_render's `xor` — two per chain; execution_bulk 438 and execution_write 1202 are
-  #     one-line `isa Union{…} ||` / `a || b` forms of the same refusal). expression_render's three
+  #     expression_render's `xor` — two per chain; execution_bulk 438 is a one-line `isa Union{…} ||`
+  #     form of the same refusal). expression_render's three
   #     temporal chains (a shift, a difference, a day-count shift) became one method per engine when
-  #     MySQL gained its own (#1130 phase 2b), 8 → 2;
+  #     MySQL gained its own (#1130 phase 2b), 8 → 2. execution_write's `insert` read-back, joined
+  #     `update` and `update` count became engine facts when MySQL gained writes (#1130 phase 3a),
+  #     11 → 5: the two upsert chains (phase 3b) and the SQLite id reservation remain;
   #   - one-engine quirks whose other arm is the engine-neutral path: execution_write 75 (consume a
   #     reserved SQLite id), projection_types 16 (SQLite's literal affinity), select_nodes 166 (window
   #     frames, a gap in PormG on SQLite).
   "src/querybuilder/execution_bulk.jl" => 7,
-  "src/querybuilder/execution_write.jl" => 11,
+  "src/querybuilder/execution_write.jl" => 5,
   "src/querybuilder/expression_render.jl" => 2,
   "src/querybuilder/many_to_many.jl" => 2,
   "src/querybuilder/projection_types.jl" => 1,

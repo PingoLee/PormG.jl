@@ -1,5 +1,6 @@
-# MySQL backend, phase 3a (#1130): single-row writes and deletes against a live MySQL 8.4 — `create`,
-# `update`, `save` and `delete` with its cascades.
+# MySQL backend, phases 3a and 3b (#1130): single-row writes and deletes against a live MySQL 8.4 —
+# `create`, `update`, `save`, `delete` with its cascades, and the upserts `update_or_create` and
+# `get_or_create` (#1267).
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl
 #
@@ -51,13 +52,31 @@ Node = Models.Model("p3w_node",
   id = Models.IDField(),
   up = Models.ForeignKey("Node", pk_field = "id", on_delete = "CASCADE", null = true, related_name = "children"),
   name = Models.CharField())
+# The upserts (#1267): `ref` is the lookup; `code` a second, nullable unique key.
+Constructor = Models.Model("p3w_constructor",
+  id = Models.IDField(),
+  ref = Models.CharField(unique = true),
+  code = Models.CharField(null = true, unique = true),
+  nationality = Models.CharField(null = true))
+# Two NOT NULL unique keys.
+Circuit = Models.Model("p3w_circuit",
+  id = Models.IDField(),
+  ref = Models.CharField(unique = true),
+  name = Models.CharField(unique = true))
+# An `auto_now` column, which an update_or_create hit refreshes.
+Season = Models.Model("p3w_season",
+  id = Models.IDField(),
+  year = Models.IntegerField(unique = true),
+  url = Models.CharField(),
+  updated = Models.DateTimeField(auto_now = true))
 end
 
 # The tables, in drop order (children first).
-const _MYW_TABLES = ("p3w_note", "p3w_guard", "p3w_driver", "p3w_team", "p3w_token", "p3w_plain", "p3w_node")
+const _MYW_TABLES = ("p3w_note", "p3w_guard", "p3w_driver", "p3w_team", "p3w_token", "p3w_plain", "p3w_node",
+                     "p3w_constructor", "p3w_circuit", "p3w_season")
 
-@testset "MySQL backend, phase 3a: single-row writes and deletes (#1130)" begin
-if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
+@testset "MySQL backend, phases 3a and 3b: single-row writes, deletes and upserts (#1130)" begin
+if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
     pool = PormG.config[PORMG_DB_FOLDER].connections
     PormG.config["p3w_my"] = PormG.Configuration.Settings(connections = pool, change_data = true, db_def_folder = "p3w_my")
     Base.invokelatest(PormG.Models.set_models, P3wModels, "p3w_my")
@@ -86,6 +105,12 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
             "`note` VARCHAR(255) NULL DEFAULT 'from the server')" * tail)
         run("CREATE TABLE `p3w_node` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `up` BIGINT NULL, `name` VARCHAR(255) NOT NULL, " *
             "$(fk("p3w_node", "up", "p3w_node")))" * tail)
+        run("CREATE TABLE `p3w_constructor` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `ref` VARCHAR(255) NOT NULL UNIQUE, " *
+            "`code` VARCHAR(255) NULL UNIQUE, `nationality` VARCHAR(255) NULL)" * tail)
+        run("CREATE TABLE `p3w_circuit` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `ref` VARCHAR(255) NOT NULL UNIQUE, " *
+            "`name` VARCHAR(255) NOT NULL UNIQUE)" * tail)
+        run("CREATE TABLE `p3w_season` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `year` INT NOT NULL UNIQUE, " *
+            "`url` VARCHAR(255) NOT NULL, `updated` DATETIME(3) NOT NULL)" * tail)
 
         # What: `create` returns the row the database wrote, read back on the same connection.
         # SQL: INSERT INTO `p3w_team` (…) VALUES (?, …), then SELECT * FROM `p3w_team` WHERE `id` = ?, bound
@@ -231,6 +256,85 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
             end)
             @test e isa PormG.IntegrityError
             @test W.Driver.objects.count() == n
+        end
+
+        # What: update_or_create upserts on its lookup, and `created` says whether the row was new.
+        # SQL: INSERT INTO `p3w_constructor` (…) VALUES (?, ?) AS `__pormg_new` ON DUPLICATE KEY UPDATE
+        #      `nationality` = `__pormg_new`.`nationality`, then SELECT * … WHERE `ref` = ? LIMIT 1.
+        # Why: MySQL's upsert names no target and updates whichever row a unique key matched (#1267), so
+        #      it runs only when the lookup is the one key the row can conflict on. Its affected-row count
+        #      is 1 for an insert AND for a duplicate already holding the values; the OK packet's id tells
+        #      them apart on an AUTO_INCREMENT table, a pre-check on any other.
+        @testset "update_or_create: ON DUPLICATE KEY UPDATE on the lookup, created from the statement" begin
+            row, created = W.Constructor.objects.update_or_create("ref" => "mclaren"; defaults = ["nationality" => "British"])
+            @test created && row.ref == "mclaren" && row.nationality == "British" && row.id isa Integer
+            id = row.id
+            row, created = W.Constructor.objects.update_or_create("ref" => "mclaren"; defaults = ["nationality" => "UK"])
+            @test !created && row.id == id && row.nationality == "UK"
+            # The same values again: MySQL counts 1, as for an insert, and reports id 0.
+            row, created = W.Constructor.objects.update_or_create("ref" => "mclaren"; defaults = ["nationality" => "UK"])
+            @test !created && row.id == id && row.nationality == "UK"
+            @test W.Constructor.objects.count() == 1
+            # A row that could also conflict on `code` is refused, and no other row is touched.
+            W.Constructor.objects.create("ref" => "brabham", "code" => "BRA", "nationality" => "British")
+            e = caught(() -> W.Constructor.objects.update_or_create("ref" => "mclaren"; defaults = ["code" => "BRA"]))
+            @test e isa PormG.BackendCapabilityError && occursin("(code)", msg(e))
+            brabham = only(W.Constructor.objects.filter("ref" => "brabham").values("code", "nationality").list())
+            @test (brabham[:code], brabham[:nationality]) == ("BRA", "British")
+            @test ismissing(only(W.Constructor.objects.filter("ref" => "mclaren").values("code").list())[:code])
+            # A primary key without AUTO_INCREMENT: the pre-check decides.
+            row, created = W.Plain.objects.update_or_create("code" => "PRO"; defaults = ["label" => "Prost"])
+            @test created && (row.code, row.label, row.note) == ("PRO", "Prost", "from the server")
+            row, created = W.Plain.objects.update_or_create("code" => "PRO"; defaults = ["label" => "Prost"])
+            @test !created && row.label == "Prost"
+            row, created = W.Plain.objects.update_or_create("code" => "PRO"; defaults = ["label" => "Alain"])
+            @test !created && row.label == "Alain"
+            # A hit refreshes an `auto_now` column, as update() does.
+            first_row, created = W.Season.objects.update_or_create("year" => 1988; defaults = ["url" => "u1988"])
+            @test created
+            sleep(0.05)
+            again, created = W.Season.objects.update_or_create("year" => 1988; defaults = ["url" => "u1988"])
+            @test !created && again.id == first_row.id && again.updated > first_row.updated
+        end
+
+        # What: get_or_create finds the row by its lookup, or inserts it with a plain INSERT.
+        # SQL: SELECT … WHERE `ref` = ? LIMIT 1; on a miss INSERT INTO `p3w_circuit` (…) VALUES (?, ?), then
+        #      the same SELECT.
+        # Why: get_or_create never updates a row, so MySQL needs no targeted DO NOTHING: the lookup's unique
+        #      index makes a concurrent insert of the same key raise, and the winner is read back (#1267).
+        #      A conflict on another key is MySQL's IntegrityError, as on PostgreSQL.
+        @testset "get_or_create: a plain INSERT, the winner of a race read back" begin
+            monza, created = W.Circuit.objects.get_or_create("ref" => "monza"; defaults = ["name" => "Monza"])
+            @test created && monza.name == "Monza"
+            # A hit needs no other column.
+            hit, created = W.Circuit.objects.get_or_create("ref" => "monza")
+            @test !created && hit.id == monza.id
+            # The row conflicts on `name`, not on its lookup: MySQL's IntegrityError, nothing written.
+            e = caught(() -> W.Circuit.objects.get_or_create("ref" => "monza2"; defaults = ["name" => "Monza"]))
+            @test e isa PormG.IntegrityError && W.Circuit.objects.count() == 1
+            # A race: another session inserted the key between the get and this INSERT. The miss path is
+            # called directly with the INSERT get_or_create builds, the winner already in the table.
+            W.Circuit.objects.create("ref" => "spa", "name" => "Spa")
+            QB = PormG.QueryBuilder
+            params = QB.get_parameter(pool)
+            QB.set_context!(params, :select)
+            insert_sql = "INSERT INTO `p3w_circuit` (`ref`, `name`) VALUES ($(QB.add_parameter!(params, "spa")), " *
+                         "$(QB.add_parameter!(params, "Spa-Francorchamps")))"
+            winner, created = QB._create_on_miss(pool, PormG.config["p3w_my"], W.Circuit, insert_sql, params,
+                                                 () -> W.Circuit.objects.filter("ref" => "spa").first(), ["ref"])
+            @test !created && winner.name == "Spa" && W.Circuit.objects.filter("ref" => "spa").count() == 1
+            # Inside a transaction, the duplicate rolls back only its own statement.
+            PormG.atomic(PormG.config["p3w_my"]) do
+                W.Circuit.objects.create("ref" => "imola", "name" => "Imola")
+                e = caught(() -> W.Circuit.objects.get_or_create("ref" => "imola2"; defaults = ["name" => "Imola"]))
+                @test e isa PormG.IntegrityError
+                W.Circuit.objects.create("ref" => "suzuka", "name" => "Suzuka")
+            end
+            @test W.Circuit.objects.filter("ref__@in" => ["imola", "imola2", "suzuka"]).count() == 2
+            # A lookup the model does not declare unique is refused on the miss.
+            e = caught(() -> W.Plain.objects.get_or_create("label" => "Mansell"; defaults = ["code" => "MAN"]))
+            @test e isa PormG.QueryBuildError && occursin("to be a unique key of the model", msg(e))
+            @test W.Plain.objects.filter("code" => "MAN").count() == 0
         end
     finally
         for t in _MYW_TABLES

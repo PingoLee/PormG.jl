@@ -299,9 +299,22 @@ RETURNING *, (xmax = 0) AS "__pormg_created"
 
 **On SQLite** the statement is the same `INSERT ... ON CONFLICT ... DO UPDATE` **without** `RETURNING` (which PormG avoids on SQLite — see the note in the single-record section). `created` is derived from a pre-check + read-back run inside SQLite's serialized write transaction (`BEGIN IMMEDIATE` + the writer lock), so it is exact under the writer serialization that always guards writes.
 
+**On MySQL** the statement is `INSERT ... AS __pormg_new ON DUPLICATE KEY UPDATE c = __pormg_new.c, ...`,
+then a `SELECT` of the row by the lookup on the same connection. MySQL's upsert names no conflict
+target: it updates the row that **any** unique key matched. So PormG builds it only when the lookup is
+the one unique key the row can conflict on, and raises `BackendCapabilityError`
+(`upsert_conflict_target`, [Backend Capabilities](../backends.md)) when the row could also match on
+another one. That is any other unique field or `UniqueConstraint` whose columns the row sets to non-NULL
+values, a primary key the row supplies, or a functional or partial `UniqueConstraint`. A NULL never
+conflicts, and neither does an id the database generates or a UUID PormG mints. `created` comes from
+the statement's own report when the primary key is `AUTO_INCREMENT`, and is exact. For any other primary
+key (the lookup is then that key) a pre-check by the lookup decides, without a lock, so it can be wrong
+when another session inserts or deletes that same key between the two statements. A duplicate uses up an
+`AUTO_INCREMENT` value, as every MySQL `INSERT` that hits a duplicate does.
+
 ### Rules and behavior
 
-- **Lookup → conflict target.** The lookup pair(s) identify the row and become the `ON CONFLICT (...)` columns. A composite key is fully supported — pass several lookup pairs: `update_or_create("year" => 2024, "round" => 8; defaults = [...])`. The target must be backed by a real UNIQUE/PRIMARY KEY constraint in the database (PormG does not require it to be declared on the model — the database is the source of truth; a missing constraint surfaces as the backend's own error).
+- **Lookup → conflict target.** The lookup pair(s) identify the row and become the `ON CONFLICT (...)` columns. A composite key is fully supported — pass several lookup pairs: `update_or_create("year" => 2024, "round" => 8; defaults = [...])`. The target must be backed by a real UNIQUE/PRIMARY KEY constraint in the database (PormG does not require it to be declared on the model — the database is the source of truth; a missing constraint surfaces as the backend's own error). **On MySQL** the model is the only source: the lookup must be its primary key, a `unique = true` field, or a `UniqueConstraint` over exactly those fields, or the call raises `QueryBuildError` before any SQL.
 - **`defaults` is required** and is the DO UPDATE `SET`. Fields in `defaults` are also merged into the INSERT. `update_or_create` always updates on conflict; when you want to *keep* an existing row untouched, use [`get_or_create`](#get-or-create) instead.
 - **Lookup and `defaults` must not overlap** — each field is either a match key or an updated value, never both.
 - **`auto_now` fields refresh on the update arm.** Any field with `auto_now = true` is appended to the SET so a conflict updates its timestamp (matching `.save()`/`.update()`); `auto_now_add` fields are create-only and are not refreshed.
@@ -337,6 +350,14 @@ row, created = M.Status.objects.get_or_create(
 - **`defaults` is optional** — a bare `get_or_create("statusid" => 200)` is a valid pure get-or-create. `defaults` supplies extra columns applied **only** when a row is inserted.
 - **Non-lookup `NOT NULL` columns are needed only on insert.** `get_or_create` runs the `SELECT` first; on a match it returns immediately, so a matching row is returned even if you didn't supply every required column. On a miss the insert must satisfy every `NOT NULL` column (via the lookup, `defaults`, or a model default), exactly like `create`.
 - **Race-safe** on PostgreSQL and SQLite. The create path runs `INSERT ... ON CONFLICT (lookup) DO NOTHING`, so if a competing writer inserts the same key first, PormG re-reads the winner and returns `created = false` — no duplicate-key crash. That rests on the engine's `ON CONFLICT`, and on SQLite also on running the whole call under the write lock ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature)).
+- **Race-safe on MySQL, through the unique index.** MySQL has no targeted `DO NOTHING`, and `get_or_create`
+  never updates a row, so the create path is a plain `INSERT`, as in Django. A competing insert of the same
+  key makes it raise a duplicate-key error. PormG then re-reads the lookup and returns the winner with
+  `created = false`, and when nothing matches (the row conflicted on another unique key) it raises the
+  `IntegrityError`, as PostgreSQL does. MySQL undoes only the failed statement, so an open transaction
+  stays usable. The lookup must be declared unique on the model (its primary key, a `unique = true`
+  field, or a `UniqueConstraint` over exactly those fields), or a miss raises `QueryBuildError` before
+  the `INSERT`.
 - **A row that cannot be read back is a database condition, not a usage error** (#1299). On
   PostgreSQL, if the winner of the race is deleted before PormG re-reads it, `get_or_create` raises
   `OperationalError`, and the call retried can succeed (a trigger or rule that skips the insert raises

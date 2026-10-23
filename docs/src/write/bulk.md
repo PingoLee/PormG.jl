@@ -93,6 +93,8 @@ Qualifications:
 | Chunk size | `chunk_size` as given — no parameter cap applies (a non-positive `chunk_size` falls back to 65,535 ÷ columns rows) | `chunk_size`, lowered automatically so a statement stays under SQLite's limit of 32,766 parameters (999 on SQLite builds older than 3.32) |
 | Statement text | the same for every chunk | grows with the chunk's row count |
 
+MySQL carries the rows as SQLite does, one `?` per cell in a `VALUES` list, with `chunk_size` lowered so a statement stays under 65,535 parameters. `bulk_update()` does not run on MySQL yet ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
+
 For a table whose columns have the types their fields declare — every table PormG created or migrated — what you observe is the same on both: the rows written, the returned `count`, and the errors raised. Only the inspection output differs, because `show_query` shows what each backend actually runs. On PostgreSQL, `show_query = :params` returns one vector per column, after any filter values:
 
 ```julia
@@ -207,6 +209,11 @@ ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 - Under `DO NOTHING` with server-generated primary keys, PostgreSQL still consumes sequence values for skipped rows — the standard harmless gaps.
 - The returned `count` leaves out rows `DO NOTHING` skipped, on both engines, so `nrow(df) - count` is the number of duplicates. A `DO UPDATE` upsert counts each row it inserted or updated. See [Return Value](#Return-Value).
 - `bulk_copy()` cannot express `ON CONFLICT` (the COPY protocol has no such clause); use `bulk_insert(...; on_conflict=...)` when duplicates are possible.
+- **On MySQL** the clause is `ON DUPLICATE KEY UPDATE`, which names no target and fires on a conflict with any unique key ([#1267](https://github.com/PingoLee/PormG.jl/issues/1267)):
+  - `on_conflict = :nothing` means the same as everywhere: skip a row that conflicts on any unique key. It renders as an update that writes nothing (`ref = status.ref`, on a column that is not `AUTO_INCREMENT`).
+  - A targeted `DO NOTHING` and a `DO UPDATE` run only when the target is the **one** unique key these rows can conflict on, and the target must be a unique key declared on the model (the model is the only source on MySQL). Another unique key counts when its columns are inserted and not NULL in every row, or the database fills them; a primary key the DataFrame carries counts, a generated one or a UUID PormG mints does not. Otherwise the call raises `BackendCapabilityError` (`upsert_conflict_target`), naming the key, before any SQL.
+  - The count is MySQL's own report: a multi-row `INSERT` says how many rows it carried and how many met a duplicate. A one-row chunk reports nothing, so it is sent as a plain `INSERT` and a duplicate-key error is counted as the skip; any other error (a foreign key, say) still raises, and an open transaction stays usable.
+  - A key repeated inside one chunk under `DO UPDATE` is applied in turn, as on SQLite.
 
 ### Returning Generated Values
 
@@ -251,6 +258,7 @@ already_present = statuses_df[ismissing.(r.rows.statusid), :]
 - With pre-allocated ids the duplicate-key → sequence-resync retry is **skipped**, as it is under `on_conflict`: the retry would send the same ids again. A collision there means the sequence had drifted below `MAX(pk)` before the call — run [`resync_sequences()`](../schema_conventions.md#Explicit-repair:-resync_sequences) and retry. Pre-allocation on PostgreSQL also shares `allocate_primary_keys()`'s default-schema scope (see its [limitations](#Notes-and-Limitations)).
 - The dry-run `show_query` modes allocate nothing — drawing a sequence is a write — so the shown statement leaves an allocated pk column out. On PostgreSQL it carries the `RETURNING` clause.
 - `bulk_update()` and `bulk_copy()` do not take `returning=`.
+- **MySQL** reads the rows back as SQLite does, on the transaction's connection; outside `DO NOTHING` the read locks the rows the statement wrote, so it also finds a row another session committed that an upsert met unchanged. It cannot pre-allocate: `AUTO_INCREMENT` has no sequence to draw from ahead of the `INSERT`, and a multi-row `INSERT`'s ids are not promised consecutive. So `returning` for an `AUTO_INCREMENT` key the DataFrame leaves out, with no `on_conflict` target, raises `BackendCapabilityError` (`preallocated_keys`): supply the key in the DataFrame, or name a unique key it carries as the target ([#1266](https://github.com/PingoLee/PormG.jl/issues/1266)).
 
 ### Auto-Generated Primary Keys
 
@@ -273,6 +281,8 @@ df[!, :token] = [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)]
 Sometimes you need the assigned primary key values **before** the insert—for example, when you are loading a parent table and a child table at the same time and need to populate a foreign key column.
 
 If the ids are only needed *after* the parent insert — insert the drivers, then build the results from their ids — [`returning=`](#Returning-Generated-Values) is simpler: `bulk_insert(M.Driver.objects, drivers_df; returning = ["driverid"])` does the allocation for you and hands the ids back in row order.
+
+On MySQL `allocate_primary_keys()` raises `BackendCapabilityError` (`preallocated_keys`): `AUTO_INCREMENT` values cannot be drawn ahead of the `INSERT`.
 
 Use `allocate_primary_keys()` when they are needed before:
 

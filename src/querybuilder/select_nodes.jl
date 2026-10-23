@@ -167,6 +167,9 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
       push!(tables, Models.model_table_name(model))
     end
   end
+  # A CTE a later term orders by is joined when that term renders: `order_by("br__surname")`, which
+  # `_resolve_cte_string_paths!` has made a `CTEReference` before ORDER BY, or `CTE("br", "surname")`.
+  _order_cte_names!(tables, object.order)
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
     push!(tables, Models.model_table_name(aj.target))
@@ -208,6 +211,16 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   end
   return cols
 end
+
+# The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it.
+_order_cte_names!(out::Set{String}, x::CTEReference) = (push!(out, x.name); out)
+_order_cte_names!(out::Set{String}, x::Union{SQLOrder,SQLField}) = _order_cte_names!(out, x.field)
+_order_cte_names!(out::Set{String}, x::FExpression) =
+  (_order_cte_names!(out, x.field_name); _order_cte_names!(out, x.operand))
+_order_cte_names!(out::Set{String}, x::FObject) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, collect(values(x.kwargs))))
+_order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)
+_order_cte_names!(out::Set{String}, ::Any) = out
 
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))

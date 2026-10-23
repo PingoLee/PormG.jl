@@ -450,6 +450,17 @@ end
   q = _MR_MY.Result.objects.values("year" => "position", "resultid")
   q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid"), Joined("d", "dob") == F("raceid__date")])
   @test key(q.order_by("-year")) == "(`Tb`.`position`"
+  # A `cjoin_on` path's last segment is a column too: `driverid__teamid` joins no team, so `country`
+  # shadows nothing.
+  q = MrMyCrossB.Lap.objects.values("country" => "position")
+  q.cjoin_on("Lap", alias = "l2", on = [Joined("l2", "lapid") == F("lapid"), Joined("l2", "position") == F("driverid__teamid")])
+  @test key(q.order_by("-country")) == "(`country`"
+  # A CTE a later term orders by is joined when that term renders: `br` has a `surname`.
+  for later in ("br__surname", CTE("br", "surname"))
+    q = _MR_MY.Result.objects
+    q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+    @test key(q.values("surname" => "position", "resultid").order_by("-surname", later)) == "(`R1`.`position`"
+  end
   # A term that names the projection by its path (`order_by("date__@year")` over `"name" => "date__@year"`).
   @test key(_MR_MY.Race.objects.values("name" => "date__@year").order_by("-date__@year")) == "(EXTRACT(YEAR FROM `Tb`.`date`)"
   # Every kind of projection: an aggregate, a window.

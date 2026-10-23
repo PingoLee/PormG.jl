@@ -56,7 +56,7 @@ referenced it.
 | `src/display.jl` | Layer 4: every `Base.show` for a model-bearing type (#534). One file because the three rules are shared and break one method at a time: a display never throws, never reaches `get_settings`, and reads slots with `getfield` (`Model_Type`/`ObjectHandler`/`PormGRow` all overload `getproperty`). Julia's `show_default` walks slots with the **2-arg** `show`, and the model graph is cyclic (`fields` → `sForeignKey.to` → `Model_Type` → `related_objects` → …), so before this every handle serialized the whole schema — 1.6 MB for one `PormGRow`. That is also why it is cheap: a 2-arg method on `Model_Type` and on `PormGField` bounds every container holding one. `test/unit/test_repl_display.jl` asserts a **size ceiling**, not an appearance — the defect is quantitative |
 | `src/json_lower.jl` | Layer 4: every `StructUtils.lower` for a model-bearing type (#643) — `display.jl`'s problem one hop over, serialization instead of display, and one file for the same reason: the rules are shared and break one method at a time. Every lowered value is a **leaf** (no PormG type inside it), which is what removes the *edge* the path explosion needs rather than shrinking the output; and the content is model/field-type/relation names only — never a `default=`, never rendered SQL, never the `connection`. Deliberately **not** `sprint(show, x)`: `show(::PormGField)` renders the constructor call the user typed, so it would put `repr`-escaped, 40-column-truncated user data into a wire format. The `InstructionObject` arm is a **credential** fix, not a size one — that type holds a live `connection`, and the reflected document contained `password`. `PormGRow`'s hook stays in `src/querybuilder/execution_read.jl` beside `_json_row`: it shapes data, this bounds the schema. `test/unit/test_json_serialization.jl` asserts **exact marker documents** plus a ceiling — the small cases (an unfixed `sCharField` is 244 chars) are invisible to a ceiling alone |
 | `src/precompile.jl` | Last in the include chain: the `PrecompileTools` workload, built on mock connections so it needs no database. Not a lever for test-suite speed (#819) |
-| `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite, `db_my` = MySQL via `PORMG_DB`; MySQL runs `test_mysql_backend.jl` and `test_mysql_reads.jl` only until #1130's later phases) |
+| `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite, `db_my` = MySQL via `PORMG_DB`; MySQL runs `test_mysql_backend.jl`, `test_mysql_reads.jl` and `test_mysql_writes.jl` only until #1130's later phases) |
 | `docs/src/` | User documentation |
 | `upgrading/` | The change log `upgrade_guide` reads — **one file per breaking/behavior entry**, `YYYY-MM-DD-<slug>.md`. Every `.md` here is an entry; nothing else belongs in it, and `UPGRADING.md` beside it is the authoring contract, not a log |
 
@@ -106,11 +106,12 @@ PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.j
 **MySQL (#1130, in progress).** `db_my` points at a local MySQL 8.4 — a Docker `mysql:8.4` container
 is enough — through its own gitignored `test/integration/db_my/connection.yml` (`adapter: MySQL`;
 see `docs/src/configuration/connection_yml.md`). Until the later phases land, the full suite refuses
-`db_my`, and the files that run there are the driver layer and the reads:
+`db_my`, and the files that run there are the driver layer, the reads and the single-row writes:
 
 ```
 PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl
 PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
+PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl
 ```
 
 **A single integration file is a valid target.** Most `test/integration/test_*.jl` open with

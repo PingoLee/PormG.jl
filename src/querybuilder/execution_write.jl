@@ -108,7 +108,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
   return quoted_field_columns, param_values, pk_exist, pk_field
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, _SQLEngine} = nothing, show_query::Symbol = :execute)
 real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
   
@@ -153,50 +153,47 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
   # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. RETURNING */SELECT *
   # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
-  if connection isa PormGPostgres
+  if _insert_returns_rows(connection)
     result = fetch(settings, exec_sql, parameters)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
     # write supplied an explicit primary key.
     return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
-  elseif connection isa PormGSQLite
-    # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
-    # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
-    # AUTOINCREMENT primary key that migrations left in a non-first column
-    # position). The previous broad `catch` masked that hang/error by re-running a
-    # plain INSERT, which then tripped a spurious UNIQUE violation because the
-    # first INSERT had already written the row. Instead: run a plain INSERT, then
-    # read the full inserted row back with a SELECT on the SAME connection
-    # (last_insert_rowid() is per-connection session state). Reading the whole row
-    # keeps the returned row consistent with the Postgres `RETURNING *` path —
-    # all columns present, including nullable ones the caller did not set.
-    #
-    # The empty-rows fallback (read-back returned nothing, which should not happen after a
-    # successful INSERT) builds the dict from real_obj.insert only, so it may omit an unreserved
-    # AUTOINCREMENT pk, and its values are the caller's inputs, not parsed reads (#800 types only a
-    # row the database handed back). The wrapped PormGRow is still returned; if that degenerate row is later
-    # mutated and .save()d, save() throws a clear "required key" error — no regression over the
-    # previous incomplete-Dict return.
-    do_insert = () -> begin
-      fetch(settings, sql, parameters)
-      rows = fetch(settings,
-        "SELECT * FROM $(safe_table_name) WHERE rowid = last_insert_rowid();") |> Tables.rowtable
-      isempty(rows) ?
-        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        _row_to_field_keyed_dict(rows[1], model, connection)
-    end
-
-    # INSERT and the row read-back must run on one connection (last_insert_rowid()
-    # is per-connection). Reuse the active transaction if there is one; otherwise
-    # pin a connection for the pair.
-    result_dict = transaction_connection_for(settings) !== nothing ?
-      do_insert() : run_in_transaction(do_insert, settings)
-
-    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
-    # write supplied an explicit primary key.
-    return PormGRow(result_dict, model)
-  else
-    throw(_unsupported_conn("insert()", connection))
   end
+  # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
+  # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids
+  # `INSERT ... RETURNING *`: it can hang indefinitely inside SQLite/libsqlite3 for some table shapes
+  # (observed: an AUTOINCREMENT primary key that migrations left in a non-first column position). The
+  # previous broad `catch` masked that hang/error by re-running a plain INSERT, which then tripped a
+  # spurious UNIQUE violation because the first INSERT had already written the row. Reading the whole
+  # row keeps the returned row consistent with the Postgres `RETURNING *` path — all columns present,
+  # including nullable ones the caller did not set.
+  #
+  # The empty-rows fallback (no key to read by, or the read-back returned nothing, which should not
+  # happen after a successful INSERT) builds the dict from real_obj.insert only, so it may omit an
+  # unreserved AUTOINCREMENT pk, and its values are the caller's inputs, not parsed reads (#800 types
+  # only a row the database handed back). The wrapped PormGRow is still returned; if that degenerate
+  # row is later mutated and .save()d, save() throws a clear "required key" error — no regression over
+  # the previous incomplete-Dict return.
+  do_insert = () -> begin
+    result = fetch(settings, sql, parameters)
+    read_back = _inserted_row_query(connection, model, real_obj.insert, result, safe_table_name)
+    rows = read_back === nothing ? () :
+      (read_back[2] === nothing ? fetch(settings, read_back[1]) : fetch(settings, read_back[1], read_back[2])) |>
+      Tables.rowtable
+    isempty(rows) ?
+      Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
+      _row_to_field_keyed_dict(rows[1], model, connection)
+  end
+
+  # INSERT and the row read-back must run on one connection (last_insert_rowid() and the OK packet's
+  # id are per statement on that connection). Reuse the active transaction if there is one; otherwise
+  # pin a connection for the pair.
+  result_dict = transaction_connection_for(settings) !== nothing ?
+    do_insert() : run_in_transaction(do_insert, settings)
+
+  # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+  # write supplied an explicit primary key.
+  return PormGRow(result_dict, model)
 
 end
 
@@ -729,7 +726,7 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
   end
 end
 
-function _build_from_tables(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite})
+function _build_from_tables(row_join::Vector{JoinRow}, connection::_SQLEngine)
   tables = String[]
   for row in row_join
     # #394: no try/catch. This used to `@error` and CONTINUE, which dropped a table from a correlated
@@ -842,14 +839,14 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
   return conditions
 end
 
-function _build_join_conditions(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite};
+function _build_join_conditions(row_join::Vector{JoinRow}, connection::_SQLEngine;
                                 rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
   return _get_join_condition_list(row_join, connection; rendered_on = rendered_on)
 end
 
 function _set_clause_uses_join_aliases(set_clause::String,
   row_join::Vector{JoinRow},
-  connection::Union{PormGPostgres, PormGSQLite})::Bool
+  connection::_SQLEngine)::Bool
   for row in row_join
     alias_b = quote_identifier(row.alias_b, connection)
     occursin("$alias_b.", set_clause) && return true
@@ -960,23 +957,32 @@ function _target_pk_selection(instruction::SQLInstruction)::Union{Nothing,String
   connection = instruction.connection
   safe_alias = quote_identifier(instruction.alias, connection)
   quoted_pk = safe_column_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
-  return _key_selection(instruction, safe_alias, safe_alias, quoted_pk)
+  return _key_selection(instruction, safe_alias, safe_alias, quoted_pk;
+                        materialize = _materializes_target_key_set(connection))
 end
 
 # `<outer_alias>.<column> IN (SELECT DISTINCT <source_alias>.<column> FROM <target> as <alias> <joins>
 # WHERE <conjuncts>)`: the query's row set, projected onto one column of one of its aliases. Every
 # argument arrives quoted. The joins print verbatim, so the row set is exactly the one the read builder
 # rendered, LEFT JOINs included.
-function _key_selection(instruction::SQLInstruction, outer_alias::String, source_alias::String, column::String)::String
+#
+# `materialize` wraps the subquery in a derived table, `IN (SELECT * FROM (SELECT DISTINCT …) AS
+# `__pormg_keys`)`, for an engine that refuses a statement reading the table it writes
+# (`_materializes_target_key_set`). Same row set, same markers in the same order.
+function _key_selection(instruction::SQLInstruction, outer_alias::String, source_alias::String, column::String;
+                        materialize::Bool = false)::String
   connection = instruction.connection
   io = IOBuffer()
-  print(io, outer_alias, ".", column, " IN (SELECT DISTINCT ", source_alias, ".", column)
+  print(io, outer_alias, ".", column, " IN (")
+  materialize && print(io, "SELECT * FROM (")
+  print(io, "SELECT DISTINCT ", source_alias, ".", column)
   print(io, "\n  FROM ", safe_table_identifier(Models.model_table_name(instruction.object.model), connection),
     " as ", quote_identifier(instruction.alias, connection))
   for j in instruction.join
     print(io, "\n  ", j)
   end
   isempty(instruction._where) || print(io, "\n  WHERE ", join(instruction._where, " AND "))
+  materialize && print(io, ") AS ", quote_identifier("__pormg_keys", connection))
   print(io, ")")
   return String(take!(io))
 end
@@ -1177,7 +1183,41 @@ function _refuse_update_non_number(f_meta, field::AbstractString, value, instruc
     "Write a numeric expression into `$(field)`, or write the value into a field of its own type."))
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+# #1130: an UPDATE whose SET reads a column another item of the same SET writes, on an engine that
+# assigns SET items in order (`_assigns_set_in_order`, MySQL). Every item means the row as it was: a
+# swap `update("laps" => F("grid"), "grid" => F("laps"))` exchanges the two on PostgreSQL and SQLite.
+# MySQL's single-table UPDATE reads an item already assigned at its new value (measured on 8.4: the
+# swap writes `grid` into both), and leaves the order of a multi-table one unspecified. So an item that
+# reads a column written EARLIER in the SET is refused, or, in the multi-table form, written anywhere
+# else in it. An item that reads its own column (`"laps" => F("laps") + 1`), or one written later in a
+# single-table SET, reads the old value and builds. A column is read when its alias-qualified name is
+# in the item's SQL, the only spelling PormG renders a target column in.
+function _refuse_set_reading_assigned(fields::Vector{String}, parts::Vector{String}, alias::String,
+                                      multi_table::Bool, connection)
+  columns = [first(split(p, " = "; limit = 2)) for p in parts]
+  for (i, part) in enumerate(parts)
+    rhs = last(split(part, " = "; limit = 2))
+    for (j, column) in enumerate(columns)
+      (j == i || (!multi_table && j > i)) && continue
+      occursin(string(alias, ".", column), rhs) || continue
+      throw(QueryBuildError("update(\"$(fields[i])\" => …) reads `$(fields[j])`, which the same update() also " *
+        "writes. $(_backend_name(connection)) assigns an UPDATE's SET items in order, so it may read the new " *
+        "value of `$(fields[j])`, where the update means the row as it was. Split it into two update() calls, " *
+        "or write the value both items mean."))
+    end
+  end
+  return nothing
+end
+
+# The `UPDATE … FROM` text PostgreSQL and SQLite share (`_update_from_sql`).
+_update_from_clause_sql(table, alias, set_parts, from_clause, where_sql) = """
+  UPDATE $(table) AS $(alias)
+  SET $(join(set_parts, ", "))
+  FROM $(from_clause)
+  WHERE $(where_sql)
+  """
+
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, _SQLEngine} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
 
@@ -1204,7 +1244,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
   # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
   # itself (`_get_join_condition_list`).
-  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true)
+  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
@@ -1227,6 +1267,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Switch context to :update for SET clause params (SET appears before WHERE/JOIN in SQL)
   set_context!(parameters, :update)
   set_clause_parts = String[]
+  set_fields = String[]   # #1130: the field each SET item writes, item for item
   for field in keys(objct.insert)    
     # Validation checks
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
@@ -1252,7 +1293,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
           "operand (#1021)."))
       _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
-      push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
     # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
     # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
     # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
@@ -1261,11 +1302,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       f_value = _set_update_query(objct.insert[field], instruction)
       _refuse_update_non_number(model.fields[field], field, objct.insert[field], instruction)
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
-      push!(set_clause_parts, "$(quoted_field) = $(f_value)")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
       formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")
       placeholder = add_parameter!(parameters, formatted_value)
-      push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end
   end
    
@@ -1276,10 +1317,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   safe_alias = quote_identifier(instruction.alias, connection)
 
   has_joins = !isempty(instruction.row_join)
+  multi_table = false   # #1130: MySQL's multi-table UPDATE, whose SET order is unspecified
   sql = ""
   
   if has_joins
-    if connection isa PormGPostgres || connection isa PormGSQLite
+    begin
       # The SET-clause loop above can reach _build_row_join (e.g. update("x" => F("fk__col"))), so
       # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
       # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
@@ -1307,7 +1349,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           fence_work = deepcopy(real_obj)
           empty!(fence_work.values)
           mark = nested_parameter_mark(parameters)
-          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true)
+          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
+                        mutation=true)
           fence_run = detach_nested_run!(parameters, mark)
           set_context!(parameters, :where)
           reattach_parameters!(parameters, fence_run)
@@ -1319,7 +1362,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         WHERE $(predicate)
         """
       else
-        # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax
+        # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
+        # (`_update_from_sql`).
         from_clause = _build_from_tables(instruction.row_join, connection)
         join_conditions = _build_join_conditions(instruction.row_join, connection;
                                                  rendered_on = instruction.cjoin_on_rendered)
@@ -1330,16 +1374,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         # here dropped a repeated `"Tb"."c" = ?` on SQLite and left a value with no marker.
         final_where = [join_conditions; instruction._where]
         
-        sql = """
-        UPDATE $(safe_table_name) AS $(safe_alias)
-        SET $(set_clause)
-        FROM $(from_clause)
-        WHERE $(join(final_where, " AND "))
-        """
+        sql = _update_from_sql(connection, safe_table_name, safe_alias, set_clause_parts, from_clause,
+                               join(final_where, " AND "))
+        multi_table = true
       end
-    else
-      @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
-      throw(_unsupported_conn("update() with JOINs", connection))
     end
   else
     # No joins - simple UPDATE
@@ -1349,6 +1387,9 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     WHERE $(join(instruction._where, " AND \n   "))
     """
   end
+
+  _assigns_set_in_order(connection) &&
+    _refuse_set_reading_assigned(set_fields, set_clause_parts, safe_alias, multi_table, connection)
 
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model.name, :update; 
@@ -1361,34 +1402,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   # Execute with parameters and return affected row count (Django matched-rows semantics).
   try
-    if connection isa PormGPostgres
-      # The driver result exposes a matched-row count; backend_num_affected_rows
-      # delegates to LibPQ.num_affected_rows in the PostgreSQL extension.
-      result = fetch(settings, sql, parameters)
-      return backend_num_affected_rows(connection, result)
-    elseif connection isa PormGSQLite
-      # SQLite changes() must run on the same connection as the UPDATE.
-      # If we are already inside a transaction context, fetch() reuses the
-      # pinned connection so a subsequent SELECT changes() is safe.
-      tx_conn = transaction_connection_for(settings)
-      if tx_conn !== nothing
-        fetch(settings, sql, parameters)
-        changes_result = fetch(settings, "SELECT changes()")
-        rows = changes_result |> DataFrames.DataFrame
-        return Int(rows[1, 1])
-      else
-        # No active transaction — wrap in run_in_transaction to pin the
-        # connection for both the UPDATE and SELECT changes().
-        return run_in_transaction(settings) do
-          fetch(settings, sql, parameters)
-          changes_result = fetch(settings, "SELECT changes()")
-          rows = changes_result |> DataFrames.DataFrame
-          return Int(rows[1, 1])
-        end
-      end
-    else
-      throw(_unsupported_conn("update()", connection))
-    end
+    return _update_row_count(connection, settings, sql, parameters)
   catch e
     @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
     rethrow(e)

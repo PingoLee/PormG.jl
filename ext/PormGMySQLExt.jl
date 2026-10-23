@@ -176,7 +176,7 @@ function _open_connection(pool::_Pool)::MySQL.Connection
     try; close(conn); catch; end
     rethrow()
   end
-  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL and plain-column model reads work; writes and migrations do not yet" maxlog = 1
+  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, and single-row writes and deletes work; upserts, bulk writes and migrations do not yet" maxlog = 1
   return conn
 end
 
@@ -269,8 +269,8 @@ function _read_value(v::MySQL.Timestamp{Dates.Microsecond}, column = nothing)
 end
 
 # A materialized result: the column table core reads through Tables.jl, and the counts the OK packet
-# carried. `last_insert_id` is the FIRST id of a multi-row INSERT (measured); what `create` and
-# `bulk_insert` do with it is #1266.
+# carried. `last_insert_id` is the FIRST id of a multi-row INSERT (measured); `create` reads its row back
+# by it (`backend_last_insert_id`, #1266).
 struct MySQLResult
   names::Vector{Symbol}
   columns::Vector{AbstractVector}
@@ -388,6 +388,11 @@ end
 
 PormG.backend_num_rows(pool::_Pool, result::MySQLResult) = result.nrows
 PormG.backend_num_affected_rows(pool::_Pool, result::MySQLResult) = result.rows_affected
+# The AUTO_INCREMENT value the INSERT wrote, from its OK packet: the generated id, or the one the
+# statement supplied (measured on 8.4: a supplied 100 reports 100, a supplied 0 the id it generated),
+# and 0 for a table without AUTO_INCREMENT. `LAST_INSERT_ID()` is not the same thing: it changes only
+# when the server generates the value, so after a supplied id it still holds an older one (#1266).
+PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last_insert_id)
 
 # ── Errors ───────────────────────────────────────────────────────────────────
 #

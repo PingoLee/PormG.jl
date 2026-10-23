@@ -81,11 +81,12 @@ struct NetClosingError <: Exception end
     @test which(f, Tuple{types...}).module === PGExt
   end
   # Every PostgreSQL backend generic has a row: a new one without a method here would fall back to
-  # LibPQ's marker-typed method for a Postgres.jl pool.
+  # LibPQ's marker-typed method for a Postgres.jl pool. The engine-only ones are not PostgreSQL's: the
+  # two version probes, and MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266).
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
-    (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version) &&
+    (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id) &&
      getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end

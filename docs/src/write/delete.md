@@ -375,6 +375,7 @@ transaction. What that is worth differs by backend:
 |---|---|---|
 | SQLite | `BEGIN IMMEDIATE` plus PormG's process-wide write lock | Impossible — no other writer can commit while planning runs |
 | PostgreSQL | `BEGIN` at READ COMMITTED | Possible — every statement takes a fresh snapshot, even inside a transaction |
+| MySQL | `START TRANSACTION`, the parents locked `FOR UPDATE` before the cascade, as on PostgreSQL | Possible, as on PostgreSQL. InnoDB checks a foreign key at each statement, so the database's own action on such a row runs at the parent's `DELETE`, not at `COMMIT` |
 
 So on PostgreSQL two sessions can interleave like this:
 

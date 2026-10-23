@@ -82,7 +82,13 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # #1110: MySQL applies a declared decimal itself (it clamps an overflow).
                                :_unapplied_decimal_width,
                                # Phase 2c-1: a boolean declaration MySQL has no cast target for.
-                               :_normalizes_boolean_cast])
+                               :_normalizes_boolean_cast,
+                               # Phase 3a (single-row writes and deletes): no RETURNING, the row read
+                               # back by its key, the matched-row counts, the parent locks, and the
+                               # 1093 wrap around a subquery on the table a mutation writes.
+                               :_insert_returns_rows, :_inserted_row_query, :_update_row_count,
+                               :_update_from_sql, :_affected_row_count, :_locks_cascade_parents,
+                               :_materializes_target_key_set, :_assigns_set_in_order])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -163,7 +169,10 @@ end
   @test _EF_QB._inspection_dialect(_EfMy()) == (:mysql, :positional)
   # `_stores_date_as_text` stays SQLite's question: MySQL refuses an untyped date operand by a method of
   # its own (`_untyped_date_refusal`, phase 2b), since its `+` reads a date's digits, not its text.
-  # Writes are phase 3's.
   @test_throws MethodError _EF_QB._stores_date_as_text(_EfMy())
-  @test_throws MethodError _EF_QB._insert_returns_rows(_EfMy())
+  # Phase 3a: MySQL has no RETURNING, and reads a mutation's own table through a derived table.
+  @test !_EF_QB._insert_returns_rows(_EfMy()) && _EF_QB._materializes_target_key_set(_EfMy())
+  @test !_EF_QB._materializes_target_key_set(_EfPg()) && !_EF_QB._materializes_target_key_set(_EfSl())
+  # Upserts are phase 3b's.
+  @test_throws MethodError _EF_QB._serializes_get_or_create(_EfMy())
 end

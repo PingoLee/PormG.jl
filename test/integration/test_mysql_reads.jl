@@ -333,14 +333,15 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `bulk_insert` (a bulk write, phase 3c) fails before a statement is sent.
+        # SQL: none — `bulk_update` (phase 3c-2) fails before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
             # It names the piece of the query builder MySQL does not have yet.
-            df = DataFrame(description = ["x"])
-            e = try; PormG.QueryBuilder.bulk_insert(M.New_join_position, df); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.QueryBuilder._normalize_on_conflict
+            df = DataFrame(id = [1], description = ["x"])
+            e = try; PormG.QueryBuilder.bulk_update(M.New_join_position, df); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.QueryBuilder._bulk_update
             @test M.New_join_position.objects.count() == 3
+            @test only(M.New_join_position.objects.filter("id" => 1).values("description").list())[:description] != "x"
         end
 
         # What: `/` divides as its operands mean: integers as integers, a float side keeping the fraction.

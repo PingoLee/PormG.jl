@@ -223,20 +223,27 @@ function _unique_keys(model::PormGModel)::Vector{@NamedTuple{fields::Vector{Stri
   return keys
 end
 
-# Whether the row about to be inserted (`insert`, after `_prepare_row_insert!` filled its defaults) can
-# conflict on `key`. `given` holds the fields the caller wrote, before that fill. A key over SQL text
-# always can. A member PormG mints and the caller left out (an auto id, a UUID `auto_add`) is a new
-# value, so the key cannot. Otherwise every member must hold a value: one the INSERT binds that is not
+# Whether the rows about to be inserted can conflict on `key`. A key over SQL text always can. A member
+# PormG mints and the caller left out (an auto id, a UUID `auto_add`) is a new value, so the key cannot
+# (`minted`). Otherwise every member must hold a value (`holds`): one the INSERT binds that is not
 # NULL, or a database default. A NULL member never conflicts. (A generated column is PostgreSQL's,
-# #1032, so no MySQL row reaches here with one.)
-function _can_conflict(key, model::PormGModel, insert::AbstractDict, given)::Bool
+# #1032, so no MySQL row reaches here with one.) The predicates read one row (`_row_conflict_reading`)
+# or a whole frame (`_frame_conflict_reading`, `bulk_insert`).
+function _can_conflict(key, holds, minted)::Bool
   key.kind === :text && return true
-  any(name -> !(name in given) && _is_minted_value(model.fields[name]), key.fields) && return false
-  return all(key.fields) do name
-    haskey(insert, name) && return !(insert[name] === nothing || insert[name] === missing)
-    f = model.fields[name]
-    return hasproperty(f, :db_default) && f.db_default !== nothing
-  end
+  any(minted, key.fields) && return false
+  return all(holds, key.fields)
+end
+
+_has_db_default(f)::Bool = hasproperty(f, :db_default) && f.db_default !== nothing
+
+# One row (`insert`, after `_prepare_row_insert!` filled its defaults; `given`, the fields the caller
+# wrote before that fill).
+function _row_conflict_reading(model::PormGModel, insert::AbstractDict, given)
+  holds = name -> haskey(insert, name) ? !(insert[name] === nothing || insert[name] === missing) :
+                                         _has_db_default(model.fields[name])
+  minted = name -> !(name in given) && _is_minted_value(model.fields[name])
+  return holds, minted
 end
 
 # A value no other row holds when the caller leaves it out: an id the database generates, or a UUID
@@ -253,24 +260,36 @@ _is_minted_value(f)::Bool = _is_pormg_minted_bulk_primary_key(f) ||
 # on PostgreSQL.
 function _refuse_unnamed_upsert_target(op::String, model::PormGModel, target_fields::Vector{String},
                                        insert::AbstractDict, given, connection)
+  holds, minted = _row_conflict_reading(model, insert, given)
+  _refuse_unnamed_target(model, target_fields, holds, minted, connection;
+    what = "$(op) on $(model.name)", noun = "lookup field(s)", others = op == "update_or_create",
+    not_unique = "For a lookup that is not unique, use filter(...).first(), then create(...).",
+    subject = "This row", effect = "update the row that key matches",
+    alternative = "Leave those fields NULL or unset, or use filter(...).first(), then update(...) or create(...).")
+end
+
+# The check itself, for one row or a frame (`bulk_insert`, `_refuse_unnamed_bulk_target`): the target
+# must be a declared plain unique key, and when `others`, no other key may be one the rows can conflict
+# on. A key over the target's fields and more can only match the target's own row: not another conflict.
+function _refuse_unnamed_target(model::PormGModel, target_fields::Vector{String}, holds, minted, connection;
+                                what::String, noun::String, others::Bool, not_unique::String,
+                                subject::String, effect::String, alternative::String)
   _supports(connection, :upsert_conflict_target) && return nothing
   keys = _unique_keys(model)
   target = Set(target_fields)
   any(k -> k.kind !== :text && Set(k.fields) == target, keys) || throw(QueryBuildError(
-    "$(op) on $(model.name) requires its lookup field(s) ($(join(target_fields, ", "))) to be a unique key " *
+    "$(what) requires its $(noun) ($(join(target_fields, ", "))) to be a unique key " *
     "of the model: the primary key, a `unique = true` field, or a plain (not partial or functional) " *
     "UniqueConstraint over exactly those fields. $(_backend_name(connection)) finds the existing row by " *
-    "its unique keys. For a lookup that is not unique, use filter(...).first(), then create(...)."))
-  op == "update_or_create" || return nothing
-  # A key over the lookup's fields and more can only match the lookup's own row: not another conflict.
-  others = [k for k in keys if !(target ⊆ Set(k.fields)) && _can_conflict(k, model, insert, given)]
-  isempty(others) && return nothing
+    "its unique keys. $(not_unique)"))
+  others || return nothing
+  conflicting = [k for k in keys if !(target ⊆ Set(k.fields)) && _can_conflict(k, holds, minted)]
+  isempty(conflicting) && return nothing
   names = join(unique(k.kind === :text ? "a functional or partial UniqueConstraint" :
-                      "($(join(k.fields, ", ")))" for k in others), ", ")
-  throw(_capability_error(connection, :upsert_conflict_target, "update_or_create on $(model.name)";
-    why = "This row can also conflict on $(names), and $(_backend_name(connection))'s ON DUPLICATE KEY " *
-          "UPDATE would update the row that key matches. Leave those fields NULL or unset, or use " *
-          "filter(...).first(), then update(...) or create(...)."))
+                      "($(join(k.fields, ", ")))" for k in conflicting), ", ")
+  throw(_capability_error(connection, :upsert_conflict_target, what;
+    why = "$(subject) can also conflict on $(names), and $(_backend_name(connection))'s ON DUPLICATE KEY " *
+          "UPDATE would $(effect). $(alternative)"))
 end
 
 # Row-level upsert (#30) behind `objects.update_or_create`. Builds the same INSERT body as insert()
@@ -898,6 +917,11 @@ function _sqlite_sequence_upsert!(settings::PormGSettings, table_literal::Abstra
                   "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = '$(table_literal)');")
   return nothing
 end
+
+# MySQL has no sequence to fall behind: an explicit id moves AUTO_INCREMENT past it (measured on 8.4:
+# 500 written, the next generated id is 501), so there is nothing to resync (#1266).
+_update_sequence(model::PormGModel, connection::PormGMySQL, pk_field::Vector{String}, settings::PormGSettings;
+                 ignore_tx::Bool = false) = nothing
 
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   _sqlite_has_sequence_table(settings) || return nothing   # no AUTOINCREMENT table, nothing to resync (#674)

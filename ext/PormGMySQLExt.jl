@@ -270,13 +270,15 @@ end
 
 # A materialized result: the column table core reads through Tables.jl, and the counts the OK packet
 # carried. `last_insert_id` is the FIRST id of a multi-row INSERT (measured); `create` reads its row back
-# by it (`backend_last_insert_id`, #1266).
+# by it (`backend_last_insert_id`, #1266). `info` is the packet's text, `Records: 3  Duplicates: 1
+# Warnings: 0` after a multi-row INSERT (`backend_insert_report`, #1267).
 struct MySQLResult
   names::Vector{Symbol}
   columns::Vector{AbstractVector}
   nrows::Int
   rows_affected::Int
   last_insert_id::UInt64
+  info::String
 end
 
 Tables.istable(::Type{MySQLResult}) = true
@@ -316,7 +318,16 @@ function _materialize(cursor, binary::Union{Nothing,Vector{Bool}} = nothing)::My
   # result would be, so `DataFrame(result)` gets typed columns.
   columns = AbstractVector[isempty(c) ? c : identity.(c) for c in raw]
   nrows = isempty(raw) ? 0 : length(first(raw))
-  return MySQLResult(names, columns, nrows, Int(cursor.rows_affected), UInt64(DBInterface.lastrowid(cursor)))
+  return MySQLResult(names, columns, nrows, Int(cursor.rows_affected), UInt64(DBInterface.lastrowid(cursor)),
+                     _ok_info(cursor))
+end
+
+# The OK packet's info text. MySQL.jl keeps the packet on the cursor without a public accessor, as it
+# keeps the column definitions `_by_charset` reads; a result set has none.
+function _ok_info(cursor)::String
+  hasfield(typeof(cursor), :ok) || return ""
+  ok = getfield(cursor, :ok)
+  return ok === nothing ? "" : String(ok.info)
 end
 
 # An interrupt that lands during a read can reach us wrapped in the transport's error with the
@@ -393,6 +404,31 @@ PormG.backend_num_affected_rows(pool::_Pool, result::MySQLResult) = result.rows_
 # and 0 for a table without AUTO_INCREMENT. `LAST_INSERT_ID()` is not the same thing: it changes only
 # when the server generates the value, so after a supplied id it still holds an older one (#1266).
 PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last_insert_id)
+
+# What a multi-row INSERT reported (#1267): how many rows it carried and how many met a duplicate key,
+# which `ON DUPLICATE KEY UPDATE` then updated or left as they were. Measured on 8.4: four rows, two of
+# them duplicates, report `Records: 4  Duplicates: 2`, while the affected-row count under `found_rows`
+# is 4 for both an insert and a skip. A one-row INSERT reports no text, so this is `nothing` for it.
+# The text follows the session's `lc_messages` (measured: `Registros: 2 - Duplicados: 1 - Avisos: 0`
+# under `pt_BR`, `レコード数: 2  重複数: 1  警告: 0` under `ja_JP`), and in every language it is the
+# three counts in that order, so they are read by position, never by their English labels. A no-op
+# duplicate is counted only because the pool connects with `found_rows` (`_connect_args`); without it,
+# MySQL reports a duplicate it left unchanged as no duplicate at all.
+const _INSERT_REPORT = r"^[^0-9]*([0-9]+)[^0-9]+([0-9]+)[^0-9]+([0-9]+)[^0-9]*$"
+function _insert_report(info::AbstractString)
+  m = match(_INSERT_REPORT, info)
+  m === nothing && return nothing
+  return (records = parse(Int, m[1]), duplicates = parse(Int, m[2]))
+end
+PormG.backend_insert_report(pool::_Pool, result::MySQLResult) = _insert_report(result.info)
+
+# A duplicate on a unique key, by error number: 1062 duplicate entry, 1022 duplicate key, 1586 duplicate
+# entry naming the key, 1169 a unique constraint. Not a foreign-key duplicate (1557, 1761, 1762), and
+# never by SQLSTATE `23000`, which every constraint failure shares.
+const _DUPLICATE_KEY_ERRNOS = (1062, 1022, 1586, 1169)
+_is_duplicate_key(e) =
+  e isa PormG.IntegrityError && e.cause isa MySQL.Protocol.ServerError && Int(e.cause.errno) in _DUPLICATE_KEY_ERRNOS
+PormG.backend_is_duplicate_key(pool::_Pool, e) = _is_duplicate_key(e)
 
 # ── Errors ───────────────────────────────────────────────────────────────────
 #

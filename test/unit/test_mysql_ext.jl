@@ -285,13 +285,16 @@ end
   @test _MyExt._bind_value(Decimals.Decimal(0, 1, 1)) == "10"   # never `1E+1` (Decimals 0.5's spelling)
   @test _MyExt._read_value(missing) === missing && _MyExt._read_value(7) === 7
 
-  r = _MyExt.MySQLResult([:id, :surname], AbstractVector[[1, 2], ["Senna", "Prost"]], 2, 0, UInt64(0))
+  r = _MyExt.MySQLResult([:id, :surname], AbstractVector[[1, 2], ["Senna", "Prost"]], 2, 0, UInt64(0), "")
   df = DataFrame(r)
   @test df.surname == ["Senna", "Prost"] && eltype(df.id) == Int
   @test collect(r) == [(1, "Senna"), (2, "Prost")]
   @test PormG.backend_num_rows(_my_pool(), r) == 2
-  empty = _MyExt.MySQLResult(Symbol[], AbstractVector[], 0, 3, UInt64(5))
+  empty = _MyExt.MySQLResult(Symbol[], AbstractVector[], 0, 3, UInt64(5), "Records: 3  Duplicates: 1  Warnings: 0")
   @test PormG.backend_num_affected_rows(_my_pool(), empty) == 3 && isempty(collect(empty))
+  # The OK packet's text after a multi-row INSERT, as `bulk_insert` counts its skips by it (#1267).
+  @test PormG.backend_insert_report(_my_pool(), empty) == (records = 3, duplicates = 1)
+  @test PormG.backend_insert_report(_my_pool(), r) === nothing
 end
 
 # What: a `Timestamp{Microsecond}` (a DATETIME(6) or TIMESTAMP(6) column) with digits below the

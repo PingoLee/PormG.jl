@@ -359,22 +359,12 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
     end
   end
 
-  ids = if connection isa PormGPostgres
-    _allocate_pg_ids(model, connection, pk_field, n)
-  elseif connection isa PormGSQLite
-    # #88: SQLite id reservation is a read-then-write on sqlite_sequence and must run under
-    # BEGIN IMMEDIATE / with_sqlite_write_lock so concurrent writers can't claim the same range.
-    # Reuse the caller's transaction if one is open on this pool (the reservation overlay stays
-    # active); otherwise auto-wrap — same idiom as bulk_insert/bulk_copy/bulk_update.
-    if transaction_connection_for(settings) !== nothing
-      _allocate_sqlite_ids(model, connection, pk_field, n, settings)
-    else
-      run_in_transaction(settings) do
-        _allocate_sqlite_ids(model, connection, pk_field, n, settings)
-      end
+  ids = if _allocates_ids_in_transaction(connection) && transaction_connection_for(settings) === nothing
+    run_in_transaction(settings) do
+      _allocate_ids(model, connection, pk_field, n, settings)
     end
   else
-    throw(_unsupported_conn("allocate_primary_keys", connection))
+    _allocate_ids(model, connection, pk_field, n, settings)
   end
 
   df[!, pk_field] = ids
@@ -435,8 +425,7 @@ function resync_sequences(objct::SQLObjectHandler)
   pk_field = String[f for f in model.field_names if model.fields[f].primary_key]
   isempty(pk_field) && return pk_field
 
-  connection isa Union{PormGPostgres, PormGSQLite} ||
-    throw(_unsupported_conn("resync_sequences()", connection))
+  connection isa _SQLEngine || throw(_unsupported_conn("resync_sequences()", connection))
   _update_sequence(model, connection, pk_field, settings)
   return pk_field
 end
@@ -1190,6 +1179,8 @@ _sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766
 # count in the wire-protocol Bind message). SQLite: probed from the library version.
 _backend_parameter_limit(::PormGPostgres) = 65535
 _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite_version(conn))
+# MySQL: 65535, the 2-byte parameter count of a prepared statement (COM_STMT_PREPARE).
+_backend_parameter_limit(::PormGMySQL) = 65535
 
 # Cap the requested chunk so that `fixed + effective × per_row` never exceeds `limit` (#84).
 # `per_row` is the parameters each row binds; `fixed` is the per-statement constant params
@@ -1218,7 +1209,7 @@ end
 # whatever the row count — so `chunk_size` is used as given, except a non-positive one: that keeps
 # the per-cell cap it always had, rather than collapsing the whole frame into one statement whose
 # arrays grow without bound. `fixed` is the per-statement filter prefix (bulk_update; 0 for insert).
-function _bulk_chunk_rows(conn::Union{PormGPostgres, PormGSQLite}, requested::Integer, ncols::Integer,
+function _bulk_chunk_rows(conn::_SQLEngine, requested::Integer, ncols::Integer,
                           fixed::Integer, op::Symbol)::Int
   per_row = _bulk_binds_column_arrays(conn) && requested >= 1 ? 0 : ncols
   return _effective_chunk_size(requested, per_row, fixed, _backend_parameter_limit(conn), op, _backend_name(conn))
@@ -1281,7 +1272,7 @@ end
 
 # The correlation key (see the block above) and, when the ids must be pre-allocated, the pk field
 # to allocate for. `fields_df` is the participating insert column list from `_prepare_bulk_df!`.
-function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{String})
+function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{String}, connection)
   target = on_conflict isa NamedTuple ? _on_conflict_column_list(on_conflict, :target) : String[]
   if !isempty(target)
     absent = setdiff(target, fields_df)
@@ -1300,6 +1291,12 @@ function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{S
       "model $(model.name) has no primary key; pass on_conflict = (action = …, target = [...])"))
   all(in(fields_df), pks) && return pks, nothing
   if length(pks) == 1 && _is_auto_generated_bulk_primary_key(model.fields[pks[1]])
+    # MySQL cannot draw AUTO_INCREMENT values ahead of the INSERT, and a multi-row INSERT's ids are not
+    # promised consecutive (`innodb_autoinc_lock_mode = 2`), so it has no key to match by (#1266).
+    _supports(connection, :preallocated_keys) || throw(_capability_error(connection, :preallocated_keys,
+      "bulk_insert(returning = …) on $(model.name)";
+      why = "Supply the primary key column in the DataFrame, or pass on_conflict = (action = …, target = [...]) " *
+            "naming a unique key the DataFrame carries."))
     return pks, pks[1]
   end
   throw(QueryBuildError("Error in bulk_insert, returning cannot tell which written row belongs to which " *
@@ -1426,20 +1423,29 @@ end
 # `SQLITE_MAX_EXPR_DEPTH`. Measured with the SQLite the driver ships: 8,000 keys pass, 16,000 fail
 # with "Expression tree is too large (maximum depth 10000)" — and a narrow frame with a raised
 # `chunk_size` reaches that, since the chunk cap is the 32,766-parameter limit ÷ columns. A stock
-# SQLite build defaults to 1000, hence a batch well under both. A single-column key is one `IN (…)`
-# list and needs no batching.
+# SQLite build defaults to 1000, hence a batch well under both. An unlocked single-column key is one
+# `IN (…)` list and needs no batching.
 const _SQLITE_READ_BACK_BATCH = 200
+# A LOCKING single-column read-back (MySQL, `_bulk_read_back`) is batched too: a long `IN (…)` can lose
+# MySQL's range access past `range_optimizer_max_mem_size`, and a scan under `FOR UPDATE` locks every
+# row it reads.
+const _LOCKED_READ_BACK_BATCH = 1000
 
-# SQLite read-back: the rows whose key is one of `keys` (raw input tuples), projecting `fields`,
-# through the ORM so the values are bound as parameters and parsed like any other read. A fresh
-# handler on the caller's connection key — the caller's own handler may carry filters, which
-# `bulk_insert` ignores and a read-back must not inherit.
-function _sqlite_bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector{String},
-    keys::Vector, fields::Vector{String})
+# Read-back without RETURNING (SQLite, MySQL): the rows whose key is one of `keys` (raw input tuples),
+# projecting `fields`, through the ORM so the values are bound as parameters and parsed like any other
+# read. A fresh handler on the caller's connection key — the caller's own handler may carry filters,
+# which `bulk_insert` ignores and a read-back must not inherit. `lock` makes it a locking read (MySQL,
+# #1267): under REPEATABLE READ a plain read sees the transaction's snapshot, which misses a row another
+# session committed after it that an upsert met unchanged; the statement already holds those rows' locks.
+function _bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector{String},
+    keys::Vector, fields::Vector{String}; lock::Bool = false)
   isempty(keys) && return DataFrames.DataFrame([field => Any[] for field in fields])
-  if length(key) > 1 && length(keys) > _SQLITE_READ_BACK_BATCH
-    batches = Iterators.partition(keys, _SQLITE_READ_BACK_BATCH)
-    return reduce(vcat, [_sqlite_bulk_read_back(objct, model, key, collect(batch), fields) for batch in batches];
+  # A locking read is batched for a one-column key too: a long `IN (…)` can lose MySQL's range access
+  # (`range_optimizer_max_mem_size`), and a scan under `FOR UPDATE` would lock every row it reads.
+  per = length(key) > 1 ? _SQLITE_READ_BACK_BATCH : lock ? _LOCKED_READ_BACK_BATCH : typemax(Int)
+  if length(keys) > per
+    batches = Iterators.partition(keys, per)
+    return reduce(vcat, [_bulk_read_back(objct, model, key, collect(batch), fields; lock = lock) for batch in batches];
       cols = :union)
   end
   q = object(model)
@@ -1449,6 +1455,7 @@ function _sqlite_bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key:
   else
     q.filter(Qor([Q((key[j] => k[j] for j in eachindex(key))...) for k in keys]...))
   end
+  lock && q.select_for_update()
   q.values(fields...)
   return DataFrames.DataFrame(q)
 end
@@ -1497,7 +1504,10 @@ Inserts multiple rows into the database in bulk from a DataFrame.
     in the model — the database is the source of truth for matching constraints. When
     `on_conflict` is set, the duplicate-key → sequence-resync retry is skipped: a conflict is
     expected there, not a sequence desync, so any duplicate-key error that still surfaces
-    (a different constraint than the target) propagates.
+    (a different constraint than the target) propagates. On MySQL the clause is
+    `ON DUPLICATE KEY UPDATE`, which names no target: a targeted `:nothing` or an `:update` runs
+    only when the target is a unique key the model declares and the one these rows can conflict
+    on, and raises `BackendCapabilityError` otherwise (#1267).
   - `returning`: Optional (#671). A field name or a vector of field names whose written values
     come back in `rows` — generated primary keys, `db_default`s, what a `DO UPDATE` wrote. Rows are
     matched to the input by key, never by position: by the `on_conflict` `target` when there is
@@ -1507,7 +1517,8 @@ Inserts multiple rows into the database in bulk from a DataFrame.
     target, raises `QueryBuildError`, as does a `target` column that is not inserted; an unknown
     field name raises `UnknownFieldError`. PostgreSQL reads the rows from `RETURNING`; SQLite
     reads them back on the same transaction connection, since PormG never uses SQLite's
-    `RETURNING`.
+    `RETURNING`; MySQL, which has none, does the same. MySQL cannot pre-allocate an
+    `AUTO_INCREMENT` pk, so there that case raises `BackendCapabilityError` (#1266).
 
   The caller's DataFrame is never mutated (and never copied — the pipeline works on a
   zero-copy wrapper), so there is no `copy=` knob to think about.
@@ -1591,14 +1602,17 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # that gates the sequence-resync retry inside _bulk_insert. Purely local (no DB round-trip),
   # so :sql/:dict/:params modes validate and render identically.
   _on_conflict = _normalize_on_conflict(on_conflict, model, fields_df, connection)
+  _on_conflict === nothing ||
+    _refuse_unnamed_bulk_target(model, on_conflict, _on_conflict.action, fields_df, mapping, df, connection)
   on_conflict_sql = _on_conflict === nothing ? nothing :
-    Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection)
+    Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection;
+                               noop = _bulk_noop_assignment(model, fields_df, connection))
 
   # returning= (#671): the correlation key, and the pk to pre-allocate when the key is an auto pk
   # the frame does not carry. Allocation is a write (it draws the sequence), so a dry run skips it
   # and shows the statement without the pk column.
   returning_key, allocate_pk = _returning === nothing ? (String[], nothing) :
-    _bulk_returning_key(model, on_conflict, fields_df)
+    _bulk_returning_key(model, on_conflict, fields_df, connection)
   allocate_pk = show_query === :execute ? allocate_pk : nothing
   do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
   returning_sql = nothing
@@ -1704,7 +1718,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         chunk_range = (index - count + 1):index
         run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
           on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
-          resync_retry = allocate_pk === nothing)
+          resync_retry = allocate_pk === nothing,
+          conflict = _on_conflict === nothing ? nothing : _on_conflict.action, rows = length(chunk_range))
         res = if _returning === nothing || show_query !== :execute
           run_chunk()
         elseif _insert_returns_rows(connection)
@@ -1714,23 +1729,28 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             chunk_range, do_nothing)
           DataFrames.nrow(returned)
         else
-          # No RETURNING (SQLite; see the #671 block above `_normalize_bulk_returning`). Under DO
+          # No RETURNING (SQLite, MySQL; see the #671 block above `_normalize_bulk_returning`). Under DO
           # NOTHING, first note which keys the table already held, so a read-back row with one of
           # them is not reported as written by this call. Every read runs on the pinned transaction
-          # connection, so nothing can land between them and the INSERT.
+          # connection. On SQLite nothing can land between them and the INSERT. On MySQL another
+          # session can: a row it inserts in between is skipped by the INSERT and, under REPEATABLE
+          # READ, invisible to both plain reads (`missing`, right), but under READ COMMITTED the
+          # read-back sees it as written by this call; a row it deletes in between is written by this
+          # call and reported `missing`, under either level. The count stays exact. Outside DO NOTHING
+          # the read-back locks (`_locks_rows`), to see every row the statement wrote or met (#1267).
           chunk_keys = unique([Tuple(source[i] for source in key_sources) for i in chunk_range
             if !any(source -> source[i] === nothing || ismissing(source[i]), key_sources)])
           existing = Set{Any}()
           if do_nothing
-            before = _sqlite_bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
+            before = _bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
             for r in 1:DataFrames.nrow(before)
               k = _bulk_returning_key_value(key_metas, returning_key, (before[r, field] for field in returning_key))
               k === nothing || push!(existing, k)
             end
           end
           written = run_chunk()   # counted before the read-back, which would overwrite changes()
-          returned = _sqlite_bulk_read_back(objct, model, returning_key, chunk_keys,
-            unique(vcat(returning_key, _returning)))
+          returned = _bulk_read_back(objct, model, returning_key, chunk_keys,
+            unique(vcat(returning_key, _returning)); lock = !do_nothing && _locks_rows(connection))
           _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
             chunk_range, do_nothing, existing)
           written
@@ -2122,7 +2142,7 @@ end
 # a subset of it, because `EXCLUDED.col` for a non-inserted column silently yields the column
 # default instead of a caller value.
 function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vector{String},
-    connection::Union{PormGPostgres, PormGSQLite})
+    connection::_SQLEngine)
   on_conflict === nothing && return nothing
 
   local action::Symbol
@@ -2191,6 +2211,50 @@ function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vecto
           set = String[quoted(col) for col in set])
 end
 
+# MySQL's `ON DUPLICATE KEY UPDATE` names no target (#1267): a targeted DO NOTHING or a DO UPDATE runs
+# only when the target is the one unique key these rows can conflict on, read from the frame. A column
+# holds a value when it takes part in the INSERT and is non-NULL in at least one row, or the database
+# fills it; an auto pk left out and a UUID PormG filled are new. The reading is per column, not per row,
+# so a composite key whose members are set in different rows is still counted: an over-refusal, never
+# a missed key. An untargeted `:nothing` means "skip a conflict on any unique key", which is what
+# MySQL does, so it is not checked.
+function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Symbol, fields_df::Vector{String},
+                                     mapping, df::DataFrames.DataFrame, connection)
+  _supports(connection, :upsert_conflict_target) && return nothing
+  target = on_conflict isa NamedTuple ? _on_conflict_column_list(on_conflict, :target) : String[]
+  action === :nothing && isempty(target) && return nothing
+  holds, minted = _frame_conflict_reading(model, fields_df, mapping, df)
+  update = action === :update
+  _refuse_unnamed_target(model, target, holds, minted, connection;
+    what = "bulk_insert(on_conflict = …) on $(model.name)", noun = "on_conflict target", others = true,
+    not_unique = "Name a unique key as the target, or pass on_conflict = :nothing to skip a conflict on any unique key.",
+    subject = "These rows",
+    effect = update ? "update the row that key matches" : "skip a row that conflicts on that key, where only the target should",
+    alternative = update ? "Leave those columns out of the insert or NULL." :
+      "Leave those columns out of the insert or NULL, or pass on_conflict = :nothing to skip a conflict on any unique key.")
+end
+
+# A frame's reading for `_can_conflict`.
+function _frame_conflict_reading(model::PormGModel, fields_df::Vector{String}, mapping, df::DataFrames.DataFrame)
+  inserted = Set(fields_df)
+  holds = name -> name in inserted ? any(v -> !(v === nothing || ismissing(v)), df[!, mapping[name]]) :
+                                     _has_db_default(model.fields[name])
+  minted = name -> _is_minted_value(model.fields[name]) &&
+                   (!(name in inserted) || _is_injected_fill_column(mapping[name]))
+  return holds, minted
+end
+
+# DO NOTHING on MySQL (`Dialect.on_conflict_clause`'s `noop`): an assignment that writes nothing, on the
+# first inserted column that is not AUTO_INCREMENT, qualified by the table. A frame whose only column is
+# the AUTO_INCREMENT pk supplies every id, so it falls back to that column: error 1869 comes only from an
+# id the statement generates.
+function _bulk_noop_assignment(model::PormGModel, fields_df::Vector{String}, connection)
+  isempty(fields_df) && return nothing
+  i = findfirst(f -> !_is_auto_generated_bulk_primary_key(model.fields[f]), fields_df)
+  column = safe_column_identifier(Models.model_column(model, fields_df[something(i, 1)]), connection)
+  return "$(column) = $(safe_table_identifier(Models.model_table_name(model), connection)).$(column)"
+end
+
 # Fetch `key` from the on_conflict NamedTuple as a Vector{String}, tolerating any
 # AbstractString/AbstractVector flavor; a missing key means "no columns".
 function _on_conflict_column_list(on_conflict::NamedTuple, key::Symbol)
@@ -2202,20 +2266,26 @@ function _on_conflict_column_list(on_conflict::NamedTuple, key::Symbol)
   return String[string(v) for v in value]
 end
 
-function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
+function _bulk_insert(model::PormGModel, connection::_SQLEngine,
   fields::Vector{String}, source_sql::String,
   pk_field::Vector{String}, settings::PormGSettings,
   show_query::Symbol, parameters:: AbstractPormGParam;
   on_conflict_sql::Union{Nothing, String} = nothing,
   returning_sql::Union{Nothing, String} = nothing,
   overriding::Bool = false,
-  resync_retry::Bool = true)
+  resync_retry::Bool = true,
+  conflict::Union{Nothing, Symbol} = nothing,
+  rows::Integer = 0)
 
   # Security: Quote table name and physical column names (db_column when set, #50).
-  # The row source is positional and built in `fields` order — `VALUES` tuples on SQLite,
+  # The row source is positional and built in `fields` order — `VALUES` tuples on SQLite and MySQL,
   # `SELECT * FROM unnest(…)` column arrays on PostgreSQL (#672) — so they still align.
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields]
+
+  # A one-row DO NOTHING on MySQL reports no count to read the skip from, so it goes without the clause
+  # and a duplicate key counts as the skip (`_counts_skips_from_report`, `_run_bulk_insert`).
+  skip_by_error = conflict === :nothing && rows == 1 && _counts_skips_from_report(connection)
 
   # Construct the bulk insert SQL. The ON CONFLICT clause (#123) is rendered once by the caller
   # and binds no parameters, so the chunk-size math and the row source's placeholders are
@@ -2229,7 +2299,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))$(overriding ? " OVERRIDING SYSTEM VALUE" : "")
   $(source_sql)
   """
-  if on_conflict_sql !== nothing
+  if on_conflict_sql !== nothing && !skip_by_error
     sql *= on_conflict_sql * "\n"
   end
   if returning_sql !== nothing
@@ -2237,76 +2307,112 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   end
 
   # Execute the query or just show it
-  if show_query !== :execute
+  show_query !== :execute &&
     return _show_query_result(show_query, sql, connection, model, :insert, parameters=parameters)
-  else
-    # Execute the query for the given connection type.
-    if connection isa PormGPostgres
-      # Use a savepoint when inside an active transaction and the model has a PK field.
-      # This lets the sequence-sync retry stay on the same TX connection. With on_conflict
-      # active there is no retry (see below), so the savepoint is skipped too. Nor is there one
-      # for pre-allocated ids (`resync_retry = false`, #671): the retry re-sends the SAME ids, so a
-      # collision there means the sequence had drifted below MAX(pk) before the allocation, and
-      # `resync_sequences` is the fix — the error propagates rather than failing a second time.
-      retry_on_duplicate = on_conflict_sql === nothing && resync_retry
-      use_savepoint = !isempty(pk_field) && retry_on_duplicate
-      # `result` is whichever INSERT actually landed: the first attempt, or the retry below.
-      result = try
-        if use_savepoint
-          with_savepoint(settings, "pormg_bulk_insert_retry") do
-            fetch(settings, sql, parameters)
-          end
-        else
-          fetch(settings, sql, parameters)
-        end
-      catch e
-        # With ON CONFLICT active a surviving duplicate-key error means a DIFFERENT constraint
-        # than the clause target conflicted — the values came from the DataFrame, not a stale
-        # sequence, so the resync-and-retry below would fail identically. Propagate instead.
-        #
-        # Recognized by SQLSTATE, never by the message (#1001): the pool wraps every driver failure
-        # into a `DatabaseError` carrying the SQLSTATE when the server sent one (#987); one without
-        # it is simply not retried. PostgreSQL localizes the primary message by `lc_messages`, so a
-        # `pt_BR` server never said "duplicate key". `23505` is a unique violation specifically —
-        # the resync answers a stale sequence, not constraint failures in general — and `23503` a
-        # foreign key. SQLite never reaches this branch.
-        if retry_on_duplicate && e isa IntegrityError && e.sqlstate == "23505"
-          if !isempty(pk_field)
-            # with_savepoint already rolled back and released the savepoint; the outer
-            # transaction is still usable. Fix the sequence and retry without a savepoint.
-            _update_sequence(model, connection, pk_field, settings)
-            fetch(settings, sql, parameters)
-          else
-            # #197: keep the original driver exception (it carries the constraint detail and is a
-            # real Exception type); the String throw this replaces destroyed both. The diagnostic
-            # hint moves to the log.
-            @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
-            rethrow()
-          end
-        elseif e isa IntegrityError && e.sqlstate == "23503"
-          @error "bulk_insert: foreign key constraint violated — a referenced row is missing" model=model.name exception=e
-          rethrow()
-        else
-          rethrow()
-        end
+  return _run_bulk_insert(connection, model, sql, parameters, settings, pk_field;
+    has_clause = on_conflict_sql !== nothing, returning = returning_sql !== nothing,
+    resync_retry = resync_retry, conflict = conflict, rows = rows, skip_by_error = skip_by_error)
+end
+
+# Run one bulk INSERT and return what the caller counts: the rows it wrote, or with RETURNING (#671)
+# the written rows themselves. One method per engine.
+function _run_bulk_insert(connection::PormGPostgres, model::PormGModel, sql::String, parameters,
+    settings::PormGSettings, pk_field::Vector{String}; has_clause::Bool, returning::Bool,
+    resync_retry::Bool, kwargs...)
+  # Use a savepoint when inside an active transaction and the model has a PK field.
+  # This lets the sequence-sync retry stay on the same TX connection. With on_conflict
+  # active there is no retry (see below), so the savepoint is skipped too. Nor is there one
+  # for pre-allocated ids (`resync_retry = false`, #671): the retry re-sends the SAME ids, so a
+  # collision there means the sequence had drifted below MAX(pk) before the allocation, and
+  # `resync_sequences` is the fix — the error propagates rather than failing a second time.
+  retry_on_duplicate = !has_clause && resync_retry
+  use_savepoint = !isempty(pk_field) && retry_on_duplicate
+  # `result` is whichever INSERT actually landed: the first attempt, or the retry below.
+  result = try
+    if use_savepoint
+      with_savepoint(settings, "pormg_bulk_insert_retry") do
+        fetch(settings, sql, parameters)
       end
-    elseif connection isa PormGSQLite
-      # Use fetch() to properly acquire/release a connection from the pool
-      # and pass the parameterized query with correct bucket ordering
-      result = fetch(settings, sql, parameters)
     else
-      throw(_unsupported_conn("bulk_insert()", connection))
+      fetch(settings, sql, parameters)
     end
-
-    # With RETURNING (#671) the written rows themselves; the caller counts them.
-    returning_sql !== nothing && return DataFrames.DataFrame(result)
-
-    # Rows `ON CONFLICT DO NOTHING` skipped are not counted on either engine; a `DO UPDATE` upsert
-    # counts each row it inserted or updated. Counted here, per chunk, because on SQLite the count is
-    # `changes()`, which any later statement overwrites (#670) — the caller's once-per-call sequence
-    # sync (#704) among them.
-    return _affected_row_count(connection, result, transaction_connection_for(settings))
+  catch e
+    # With ON CONFLICT active a surviving duplicate-key error means a DIFFERENT constraint
+    # than the clause target conflicted — the values came from the DataFrame, not a stale
+    # sequence, so the resync-and-retry below would fail identically. Propagate instead.
+    #
+    # Recognized by SQLSTATE, never by the message (#1001): the pool wraps every driver failure
+    # into a `DatabaseError` carrying the SQLSTATE when the server sent one (#987); one without
+    # it is simply not retried. PostgreSQL localizes the primary message by `lc_messages`, so a
+    # `pt_BR` server never said "duplicate key". `23505` is a unique violation specifically —
+    # the resync answers a stale sequence, not constraint failures in general — and `23503` a
+    # foreign key.
+    if retry_on_duplicate && e isa IntegrityError && e.sqlstate == "23505"
+      if !isempty(pk_field)
+        # with_savepoint already rolled back and released the savepoint; the outer
+        # transaction is still usable. Fix the sequence and retry without a savepoint.
+        _update_sequence(model, connection, pk_field, settings)
+        fetch(settings, sql, parameters)
+      else
+        # #197: keep the original driver exception (it carries the constraint detail and is a
+        # real Exception type); the String throw this replaces destroyed both. The diagnostic
+        # hint moves to the log.
+        @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
+        rethrow()
+      end
+    elseif e isa IntegrityError && e.sqlstate == "23503"
+      @error "bulk_insert: foreign key constraint violated — a referenced row is missing" model=model.name exception=e
+      rethrow()
+    else
+      rethrow()
+    end
   end
+  # With RETURNING (#671) the written rows themselves; the caller counts them.
+  returning && return DataFrames.DataFrame(result)
+  # Rows `ON CONFLICT DO NOTHING` skipped are not counted; a `DO UPDATE` upsert counts each row it
+  # inserted or updated.
+  return _affected_row_count(connection, result, transaction_connection_for(settings))
+end
+
+function _run_bulk_insert(connection::PormGSQLite, model::PormGModel, sql::String, parameters,
+    settings::PormGSettings, pk_field::Vector{String}; returning::Bool, kwargs...)
+  # Use fetch() to properly acquire/release a connection from the pool
+  # and pass the parameterized query with correct bucket ordering
+  result = fetch(settings, sql, parameters)
+  returning && return DataFrames.DataFrame(result)
+  # Counted here, per chunk, because the count is `changes()`, which any later statement overwrites
+  # (#670) — the caller's once-per-call sequence sync (#704) among them. Rows DO NOTHING skipped are
+  # not counted.
+  return _affected_row_count(connection, result, transaction_connection_for(settings))
+end
+
+# MySQL (#1267). Its affected-row count under `found_rows` is 1 for an inserted row AND for a skipped
+# one, so the counts the docstring promises are read elsewhere (measured on 8.4):
+#   - no `on_conflict`: the affected rows;
+#   - DO UPDATE: every row of the chunk was inserted or updated;
+#   - DO NOTHING: `records - duplicates` from the multi-row INSERT's report (`backend_insert_report`).
+#     A one-row INSERT reports none, so it was sent without the clause (`skip_by_error`): a duplicate
+#     key raises, which counts 0 and rolls back that statement only, and any other error propagates.
+# No sequence resync and no retry: an explicit id moves AUTO_INCREMENT past it (`_update_sequence`).
+function _run_bulk_insert(connection::PormGMySQL, model::PormGModel, sql::String, parameters,
+    settings::PormGSettings, pk_field::Vector{String}; conflict, rows::Integer, skip_by_error::Bool, kwargs...)
+  result = try
+    fetch(settings, sql, parameters)
+  catch e
+    skip_by_error && backend_is_duplicate_key(connection, e) && return 0
+    rethrow()
+  end
+  conflict === nothing && return _affected_row_count(connection, result, transaction_connection_for(settings))
+  conflict === :update && return Int(rows)
+  skip_by_error && return 1
+  report = backend_insert_report(connection, result)
+  # The report is read by position (`backend_insert_report`), so it is checked against the chunk: it
+  # carried `rows` rows, and no more of them met a duplicate.
+  (report === nothing || report.records != rows || !(0 <= report.duplicates <= rows)) &&
+    throw(StatementError(_backend_name(connection),
+      "bulk_insert: the multi-row INSERT did not report the row counts of its $(rows) rows, so the rows " *
+      "on_conflict = :nothing skipped cannot be counted."))
+  return report.records - report.duplicates
 end
 
 

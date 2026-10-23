@@ -1515,6 +1515,30 @@ for (modname, key, conn) in ((:MrMyUp, "mr_my_up", MrMockMySQL()), (:MrPGUp, "mr
   # A UUID primary key PormG mints when the row leaves it out.
   Token = Models.Model("token", token = Models.UUIDField(primary_key = true, auto_add = true),
                        label = Models.CharField(unique = true), note = Models.CharField(null = true))
+  # A unique field a Julia default fills.
+  Grid = Models.Model("grid", gridid = Models.IDField(), ref = Models.CharField(unique = true),
+                      slot = Models.IntegerField(unique = true, default = 1), note = Models.CharField(null = true))
+  # A unique field under `db_column`, and one the database fills (`db_default`).
+  Pit = Models.Model("pit", pitid = Models.IDField(), ref = Models.CharField(unique = true),
+                     code = Models.CharField(unique = true, null = true, db_column = "pit_code"),
+                     stamp = Models.DateTimeField(unique = true, null = true, db_default = "CURRENT_TIMESTAMP"),
+                     note = Models.CharField(null = true))
+  # A OneToOneField (unique by default) and a unique ForeignKey, both nullable.
+  Seat = Models.Model("seat", seatid = Models.IDField(), ref = Models.CharField(unique = true),
+                      circuit = Models.OneToOneField(Circuit, pk_field = "circuitid", null = true),
+                      owner = Models.ForeignKey(Circuit, pk_field = "circuitid", unique = true, null = true,
+                                                related_name = "owned_seats"),
+                      note = Models.CharField(null = true))
+  # A partial UniqueConstraint.
+  Entry = Models.Model("entry"; entryid = Models.IDField(), ref = Models.CharField(unique = true),
+                       alias = Models.CharField(null = true), note = Models.CharField(null = true),
+                       constraints = [Models.UniqueConstraint(fields = ("alias",), condition = "alias <> ''",
+                                                              name = "entry_alias_uq")])
+  # A constraint over the lookup and one more field, and a non-pk UUID PormG mints.
+  Badge = Models.Model("badge"; badgeid = Models.IDField(), ref = Models.CharField(unique = true),
+                       raceid = Models.IntegerField(null = true),
+                       ticket = Models.UUIDField(unique = true, auto_add = true), note = Models.CharField(null = true),
+                       constraints = [Models.UniqueConstraint(fields = ("ref", "raceid"))])
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end
@@ -1553,11 +1577,14 @@ end
   @test e isa PormG.BackendCapabilityError && occursin("(name)", sprint(showerror, e)) &&
         !occursin("(circuitref)", sprint(showerror, e))
   # A composite constraint conflicts only when every member is set.
-  @test uoc(MrMyUp.Standing, "standingid" => 7; defaults = Pair{String,Any}["raceid" => 1, "points" => 2.0]) isa String
+  @test occursin("ON DUPLICATE KEY UPDATE `raceid` = `__pormg_new`.`raceid`",
+                 uoc(MrMyUp.Standing, "standingid" => 7; defaults = Pair{String,Any}["raceid" => 1, "points" => 2.0]))
   e = caught(() -> uoc(MrMyUp.Standing, "standingid" => 7; defaults = Pair{String,Any}["raceid" => 1, "driverid" => 3, "points" => 2.0]))
   @test e isa PormG.BackendCapabilityError && occursin("(raceid, driverid)", sprint(showerror, e))
-  @test uoc(MrMyUp.Standing, "raceid" => 1, "driverid" => 3; defaults = ["points" => 2.0]) isa String
-  @test uoc(MrMyUp.Standing, "driverid" => 3, "raceid" => 1; defaults = ["points" => 2.0]) isa String   # a set, not a sequence
+  @test occursin("ON DUPLICATE KEY UPDATE `points` = `__pormg_new`.`points`",
+                 uoc(MrMyUp.Standing, "raceid" => 1, "driverid" => 3; defaults = ["points" => 2.0]))
+  @test occursin("ON DUPLICATE KEY UPDATE `points` = `__pormg_new`.`points`",   # a set, not a sequence
+                 uoc(MrMyUp.Standing, "driverid" => 3, "raceid" => 1; defaults = ["points" => 2.0]))
   # A functional constraint always counts: PormG cannot evaluate `lower(url)` against the row.
   e = caught(() -> uoc(MrMyUp.Season, "year" => 1988; defaults = ["url" => "u"]))
   @test e isa PormG.BackendCapabilityError && occursin("a functional or partial UniqueConstraint", sprint(showerror, e))
@@ -1618,6 +1645,51 @@ end
   e = try; goc(MrMyUp.Status, "label" => "x"; defaults = ["code" => "F"]); nothing; catch err; err; end
   @test e isa PormG.QueryBuildError && occursin("get_or_create on status requires its lookup field(s) (label)", sprint(showerror, e))
   @test goc(MrMyUp.Standing, "raceid" => 1, "driverid" => 2; defaults = ["points" => 1.0]) isa String
-  @test !_MR_QB._serializes_get_or_create(MrMockMySQL()) && !_MR_QB._upsert_names_target(MrMockMySQL())
-  @test _MR_QB._upsert_names_target(MrMockPostgres()) && _MR_QB._upsert_names_target(MrMockSQLite())
+  @test !_MR_QB._serializes_get_or_create(MrMockMySQL())
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL update_or_create: every kind of unique key a row can conflict on is counted
+# A key the check misses is the silent wrong-row update #1267 is about. Expected: a unique field a
+# Julia default fills, one under `db_column` (named by its field), one a database default fills even
+# when the row leaves it out, a OneToOneField, a unique ForeignKey, a partial UniqueConstraint, and
+# the `(owner, related)` index of an auto many-to-many join table each raise BackendCapabilityError
+# naming the key; a partial constraint is no lookup (QueryBuildError, "plain"). A key over the lookup
+# and more, and a UUID PormG mints, cannot hit another row, so those build. PostgreSQL and SQLite
+# build every shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL update_or_create: every kind of unique key a row can conflict on is counted" begin
+  caught(f) = try; f(); nothing; catch e; e; end
+  uoc(m, lookup...; defaults) = m.objects.update_or_create(lookup...; defaults = defaults, show_query = :sql)
+  refused(e, needle) = e isa PormG.BackendCapabilityError && occursin(needle, sprint(showerror, e))
+  @test refused(caught(() -> uoc(MrMyUp.Grid, "ref" => "a"; defaults = ["note" => "n"])), "(slot)")
+  e = caught(() -> uoc(MrMyUp.Pit, "ref" => "a"; defaults = Pair{String,Any}["code" => "P1", "note" => "n"]))
+  @test refused(e, "(code)") && refused(e, "(stamp)")
+  e = caught(() -> uoc(MrMyUp.Pit, "ref" => "a"; defaults = ["note" => "n"]))
+  @test refused(e, "(stamp)") && !occursin("(code)", sprint(showerror, e))
+  @test occursin("ON DUPLICATE KEY UPDATE `note`", uoc(MrMyUp.Seat, "ref" => "a"; defaults = ["note" => "n"]))
+  @test refused(caught(() -> uoc(MrMyUp.Seat, "ref" => "a"; defaults = Pair{String,Any}["circuit" => 1, "note" => "n"])), "(circuit)")
+  @test refused(caught(() -> uoc(MrMyUp.Seat, "ref" => "a"; defaults = Pair{String,Any}["owner" => 1, "note" => "n"])), "(owner)")
+  @test refused(caught(() -> uoc(MrMyUp.Entry, "ref" => "a"; defaults = ["note" => "n"])), "a functional or partial UniqueConstraint")
+  e = caught(() -> uoc(MrMyUp.Entry, "alias" => "x"; defaults = ["ref" => "r", "note" => "n"]))
+  @test e isa PormG.QueryBuildError && occursin("a plain (not partial or functional) UniqueConstraint", sprint(showerror, e))
+  @test occursin("ON DUPLICATE KEY UPDATE `raceid`",
+                 uoc(MrMyUp.Badge, "ref" => "a"; defaults = Pair{String,Any}["raceid" => 1, "note" => "n"]))
+  @test refused(caught(() -> uoc(MrMyUp.Badge, "ref" => "a"; defaults = Pair{String,Any}["ticket" => UUIDs.uuid4(), "note" => "n"])),
+                "(ticket)")
+  # An auto many-to-many join table: its index is not a declared constraint, and still a key.
+  join = Models.Model("car_driver"; id = Models.IDField(), car_id = Models.IntegerField(), driver_id = Models.IntegerField())
+  join.cache["many_to_many_auto"] = Dict{String, Any}("field" => "drivers", "owner_column" => "car_id",
+                                                      "related_column" => "driver_id",
+                                                      "unique_index" => "car_driver_car_id_driver_id_uniq")
+  @test (fields = ["car_id", "driver_id"], kind = :constraint) in _MR_QB._unique_keys(join)
+  row = Dict{String,Any}("id" => 1, "car_id" => 2, "driver_id" => 3)
+  @test refused(caught(() -> _MR_QB._refuse_unnamed_upsert_target("update_or_create", join, ["id"], row,
+                                                                   Set(keys(row)), MrMockMySQL())), "(car_id, driver_id)")
+  @test _MR_QB._refuse_unnamed_upsert_target("get_or_create", join, ["driver_id", "car_id"], row, Set(keys(row)),
+                                             MrMockMySQL()) === nothing
+  for models in (MrPGUp, MrSLUp)
+    @test uoc(models.Pit, "ref" => "a"; defaults = Pair{String,Any}["code" => "P1", "note" => "n"]) isa String
+    @test uoc(models.Entry, "alias" => "x"; defaults = ["ref" => "r", "note" => "n"]) isa String
+  end
 end

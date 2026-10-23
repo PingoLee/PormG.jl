@@ -197,8 +197,9 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 
 end
 
-# The unique keys a row of `model` can collide on (#1267): the primary key, each `unique` field, and
-# each declared `UniqueConstraint`. `kind` is `:pk`, `:field` or `:constraint`, or `:text` for a
+# The unique keys a row of `model` can collide on (#1267): the primary key, each `unique` field
+# (a `OneToOneField` included), each declared `UniqueConstraint`, and the `(owner, related)` index of
+# an auto many-to-many join table. `kind` is `:pk`, `:field` or `:constraint`, or `:text` for a
 # functional or partial constraint, whose SQL text PormG cannot evaluate against a row.
 function _unique_keys(model::PormGModel)::Vector{@NamedTuple{fields::Vector{String}, kind::Symbol}}
   keys = @NamedTuple{fields::Vector{String}, kind::Symbol}[]
@@ -213,26 +214,37 @@ function _unique_keys(model::PormGModel)::Vector{@NamedTuple{fields::Vector{Stri
   for c in Models._declared_unique_constraints(model)
     push!(keys, (fields = c.fields, kind = Models._unique_holds_text(c) ? :text : :constraint))
   end
+  # The join table's own index is not a declared constraint: its columns name its two fields.
+  auto = Models._auto_join_unique_columns(model)
+  if auto !== nothing
+    by_column = Dict(Models.model_column(model, f) => f for f in model.field_names)
+    push!(keys, (fields = [by_column[auto[1]], by_column[auto[2]]], kind = :constraint))
+  end
   return keys
 end
 
 # Whether the row about to be inserted (`insert`, after `_prepare_row_insert!` filled its defaults) can
 # conflict on `key`. `given` holds the fields the caller wrote, before that fill. A key over SQL text
-# always can. A primary key PormG mints and the caller left out (an auto id, a UUID `auto_add`) is a new
-# value, so it cannot. Otherwise every member must hold a value: one the INSERT binds that is not NULL,
-# a database default, or a generated column. A NULL member never conflicts.
+# always can. A member PormG mints and the caller left out (an auto id, a UUID `auto_add`) is a new
+# value, so the key cannot. Otherwise every member must hold a value: one the INSERT binds that is not
+# NULL, or a database default. A NULL member never conflicts. (A generated column is PostgreSQL's,
+# #1032, so no MySQL row reaches here with one.)
 function _can_conflict(key, model::PormGModel, insert::AbstractDict, given)::Bool
   key.kind === :text && return true
-  key.kind === :pk && _is_pormg_minted_bulk_primary_key(model.fields[only(key.fields)]) &&
-    !(only(key.fields) in given) && return false
+  any(name -> !(name in given) && _is_minted_value(model.fields[name]), key.fields) && return false
   return all(key.fields) do name
     haskey(insert, name) && return !(insert[name] === nothing || insert[name] === missing)
     f = model.fields[name]
-    return Models.is_generated_field(f) || (hasproperty(f, :db_default) && f.db_default !== nothing)
+    return hasproperty(f, :db_default) && f.db_default !== nothing
   end
 end
 
-# MySQL's upsert names no target (`_upsert_names_target`), so before any SQL (#1267):
+# A value no other row holds when the caller leaves it out: an id the database generates, or a UUID
+# PormG mints (`auto_add`), primary key or not.
+_is_minted_value(f)::Bool = _is_pormg_minted_bulk_primary_key(f) ||
+  (f.type == "UUID" && hasproperty(f, :auto_add) && f.auto_add === true)
+
+# MySQL's upsert names no target (no `upsert_conflict_target` row), so before any SQL (#1267):
 #   - the lookup must be one of the model's unique keys, exactly. PostgreSQL and SQLite raise for any
 #     other lookup when the INSERT runs; MySQL would insert a duplicate without a word;
 #   - for `update_or_create`, no other key may be one the row can conflict on: `ON DUPLICATE KEY UPDATE`
@@ -241,16 +253,17 @@ end
 # on PostgreSQL.
 function _refuse_unnamed_upsert_target(op::String, model::PormGModel, target_fields::Vector{String},
                                        insert::AbstractDict, given, connection)
-  _upsert_names_target(connection) && return nothing
+  _supports(connection, :upsert_conflict_target) && return nothing
   keys = _unique_keys(model)
   target = Set(target_fields)
   any(k -> k.kind !== :text && Set(k.fields) == target, keys) || throw(QueryBuildError(
     "$(op) on $(model.name) requires its lookup field(s) ($(join(target_fields, ", "))) to be a unique key " *
-    "of the model: the primary key, a `unique = true` field, or a UniqueConstraint over exactly those " *
-    "fields. $(_backend_name(connection)) finds the existing row by its unique keys. For a lookup that " *
-    "is not unique, use filter(...).first(), then create(...)."))
+    "of the model: the primary key, a `unique = true` field, or a plain (not partial or functional) " *
+    "UniqueConstraint over exactly those fields. $(_backend_name(connection)) finds the existing row by " *
+    "its unique keys. For a lookup that is not unique, use filter(...).first(), then create(...)."))
   op == "update_or_create" || return nothing
-  others = [k for k in keys if Set(k.fields) != target && _can_conflict(k, model, insert, given)]
+  # A key over the lookup's fields and more can only match the lookup's own row: not another conflict.
+  others = [k for k in keys if !(target ⊆ Set(k.fields)) && _can_conflict(k, model, insert, given)]
   isempty(others) && return nothing
   names = join(unique(k.kind === :text ? "a functional or partial UniqueConstraint" :
                       "($(join(k.fields, ", ")))" for k in others), ", ")
@@ -400,12 +413,15 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
     result = fetch(settings, sql, parameters)
     created = _odku_created(counts_insert, existed, backend_num_affected_rows(connection, result),
                             counts_insert ? backend_last_insert_id(connection, result) : 0)
+    # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
+    # a row another session committed after it, when this statement hit it unchanged (measured). The
+    # ODKU already locked that row, so the read waits on nothing.
     rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields,
-                                             safe_table_name, connection)...) |> Tables.rowtable
-    dict = isempty(rows) ?
-      Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-      _row_to_field_keyed_dict(rows[1], model, connection)
-    (dict, created)
+                                             safe_table_name, connection; lock = true)...) |> Tables.rowtable
+    isempty(rows) && throw(StatementError(_backend_name(connection),
+      "update_or_create: the statement reported success, but the $(model.name) row could not be read " *
+      "back: a trigger may have dropped it, or the lookup does not match what was stored."))
+    (_row_to_field_keyed_dict(rows[1], model, connection), created)
   end
   # The statement and its read-back share one connection, so the report and the row are this call's.
   dict, created = transaction_connection_for(settings) !== nothing ?
@@ -420,14 +436,15 @@ _odku_created(counts_insert::Bool, existed::Bool, count::Integer, id::Integer)::
   counts_insert ? (count == 1 && id != 0) : (!existed && count != 2)
 
 # `<head> FROM <table> WHERE <target> = <the value the INSERT bound> … LIMIT 1`, on a fresh parameter
-# object each call: a statement's parameters are never reused across fetches.
-function _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection)
+# object each call: a statement's parameters are never reused across fetches. `lock` makes it a
+# locking read (`FOR SHARE`), which reads the latest committed row rather than the snapshot.
+function _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock::Bool = false)
   params = get_parameter(connection)
   set_context!(params, :where)
   where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = " *
                     "$(add_parameter!(params, real_obj.insert[f] |> model.fields[f].formatter))" for f in target_fields],
                    " AND ")
-  return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1;", params)
+  return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1$(lock ? " FOR SHARE" : "");", params)
 end
 
 # A missing unique constraint on the ON CONFLICT target surfaces as a driver error at execution
@@ -510,12 +527,17 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     _format_single(model.fields[f], f, v, "get_or_create")
   end
 
-  fetch_by_target = () -> _get_or_create_lookup(model, target_fields, target_values).first()
+  # `lock` reads the latest committed row (`select_for_update`), for a re-read inside a transaction
+  # whose snapshot may predate the winner of a race (MySQL, #1267).
+  fetch_by_target = (; lock::Bool = false) -> begin
+    q = _get_or_create_lookup(model, target_fields, target_values)
+    lock ? q.select_for_update().first() : q.first()
+  end
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
   # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
-  # when we actually insert. MySQL has no targeted DO NOTHING (`_upsert_names_target`): its miss is a
-  # plain INSERT, and the lookup must be a unique key of the model, checked here (#1267).
+  # when we actually insert. MySQL has no targeted DO NOTHING (no `upsert_conflict_target` row): its
+  # miss is a plain INSERT, and the lookup must be a unique key of the model, checked here (#1267).
   build_insert = (parameters) -> begin
     set_context!(parameters, :select)
     given = Set{String}(keys(real_obj.insert))
@@ -524,7 +546,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     _refuse_unnamed_upsert_target("get_or_create", model, target_fields, real_obj.insert, given, connection)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
-    clause  = _upsert_names_target(connection) ?
+    clause  = _supports(connection, :upsert_conflict_target) ?
       Dialect.on_conflict_clause(:nothing, qtarget, String[], connection) : ""
     """
     INSERT INTO $(safe_table_name) (
@@ -622,16 +644,17 @@ end
 # MySQL (#1267): a plain INSERT, guarded by the unique index the lookup must be. A concurrent insert of
 # the same key makes it raise `IntegrityError`; the row is then re-read by the lookup and returned with
 # `created = false`, Django's own recovery. MySQL rolls back only the failed statement, so an open
-# transaction stays usable (measured). When the re-read finds nothing, the conflict was on another key
-# (or a REPEATABLE READ snapshot cannot see the winner yet), and the `IntegrityError` is the answer, as
-# PostgreSQL gives for a conflict on a key that is not the target.
+# transaction stays usable (measured). Inside a transaction the re-read is a locking one: a plain read
+# sees the transaction's REPEATABLE READ snapshot, which misses a winner committed after it (measured).
+# When the re-read finds nothing, the conflict was on another key, and the `IntegrityError` is the
+# answer, as PostgreSQL gives for a conflict on a key that is not the target.
 function _create_on_miss(connection::PormGMySQL, settings, model, insert_sql, parameters, fetch_by_target,
                          target_fields)
   try
     fetch(settings, insert_sql, parameters)
   catch e
     e isa IntegrityError || rethrow()
-    raced = fetch_by_target()
+    raced = fetch_by_target(; lock = transaction_connection_for(settings) !== nothing)
     raced === nothing && rethrow()
     return (raced, false)
   end

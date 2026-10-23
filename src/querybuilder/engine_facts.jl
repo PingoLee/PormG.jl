@@ -127,13 +127,6 @@ _serializes_get_or_create(::PormGSQLite) = true
 # keys in one index gap (measured on 8.4: a `FOR UPDATE` on a missing key, then the inserts, gave 1213).
 _serializes_get_or_create(::PormGMySQL) = false
 
-# An upsert names the unique key it conflicts on (`ON CONFLICT (target)`), so a conflict on any other
-# key raises. MySQL's `ON DUPLICATE KEY UPDATE` names none: it updates whichever row a unique key
-# matched, so PormG builds one only when the lookup is the one key the row can conflict on (#1267).
-_upsert_names_target(::PormGPostgres) = true
-_upsert_names_target(::PormGSQLite) = true
-_upsert_names_target(::PormGMySQL) = false
-
 # A cascading delete locks every parent row, top-down, before it reads one (#770, #771). SQLite's
 # writers are already serialized for the whole transaction, so nothing can change under it.
 _locks_cascade_parents(::PormGPostgres) = true

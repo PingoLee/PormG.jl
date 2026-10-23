@@ -289,6 +289,26 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             @test !created && row.label == "Prost"
             row, created = W.Plain.objects.update_or_create("code" => "PRO"; defaults = ["label" => "Alain"])
             @test !created && row.label == "Alain"
+            # A UUID primary key: no AUTO_INCREMENT either.
+            tok = UUIDs.uuid4()
+            row, created = W.Token.objects.update_or_create("token" => tok; defaults = ["label" => "t9"])
+            @test created && (row.label, row.note) == ("t9", "from the server")
+            row, created = W.Token.objects.update_or_create("token" => tok; defaults = ["label" => "t9"])
+            @test !created && W.Token.objects.filter("token" => tok).count() == 1
+            # A supplied AUTO_INCREMENT id as the lookup: the OK packet reports it on an insert.
+            row, created = W.Team.objects.update_or_create("id" => 900; defaults = ["name" => "Ligier"])
+            @test created && (row.id, row.name) == (900, "Ligier")
+            row, created = W.Team.objects.update_or_create("id" => 900; defaults = ["name" => "Ligier"])
+            @test !created && row.id == 900
+            # Inside a transaction whose snapshot predates a row another session committed: the statement
+            # hits that row unchanged, and the row read back is the stored one, not the values sent.
+            PormG.atomic(PormG.config["p3w_my"]) do
+                @test W.Plain.objects.filter("code" => "MAN").count() == 0   # opens the snapshot
+                PormG.fetch(pool, "INSERT INTO `p3w_plain` (`code`, `label`) VALUES (?, ?)";
+                            params = ["MAN", "Mansell"], ignore_tx = true)
+                row, _ = W.Plain.objects.update_or_create("code" => "MAN"; defaults = ["label" => "Mansell"])
+                @test (row.code, row.label, row.note) == ("MAN", "Mansell", "from the server")
+            end
             # A hit refreshes an `auto_now` column, as update() does.
             first_row, created = W.Season.objects.update_or_create("year" => 1988; defaults = ["url" => "u1988"])
             @test created
@@ -321,7 +341,7 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             insert_sql = "INSERT INTO `p3w_circuit` (`ref`, `name`) VALUES ($(QB.add_parameter!(params, "spa")), " *
                          "$(QB.add_parameter!(params, "Spa-Francorchamps")))"
             winner, created = QB._create_on_miss(pool, PormG.config["p3w_my"], W.Circuit, insert_sql, params,
-                                                 () -> W.Circuit.objects.filter("ref" => "spa").first(), ["ref"])
+                                                 (; lock = false) -> W.Circuit.objects.filter("ref" => "spa").first(), ["ref"])
             @test !created && winner.name == "Spa" && W.Circuit.objects.filter("ref" => "spa").count() == 1
             # Inside a transaction, the duplicate rolls back only its own statement.
             PormG.atomic(PormG.config["p3w_my"]) do
@@ -331,10 +351,19 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
                 W.Circuit.objects.create("ref" => "suzuka", "name" => "Suzuka")
             end
             @test W.Circuit.objects.filter("ref__@in" => ["imola", "imola2", "suzuka"]).count() == 2
+            # A race inside a transaction: the winner committed after its snapshot is read back by a
+            # locking read, so the call returns it rather than the duplicate-key error.
+            PormG.atomic(PormG.config["p3w_my"]) do
+                @test W.Circuit.objects.filter("ref" => "monaco").count() == 0   # opens the snapshot
+                PormG.fetch(pool, "INSERT INTO `p3w_circuit` (`ref`, `name`) VALUES (?, ?)";
+                            params = ["monaco", "Monaco"], ignore_tx = true)
+                winner, created = W.Circuit.objects.get_or_create("ref" => "monaco"; defaults = ["name" => "Monte Carlo"])
+                @test !created && winner.name == "Monaco"
+            end
             # A lookup the model does not declare unique is refused on the miss.
-            e = caught(() -> W.Plain.objects.get_or_create("label" => "Mansell"; defaults = ["code" => "MAN"]))
+            e = caught(() -> W.Plain.objects.get_or_create("label" => "Piquet"; defaults = ["code" => "PIQ"]))
             @test e isa PormG.QueryBuildError && occursin("to be a unique key of the model", msg(e))
-            @test W.Plain.objects.filter("code" => "MAN").count() == 0
+            @test W.Plain.objects.filter("code" => "PIQ").count() == 0
         end
     finally
         for t in _MYW_TABLES

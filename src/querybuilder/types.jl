@@ -524,8 +524,13 @@ end
   window_group_terms::Vector{Tuple{String,Vector{Any}}} = Tuple{String,Vector{Any}}[]
   # #1115: the `order_by` terms `get_order_query` rendered but left out of `group` because they hold
   # an aggregate or a window, as declared. `_check_mixed_grouping` walks exactly these — a term that
-  # resolved to a projection alias is not here, since the statement never contains its expression.
+  # resolved to a projection alias is not here: its expression is the projection's, already checked
+  # there, even where a NULL sort key repeats it (#1130).
   ungrouped_order_terms::Vector{SQLTypeField} = SQLTypeField[]
+  # #1130: the values each projection bound, by output name, in the order its markers print. An ORDER
+  # BY term that repeats a projection's SQL in its NULL sort key (`_projection_null_key`) binds them
+  # again from here, so the projection is never rendered a second time.
+  projection_params::Dict{String,Vector{Any}} = Dict{String,Vector{Any}}()
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query

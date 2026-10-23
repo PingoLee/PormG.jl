@@ -295,7 +295,6 @@ function build(object::SQLObject;
   _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
   _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
   _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
-  _refuse_shadowed_null_key_alias(object, instruct)   # #1130: a NULL sort key MySQL would read as a column
 
   return instruct
 end

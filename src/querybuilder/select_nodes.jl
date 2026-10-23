@@ -114,46 +114,51 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, c
                 null_flag = null_flag)
 end
 
-# #1130: an ordering on a projection is printed as its alias, and on an engine that emulates the NULL
-# placement the alias is also inside the sort key, `(alias IS NULL)`. MySQL reads a name inside an
-# ORDER BY EXPRESSION as a FROM column before a result alias (measured on 8.4; a bare `ORDER BY alias`
-# reads the alias), so when a FROM table has a column of that name the key tests that column, and the
-# NULLs land where MySQL puts them, silently: `values("laps" => "position").order_by("-laps")`. Until
-# the key is rendered over the projection itself (phase 2b, which edits the ordering renderer), such a
-# query is refused. A projection that IS that column (`values("position")`, `"surname" =>
-# "driverid__surname"`) reads the same value under either name, so it builds.
-function _refuse_shadowed_null_key_alias(object::SQLObject, instruc::SQLInstruction)
-  (isempty(object.order) || !_refuses_shadowed_null_key_alias(instruc.connection)) && return nothing
-  outputs = Dict{String,Any}()
-  for p in object.values
-    p isa SQLField && (outputs[something(p.custom_as, p._as)] = p.field)
+# #1130: the NULL sort key of an ORDER BY term printed as the projection named `name`, where a table the
+# query reads has a column of that name (`get_order_query`): the projection's SQL as the SELECT list
+# rendered it, with the values it bound bound again under `:order`, where the key's markers print. The
+# text is reused rather than the node rendered again, so the key is the projection by construction, a
+# path's join, a function's typed render and a literal's bind alike.
+#
+# Measured on MySQL 8.4: the key reads the projection for a column, an aggregate and a window, bound or
+# not. Under DISTINCT, or GROUP BY, MySQL also requires every column the key reads outside an aggregate
+# to be a projected or grouped column, so a key over `position + 1` there is MySQL's error 3065 or 1055:
+# loud, on that engine only, and left to it (#1087).
+function _projection_null_key(name::AbstractString, instruc::SQLInstruction)::String
+  for i in eachindex(instruc.select)
+    isassigned(instruc.select, i) || continue
+    value = instruc.select[i]
+    _projection_output_name(value) == name || continue
+    sql = value.field
+    sql isa AbstractString || break
+    copy_parameters_to!(instruc, :order, get(instruc.projection_params, name, Any[]))
+    return String(sql)
   end
-  isempty(outputs) && return nothing
-  columns = nothing   # the FROM tables' column names, read once, on the first term that needs them
-  for o in object.order
-    f = o.field
-    (f isa SQLField && f.field isa String && haskey(outputs, f.field)) || continue
-    name = f.field
-    source = outputs[name]
-    source isa String && last(split(source, "__")) == name && continue
-    columns === nothing && (columns = _from_column_names(object, instruc))
-    name in columns || continue
-    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
-      "query reads has a column with that name. MySQL places NULLs with an `($(name) IS NULL)` sort key, and " *
-      "reads `$(name)` there as that column, not as the projection, so the NULLs would sort in the wrong place. " *
-      "Project it under a name no column has, e.g. \e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
-  end
-  return nothing
+  throw(QueryBuildError("PormG internal error: order_by(\"$(name)\") names a projection whose SQL was not " *
+                        "rendered. This is a PormG bug; please report it."))
 end
 
 # The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
 # and each joined CTE's projections. A joined model is found by its table among the models the base
 # model reaches through its relations (forward and reverse, any depth, whatever module defines them),
 # the `cjoin_on` targets, and the models of the base model's module.
+#
+# Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
+# that point: an `order_by` path a later term resolves, and the `cjoin`/`on()` paths `build` materializes
+# after ORDER BY (#404 fixes that order). Each hop of such a path is walked without joining it.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
+  end
+  for path in Iterators.flatten((keys(object.custom_join), _projected_paths(object.order)))
+    model = object.model
+    for (i, seg) in enumerate(split(String(first(split(lstrip(path, '-'), "__@"))), "__"))
+      step = _relation_step(object, model, seg, i == 1)
+      step === nothing && break
+      model = step[2]
+      push!(tables, Models.model_table_name(model))
+    end
   end
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)

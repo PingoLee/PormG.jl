@@ -1201,7 +1201,7 @@ function _refuse_set_reading_assigned(fields::Vector{String}, parts::Vector{Stri
       (j == i || (!multi_table && j > i)) && continue
       occursin(string(alias, ".", column), rhs) || continue
       throw(QueryBuildError("update(\"$(fields[i])\" => …) reads `$(fields[j])`, which the same update() also " *
-        "writes. $(_backend_name(connection)) assigns an UPDATE's SET items in order, so it would read the new " *
+        "writes. $(_backend_name(connection)) assigns an UPDATE's SET items in order, so it may read the new " *
         "value of `$(fields[j])`, where the update means the row as it was. Split it into two update() calls, " *
         "or write the value both items mean."))
     end

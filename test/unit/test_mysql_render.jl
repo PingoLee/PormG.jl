@@ -1421,6 +1421,11 @@ PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
   @test !occursin("__pormg_members", _mr_inspect(_MR_MY.Result.objects.filter("resultid__@in" => members))[:sql_text])
   @test !occursin("__pormg_members", _MR_PG.Result.objects.filter("resultid__@in" => _MR_PG.Result.objects.filter("grid" => 1).
                     values("resultid")).update("laps" => 5; show_query = :sql))
+  # … and in a delete: the root's own statement and a cascade step take the same path (`_build_entry`).
+  del = _MR_MY.Result.objects.filter("resultid__@in" => members).delete(show_query = :sql)
+  @test occursin("IN (SELECT * FROM (SELECT", del) && occursin(") AS `__pormg_members`)", del)
+  @test !occursin("__pormg_members", _MR_PG.Result.objects.filter("resultid__@in" =>
+                    _MR_PG.Result.objects.filter("grid" => 1).values("resultid")).delete(show_query = :sql))
   correlated = _MR_MY.Driver.objects.filter("driverid" => _MR_QB.OuterRef("driverid")).values("driverid")
   upd = _MR_MY.Result.objects.filter("driverid__@in" => correlated).update("laps" => 5; show_query = :sql)
   @test !occursin("__pormg_members", upd)

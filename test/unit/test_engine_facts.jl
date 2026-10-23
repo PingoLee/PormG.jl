@@ -91,7 +91,11 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_materializes_target_key_set, :_assigns_set_in_order,
                                # Phase 3b (upserts): a miss serialized by nothing but the unique
                                # index.
-                               :_serializes_get_or_create])
+                               :_serializes_get_or_create,
+                               # Phase 3c-1 (bulk_insert): one parameter per cell, no identity to
+                               # override, no keys drawn ahead, and the skips read from the report.
+                               :_bulk_binds_column_arrays, :_overrides_generated_identity, :_allocate_ids,
+                               :_allocates_ids_in_transaction, :_counts_skips_from_report])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -178,6 +182,8 @@ end
   @test !_EF_QB._materializes_target_key_set(_EfPg()) && !_EF_QB._materializes_target_key_set(_EfSl())
   # Phase 3b: no lock between the get and the insert.
   @test !_EF_QB._serializes_get_or_create(_EfMy())
-  # Bulk writes are phase 3c's.
-  @test_throws MethodError _EF_QB._bulk_binds_column_arrays(_EfMy())
+  # Phase 3c-1: a bulk INSERT binds one parameter per cell, and counts its skips from MySQL's report.
+  @test !_EF_QB._bulk_binds_column_arrays(_EfMy()) && _EF_QB._counts_skips_from_report(_EfMy())
+  # Migrations are phase 4's.
+  @test_throws MethodError PormG.Migrations._rebuilds_table(_EfMy())
 end

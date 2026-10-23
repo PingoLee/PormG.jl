@@ -52,6 +52,7 @@ import PormG: LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERAT
               VERBATIM_PATTERN_OPERATORS
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_last_insert_id     # MySQL: the AUTO_INCREMENT value an INSERT wrote (#1266)
+import PormG: backend_insert_report, backend_is_duplicate_key   # MySQL: a bulk INSERT's skips (#1267)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.

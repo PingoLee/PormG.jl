@@ -55,6 +55,9 @@ const _BACKEND_FEATURES = (
   # #1267: `ON CONFLICT (target)` names the unique key an upsert updates on; MySQL's `ON DUPLICATE KEY
   # UPDATE` names none and fires on a conflict with any of the table's unique keys.
   :upsert_conflict_target => "an upsert that names the unique key it updates on (`ON CONFLICT (target)`)",
+  # #1266: PostgreSQL draws ids from the pk's sequence, SQLite reserves them in `sqlite_sequence`;
+  # MySQL's AUTO_INCREMENT cannot be drawn ahead of the INSERT.
+  :preallocated_keys      => "drawing auto-increment keys before the rows are written",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
@@ -86,7 +89,7 @@ for f in _FEATURE_NAMES
   @eval _has_feature(::Type{<:PormGPostgres}, ::Val{$(QuoteNode(f))}) = true
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
-          :supported_server, :deferred_foreign_keys, :upsert_conflict_target)
+          :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the

@@ -108,15 +108,34 @@ end
 # parameter per cell, so a chunk's parameter count does not grow with its rows.
 _bulk_binds_column_arrays(::PormGPostgres) = true
 _bulk_binds_column_arrays(::PormGSQLite) = false
+_bulk_binds_column_arrays(::PormGMySQL) = false   # one `?` per cell, as SQLite (#1266)
 
 # A pre-allocated id written into a `generated_always` identity needs `OVERRIDING SYSTEM VALUE`.
 # SQLite has no identity column to override.
 _overrides_generated_identity(::PormGPostgres) = true
 _overrides_generated_identity(::PormGSQLite) = false
+_overrides_generated_identity(::PormGMySQL) = false   # AUTO_INCREMENT takes an explicit value
 
 # Draw `n` primary keys for `bulk_insert(returning = …)` before the rows are written (#671).
 _allocate_ids(model, conn::PormGPostgres, pk, n, settings) = _allocate_pg_ids(model, conn, pk, n)
 _allocate_ids(model, conn::PormGSQLite, pk, n, settings) = _allocate_sqlite_ids(model, conn, pk, n, settings)
+# MySQL has no sequence, and AUTO_INCREMENT cannot be reserved ahead of the INSERT (#1266).
+_allocate_ids(model, conn::PormGMySQL, pk, n, settings) =
+  throw(_capability_error(conn, :preallocated_keys, "allocating $(model.name)'s primary keys";
+    why = "Let the INSERT generate them, or supply them in the DataFrame."))
+# SQLite's allocator reads and writes `sqlite_sequence`, so it runs inside a transaction; PostgreSQL's
+# `nextval` needs none.
+_allocates_ids_in_transaction(::PormGPostgres) = false
+_allocates_ids_in_transaction(::PormGSQLite) = true
+_allocates_ids_in_transaction(::PormGMySQL) = false   # `_allocate_ids` refuses first
+
+# How a bulk INSERT with `on_conflict = :nothing` counts the rows it skipped (#670, #1267). PostgreSQL
+# and SQLite report the rows they wrote. MySQL reports the rows a multi-row INSERT carried and how many
+# met a duplicate key (`backend_insert_report`), and nothing for a one-row INSERT, which is therefore
+# sent without the clause and counted 0 when it raises a duplicate key (measured on 8.4).
+_counts_skips_from_report(::PormGPostgres) = false
+_counts_skips_from_report(::PormGSQLite) = false
+_counts_skips_from_report(::PormGMySQL) = true
 
 # `get_or_create` runs its get + insert + read-back in one transaction: SQLite has no atomic
 # insert-or-read, so the steps are serialized; PostgreSQL's `ON CONFLICT` is atomic on its own.

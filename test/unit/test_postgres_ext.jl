@@ -82,11 +82,13 @@ struct NetClosingError <: Exception end
   end
   # Every PostgreSQL backend generic has a row: a new one without a method here would fall back to
   # LibPQ's marker-typed method for a Postgres.jl pool. The engine-only ones are not PostgreSQL's: the
-  # two version probes, and MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266).
+  # two version probes, MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266), and
+  # MySQL's bulk INSERT report and duplicate-key test (PostgreSQL counts rows and reads SQLSTATE, #1267).
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
-    (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id) &&
+    (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id,
+                                             :backend_insert_report, :backend_is_duplicate_key) &&
      getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end

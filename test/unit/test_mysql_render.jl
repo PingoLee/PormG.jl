@@ -1701,3 +1701,133 @@ end
     @test uoc(models.Entry, "alias" => "x"; defaults = ["ref" => "r", "note" => "n"]) isa String
   end
 end
+
+import DataFrames
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL bulk_insert: VALUES rows, the 65535-parameter cap, and ON DUPLICATE KEY UPDATE per action
+# MySQL binds one `?` per cell, as SQLite, up to a prepared statement's 65535 parameters. Expected SQL:
+# `INSERT INTO t (cols)\nVALUES (?, ?), (?, ?)\n`; DO NOTHING `ON DUPLICATE KEY UPDATE c = t.c` on the
+# first inserted column that is not AUTO_INCREMENT (assigning that column fails with error 1869 when a
+# new key repeats in one statement, measured); DO UPDATE the 3b row alias; a ONE-row DO NOTHING with no
+# clause at all, since MySQL reports no count for one row and a duplicate key is counted as the skip.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bulk_insert: VALUES rows, the parameter cap, and ON DUPLICATE KEY UPDATE per action" begin
+  bulk(m, df; kw...) = _MR_QB.bulk_insert(m, df; show_query = :sql, kw...)
+  df = DataFrames.DataFrame(constructorref = ["mclaren", "brabham", "ligier"], nationality = ["British", "British", "French"])
+  @test bulk(MrMyUp.Constructor, df) == "INSERT INTO `constructor` (`constructorref`, `nationality`)\nVALUES (?, ?), (?, ?), (?, ?)\n"
+  d = _MR_QB.bulk_insert(MrMyUp.Constructor, df; show_query = :dict)
+  @test d[:parameters] == Any["mclaren", "British", "brabham", "British", "ligier", "French"]
+  @test length(bulk(MrMyUp.Constructor, df; chunk_size = 2)) == 2
+  @test _MR_QB._backend_parameter_limit(MrMockMySQL()) == 65535
+  @test _MR_QB._bulk_chunk_rows(MrMockMySQL(), 100_000, 2, 0, :bulk_insert) == 32767
+  @test !_MR_QB._bulk_binds_column_arrays(MrMockMySQL()) && !_MR_QB._overrides_generated_identity(MrMockMySQL())
+  # DO NOTHING writes nothing, on a column that is not AUTO_INCREMENT even when the id comes first.
+  @test endswith(bulk(MrMyUp.Constructor, df; on_conflict = :nothing),
+                 "\nON DUPLICATE KEY UPDATE `constructorref` = `constructor`.`constructorref`\n")
+  withid = DataFrames.DataFrame(constructorid = [1, 2], constructorref = ["mclaren", "brabham"])
+  @test endswith(bulk(MrMyUp.Constructor, withid; on_conflict = :nothing),
+                 "ON DUPLICATE KEY UPDATE `constructorref` = `constructor`.`constructorref`\n")
+  # One row: no clause; the duplicate key is the skip.
+  @test bulk(MrMyUp.Constructor, df[1:1, :]; on_conflict = :nothing) ==
+        "INSERT INTO `constructor` (`constructorref`, `nationality`)\nVALUES (?, ?)\n"
+  @test _MR_QB._counts_skips_from_report(MrMockMySQL()) && !_MR_QB._counts_skips_from_report(MrMockSQLite())
+  upsert = (action = :update, target = ["constructorref"], set = ["nationality"])
+  @test endswith(bulk(MrMyUp.Constructor, df; on_conflict = upsert),
+                 "\nAS `__pormg_new` ON DUPLICATE KEY UPDATE `nationality` = `__pormg_new`.`nationality`\n")
+  @test endswith(bulk(MrMyUp.Constructor, df[1:1, :]; on_conflict = upsert),
+                 "AS `__pormg_new` ON DUPLICATE KEY UPDATE `nationality` = `__pormg_new`.`nationality`\n")
+  # PostgreSQL and SQLite keep ON CONFLICT, a one-row chunk included.
+  @test endswith(_MR_QB.bulk_insert(MrSLUp.Constructor, df[1:1, :]; on_conflict = :nothing, show_query = :sql),
+                 "ON CONFLICT DO NOTHING\n")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL bulk_insert(on_conflict = …): the target must be the one unique key the rows can hit
+# #1267, per call: a column holds a value when it is inserted and not NULL in every row, or the
+# database fills it; an auto pk left out and a UUID PormG fills are new. Expected: a targeted DO
+# NOTHING or a DO UPDATE whose rows can also conflict on another key raises BackendCapabilityError
+# (`upsert_conflict_target`) naming it; a target that is not a unique key raises QueryBuildError; an
+# untargeted `:nothing` (skip on any key, exactly MySQL's meaning) always builds; PostgreSQL and SQLite
+# build every shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bulk_insert(on_conflict = …): the target is the one unique key the rows can hit" begin
+  bulk(m, df; kw...) = _MR_QB.bulk_insert(m, df; show_query = :sql, kw...)
+  caught(f) = try; f(); nothing; catch e; e; end
+  refused(e, needle) = e isa PormG.BackendCapabilityError && occursin(needle, sprint(showerror, e))
+  upsert = (action = :update, target = ["constructorref"], set = ["nationality"])
+  skip = (action = :nothing, target = ["constructorref"])
+  coded = DataFrames.DataFrame(constructorref = ["mclaren", "brabham"], code = ["MCL", missing], nationality = ["B", "B"])
+  e = caught(() -> bulk(MrMyUp.Constructor, coded; on_conflict = upsert))
+  @test refused(e, "(code)") && occursin("bulk_insert(on_conflict = …) on constructor", sprint(showerror, e)) &&
+        occursin("would update the row that key matches", sprint(showerror, e))
+  e = caught(() -> bulk(MrMyUp.Constructor, coded; on_conflict = skip))
+  @test refused(e, "(code)") && occursin("would skip a row that conflicts on that key", sprint(showerror, e))
+  @test occursin("ON DUPLICATE KEY UPDATE", bulk(MrMyUp.Constructor, coded; on_conflict = :nothing))
+  # A column NULL in every row cannot conflict.
+  nulls = DataFrames.DataFrame(constructorref = ["mclaren", "brabham"], code = [missing, missing], nationality = ["B", "B"])
+  @test occursin("ON DUPLICATE KEY UPDATE `nationality`", bulk(MrMyUp.Constructor, nulls; on_conflict = upsert))
+  # A supplied auto id can conflict; an omitted one, or a UUID PormG fills, is new.
+  withid = DataFrames.DataFrame(constructorid = [1, 2], constructorref = ["mclaren", "brabham"], nationality = ["B", "B"])
+  @test refused(caught(() -> bulk(MrMyUp.Constructor, withid; on_conflict = upsert)), "(constructorid)")
+  tokens = DataFrames.DataFrame(label = ["a", "b"], note = ["x", "y"])
+  @test occursin("ON DUPLICATE KEY UPDATE `note`",
+                 bulk(MrMyUp.Token, tokens; on_conflict = (action = :update, target = ["label"], set = ["note"])))
+  supplied = DataFrames.DataFrame(token = [UUIDs.uuid4(), UUIDs.uuid4()], label = ["a", "b"], note = ["x", "y"])
+  @test refused(caught(() -> bulk(MrMyUp.Token, supplied; on_conflict = (action = :update, target = ["label"], set = ["note"]))),
+                "(token)")
+  e = caught(() -> bulk(MrMyUp.Status, DataFrames.DataFrame(code = ["F"], label = ["x"]);
+                        on_conflict = (action = :nothing, target = ["label"])))
+  @test e isa PormG.QueryBuildError && occursin("requires its on_conflict target (label) to be a unique key", sprint(showerror, e))
+  for models in (MrPGUp, MrSLUp)
+    @test occursin("ON CONFLICT (\"constructorref\") DO UPDATE", bulk(models.Constructor, coded; on_conflict = upsert))
+    @test occursin("ON CONFLICT (\"constructorref\") DO NOTHING", bulk(models.Constructor, coded; on_conflict = skip))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL has no key to pre-allocate: returning = … with a server-generated pk, and allocate_primary_keys
+# #1266: MySQL has no sequence, AUTO_INCREMENT cannot be drawn ahead of the INSERT, and a multi-row
+# INSERT's ids are not promised consecutive. Expected: `returning` for an auto pk the frame does not
+# carry, with no on_conflict target, and `allocate_primary_keys`, raise BackendCapabilityError naming
+# `preallocated_keys` and the shapes that work; a supplied pk or a target builds; PostgreSQL and SQLite
+# keep the pre-allocation (a dry run allocates nothing there).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bulk_insert(returning = …) and allocate_primary_keys: no key to pre-allocate" begin
+  caught(f) = try; f(); nothing; catch e; e; end
+  df = DataFrames.DataFrame(constructorref = ["mclaren", "brabham"], nationality = ["B", "B"])
+  e = caught(() -> _MR_QB.bulk_insert(MrMyUp.Constructor, df; returning = ["constructorid"], show_query = :sql))
+  @test e isa PormG.BackendCapabilityError
+  msg = sprint(showerror, e)
+  @test occursin("drawing auto-increment keys before the rows are written", msg) && occursin("MySQL", msg) &&
+        occursin("Supply the primary key column", msg) && occursin("on_conflict", msg)
+  @test _MR_QB.bulk_insert(MrMyUp.Constructor, df; returning = ["constructorid"], show_query = :sql,
+                           on_conflict = (action = :nothing, target = ["constructorref"])) isa String
+  withid = DataFrames.DataFrame(constructorid = [1, 2], constructorref = ["mclaren", "brabham"], nationality = ["B", "B"])
+  @test _MR_QB.bulk_insert(MrMyUp.Constructor, withid; returning = ["nationality"], show_query = :sql) isa String
+  e = caught(() -> _MR_QB.allocate_primary_keys(MrMyUp.Constructor, df))
+  @test e isa PormG.BackendCapabilityError && occursin("allocating constructor's primary keys", sprint(showerror, e))
+  @test !PormG.Kernel._supports(MrMockMySQL(), :preallocated_keys)
+  @test PormG.Kernel._supports(MrMockPostgres(), :preallocated_keys) && PormG.Kernel._supports(MrMockSQLite(), :preallocated_keys)
+  for models in (MrPGUp, MrSLUp)
+    @test _MR_QB.bulk_insert(models.Constructor, df; returning = ["constructorid"], show_query = :sql) isa String
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL's report of a multi-row INSERT, and its duplicate-key errors
+# The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured);
+# a one-row INSERT has none. A duplicate on a unique key is errno 1062/1022/1586/1169; a foreign-key
+# failure or any other constraint is not, though every one of them carries SQLSTATE 23000.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL extension: a multi-row INSERT's report, and a duplicate key by its number" begin
+  ext = Base.get_extension(PormG, :PormGMySQLExt)
+  @test ext._insert_report("Records: 4  Duplicates: 2  Warnings: 0") == (records = 4, duplicates = 2)
+  @test ext._insert_report("Records: 3  Duplicates: 0  Warnings: 1") == (records = 3, duplicates = 0)
+  @test ext._insert_report("") === nothing
+  @test ext._insert_report("Rows matched: 2  Changed: 1  Warnings: 0") === nothing
+  integrity(errno) = PormG.IntegrityError("MySQL", MySQL.Protocol.Error(errno, "x", "23000"); sqlstate = "23000")
+  @test ext._is_duplicate_key(integrity(1062)) && ext._is_duplicate_key(integrity(1586))
+  @test !ext._is_duplicate_key(integrity(1452)) && !ext._is_duplicate_key(integrity(1048))
+  @test !ext._is_duplicate_key(PormG.StatementError("MySQL", MySQL.Protocol.Error(1062, "x", "23000")))
+end

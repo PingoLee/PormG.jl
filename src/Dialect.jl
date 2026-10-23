@@ -2633,7 +2633,7 @@ PostgreSQL and SQLite (≥3.24) share this syntax, so one method covers both bac
 - `(:update, cols, setcols)`  → `ON CONFLICT (cols) DO UPDATE SET c = EXCLUDED.c, …`
 """
 function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String},
-                            conn::Union{PormGPostgres, PormGSQLite})::String
+                            conn::Union{PormGPostgres, PormGSQLite}; noop = nothing)::String
   action in (:nothing, :update) ||
     throw(QueryBuildError("on_conflict_clause: action must be :nothing or :update, got :$action"))
   target_sql = isempty(target) ? "" : " ($(join(target, ", ")))"
@@ -2650,12 +2650,19 @@ end
 
 # MySQL (#1267): `AS <row alias> ON DUPLICATE KEY UPDATE c = <alias>.c, …`, the row alias of 8.0.19 in
 # place of the deprecated `VALUES(c)`. It names no target: the caller has already checked that the
-# target is the one unique key the row can conflict on (`_refuse_unnamed_upsert_target`). There is no
-# DO NOTHING here: its spelling (`pk = <table>.pk`, qualified because the alias makes a bare `pk`
-# ambiguous) needs the table, and no single-row path asks for it.
-function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String}, conn::PormGMySQL)::String
+# target is the one unique key the row can conflict on (`_refuse_unnamed_upsert_target`). DO NOTHING is
+# an update that writes nothing, `noop`: `` `c` = `t`.`c` `` for a column that is not AUTO_INCREMENT,
+# qualified so it cannot be ambiguous. Assigning the AUTO_INCREMENT column itself fails with error 1869
+# when a new key appears twice in one statement (measured on 8.4).
+function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String}, conn::PormGMySQL;
+                            noop = nothing)::String
+  if action === :nothing
+    noop === nothing &&
+      throw(QueryBuildError("on_conflict_clause: MySQL's DO NOTHING needs the no-op assignment (`noop`)"))
+    return "ON DUPLICATE KEY UPDATE $(noop)"
+  end
   action === :update ||
-    throw(QueryBuildError("on_conflict_clause: MySQL renders only action :update here, got :$action"))
+    throw(QueryBuildError("on_conflict_clause: action must be :nothing or :update, got :$action"))
   isempty(target) &&
     throw(QueryBuildError("on_conflict_clause: action :update requires a non-empty conflict target"))
   isempty(set) &&

@@ -90,6 +90,8 @@ _driver_hint(driver::Symbol)::String =
 #   backend_num_affected_rows(pool, result)            -> Int matched-row count (PG)
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
 #   backend_last_insert_id(pool, result)               -> Int the AUTO_INCREMENT value an INSERT wrote (MySQL; #1266)
+#   backend_insert_report(pool, result)                -> (records, duplicates) a multi-row INSERT reported, or nothing (MySQL; #1267)
+#   backend_is_duplicate_key(pool, e)                  -> Bool: is the IntegrityError `e` a duplicate on a unique key (MySQL; #1267)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
@@ -106,6 +108,7 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_is_permanent_connect_error,
            :backend_cancel_query!, :backend_drain_connection!,
            :backend_num_affected_rows, :backend_num_rows, :backend_last_insert_id, :backend_copy_in!,
+           :backend_insert_report, :backend_is_duplicate_key,
            :backend_sqlite_version, :backend_mysql_version)
   @eval begin
     function $fn end

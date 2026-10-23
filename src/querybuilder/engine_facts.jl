@@ -110,6 +110,13 @@ _bulk_binds_column_arrays(::PormGPostgres) = true
 _bulk_binds_column_arrays(::PormGSQLite) = false
 _bulk_binds_column_arrays(::PormGMySQL) = false   # one `?` per cell, as SQLite (#1266)
 
+# The prefix of each row in a `VALUES` list that is a derived table: MySQL writes its table value
+# constructor `VALUES ROW(?, ?), …` (#1130 phase 3c-2); SQLite's `VALUES (?, ?), …` needs none, and
+# PostgreSQL binds column arrays instead (`_bulk_binds_column_arrays`).
+_values_row_prefix(::PormGPostgres) = ""
+_values_row_prefix(::PormGSQLite) = ""
+_values_row_prefix(::PormGMySQL) = "ROW"
+
 # A pre-allocated id written into a `generated_always` identity needs `OVERRIDING SYSTEM VALUE`.
 # SQLite has no identity column to override.
 _overrides_generated_identity(::PormGPostgres) = true

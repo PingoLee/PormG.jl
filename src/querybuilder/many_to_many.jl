@@ -161,42 +161,47 @@ function add(manager::ManyToManyManager, targets...)
   related_column = safe_column_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
 
-  if connection isa PormGPostgres
-    # Use INSERT ... SELECT ... WHERE NOT EXISTS for idempotent inserts.
-    # This works regardless of whether a unique constraint exists on the
-    # through table (auto-generated through tables have one; explicit
-    # through models typically do not).
-    # Since Postgres/LibPQ parameterized queries do not allow multiple statements
-    # in a single query execution, we execute them one by one.
-    for target_id in target_ids
-      parameters = get_parameter(connection)
-      set_context!(parameters, :select)
-      owner_ph = add_parameter!(parameters, owner_value)
-      target_ph = add_parameter!(parameters, target_id)
-      owner_ph2 = add_parameter!(parameters, owner_value)
-      target_ph2 = add_parameter!(parameters, target_id)
-      sql = "INSERT INTO $table_name ($owner_column, $related_column) " *
-            "SELECT $owner_ph, $target_ph " *
-            "WHERE NOT EXISTS (" *
-              "SELECT 1 FROM $table_name WHERE $owner_column = $owner_ph2 AND $related_column = $target_ph2" *
-            ");"
-      fetch(settings, sql, parameters)
-    end
-  elseif connection isa PormGSQLite
+  _m2m_add!(connection, settings, table_name, owner_column, related_column, owner_value, target_ids)
+  return nothing
+end
+
+# Insert each (owner, target) pair that is not there yet, one method per engine.
+# PostgreSQL and MySQL: INSERT ... SELECT ... WHERE NOT EXISTS, idempotent whether or not the through
+# table has a unique constraint (auto-generated through tables have one; explicit through models
+# typically do not). One statement per target: Postgres/LibPQ parameterized queries do not allow
+# multiple statements in a single query execution. MySQL runs the statement as written, with no
+# `FROM DUAL`, and reads its own table in the NOT EXISTS (measured on 8.4, #1130 phase 3c-2).
+function _m2m_add!(connection::Union{PormGPostgres, PormGMySQL}, settings, table_name, owner_column,
+                   related_column, owner_value, target_ids)
+  for target_id in target_ids
     parameters = get_parameter(connection)
     set_context!(parameters, :select)
-    groups = String[]
-    for target_id in target_ids
-      owner_placeholder = add_parameter!(parameters, owner_value)
-      target_placeholder = add_parameter!(parameters, target_id)
-      push!(groups, "($owner_placeholder, $target_placeholder)")
-    end
-    sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+    owner_ph = add_parameter!(parameters, owner_value)
+    target_ph = add_parameter!(parameters, target_id)
+    owner_ph2 = add_parameter!(parameters, owner_value)
+    target_ph2 = add_parameter!(parameters, target_id)
+    sql = "INSERT INTO $table_name ($owner_column, $related_column) " *
+          "SELECT $owner_ph, $target_ph " *
+          "WHERE NOT EXISTS (" *
+            "SELECT 1 FROM $table_name WHERE $owner_column = $owner_ph2 AND $related_column = $target_ph2" *
+          ");"
     fetch(settings, sql, parameters)
-  else
-    throw(_unsupported_conn("many-to-many add", connection))
   end
+  return nothing
+end
 
+function _m2m_add!(connection::PormGSQLite, settings, table_name, owner_column, related_column, owner_value,
+                   target_ids)
+  parameters = get_parameter(connection)
+  set_context!(parameters, :select)
+  groups = String[]
+  for target_id in target_ids
+    owner_placeholder = add_parameter!(parameters, owner_value)
+    target_placeholder = add_parameter!(parameters, target_id)
+    push!(groups, "($owner_placeholder, $target_placeholder)")
+  end
+  sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+  fetch(settings, sql, parameters)
   return nothing
 end
 

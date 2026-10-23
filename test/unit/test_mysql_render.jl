@@ -20,6 +20,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates, UUIDs, Decimals, TimeZones
+import MySQL   # loads PormGMySQLExt, whose statement routing is tested at the end
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, Joined, F, CTE
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
@@ -1240,4 +1241,31 @@ end
                  _mr_inspect(_MR_PG.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES"))))[:sql_text])
   e = try; _mr_inspect(_MR_SL.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW")))); nothing; catch err; err; end
   @test e isa PormG.BackendCapabilityError && occursin("PormG does not render explicit window frames on SQLite yet", sprint(showerror, e))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL extension: which statements are prepared to read their columns' character sets (#1130 phase 2c-3b)
+# A statement that returns rows is prepared, so its text and bytes decode by charset; any other keeps
+# the text protocol. Expected: SELECT/WITH/SHOW/`(` match after any whitespace and leading comments;
+# a statement that returns no rows never matches, however much whitespace or how many comments open
+# it, and a comment never stretches past its own `*/`.
+# Why: a backtracking skip loop threw "match limit exceeded" on a non-row statement after ~24
+# spaces, and matched `/* c */ INSERT … /* cols */ (…)` by reading the comment to the second `*/`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL extension: row-returning statements, whatever opens them" begin
+  ext = Base.get_extension(PormG, :PormGMySQLExt)
+  @test ext !== nothing
+  R = ext._RETURNS_ROWS
+  for sql in ("SELECT 1", "  select 1", "(SELECT 1) UNION (SELECT 2)", "WITH x AS (SELECT 1) SELECT * FROM x",
+              "SHOW WARNINGS", "/* a note */ -- and a line\nSELECT 1", "--\tx\r\nSELECT 1", "#c\nSELECT 1",
+              " "^5000 * "SELECT 1")
+    @test (first(sql, 40), occursin(R, sql)) == (first(sql, 40), true)
+  end
+  for sql in (" "^30 * "INSERT INTO t VALUES (1)", "\n" * "    "^6 * "UPDATE t SET a = 1", "\n"^25 * "START TRANSACTION",
+              "/* c */ INSERT INTO t /* cols */ (a, b) VALUES (1, 2)", "/* c */ DELETE FROM t -- x */ SELECT",
+              "/* c */ INSERT INTO t VALUES ('*/ SELECT')", "/* SELECT */ INSERT INTO t VALUES (1)",
+              "-- x\nINSERT INTO t VALUES (1)", "/* unterminated SELECT", "INSERT INTO t SELECT 1",
+              repeat("/* c */ ", 2000) * "INSERT INTO t VALUES (1)")
+    @test (first(sql, 40), occursin(R, sql)) == (first(sql, 40), false)
+  end
 end

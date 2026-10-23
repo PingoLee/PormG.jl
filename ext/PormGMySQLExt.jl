@@ -348,7 +348,10 @@ end
 # no parameters. Prepared as MySQL.jl's own parameterized `execute` does, then closed. One MySQL will
 # not prepare (error 1295, `SHOW WARNINGS`) runs over the text protocol, as every other statement does.
 # Leading comments are skipped (`/* … */`, `-- …`, `# …`), so raw SQL that opens with one is decoded too.
-const _RETURNS_ROWS = r"^(?:\s+|/\*.*?\*/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*(\(|SELECT\b|WITH\b|SHOW\b)"is
+# Possessive (`++`, `*+`): a skip loop that could backtrack splits a run of n spaces 2^(n-1) ways
+# before a statement that returns no rows, and PCRE gives up with an error past ~24 of them; nor may a
+# comment stretch past its own `*/` to a later one.
+const _RETURNS_ROWS = r"^(?:\s++|/\*.*?\*/|--[^\n]*+(?:\n|$)|#[^\n]*+(?:\n|$))*+(\(|SELECT\b|WITH\b|SHOW\b)"is
 const _UNPREPARABLE_ERRNO = 1295
 function _run(conn::MySQL.Connection, sql::String, bound)
   return _with_bare_interrupt() do

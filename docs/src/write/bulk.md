@@ -93,7 +93,7 @@ Qualifications:
 | Chunk size | `chunk_size` as given — no parameter cap applies (a non-positive `chunk_size` falls back to 65,535 ÷ columns rows) | `chunk_size`, lowered automatically so a statement stays under SQLite's limit of 32,766 parameters (999 on SQLite builds older than 3.32) |
 | Statement text | the same for every chunk | grows with the chunk's row count |
 
-MySQL carries the rows as SQLite does, one `?` per cell in a `VALUES` list, with `chunk_size` lowered so a statement stays under 65,535 parameters. `bulk_update()` does not run on MySQL yet ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
+MySQL carries the rows as SQLite does, one `?` per cell, with `chunk_size` lowered so a statement stays under 65,535 parameters: a `VALUES (?, …), …` list for `bulk_insert()`, and for `bulk_update()` a `VALUES ROW(?, …), …` derived table that the `UPDATE` joins (`UPDATE t AS Tb, (VALUES ROW(…)) AS source (…) SET Tb.col = source.col WHERE …`).
 
 For a table whose columns have the types their fields declare — every table PormG created or migrated — what you observe is the same on both: the rows written, the returned `count`, and the errors raised. Only the inspection output differs, because `show_query` shows what each backend actually runs. On PostgreSQL, `show_query = :params` returns one vector per column, after any filter values:
 

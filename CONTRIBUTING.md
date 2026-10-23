@@ -106,7 +106,7 @@ PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.j
 **MySQL (#1130, in progress).** `db_my` points at a local MySQL 8.4 — a Docker `mysql:8.4` container
 is enough — through its own gitignored `test/integration/db_my/connection.yml` (`adapter: MySQL`;
 see `docs/src/configuration/connection_yml.md`). Until the later phases land, the full suite refuses
-`db_my`, and the files that run there are the driver layer, the reads, the single-row writes and upserts, and `bulk_insert`:
+`db_my`, and the files that run there are the driver layer, the reads, the single-row writes and upserts, and the bulk writes:
 
 ```
 PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl

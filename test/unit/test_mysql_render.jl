@@ -1819,6 +1819,42 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MySQL bulk_update: a multi-table UPDATE over a VALUES ROW derived table; the many-to-many add
+# MySQL has no UPDATE … FROM. Expected SQL: `UPDATE t AS `Tb`, (VALUES ROW(?, ?), …) AS source (cols)
+# SET `Tb`.col = source.col WHERE `Tb`.key = source.key`, every SET target qualified (a bare one is
+# ambiguous there, error 1052, measured); a `filters=` membership subquery over the same table inside a
+# derived table (error 1093 otherwise); the parameters in text order. PostgreSQL and SQLite render as
+# before. The many-to-many `add` takes PostgreSQL's idempotent NOT EXISTS shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bulk_update: a multi-table UPDATE over a VALUES ROW derived table" begin
+  df = DataFrames.DataFrame(constructorid = [1, 2], nationality = ["British", missing])
+  d = _MR_QB.bulk_update(MrMyUp.Constructor, df; show_query = :dict)
+  @test d[:sql_text] == "UPDATE `constructor` AS `Tb`, (VALUES ROW(?, ?), ROW(?, ?)) AS source (`constructorid`, `nationality`)\n" *
+                        "SET `Tb`.`nationality` = source.`nationality`\n" *
+                        "WHERE `Tb`.`constructorid` = source.`constructorid`\n"
+  @test isequal(d[:parameters], Any[1, "British", 2, missing])
+  @test _MR_QB._values_row_prefix(MrMockMySQL()) == "ROW" && _MR_QB._values_row_prefix(MrMockSQLite()) == ""
+  # A membership subquery on the table being written is read through a derived table (error 1093
+  # otherwise); its value binds after the rows, as it renders.
+  members = MrMyUp.Constructor.objects.filter("code" => "MCL").values("constructorid")
+  d = _MR_QB.bulk_update(MrMyUp.Constructor, df; filters = ["constructorid__@in" => members], show_query = :dict)
+  @test occursin("WHERE `Tb`.`constructorid` = source.`constructorid` AND \n   `Tb`.`constructorid` IN (SELECT * FROM (SELECT", d[:sql_text])
+  @test occursin(") AS `__pormg_members`)", d[:sql_text]) && isequal(d[:parameters], Any[1, "British", 2, missing, "MCL"])
+  # PostgreSQL and SQLite render as before: an unqualified SET target, and no derived table.
+  pg = _MR_QB.bulk_update(MrPGUp.Constructor, df; show_query = :sql,
+                          filters = ["constructorid__@in" => MrPGUp.Constructor.objects.filter("code" => "MCL").values("constructorid")])
+  @test startswith(pg, "UPDATE \"constructor\" AS \"Tb\"\nSET \"nationality\" = source.\"nationality\"\nFROM unnest(")
+  @test !occursin("__pormg_members", pg)
+  @test _MR_QB.bulk_update(MrSLUp.Constructor, df; show_query = :sql) ==
+        "WITH source(\"constructorid\", \"nationality\") AS (\n  VALUES (?, ?), (?, ?)\n)\nUPDATE \"constructor\"\n" *
+        "SET \"nationality\" = source.\"nationality\"\nFROM source\nWHERE \"constructor\".\"constructorid\" = source.\"constructorid\"\n"
+  # The many-to-many `add`: PostgreSQL's NOT EXISTS shape on MySQL too, SQLite's INSERT OR IGNORE.
+  my_add = which(_MR_QB._m2m_add!, Tuple{MrMockMySQL, Any, Any, Any, Any, Any, Any})
+  @test my_add === which(_MR_QB._m2m_add!, Tuple{MrMockPostgres, Any, Any, Any, Any, Any, Any})
+  @test my_add !== which(_MR_QB._m2m_add!, Tuple{MrMockSQLite, Any, Any, Any, Any, Any, Any})
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MySQL's report of a multi-row INSERT, and its duplicate-key errors
 # The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured),
 # in the session's `lc_messages` language and always in that order, so it is read by position; a

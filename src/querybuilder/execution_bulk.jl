@@ -2416,6 +2416,42 @@ function _run_bulk_insert(connection::PormGMySQL, model::PormGModel, sql::String
 end
 
 
+# The bulk UPDATE statement, one method per engine: each joins the target table to the chunk's rows,
+# `source`, by `where` (the match keys, then the handler's and `filters=`'s predicates on `Tb`).
+function _bulk_update_sql(::PormGPostgres, table, set_parts, source_sql, quoted_fields, where)
+  return """
+  UPDATE $table AS "Tb"
+  SET $(join(set_parts, ", "))
+  FROM $(source_sql) AS source ($(join(quoted_fields, ",")))
+  WHERE $(join(where, " AND \n   "))
+  """
+end
+
+function _bulk_update_sql(::PormGSQLite, table, set_parts, source_sql, quoted_fields, where)
+  # SQLite 3.33+ supports UPDATE FROM. We use a CTE to define the source clearly.
+  return """
+  WITH source($(join(quoted_fields, ", "))) AS (
+    $(source_sql)
+  )
+  UPDATE $table
+  SET $(join(set_parts, ", "))
+  FROM source
+  WHERE $(join(replace.(where, "\"Tb\"." => "$table."), " AND "))
+  """
+end
+
+# MySQL's multi-table UPDATE over a `VALUES ROW(…)` derived table with a column list (8.0.19). Every SET
+# target is qualified by `Tb`: the source carries the same column names, and a bare one is ambiguous
+# (error 1052, measured on 8.4). Matched rows are counted, as `update()` counts them (`found_rows`).
+function _bulk_update_sql(conn::PormGMySQL, table, set_parts, source_sql, quoted_fields, where)
+  tb = quote_identifier("Tb", conn)
+  return """
+  UPDATE $table AS $tb, ($(source_sql)) AS source ($(join(quoted_fields, ", ")))
+  SET $(join(["$(tb).$(part)" for part in set_parts], ", "))
+  WHERE $(join(where, " AND \n   "))
+  """
+end
+
 # #665: the handler state a bulk UPDATE cannot express. `update()`'s three guards (limit/offset/
 # order_by, distinct, aggregates) apply unchanged, plus two that only this terminal needs:
 # - a CTE: the statement never renders the handler's `WITH`, so a filter naming it would reach
@@ -2454,8 +2490,8 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
   PostgreSQL binds one array per column, so a positive chunk is used as given (a non-positive
-  one falls back to 65,535 ÷ columns rows); SQLite binds one parameter per cell and caps it
-  automatically to stay under its bind-parameter limit.
+  one falls back to 65,535 ÷ columns rows); SQLite and MySQL bind one parameter per cell and cap it
+  automatically to stay under their bind-parameter limit.
 
 # Handler scope
 Filters already attached to `objct` are kept: they are AND'd with the `match_on=` merge condition
@@ -2567,7 +2603,9 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     work.filter(filter)
   end
   # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
-  instruction = build(work.object, connection=connection, semi_join=true)
+  # `mutation`: a membership subquery over this model's own table is read through a derived table on
+  # MySQL, which refuses a subquery on the table an UPDATE writes (error 1093, #1130 phase 3a).
+  instruction = build(work.object, connection=connection, semi_join=true, mutation=true)
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]
@@ -2594,7 +2632,6 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
     end
   end
-  safe_set_clause = join(safe_set_parts, ", ")
 
   # Security: Create parameterized query.
   # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
@@ -2606,7 +2643,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
   # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
-  # limit (#84). On SQLite each row binds one param per set column *and* per match key
+  # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
   # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
   # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
   effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
@@ -2615,7 +2652,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
   # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
-  # SQLite binds each cell as it goes and collects `(?, ?, …)` row tuples for its VALUES CTE.
+  # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
+  # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
   pg_arrays = _bulk_binds_column_arrays(connection)
   casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
   new_columns() = [Any[] for _ in joined_columns]
@@ -2662,8 +2700,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       count += 1
       if count == effective_chunk || index == total
         source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, columns, casts) :
-                                 "VALUES " * join(rows, ", ")
-        res = _bulk_update(model, settings, connection, joined_columns, source_sql, safe_set_clause, dinanic_filters, show_query, instruction, chunk_parameters)
+                                 "VALUES " * join(_values_row_prefix(connection) .* rows, ", ")
+        res = _bulk_update(model, settings, connection, joined_columns, source_sql, String.(safe_set_parts), dinanic_filters, show_query, instruction, chunk_parameters)
         push!(results, res)
         count = 0
         rows = String[]
@@ -2697,10 +2735,10 @@ end
 
 function _bulk_update(model::PormGModel,
   settings::PormGSettings,
-  connection::Union{PormGPostgres, PormGSQLite}, 
+  connection::_SQLEngine, 
   fields::Vector{String},
   source_sql::String,
-  safe_set_clause::String,
+  set_parts::Vector{String},
   dinanic_filters::Vector{String}, 
   show_query::Symbol,
   instruction::Union{SQLInstruction, Nothing},
@@ -2712,7 +2750,7 @@ function _bulk_update(model::PormGModel,
   end
 
   # Security: Quote table name and field names. `quoted_fields` is the column list of the `source`
-  # derived table (PostgreSQL) / CTE (SQLite) below — an alias position, so fail-closed (#394).
+  # derived table (PostgreSQL, MySQL) / CTE (SQLite) below — an alias position, so fail-closed (#394).
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(field, connection) for field in fields]
 
@@ -2725,7 +2763,7 @@ function _bulk_update(model::PormGModel,
     # No cast: on PostgreSQL the `source` column is already typed by its array (#672).
     quoted_tb_field = safe_column_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
-    push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field")
+    push!(safe_where_conditions, "$(quote_identifier("Tb", connection)).$quoted_tb_field = source.$quoted_source_field")
   end
   # # Construct the bulk update SQL.
   # _where::Vector{String} = []
@@ -2739,29 +2777,9 @@ function _bulk_update(model::PormGModel,
   end
 
   # `source_sql` is the chunk's row source: `unnest($k+1::<type>[], …)` over one array per column on
-  # PostgreSQL (#672), `VALUES (?, …), …` on SQLite — an intentional divergence, see "PostgreSQL
-  # column arrays" above.
-  if connection isa PormGPostgres
-    sql = """
-    UPDATE $safe_table_name AS "Tb"
-    SET $(safe_set_clause)
-    FROM $(source_sql) AS source ($(join(quoted_fields, ",")))
-    WHERE $(join(safe_where_conditions, " AND \n   "))
-    """
-  elseif connection isa PormGSQLite
-    # SQLite 3.33+ supports UPDATE FROM. We use a CTE to define the source clearly.
-    sql = """
-    WITH source($(join(quoted_fields, ", "))) AS (
-      $(source_sql)
-    )
-    UPDATE $safe_table_name
-    SET $(safe_set_clause)
-    FROM source
-    WHERE $(join(replace.(safe_where_conditions, "\"Tb\"." => "$safe_table_name."), " AND "))
-    """
-  else
-    throw(_unsupported_conn("bulk_update()", connection))
-  end
+  # PostgreSQL (#672), `VALUES (?, …), …` on SQLite, `VALUES ROW(?, …), …` on MySQL — an intentional
+  # divergence, see "PostgreSQL column arrays" above.
+  sql = _bulk_update_sql(connection, safe_table_name, set_parts, source_sql, quoted_fields, safe_where_conditions)
 
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)

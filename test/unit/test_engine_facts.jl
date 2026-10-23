@@ -95,7 +95,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # Phase 3c-1 (bulk_insert): one parameter per cell, no identity to
                                # override, no keys drawn ahead, and the skips read from the report.
                                :_bulk_binds_column_arrays, :_overrides_generated_identity, :_allocate_ids,
-                               :_allocates_ids_in_transaction, :_counts_skips_from_report])
+                               :_allocates_ids_in_transaction, :_counts_skips_from_report,
+                               # Phase 3c-2 (bulk_update): a `VALUES ROW(…)` derived table.
+                               :_values_row_prefix])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

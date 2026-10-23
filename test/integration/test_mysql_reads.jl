@@ -332,16 +332,16 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test_throws PormG.PormGError M.Driver.objects.filter("driverref" => "senna").select_for_update().list()
         end
 
-        # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `bulk_update` (phase 3c-2) fails before a statement is sent.
+        # What: what MySQL does not do yet stays loud, never another engine's SQL.
+        # SQL: none — a migration plan (phase 4, #1268) is refused before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
-        @testset "what is not rendered yet fails before any SQL is sent" begin
-            # It names the piece of the query builder MySQL does not have yet.
-            df = DataFrame(id = [1], description = ["x"])
-            e = try; PormG.QueryBuilder.bulk_update(M.New_join_position, df); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.QueryBuilder._bulk_update
+        @testset "what is not supported yet fails before any SQL is sent" begin
+            # The gate makemigrations and migrate pass first names the feature and MySQL.
+            pool = PormG.config[PORMG_DB_FOLDER].connections
+            e = try; PormG.Migrations._require_plan_floor(pool); nothing; catch err; err; end
+            @test e isa PormG.BackendCapabilityError && occursin("migration plan", sprint(showerror, e)) &&
+                  occursin("MySQL", sprint(showerror, e))
             @test M.New_join_position.objects.count() == 3
-            @test only(M.New_join_position.objects.filter("id" => 1).values("description").list())[:description] != "x"
         end
 
         # What: `/` divides as its operands mean: integers as integers, a float side keeping the fraction.

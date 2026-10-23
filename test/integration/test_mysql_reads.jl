@@ -107,7 +107,8 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: NULL placement is PormG's default on MySQL too — last ascending, first descending.
-        # SQL: ORDER BY (`position` IS NULL) ASC, `position` ASC, and the DESC twin.
+        # SQL: ORDER BY (`Tb`.`position` IS NULL) ASC, `position` ASC, and the DESC twin; a name no
+        #      column has keeps its alias in the key: ORDER BY (`pos2` IS NULL) DESC, `pos2` DESC.
         # Why: MySQL sorts NULL as the smallest value, so without the key a descending order would put
         # them last, the opposite of PostgreSQL, silently.
         @testset "NULL placement: last ascending, first descending" begin
@@ -124,14 +125,48 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test totals == [83, 123, 195]
             distinct = [r[:pos2] for r in M.Result.objects.values("pos2" => "position").distinct().order_by("-pos2").list()]
             @test nullish(distinct[1]) && distinct[2:4] == [3, 2, 1]
-            # An alias that is also another column's name (`laps`) is read there as the column, which is
-            # never NULL, so the NULLs would sort last instead of first: refused before any SQL.
+        end
+
+        # What: an ordering on a projection named after a column of a table the query reads places NULLs
+        # by the projection.
+        # SQL: ORDER BY (`Tb`.`position` IS NULL) DESC, `laps` DESC — the key is the projection's SQL,
+        #      with its values bound again where it prints; the alias still names the sort itself.
+        # Why: inside an expression MySQL reads a name as a FROM column before a result alias, so the key
+        # `(laps IS NULL)` tested the never-NULL `laps` column and the NULLs sorted last, silently (#1130).
+        @testset "NULL placement: an alias a FROM column also names is keyed on the projection" begin
+            nullish(v) = ismissing(v) || isnothing(v)
+            # The oracle: the rows as stored, ordered in Julia. NULLs first descending, last ascending,
+            # ties by `resultid`.
+            base = M.Result.objects.values("resultid", "position", "driverid", "raceid").order_by("resultid").list()
+            pos(r) = nullish(r[:position]) ? nothing : r[:position]
+            by_desc = [r[:resultid] for r in sort(base; by = r -> (pos(r) !== nothing, -something(pos(r), 0), r[:resultid]))]
+            by_asc = [r[:resultid] for r in sort(base; by = r -> (pos(r) === nothing, something(pos(r), 0), r[:resultid]))]
+            @test any(r -> pos(r) === nothing, base) && any(r -> pos(r) !== nothing, base)
+            # `laps` is a column of `result`.
+            ids(q) = [r[:resultid] for r in q.list()]
+            @test ids(M.Result.objects.values("laps" => "position", "resultid").order_by("-laps", "resultid")) == by_desc
+            # `year` is a column of the joined `race`.
+            @test ids(M.Result.objects.values("year" => "position", "resultid", "raceid__name").order_by("year", "resultid")) == by_asc
+            # A projection that binds: its value is bound again in the key.
+            rows = M.Result.objects.values("resultid", "laps" => F("position") + 10).order_by("laps", "resultid").list()
+            @test [r[:resultid] for r in rows] == by_asc
+            posof = Dict(r[:resultid] => pos(r) for r in base)
+            @test all(r -> nullish(r[:laps]) ? posof[r[:resultid]] === nothing : r[:laps] == posof[r[:resultid]] + 10, rows)
+            # A column under DISTINCT.
+            distinct = [r[:laps] for r in M.Result.objects.values("laps" => "position").distinct().order_by("-laps").list()]
+            @test nullish(distinct[1]) && distinct[2:end] == sort(unique(p for p in pos.(base) if p !== nothing); rev = true)
+            # An aggregate, grouped: race 2's drivers finished 1st and not at all, so the NULL leads.
+            race2 = filter(r -> r[:raceid] == 2, base)
+            expected = [r[:driverid] for r in sort(race2; by = r -> (pos(r) !== nothing, -something(pos(r), 0)))]
+            @test [r[:driverid] for r in M.Result.objects.filter("raceid" => 2).values("driverid", "laps" => Max("position")).order_by("-laps").list()] == expected
+            # MySQL requires the key's columns to be projected under DISTINCT, so a computed projection
+            # there is MySQL's own error 3065, loud, never a silent order.
             e = try
-                M.Result.objects.values("laps" => "position").order_by("-laps").list(); nothing
+                M.Result.objects.values("laps" => F("position") + 10).distinct().order_by("-laps").list(); nothing
             catch err
                 err
             end
-            @test e isa PormG.QueryBuildError && occursin("a table this query reads has a column with that name", msg(e))
+            @test e isa PormG.StatementError && hasproperty(e.cause, :errno) && Int(e.cause.errno) == 3065
         end
 
         # What: the count forms, exists and first.

@@ -333,12 +333,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: the `get_or_create` lookup only — its insert (an upsert, phase 3b) fails before it is sent.
+        # SQL: none — `get_or_create` (an upsert, phase 3b) fails before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
             # It names the piece of the query builder MySQL does not have yet.
             e = try; M.New_join_position.objects.get_or_create("description" => "x"); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.Dialect.on_conflict_clause
+            @test e isa MethodError && e.f === PormG.QueryBuilder._serializes_get_or_create
             @test M.New_join_position.objects.count() == 3
         end
 

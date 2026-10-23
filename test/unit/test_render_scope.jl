@@ -188,6 +188,9 @@ const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
     "src/querybuilder/execution_read.jl" => Dict(
         "!is_subquery && set_context!(parameters, :cte)" => 1,
         "set_context!(parameters, :cte)" => 2),
+    # MySQL's `create` read-back (#1266): its own one-statement SELECT, keyed on the inserted row.
+    "src/querybuilder/engine_facts.jl" => Dict(
+        "set_context!(params, :where)" => 1),
     # insert and upsert rows (`:select`); update()'s SET list (`:update`); a temp-table insert
     # (`tp`); the mutation predicate and update fence re-emitting their lifted runs under `:where`.
     "src/querybuilder/execution_write.jl" => Dict(

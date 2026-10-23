@@ -805,6 +805,17 @@ function LAST_VALUE(column::String, over_sql::String, conn::PormGSQLite)
 end
 
 NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGPostgres) = "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
+# MySQL (#1130 phase 2c-3b) has window functions from 8.0, below PormG's floor. Its ranking functions
+# are a `BIGINT UNSIGNED` (read as a `UInt64`, measured on 8.4), so they are cast to the signed
+# `BIGINT` they are on PostgreSQL and SQLite; the others keep their operand's type there.
+RANK(over_sql::String, conn::PormGMySQL) = "CAST($(_window_no_column("RANK", over_sql)) AS SIGNED)"
+DENSE_RANK(over_sql::String, conn::PormGMySQL) = "CAST($(_window_no_column("DENSE_RANK", over_sql)) AS SIGNED)"
+ROW_NUMBER(over_sql::String, conn::PormGMySQL) = "CAST($(_window_no_column("ROW_NUMBER", over_sql)) AS SIGNED)"
+LAG(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGMySQL) = _window_offset("LAG", column, over_sql, kwargs)
+LEAD(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGMySQL) = _window_offset("LEAD", column, over_sql, kwargs)
+FIRST_VALUE(column::String, over_sql::String, conn::PormGMySQL) = _window_column("FIRST_VALUE", column, over_sql)
+LAST_VALUE(column::String, over_sql::String, conn::PormGMySQL) = _window_column("LAST_VALUE", column, over_sql)
+NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGMySQL) = "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
 function NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGSQLite)
   _assert_sqlite_window_support(conn)
   return "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
@@ -1056,6 +1067,20 @@ end
 const _FRAME_TOKEN_RE = r"'[^']*+'|[A-Za-z]++|\d++(?:\.\d++)?+|\S"
 const _FRAME_INTERVAL_RE = r"^'\s*+(\d++)\s++([a-z]++)\s*+'$"
 const _FRAME_INTERVAL_UNITS = ("microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "year")
+
+# The frame `window_frame_sql` spells, in each engine's grammar. PostgreSQL's (and SQLite's, which
+# renders no frame yet) is that spelling. MySQL (#1130 phase 2c-3b) writes an interval offset
+# `INTERVAL <n> <UNIT>`, unquoted and singular, and has no MILLISECOND unit, so milliseconds are
+# counted in microseconds: `INTERVAL '7 days' PRECEDING` is `INTERVAL 7 DAY PRECEDING` there.
+engine_frame_sql(frame::String, ::Union{PormGPostgres,PormGSQLite}) = frame
+function engine_frame_sql(frame::String, ::PormGMySQL)
+  return replace(frame, r"INTERVAL '(\d+) ([a-z]+)'" => function (m)
+    n, unit = match(r"INTERVAL '(\d+) ([a-z]+)'", m).captures
+    unit = Base.endswith(unit, "s") && chop(unit) in _FRAME_INTERVAL_UNITS ? chop(unit) : unit
+    unit == "millisecond" && return "INTERVAL $(parse(BigInt, n) * 1000) MICROSECOND"   # never wraps
+    return "INTERVAL $(n) $(uppercase(unit))"
+  end)
+end
 # The longest real spelling — two intervals and an EXCLUDE — is about 110 characters.
 const _FRAME_MAX_LENGTH = 200
 
@@ -1463,17 +1488,19 @@ end
 # so `integer_kind` asks nothing of it, as on SQLite.
 NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "NULLIF($(columns[1]), $(columns[2]))"
 
-function LOWER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function LOWER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "LOWER($(column))"
 end
 
-function UPPER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function UPPER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "UPPER($(column))"
 end
 
 function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "LENGTH($(column))"
 end
+# MySQL's `LENGTH` counts bytes (`Räikkönen` is 11); `CHAR_LENGTH` counts characters, as `Length` means.
+LENGTH(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CHAR_LENGTH($(column))"
 
 # #1147 — over an integer (`integer_kind`, set by the build from `_integer_operand_kind`) `Abs`, `Floor`
 # and `Ceil` keep it, as SQLite does: an integer `Floor("grid") / 2` divides as an integer on both
@@ -1527,7 +1554,7 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   end
 end
 
-function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
 end
 
@@ -1547,16 +1574,28 @@ end
 function RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "pormg_rpad($(columns[1]), $(columns[2]), $(columns[3]))"
 end
+# MySQL (#1130 phase 2c-3b): its own `LPAD`/`RPAD`, which cut a longer string and repeat the fill by
+# characters as PostgreSQL does (measured on 8.4), except that an empty fill answers `''` where
+# PostgreSQL returns the string cut to the length. The build flags an empty literal fill
+# (`empty_fill`), which renders that cut, `LEFT(x, n)`, with the fill's marker kept in its place
+# (`CONCAT` of the empty string) so the values bind in text order. A fill COLUMN empty on a row
+# still answers `''` there.
+function _mysql_pad(name::String, columns::Vector{Any}, format::Dict{String,Any})
+  get(format, "empty_fill", false) === true && return "CONCAT(LEFT($(columns[1]), $(columns[2])), $(columns[3]))"
+  return "$(name)($(columns[1]), $(columns[2]), $(columns[3]))"
+end
+LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("LPAD", columns, format)
+RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("RPAD", columns, format)
 
-function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "TRIM($(column))"
 end
 
-function LTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function LTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "LTRIM($(column))"
 end
 
-function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "RTRIM($(column))"
 end
 

@@ -20,6 +20,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates, UUIDs, Decimals, TimeZones
+import MySQL   # loads PormGMySQLExt, whose statement routing is tested at the end
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, Joined, F, CTE
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
@@ -1152,4 +1153,119 @@ end
   # SQLite and PostgreSQL keep theirs.
   @test occursin("strftime('%Y-%m', \"Tb\".\"date\")", _mr_inspect(_MR_SL.Race.objects.values("v" => QB.ToChar("date", "YYYY-MM")))[:sql_text])
   @test occursin("to_char(\"Tb\".\"date\", 'YYYY-MM')", _mr_inspect(_MR_PG.Race.objects.values("v" => QB.ToChar("date", "YYYY-MM")))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL text functions (#1130 phase 2c-3b)
+# Measured on 8.4: `LENGTH` counts bytes (`Räikkönen` is 11) and `CHAR_LENGTH` characters (9);
+# `LOWER`/`UPPER`/`TRIM`/`REPLACE` and `LPAD`/`RPAD` (cut, repeated fill) answer as PostgreSQL's,
+# except that an empty fill pads to `''` where PostgreSQL returns the string cut to the length.
+# Expected: `CHAR_LENGTH(x)` for `Length`; the shared spellings for the others; an empty literal fill
+# rendered `CONCAT(LEFT(x, ?), ?)`, the cut with the fill's marker kept in place, so the values bind
+# in text order; a non-empty fill `LPAD(x, ?, ?)`.
+# Why: before phase 2c-3b each was a `MethodError` on MySQL, and `LENGTH` there would count bytes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL text functions: MySQL's own, Length in characters" begin
+  QB = PormG.QueryBuilder
+  D = _MR_MY.Driver
+  proj(build) = (r = _mr_inspect(build()); (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")),
+                                             r[:parameters]))
+  @test proj(() -> D.objects.values("v" => QB.Length("surname"))) == ("CHAR_LENGTH(`Tb`.`surname`)", Any[])
+  @test proj(() -> D.objects.values("v" => QB.Upper("surname"))) == ("UPPER(`Tb`.`surname`)", Any[])
+  @test proj(() -> D.objects.values("v" => QB.Lower("surname"))) == ("LOWER(`Tb`.`surname`)", Any[])
+  @test proj(() -> D.objects.values("v" => QB.Trim("surname"))) == ("TRIM(`Tb`.`surname`)", Any[])
+  @test proj(() -> D.objects.values("v" => QB.RTrim("surname"))) == ("RTRIM(`Tb`.`surname`)", Any[])
+  @test proj(() -> D.objects.values("v" => QB.Replace("surname", "enn", "X"))) == ("REPLACE(`Tb`.`surname`, ?, ?)", Any["enn", "X"])
+  @test proj(() -> D.objects.values("v" => QB.LPad("surname", 10, "*"))) == ("LPAD(`Tb`.`surname`, ?, ?)", Any[10, "*"])
+  @test proj(() -> D.objects.values("v" => QB.RPad("surname", 10, "ab"))) == ("RPAD(`Tb`.`surname`, ?, ?)", Any[10, "ab"])
+  # An empty fill pads nothing: the cut alone, its marker still bound where it prints.
+  @test proj(() -> D.objects.values("v" => QB.LPad("surname", 3, ""))) == ("CONCAT(LEFT(`Tb`.`surname`, ?), ?)", Any[3, ""])
+  @test proj(() -> D.objects.values("v" => QB.RPad("surname", 3, ""))) == ("CONCAT(LEFT(`Tb`.`surname`, ?), ?)", Any[3, ""])
+  # PostgreSQL and SQLite keep theirs, an empty fill included.
+  @test occursin("LENGTH(\"Tb\".\"surname\")", _mr_inspect(_MR_PG.Driver.objects.values("v" => QB.Length("surname")))[:sql_text])
+  @test occursin("pormg_lpad(\"Tb\".\"surname\", ?, ?)", _mr_inspect(_MR_SL.Driver.objects.values("v" => QB.LPad("surname", 3, "")))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL window functions and frames (#1130 phase 2c-3b)
+# Measured on 8.4: `ROW_NUMBER`/`RANK`/`DENSE_RANK` are a `BIGINT UNSIGNED` (a `UInt64` through
+# MySQL.jl); `LAG`/`LEAD` take a bound offset and default; ROWS and RANGE frames work, GROUPS and
+# EXCLUDE raise error 1235. Expected: the ranking functions `CAST(… AS SIGNED)`, an `Int64` as on the
+# other engines; the others bare, binding offset then default in text order; ROWS/RANGE frames as
+# written; GROUPS and EXCLUDE refused with `BackendCapabilityError` through their capability rows,
+# which PostgreSQL has.
+# Why: before phase 2c-3b each was a `MethodError` on MySQL, and a GROUPS frame would have reached
+# the server as a syntax error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL window functions: signed ranks, ROWS/RANGE frames, GROUPS/EXCLUDE refused" begin
+  QB = PormG.QueryBuilder
+  R = _MR_MY.Result
+  by(; kw...) = QB.WindowOver(; order_by = ["resultid"], kw...)
+  proj(build) = (r = _mr_inspect(build()); (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")),
+                                             r[:parameters]))
+  @test proj(() -> R.objects.values("v" => QB.RowNumber(over = by()))) ==
+        ("CAST(ROW_NUMBER() OVER (ORDER BY `Tb`.`resultid` ASC) AS SIGNED)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Rank(over = QB.WindowOver(order_by = ["-points"])))) ==
+        ("CAST(RANK() OVER (ORDER BY `Tb`.`points` DESC) AS SIGNED)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.DenseRank(over = by()))) ==
+        ("CAST(DENSE_RANK() OVER (ORDER BY `Tb`.`resultid` ASC) AS SIGNED)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Lag("grid"; offset = 2, default = -1, over = by()))) ==
+        ("LAG(`Tb`.`grid`, ?, ?) OVER (ORDER BY `Tb`.`resultid` ASC)", Any[2, -1])
+  @test proj(() -> R.objects.values("v" => QB.Lead("grid"; over = by()))) == ("LEAD(`Tb`.`grid`, ?) OVER (ORDER BY `Tb`.`resultid` ASC)", Any[1])
+  @test proj(() -> R.objects.values("v" => QB.FirstValue("grid"; over = by()))) == ("FIRST_VALUE(`Tb`.`grid`) OVER (ORDER BY `Tb`.`resultid` ASC)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.NthValue("grid", 2; over = by()))) == ("NTH_VALUE(`Tb`.`grid`, 2) OVER (ORDER BY `Tb`.`resultid` ASC)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.LastValue("grid"; over = by(frame = "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")))) ==
+        ("LAST_VALUE(`Tb`.`grid`) OVER (ORDER BY `Tb`.`resultid` ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)", Any[])
+  @test proj(() -> R.objects.values("v" => QB.LastValue("grid"; over = by(frame = "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW")))) ==
+        ("LAST_VALUE(`Tb`.`grid`) OVER (ORDER BY `Tb`.`resultid` ASC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)", Any[])
+  # An interval offset in MySQL's grammar: unquoted, singular, and milliseconds counted in microseconds
+  # (MySQL has no MILLISECOND unit); PostgreSQL keeps its quoted interval.
+  rng(frame) = proj(() -> R.objects.values("v" => QB.LastValue("grid"; over = by(frame = frame))))[1]
+  @test occursin("RANGE BETWEEN INTERVAL 7 DAY PRECEDING AND CURRENT ROW)", rng("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))
+  @test occursin("RANGE BETWEEN INTERVAL 1 WEEK PRECEDING AND INTERVAL 5000 MICROSECOND FOLLOWING)",
+                 rng("RANGE BETWEEN INTERVAL '1 week' PRECEDING AND INTERVAL '5 milliseconds' FOLLOWING"))
+  # The count never wraps: past the 64-bit range it stays the number written, for the server to refuse.
+  @test occursin("INTERVAL 9300000000000000000 MICROSECOND PRECEDING",
+                 rng("RANGE BETWEEN INTERVAL '9300000000000000 milliseconds' PRECEDING AND CURRENT ROW"))
+  @test occursin("RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW",
+                 _mr_inspect(_MR_PG.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"))))[:sql_text])
+  @test PormG._supports(MrMockMySQL(), :window_functions)
+  refused(frame) = (e = try; _mr_inspect(R.objects.values("v" => QB.LastValue("grid"; over = by(frame = frame)))); nothing; catch err; err; end;
+                    e isa PormG.BackendCapabilityError ? sprint(showerror, e) : e)
+  @test occursin("a `GROUPS` window frame, which MySQL does not support (supported on PostgreSQL)",
+                 refused("GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW"))
+  @test occursin("an `EXCLUDE` clause in a window frame, which MySQL does not support (supported on PostgreSQL)",
+                 refused("ROWS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW"))
+  # PostgreSQL renders both; SQLite still refuses every explicit frame, first.
+  @test occursin("GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES",
+                 _mr_inspect(_MR_PG.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES"))))[:sql_text])
+  e = try; _mr_inspect(_MR_SL.Result.objects.values("v" => QB.LastValue("grid"; over = by(frame = "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW")))); nothing; catch err; err; end
+  @test e isa PormG.BackendCapabilityError && occursin("PormG does not render explicit window frames on SQLite yet", sprint(showerror, e))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL extension: which statements are prepared to read their columns' character sets (#1130 phase 2c-3b)
+# A statement that returns rows is prepared, so its text and bytes decode by charset; any other keeps
+# the text protocol. Expected: SELECT/WITH/SHOW/`(` match after any whitespace and leading comments;
+# a statement that returns no rows never matches, however much whitespace or how many comments open
+# it, and a comment never stretches past its own `*/`.
+# Why: a backtracking skip loop threw "match limit exceeded" on a non-row statement after ~24
+# spaces, and matched `/* c */ INSERT … /* cols */ (…)` by reading the comment to the second `*/`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL extension: row-returning statements, whatever opens them" begin
+  ext = Base.get_extension(PormG, :PormGMySQLExt)
+  @test ext !== nothing
+  R = ext._RETURNS_ROWS
+  for sql in ("SELECT 1", "  select 1", "(SELECT 1) UNION (SELECT 2)", "WITH x AS (SELECT 1) SELECT * FROM x",
+              "SHOW WARNINGS", "/* a note */ -- and a line\nSELECT 1", "--\tx\r\nSELECT 1", "#c\nSELECT 1",
+              " "^5000 * "SELECT 1")
+    @test (first(sql, 40), occursin(R, sql)) == (first(sql, 40), true)
+  end
+  for sql in (" "^30 * "INSERT INTO t VALUES (1)", "\n" * "    "^6 * "UPDATE t SET a = 1", "\n"^25 * "START TRANSACTION",
+              "/* c */ INSERT INTO t /* cols */ (a, b) VALUES (1, 2)", "/* c */ DELETE FROM t -- x */ SELECT",
+              "/* c */ INSERT INTO t VALUES ('*/ SELECT')", "/* SELECT */ INSERT INTO t VALUES (1)",
+              "-- x\nINSERT INTO t VALUES (1)", "/* unterminated SELECT", "INSERT INTO t SELECT 1",
+              repeat("/* c */ ", 2000) * "INSERT INTO t VALUES (1)")
+    @test (first(sql, 40), occursin(R, sql)) == (first(sql, 40), false)
+  end
 end

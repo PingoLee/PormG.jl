@@ -391,7 +391,7 @@ Result — 34 rows, of which the first and last few:
 Seven of the 34 drivers did not race in 1990 at all, so the `LEFT JOIN` gives them a `NULL`
 `prev_points` — and that is what makes `nulls=:last` load-bearing rather than decorative. **The two
 backends disagree about where a `NULL` sorts by default**: PostgreSQL treats it as the largest
-value, so `DESC` puts it *first*; SQLite treats it as the smallest, so `DESC` puts it *last*. Drop
+value, so `DESC` puts it *first*; SQLite and MySQL treat it as the smallest, so `DESC` puts it *last*. Drop
 the `nulls=:last` from the example above and the same query returns, measured:
 
 | Backend | Rank 1, with `nulls` unset |
@@ -419,7 +419,7 @@ default of its own, so inside `OVER (...)` you state it or you inherit the backe
     `CTE("name", "column")` to select the CTE's column, or rename the CTE to reach the model's.
     See [Referencing a CTE's columns](subqueries_and_ctes.md#Referencing-a-CTE's-columns).
 
-### Frame Specifications (PostgreSQL only)
+### Frame Specifications (PostgreSQL and MySQL)
 
 Explicit frames are needed when the SQL default frame is wrong for your use case. The most common trap: **`LastValue` with `ORDER BY` but no explicit frame.**
 
@@ -440,7 +440,7 @@ spec_default = WindowOver(
 spec_full = WindowOver(
     partition_by=["constructorid"],
     order_by=["positionorder"],
-    frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL only
+    frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"  # PostgreSQL and MySQL
 )
 
 query = M.Result.objects
@@ -497,7 +497,7 @@ ORDER BY "constructorid" ASC, "positionorder" ASC
 ```
 
 !!! warning
-    Explicit frame strings are PostgreSQL-only. Passing `frame=` on a SQLite connection throws a `BackendCapabilityError` with a helpful message.
+    Explicit frame strings render on PostgreSQL and MySQL. Passing `frame=` on a SQLite connection throws a `BackendCapabilityError` with a helpful message. MySQL has `ROWS` and `RANGE` frames but no `GROUPS` frame and no `EXCLUDE` clause: either raises `BackendCapabilityError` there (the `window_groups_frame` and `window_frame_exclusion` rows of [Backend Capabilities](@ref)). A `RANGE` interval offset is written in PostgreSQL's spelling, `INTERVAL '7 days'`, and PormG renders MySQL's `INTERVAL 7 DAY` for it. MySQL takes a `RANGE` offset over exactly one `ORDER BY` key, so a window ordered with `nulls` (which MySQL orders by an extra `IS NULL` key) and a `RANGE` offset fails there with server error 3587.
 
 **Frame unit — `ROWS` vs `RANGE`**
 
@@ -778,7 +778,7 @@ Three behaviours are visible at once:
 
 **`winner_pts` (`FirstValue`)** — `25.0` on every row. The first row in the partition (position 1) scored 25 points; `FirstValue` always picks that value and broadcasts it to every row in the partition, regardless of where the frame ends.
 
-**`last_pts` (`LastValue`)** — decreasing row by row: `25.0`, `18.0`, `15.0`, `12.0`, … This looks wrong but it is the SQL default. Without an explicit `frame=`, SQL uses `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the frame only reaches up to and including the *current* row. At each row, the "last" value the function can see is the current row's own `points`, so it just echoes that value. To get the true last finisher's points broadcast to every row, pass `frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` — see [Frame Specifications](#Frame-Specifications-(PostgreSQL-only)) for a side-by-side comparison.
+**`last_pts` (`LastValue`)** — decreasing row by row: `25.0`, `18.0`, `15.0`, `12.0`, … This looks wrong but it is the SQL default. Without an explicit `frame=`, SQL uses `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the frame only reaches up to and including the *current* row. At each row, the "last" value the function can see is the current row's own `points`, so it just echoes that value. To get the true last finisher's points broadcast to every row, pass `frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` — see [Frame Specifications](#Frame-Specifications-(PostgreSQL-and-MySQL)) for a side-by-side comparison.
 
 **`second_pts` (`NthValue(2)`)** — `missing` on row 1, then `18.0` for all remaining rows. When processing row 1 the frame contains only one row (position 1), so there is no 2nd element — SQL returns `NULL`. Once row 2 enters the frame (position 2, driver 1, 18 points), `NthValue` finds that element and returns `18.0`. From row 3 onward the 2nd element never changes, so `second_pts` stays at `18.0` for every remaining row.
 
@@ -1259,10 +1259,13 @@ All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). 
 # BackendCapabilityError: A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the SQLite library PormG loads is 3.24.0.
 ```
 
-The only SQLite limitation is **explicit frame specifications** (`frame=` argument). These are PostgreSQL-only for now.
+The only SQLite limitation is **explicit frame specifications** (`frame=` argument). These render on PostgreSQL and MySQL only, for now.
+
+On MySQL (#1130) every window function renders, and `Rank`, `DenseRank` and `RowNumber` read back as
+an `Int64` as on the other engines (MySQL computes them as an unsigned integer, which PormG casts).
 
 The value functions (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) return one of the
-column's own values, so they read back as the column does on both engines. For example,
+column's own values, so they read back as the column does on every engine. For example,
 `Lag("date")` gives a `Date` and `Lag("duration")` a `Dates.CompoundPeriod`, where SQLite alone
 would hand back the stored text. A value function over a computed number, such as
 `Lag(Sum("points"))`, reads back as the type that number means, a `Float64` or a `Decimal`, on both
@@ -1294,7 +1297,7 @@ number's type (#824, #1121). Over a `Subquery(...)` it reads back as the subquer
 - **A plain window argument beside an aggregate** (`Lag("raceid__round")` next to `Sum("points")`) raises a `QueryBuildError` unless the query already groups that column. Aggregate it (`Lag(Max("raceid__round"))`) or project it; see [A Window Over an Aggregate](#A-Window-Over-an-Aggregate).
 - **Filtering on a window alias** in the query that computes it raises a `QueryBuildError`. Filter on the column of a CTE instead — see [Filtering on a Window Result](#Filtering-on-a-Window-Result).
 - **Named `WINDOW` clauses** (`WINDOW w AS (...)`) are not supported. Each function carries its own inline `OVER`.
-- **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL for frame-bound queries.
+- **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL or MySQL for frame-bound queries; MySQL has no `GROUPS` frame and no `EXCLUDE` clause.
 
 ---
 

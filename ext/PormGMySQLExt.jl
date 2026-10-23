@@ -290,12 +290,27 @@ Base.eltype(::Type{MySQLResult}) = Tuple
 Base.iterate(r::MySQLResult, i::Int = 1) =
   i > r.nrows ? nothing : (Tuple(c[i] for c in r.columns), i + 1)
 
-function _materialize(cursor)::MySQLResult
+# #1130 phase 2c-3b: text or bytes, by the column's character set. MySQL sets the BINARY flag on every
+# column of a binary COLLATION, which `utf8mb4_0900_bin` (every PormG text column, #1265) is, and MySQL.jl
+# 2.0 decides by that flag: a TEXT column (a BLOB type with the flag) arrives as bytes, and a text
+# expression whose length a parameter sets is typed a BLOB too (`LPAD(s, ?, …)`, `CONCAT_WS('', s, ?)`),
+# while a VARBINARY column (no BLOB type) arrives as text. The character set is the one that says it:
+# 63 is `binary`. Measured on 8.4. MySQL.jl keeps it only on a prepared statement's column definitions.
+# One exception: a JSON column reports `binary` too (MySQL stores it as a binary BLOB), and is text.
+const _BINARY_CHARSET = 63
+const _JSON_TYPE = 245
+_is_binary_column(c) = Int(c.charset) == _BINARY_CHARSET && Int(c.type) != _JSON_TYPE
+_by_charset(v::Vector{UInt8}, binary::Bool) = binary ? v : String(v)
+_by_charset(v::String, binary::Bool) = binary ? Vector{UInt8}(codeunits(v)) : v
+_by_charset(v, ::Bool) = v
+
+function _materialize(cursor, binary::Union{Nothing,Vector{Bool}} = nothing)::MySQLResult
   schema = Tables.schema(cursor)
   names = schema === nothing ? Symbol[] : collect(Symbol, schema.names)
   raw = [Any[] for _ in names]
   for row in cursor, (j, name) in enumerate(names)
-    push!(raw[j], _read_value(Tables.getcolumn(row, j), name))
+    v = _read_value(Tables.getcolumn(row, j), name)
+    push!(raw[j], binary === nothing ? v : _by_charset(v, binary[j]))
   end
   # Narrow each column to the types it holds (`String`, `Union{Missing, Int64}`, …), as a driver
   # result would be, so `DataFrame(result)` gets typed columns.
@@ -324,11 +339,41 @@ function _with_bare_interrupt(f)
   end
 end
 
-# A statement without parameters goes over the text protocol: MySQL cannot PREPARE every statement
-# (`LOCK TABLES`, several `SET` forms, …), and a one-shot prepare costs two round trips besides.
-_run(conn::MySQL.Connection, sql::String, bound) = _with_bare_interrupt() do
-  cursor = bound === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, bound)
-  _materialize(cursor)
+# A statement without parameters that returns no rows goes over the text protocol: MySQL cannot
+# PREPARE every statement (`START TRANSACTION`, `LOCK TABLES`, …), and a one-shot prepare costs two
+# round trips besides.
+#
+# A statement that returns rows is prepared even without parameters (#1130 phase 2c-3b), so its cells
+# are decoded by their columns' character sets (`_by_charset`): one more round trip for a read with
+# no parameters. Prepared as MySQL.jl's own parameterized `execute` does, then closed. One MySQL will
+# not prepare (error 1295, `SHOW WARNINGS`) runs over the text protocol, as every other statement does.
+# Leading comments are skipped (`/* … */`, `-- …`, `# …`), so raw SQL that opens with one is decoded too.
+# Possessive (`++`, `*+`): a skip loop that could backtrack splits a run of n spaces 2^(n-1) ways
+# before a statement that returns no rows, and PCRE gives up with an error past ~24 of them; nor may a
+# comment stretch past its own `*/` to a later one.
+const _RETURNS_ROWS = r"^(?:\s++|/\*.*?\*/|--[^\n]*+(?:\n|$)|#[^\n]*+(?:\n|$))*+(\(|SELECT\b|WITH\b|SHOW\b)"is
+const _UNPREPARABLE_ERRNO = 1295
+function _run(conn::MySQL.Connection, sql::String, bound)
+  return _with_bare_interrupt() do
+    if occursin(_RETURNS_ROWS, sql)
+      stmt = try
+        DBInterface.prepare(conn, sql)
+      catch e
+        (e isa MySQL.Protocol.ServerError && Int(e.errno) == _UNPREPARABLE_ERRNO) || rethrow()
+        nothing
+      end
+      if stmt !== nothing
+        try
+          cursor = DBInterface.execute(stmt, bound === nothing ? () : bound)
+          return _materialize(cursor, Bool[_is_binary_column(c) for c in stmt.columns])
+        finally
+          DBInterface.close!(stmt)
+        end
+      end
+    end
+    cursor = bound === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, bound)
+    return _materialize(cursor)
+  end
 end
 
 PormG.backend_execute(pool::_Pool, conn::MySQL.Connection, sql::String, params) =

@@ -1375,19 +1375,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | alone", :sqlite) =>
@@ -1843,145 +1843,145 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag date default date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("FirstValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Lead hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("LastValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Rank | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Rank | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Rank | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Rank | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Concat text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | alone", :sqlite) =>
@@ -2005,37 +2005,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Upper text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Upper text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Upper text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Upper text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Length text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Length text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Length text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Length text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | alone", :sqlite) =>
@@ -3157,19 +3157,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag int default float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast Case int float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case int float to integer | alone", :sqlite) =>
@@ -5150,6 +5150,30 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("NullIf date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("NullIf date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag hop date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag hop date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag date default date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag date default date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lag date default date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("FirstValue decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("FirstValue decimal | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("FirstValue decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Lead hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lead hop date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Lead hop date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],

@@ -46,6 +46,9 @@ const _BACKEND_FEATURES = (
   :negative_round_precision => "rounding to a negative number of places (`Round(x, -1)`: tens, hundreds, …)",
   # #1163: the rows below depend on the server version on at least one backend.
   :window_functions       => "window functions (`OVER (…)`)",
+  # #1130 phase 2c-3b: two frame forms a backend can lack while it renders ROWS and RANGE frames.
+  :window_groups_frame    => "a `GROUPS` window frame",
+  :window_frame_exclusion => "an `EXCLUDE` clause in a window frame",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
@@ -82,8 +85,9 @@ for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
 # connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269). Phase 2c-2: `ROUND`
-# takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4).
-for f in (:supported_server, :advisory_locks, :negative_round_precision)
+# takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4). Phase 2c-3b: window functions
+# (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.
+for f in (:supported_server, :advisory_locks, :negative_round_precision, :window_functions)
   @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 

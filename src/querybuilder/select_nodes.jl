@@ -265,6 +265,16 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
     instruc.connection isa PormGSQLite && throw(BackendCapabilityError(
       "frame = $(repr(frame)): PormG does not render explicit window frames on SQLite yet. Remove " *
       "frame= to use the default frame."))
+    # #1130 phase 2c-3b: ROWS and RANGE render everywhere frames do; a GROUPS frame and an EXCLUDE
+    # clause are each a capability-table row (MySQL has neither).
+    conn = instruc.connection
+    if conn !== nothing
+      for (needed, feature) in ((Base.startswith(frame, "GROUPS"), :window_groups_frame),
+                                (occursin(" EXCLUDE ", frame), :window_frame_exclusion))
+        needed && !_supports(conn, feature) && throw(_capability_error(conn, feature, "frame = $(repr(frame))"))
+      end
+      frame = Dialect.engine_frame_sql(frame, conn)
+    end
     push!(parts, frame)
   end
 
@@ -839,6 +849,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   if v isa FObject && v.function_name in ("EXTRACT", "EXTRACT_DATE", "WEEK_DAY", "QUARTER", "QUADRIMESTER", "DATE")
     temporal = _temporal_hint(_expression_kind(v.column, instruc))
     temporal === nothing || (resolved_kwargs["temporal_kind"] = temporal)
+  end
+  # #1130 phase 2c-3b: an empty literal fill (`LPad(x, n, "")`) pads nothing, which an engine whose
+  # pad answers `''` for it (MySQL) renders as the cut alone; `Dialect.LPAD` reads this.
+  if v isa FObject && v.function_name in ("LPAD", "RPAD") && v.column isa AbstractVector &&
+     length(v.column) == 3 && v.column[3] isa SQLText && v.column[3].field == ""
+    resolved_kwargs["empty_fill"] = true
   end
   # #1150: `NullIf(a, b)` is `a` or NULL, so it has `a`'s type — but PostgreSQL resolves it with `b`
   # for the `=` it is defined by, so `NULLIF(<integer>, 0.5)` is a `numeric` there and keeps the half

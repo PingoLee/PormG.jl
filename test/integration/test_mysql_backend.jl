@@ -73,6 +73,50 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test rows("SELECT COUNT(*) AS n FROM $(_MY_T)").n[1] == 1
     end
 
+    # What: text reads as a `String` and binary data as a `Vector{UInt8}`, decided by the column's
+    #       character set, whether the statement has parameters or not.
+    # SQL: `SELECT t, v, s, b, bl FROM pormg_my_phase1_text …`, with and without a `WHERE id = ?`, and
+    #      `LPAD(s, ?, '*')`, `CONCAT_WS('', s, ?)`, `REPLACE(s, ?, ?)` over a `utf8mb4_0900_bin` column.
+    # Why: MySQL sets the BINARY flag on every column of a binary collation, which PormG's text columns
+    #      are (#1265), and MySQL.jl 2.0 decides by that flag: a TEXT column and any text expression
+    #      whose length a parameter sets came back as bytes, and a VARBINARY column as text
+    #      (#1130 phase 2c-3b). The character set (63 = binary) is what says which.
+    @testset "text reads as a String and bytes as bytes, by the column's character set" begin
+        t = "pormg_my_phase1_text"
+        run("DROP TABLE IF EXISTS $(t)")
+        try
+            run("""CREATE TABLE $(t) (id BIGINT PRIMARY KEY, t TEXT COLLATE utf8mb4_0900_bin,
+                   v VARCHAR(50) COLLATE utf8mb4_0900_bin, s VARCHAR(50) COLLATE utf8mb4_0900_bin,
+                   b VARBINARY(8), bl BLOB) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin""")
+            run("INSERT INTO $(t) VALUES (?, ?, ?, ?, ?, ?)";
+                params = Any[1, "Räikkönen's long text", "Senna", "Prost", UInt8[0x00, 0xc3, 0x28], UInt8[0xff, 0x01]])
+            for (label, got) in ("no parameters" => rows("SELECT t, v, s, b, bl FROM $(t)"),
+                                 "a parameter" => rows("SELECT t, v, s, b, bl FROM $(t) WHERE id = ?"; params = Any[1]))
+                @test (label, got.t[1]) == (label, "Räikkönen's long text") && got.t[1] isa String
+                @test got.v[1] == "Senna" && got.v[1] isa String && got.s[1] isa String
+                @test (label, got.b[1]) == (label, UInt8[0x00, 0xc3, 0x28]) && got.b[1] isa Vector{UInt8}
+                @test got.bl[1] == UInt8[0xff, 0x01] && got.bl[1] isa Vector{UInt8}
+            end
+            # Text expressions whose length a parameter sets: MySQL types them a BLOB of utf8mb4.
+            e = rows("SELECT LPAD(s, ?, '*') AS lp, CONCAT_WS('', s, ?) AS cw, REPLACE(s, ?, ?) AS rp FROM $(t)";
+                     params = Any[8, "!", "o", "0"])
+            @test (e.lp[1], e.cw[1], e.rp[1]) == ("***Prost", "Prost!", "Pr0st")
+            @test all(c -> c[1] isa String, (e.lp, e.cw, e.rp))
+            # A row-returning statement MySQL will not prepare (error 1295, measured) runs over the
+            # text protocol instead; and SQL that opens with a comment is still decoded.
+            @test rows("SHOW WARNINGS") isa DataFrame
+            c = rows("/* a note */ -- and a line\nSELECT t FROM $(t)")
+            @test c.t[1] == "Räikkönen's long text" && c.t[1] isa String
+            # A JSON column reports the binary character set, and is text.
+            run("ALTER TABLE $(t) ADD COLUMN j JSON")
+            run("UPDATE $(t) SET j = ? WHERE id = ?"; params = Any["{\"a\": 1}", 1])
+            js = rows("SELECT j FROM $(t) WHERE id = ?"; params = Any[1])
+            @test js.j[1] isa String && occursin("\"a\"", js.j[1])
+        finally
+            run("DROP TABLE IF EXISTS $(t)")
+        end
+    end
+
     # What: an UPDATE reports the rows it MATCHED, not only the rows whose value changed.
     # SQL: `UPDATE pormg_my_phase1_values SET big = big WHERE name = ?` (the value does not change).
     # Why: MySQL's default reports 0 for an unchanged row, where PostgreSQL and SQLite report 1; core's

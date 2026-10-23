@@ -14,7 +14,8 @@ if !isdefined(Main, :PormG)
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs,
-    Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract, ToChar, Upper
+    Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract, ToChar, Upper, Lower, Length, Trim, Replace, LPad,
+    RPad, RowNumber, Rank, DenseRank, Lag, Lead, FirstValue, LastValue, NthValue, WindowOver
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -297,12 +298,10 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `Upper` (phase 2c-3b) and `create` (phase 3) fail before a statement is sent.
+        # SQL: none — `create` (phase 3) fails before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
-            # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Driver.objects.values("a" => Upper("surname")).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.Dialect.UPPER
+            # It names the piece of the query builder MySQL does not have yet.
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
@@ -604,6 +603,87 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test e isa PormG.QueryBuildError && occursin("over a time is not supported on MySQL", msg(e))
             hm = only(M.Race.objects.filter("raceid" => first_stamp).values("v" => ToChar(Cast("start_at", "time"), "HH:MI")).list())[:v]
             @test hm == Dates.format(t, "HH:MM")
+        end
+
+        # What: the text functions answer as Julia does over the same rows, each read as a `String`
+        #       (`Length` as an integer), `LPad`/`RPad` with PostgreSQL's cut, repeat and empty fill.
+        # SQL: `CHAR_LENGTH(x)`, `UPPER`/`LOWER`/`TRIM`/`REPLACE`, `LPAD(x, ?, ?)`, an empty fill as
+        #      `CONCAT(LEFT(x, ?), ?)`, and `CONCAT_WS('', x, ?)` for a `Concat` with a `Value`.
+        # Why: MySQL's `LENGTH` counts bytes, its `LPAD` pads an empty fill to `''`, and a text result whose
+        #      length a parameter sets came back as bytes before the extension decoded by charset
+        #      (#1130 phase 2c-3b).
+        @testset "text functions answer as Julia does (phase 2c-3b)" begin
+            names = Dict(r[:driverid] => r[:surname] for r in M.Driver.objects.values("driverid", "surname").list())
+            @test any(s -> !isascii(s), values(names)) && any(s -> Base.endswith(s, " "), values(names))
+            pad(s, n, f, left) = length(s) >= n ? first(s, n) : isempty(f) ? s :
+                                 (p = first(repeat(f, n), n - length(s)); left ? p * s : s * p)
+            rows = M.Driver.objects.values("driverid", "n" => Length("surname"), "u" => Upper("surname"),
+                "l" => Lower("surname"), "t" => Trim("surname"), "r" => Replace("surname", "enn", "X"),
+                "lp" => LPad("surname", 8, "*"), "rp" => RPad("surname", 7, "ab"), "cut" => LPad("surname", 3, "*"),
+                "e" => LPad("surname", 8, ""), "c" => Concat("surname", Value("!"))).order_by("driverid").list()
+            @test length(rows) == length(names)
+            for r in rows
+                s = names[r[:driverid]]
+                @test (s, r[:n]) == (s, length(s)) && r[:n] isa Integer
+                @test (s, r[:u], r[:l], r[:t]) == (s, uppercase(s), lowercase(s), strip(s, ' '))
+                @test (s, r[:r]) == (s, replace(s, "enn" => "X"))
+                @test (s, r[:lp], r[:rp], r[:cut], r[:e]) == (s, pad(s, 8, "*", true), pad(s, 7, "ab", false), pad(s, 3, "*", true), pad(s, 8, "", true))
+                @test (s, r[:c]) == (s, s * "!")
+                @test all(k -> r[k] isa String, (:u, :l, :t, :r, :lp, :rp, :cut, :e, :c))
+            end
+        end
+
+        # What: the window functions answer as Julia computes them over the same rows: ranks as
+        #       `Int64`, `Lag`/`Lead` with an offset and a default over an integer, a date, a text and a
+        #       duration, first/nth/last values, a ROWS frame and a RANGE frame of days.
+        # SQL: `CAST(ROW_NUMBER() OVER (…) AS SIGNED)`, `LAG(x, ?, ?) OVER (…)`, `NTH_VALUE(x, 2) OVER (…)`,
+        #      `… OVER (ORDER BY … ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)`, `RANGE BETWEEN INTERVAL 30 DAY
+        #      PRECEDING AND CURRENT ROW`.
+        # Why: MySQL's ranks are a `BIGINT UNSIGNED`, a text default came back as bytes, and an interval
+        #      frame offset has MySQL's own grammar (#1130 phase 2c-3b).
+        @testset "window functions answer as Julia computes them (phase 2c-3b)" begin
+            res = M.Result.objects.values("resultid", "grid", "points", "raceid", "fastestlaptime",
+                "raceid__date", "driverid__surname").order_by("resultid").list()
+            n = length(res)
+            @test n == 7
+            ord() = WindowOver(order_by = ["resultid"])
+            rows = M.Result.objects.values("resultid",
+                "rn" => RowNumber(over = WindowOver(order_by = ["-resultid"])),
+                "rk" => Rank(over = WindowOver(order_by = ["-points"])), "dr" => DenseRank(over = WindowOver(order_by = ["-points"])),
+                "lg" => Lag("grid"; offset = 1, default = -1, over = ord()),
+                "ld" => Lead("raceid__date"; offset = 2, default = Date(2000, 1, 1), over = ord()),
+                "ls" => Lag("driverid__surname"; offset = 1, default = "none", over = ord()),
+                "lt" => Lag("fastestlaptime"; offset = 1, over = ord()),
+                "fv" => FirstValue("points"; over = WindowOver(partition_by = ["raceid"], order_by = ["resultid"])),
+                "nv" => NthValue("grid", 2; over = ord()),
+                "lv" => LastValue("grid"; over = WindowOver(order_by = ["resultid"], frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING")),
+                "pr" => FirstValue("grid"; over = WindowOver(order_by = ["resultid"], frame = "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")),
+                "rd" => FirstValue("raceid__date"; over = WindowOver(order_by = ["raceid__date"], frame = "RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW")),
+                "ep" => RPad("driverid__surname", 3, "")
+                ).order_by("resultid").list()
+            @test length(rows) == n
+            pts = [r[:points] for r in res]
+            for (i, r) in enumerate(rows)
+                b = res[i]
+                @test (i, r[:rn]) === (i, Int64(n - i + 1))
+                @test (i, r[:rk]) === (i, Int64(1 + count(>(b[:points]), pts)))
+                @test (i, r[:dr]) === (i, Int64(1 + length(unique(filter(>(b[:points]), pts)))))
+                @test (i, r[:lg]) == (i, i == 1 ? -1 : res[i - 1][:grid])
+                @test (i, r[:ld]) == (i, i + 2 <= n ? res[i + 2][:raceid__date] : Date(2000, 1, 1)) && r[:ld] isa Date
+                @test (i, r[:ls]) == (i, i == 1 ? "none" : res[i - 1][:driverid__surname]) && r[:ls] isa String
+                @test isequal(r[:lt], i == 1 ? missing : res[i - 1][:fastestlaptime])
+                first_of_race = res[findfirst(x -> x[:raceid] == b[:raceid], res)][:points]
+                @test (i, r[:fv]) == (i, first_of_race)
+                @test isequal(r[:nv], i >= 2 ? res[2][:grid] : missing)
+                @test (i, r[:lv], r[:pr]) == (i, res[n][:grid], res[max(i - 1, 1)][:grid])
+                # The earliest date within 30 days before this row's: the same for every peer.
+                @test (i, r[:rd]) == (i, minimum(x[:raceid__date] for x in res if b[:raceid__date] - Day(30) <= x[:raceid__date] <= b[:raceid__date]))
+                @test (i, r[:ep]) == (i, first(b[:driverid__surname], 3))
+            end
+            # GROUPS and EXCLUDE are frames MySQL does not have: refused before any SQL.
+            e = try; M.Result.objects.values("v" => LastValue("grid"; over = WindowOver(order_by = ["resultid"],
+                    frame = "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW"))).list(); nothing; catch err; err; end
+            @test e isa PormG.BackendCapabilityError && occursin("which MySQL does not support", msg(e))
         end
 
         # What: the math functions answer as Julia does over the same rows, each read as the type its call

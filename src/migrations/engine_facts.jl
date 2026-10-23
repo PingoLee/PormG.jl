@@ -31,6 +31,9 @@ _adopts_indexes(::PormGMySQL) = false
 # is dropped and re-created under its new name.
 _can_rename_index(::PormGPostgres) = true
 _can_rename_index(::PormGSQLite) = false
+# MySQL renames in place (`ALTER TABLE … RENAME INDEX`); the statement itself is phase 4b's
+# (`Dialect.rename_index(::PormGMySQL)` refuses until then).
+_can_rename_index(::PormGMySQL) = true
 
 # The key a model-level index name is unique under, as the catalog stores it: PostgreSQL truncates at
 # 63 bytes and compares exactly (PormG quotes every name); SQLite keeps the name and compares it

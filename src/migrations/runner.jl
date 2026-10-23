@@ -823,22 +823,6 @@ ALTER would fail on — not an estimate:
   which `cidr`'s input function refuses in the plan's `USING`. `CAST(… AS cidr)` is the assignment
   cast, which zeroes those bits, so a value it changes is one the ALTER fails on. Any version.
 """
-# MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
-# existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
-# kind comes from a column change, which is phase 4b's.
-function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
-                       server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
-  lossy_alter_class(f) === :rows || return nothing
-  f.kind === :add_foreign_key ||
-    throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
-  q(name) = Dialect._ddl_ident(conn, name)
-  col = q(f.column)
-  parent, key = f.references
-  return ("SELECT COUNT(*) AS n FROM $(q(f.table)) AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
-          "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
-          "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
-end
-
 function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
@@ -962,6 +946,22 @@ end
 # Does the live table still have this column? A plan header can outlive what it describes — the plan
 # was edited by hand, or the #81 path re-archives a plan whose ALTER already ran — and a finding
 # about a column that is gone is stale, not a reason to refuse.
+# MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
+# existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
+# kind comes from a column change, which is phase 4b's.
+function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
+                       server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
+  lossy_alter_class(f) === :rows || return nothing
+  f.kind === :add_foreign_key ||
+    throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
+  q(name) = Dialect._ddl_ident(conn, name)
+  col = q(f.column)
+  parent, key = f.references
+  return ("SELECT COUNT(*) AS n FROM $(q(f.table)) AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
+          "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
+          "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+end
+
 function _live_column_exists(conn::PormGPostgres, table::AbstractString, column::AbstractString)::Bool
   rows = fetch(conn, """
     SELECT count(*) AS n FROM pg_attribute
@@ -3235,7 +3235,8 @@ end
     migrate(connection::PormGBackend, settings; interactive, destructive, name, lock_wait, lock_timeout, statement_timeout, atomic) -> MigrationResult
     migrate(db::String; config, kwargs...) -> MigrationResult
 
-Apply the pending migration plan (`pending_migrations.jl`) to a database, PostgreSQL or SQLite, and
+Apply the pending migration plan (`pending_migrations.jl`) to a database (PostgreSQL, SQLite, or MySQL —
+in progress, #1130), and
 return a [`MigrationResult`](@ref) saying what happened. Safe to call at application boot by
 several instances at once — see the [Deploying](@ref deploying-migrations) guide.
 
@@ -3266,9 +3267,11 @@ on one file cannot both apply the same plan, nor change a table between the chec
 
 MySQL (#1268) takes a named lock (`GET_LOCK`) in step 3, but has no transactional DDL: each statement
 commits on its own. A plan of more than one statement is refused in step 1 with
-`BackendCapabilityError` unless `atomic = false`; then step 5 runs the statements in order and records
-the plan once all of them ran, or as `failed` when one raised, leaving the ones before it applied.
-`makemigrations` afterwards plans what is still missing.
+`BackendCapabilityError` unless `atomic = false` (or it is the latest applied plan, the #81 case); then
+step 5 runs the statements in order and records the plan once all of them ran, or as `failed` when one
+raised, leaving the ones before it applied. `makemigrations` afterwards plans what is still missing.
+Step 2's schema precondition is skipped there, because another instance's half-applied plan reads as a
+changed schema; the check inside the lock, after the #81 guard, decides.
 
 A plan with no `# pormg-schema-table:` header — one generated before #739, or one whose lines were
 deleted on purpose — is applied without the precondition.
@@ -3297,8 +3300,8 @@ deleted on purpose — is applied without the precondition.
   SQLite always apply a plan whole, so there it changes nothing.
 
 `lock_timeout` and `statement_timeout` are PostgreSQL's. SQLite accepts and ignores them, so one deploy
-script can run on both; MySQL refuses them (`UnsupportedConnectionError`), since it has neither for
-DDL. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each must be a positive number of
+script can run on both; MySQL refuses them (`UnsupportedConnectionError`) until phase 4b of #1130
+decides their MySQL meaning. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each must be a positive number of
 seconds.
 
 Use [`dry_run`](@ref) to inspect a plan without applying it.
@@ -3344,8 +3347,10 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # column below 12 — is refused here, before anything is written. `makemigrations` refuses it too,
   # but a plan made against a newer server can be applied to an older one.
   _refuse_statements_above_server(connection, ordered_statements)
-  # #1268: a plan applies whole or not at all only where its DDL runs in one transaction.
-  _require_atomic_plan(connection, ordered_statements, atomic)
+  # #1268: a plan applies whole or not at all only where its DDL runs in one transaction. A plan already
+  # applied (the #81 re-archive) is not refused: nothing of it runs again.
+  _require_atomic_plan(connection, ordered_statements, atomic;
+                       applied = () -> _plan_is_latest_applied(connection, checksum))
   _require_migration_timeouts(connection, timeouts)
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
@@ -3372,7 +3377,10 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # instance's committed changes, and refuse a plan that is already applied. Both engines commit the
   # DDL and the history row together, so a schema read that saw the changes is followed by a history
   # read that sees the row.
-  if schema_tables !== nothing
+  # Where DDL is not transactional (MySQL, #1268) that premise is false: another instance's statements
+  # commit one by one and its history row comes after them, so a schema that differs here may be that
+  # instance's plan half-way. The check inside the lock, after the #81 guard, decides there instead.
+  if schema_tables !== nothing && _supports(connection, :transactional_ddl)
     drift = _schema_precondition_drift(connection, settings, schema_tables)
     isempty(drift) || _plan_is_latest_applied(connection, checksum) ||
       throw(_plan_precondition_error(drift, schema_tables))
@@ -3406,8 +3414,11 @@ end
 # its own — a plan of more than one statement is refused unless the caller accepts a part-applied
 # schema with `atomic = false`. One statement is atomic anywhere (MySQL 8.0's DDL is atomic per
 # statement), so it runs as it is.
-function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool)::Nothing
+function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool;
+                              applied::Function = () -> false)::Nothing
   (atomic && length(statements) > 1) || return nothing
+  _supports(connection, :transactional_ddl) && return nothing
+  applied() && return nothing
   _require_feature(connection, :transactional_ddl,
                    "Applying a migration plan of $(length(statements)) statements as one change";
                    why = "Each statement commits on its own, so a failure part-way leaves the statements " *
@@ -3417,8 +3428,9 @@ function _require_atomic_plan(connection::PormGBackend, statements::AbstractVect
 end
 
 # `lock_timeout` and `statement_timeout` are PostgreSQL's `SET LOCAL` settings on the migration
-# transaction (#737). MySQL has neither for DDL (its `max_execution_time` bounds a SELECT only), so an
-# opt-in is refused there rather than ignored.
+# transaction (#737). On MySQL they are refused rather than ignored until phase 4b decides their MySQL
+# meaning (`lock_wait_timeout` bounds a DDL statement's wait for its table's metadata lock; a statement's
+# run time has no DDL bound).
 _require_migration_timeouts(::Union{PormGPostgres, PormGSQLite}, ::_MigrationTimeouts)::Nothing = nothing
 function _require_migration_timeouts(connection::PormGMySQL, timeouts::_MigrationTimeouts)::Nothing
   (timeouts.lock_timeout_ms === nothing && timeouts.statement_timeout_ms === nothing) && return nothing

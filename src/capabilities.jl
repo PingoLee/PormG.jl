@@ -63,6 +63,8 @@ const _BACKEND_FEATURES = (
   :transactional_ddl      => "transactional DDL (a migration plan's statements in one transaction, applied whole or not at all)",
   # MySQL has no partial index (`CREATE INDEX … WHERE`).
   :partial_indexes        => "a partial index (an index with a `WHERE` condition)",
+  # MySQL indexes a `LONGTEXT`, `LONGBLOB` or `JSON` column only by a prefix of it (errors 1170, 3152).
+  :unbounded_text_indexes => "an index or key over a whole column of unbounded text, bytes or JSON",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
@@ -95,7 +97,7 @@ for f in _FEATURE_NAMES
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
           :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys,
-          :transactional_ddl, :partial_indexes)
+          :transactional_ddl, :partial_indexes, :unbounded_text_indexes)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the

@@ -561,8 +561,8 @@ function _claim_composite_target!(conn::_SQLEngine,
   key = _composite_name_key(conn, name)
   if haskey(targets, key)
     throw(InvalidMigrationError(
-      "Duplicate index name '$(stored)' (tables '$(targets[key][2])' and '$(table)'); index names are " *
-      "unique per schema on PostgreSQL and per database on SQLite, so give each UniqueConstraint and " *
+      "Duplicate index name '$(stored)' (tables '$(targets[key][2])' and '$(table)'); PormG keeps index " *
+      "names unique across a database's tables, so that a models file means the same on every backend: give each UniqueConstraint and " *
       "Index a distinct name"))
   end
   targets[key] = (stored, table)
@@ -598,7 +598,7 @@ function _check_composite_targets_free(conn::_SQLEngine,
       target_table == table && continue
       throw(InvalidMigrationError(
         "Index name '$(stored)' for table '$(target_table)' is already held by an index on table " *
-        "'$(table)'. Index names are unique per schema on PostgreSQL and per database on SQLite: give " *
+        "'$(table)'. PormG keeps index names unique across a database's tables, so that a models file means the same on every backend: give " *
         "the UniqueConstraint or Index another name, or free the name in a separate migration first"))
     end
   end
@@ -1111,6 +1111,12 @@ end
 # carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
 # holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
 # this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
+# MySQL: a declared CheckConstraint is phase 4c's (`Dialect.create_table(::PormGMySQL, model)` refuses it on
+# a new table); this is the same refusal for one added to a table that exists.
+_refuse_check_name_clash(::PormGMySQL, model::PormGModel, table::AbstractString,
+                         catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing =
+  throw(Dialect._mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
+
 function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table::AbstractString,
                                   catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
   own = Set{String}(["$(table)_pkey"])
@@ -2954,6 +2960,37 @@ function _refuse_unsupported_indexes(current_schema::Dict{Symbol, Dict{Symbol, U
   return nothing
 end
 
+# #1130: a key or an index over a column of unbounded text, bytes or JSON — a `TextField`, a
+# `BinaryField`, a `JSONField` — on a backend that indexes such a column only by a prefix (MySQL's
+# `LONGTEXT`, `LONGBLOB` and `JSON`, errors 1170 and 3152). Refused for every managed model before the
+# diff: left to the server, the `CREATE INDEX` fails after the `CREATE TABLE` committed, and the fix (a
+# `CharField`) is then a retype of a table that exists. A primary key, a `unique`, a `db_index` and a
+# member of a declared `Index` or `UniqueConstraint` all count.
+function _refuse_unbounded_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                   conn)::Nothing
+  (conn isa PormGBackend && !_supports(conn, :unbounded_text_indexes)) || return nothing
+  for table in sort!(collect(keys(current_schema)))
+    model = current_schema[table][:model]
+    by_column = Dict{String, Tuple{String, PormGField}}()
+    for (key, field) in model.fields
+      Models.is_many_to_many_field(field) && continue
+      by_column[Models.field_db_column(field, string(key))] = (string(key), field)
+    end
+    unbounded(col) = haskey(by_column, col) &&
+      parse_canonical_type(_render_column_type(last(by_column[col]), conn), conn) isa Union{CText, CBytes, CJSON}
+    keyed = String[col for (col, (_, f)) in by_column if
+                   _slot(f, :primary_key, false) || _slot(f, :unique, false) || _slot(f, :db_index, false)]
+    members = String[c for d in declared_composites(model) for c in d.columns]
+    for col in sort!(unique!(vcat(keyed, members)))
+      unbounded(col) || continue
+      throw(_capability_error(conn, :unbounded_text_indexes,
+        "A key or index over column \"$(col)\" of model '$(model.name)', a $(string(nameof(typeof(last(by_column[col]))))[2:end]),";
+        why = "Declare it as a CharField with a max_length, or drop the key or index."))
+    end
+  end
+  return nothing
+end
+
 """
     get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true, renames = [])
     get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true, renames = [])
@@ -3053,6 +3090,7 @@ _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 _refuse_unsupported_fields(current_schema, conn)
 _refuse_unsupported_indexes(current_schema, conn)
+_refuse_unbounded_indexes(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables

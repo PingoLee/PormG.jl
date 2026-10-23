@@ -138,8 +138,17 @@ end
                   "int unsigned", "bigint unsigned", "float", "blob", "timestamp")
     @test (foreign, _MM.parse_canonical_type(foreign, _mm_my)) == (foreign, PormG.CUnsupported(foreign))
   end
-  @test _MM.parse_canonical_type("tinyint(1)", _mm_my) == PormG.CBool()
-  @test _MM.parse_canonical_type("decimal(6,3)", _mm_my) == PormG.CDecimal(6, 3)
+  # Each spelling the map writes, against the type it means: a deleted arm reads both sides of the law
+  # above as the same `CUnsupported`, which only this table catches.
+  for (spelling, want) in ("bigint" => PormG.CInt64(), "int" => PormG.CInt32(), "smallint" => PormG.CInt16(),
+                           "tinyint(1)" => PormG.CBool(), "double" => PormG.CFloat64(),
+                           "decimal(6,3)" => PormG.CDecimal(6, 3), "varchar(100)" => PormG.CVarChar(100),
+                           "longtext" => PormG.CText(), "date" => PormG.CDate(),
+                           "datetime(3)" => PormG.CDateTime(false), "time(6)" => PormG.CTime(),
+                           "char(36)" => PormG.CUUID(), "json" => PormG.CJSON(), "longblob" => PormG.CBytes())
+    @test (spelling, _MM.parse_canonical_type(spelling, _mm_my)) == (spelling, want)
+    @test (spelling, _MM.parse_canonical_type(uppercase(spelling), _mm_my)) == (spelling, want)
+  end
 end
 
 # What: a column default as `information_schema.COLUMNS` reports it, cleaned.
@@ -241,6 +250,9 @@ end
   @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], false) === nothing
   @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)"], true) === nothing
   @test _MM._require_atomic_plan(MmMockPostgres(), ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], true) === nothing
+  # The latest applied plan (the #81 re-archive) runs no statement again, so it is not refused.
+  @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], true;
+                                 applied = () -> true) === nothing
   @test !PormG._supports(_mm_my, :transactional_ddl) && PormG._supports(MmMockPostgres(), :transactional_ddl)
   # The PostgreSQL timeouts have no MySQL counterpart for DDL: refused, not ignored.
   e = _mm_err(() -> _MM._require_migration_timeouts(_mm_my, _MM._migration_timeouts(30, 5, nothing)))
@@ -305,4 +317,63 @@ end
   e = _mm_err(() -> _MM._refuse_dropped_table_dependents(_mm_my, Set(["lap_times"])))
   @test e isa PormG.UnsupportedConnectionError && occursin("lap_times", sprint(showerror, e))
   @test _MM._refuse_dropped_table_dependents(_mm_my, Set{String}()) === nothing
+end
+
+# A models file loaded as `makemigrations` loads it, and the plan the planner builds for it on a mock.
+_mm_dir = mktempdir()
+function _mm_schema(src)
+  path = joinpath(_mm_dir, "m_$(time_ns()).jl")
+  write(path, "module models\nimport PormG.Models\n" * src * "\nend\n")
+  return _MM._load_current_models(path)
+end
+function _mm_plan(conn, live_src, declared_src)
+  live = _MM.LiveTable[_MM.live_table(e[:model], conn) for (_, e) in _mm_schema(live_src)]
+  plan = _MM.get_migration_plan(live, _mm_schema(declared_src), conn,
+                                PormG.Configuration.Settings(connections = conn); interactive = false)
+  conn isa PormG.PormGMySQL && _MM._refuse_mysql_alter_plan(plan, live)
+  return plan
+end
+_mm_driver(extra = "", tail = "") =
+  "Driver = Models.Model(\"driver\", driverid = Models.IDField(), forename = Models.CharField(max_length = 100, db_index = true), " *
+  "code = Models.CharField(max_length = 8)$(extra)$(tail))"
+
+# What: the planner, run on a MySQL table that exists, for each change phase 4a does not plan.
+# SQL: none — each is refused while the plan is built.
+# Why: the planner reaches a renderer or a catalog lookup for these before any plan-level check, and on
+# MySQL each must name its phase (#1268), not fall into a `MethodError`; the changes 4a does plan (a
+# missing key or index) still build.
+@testset "#1268: a change to an existing MySQL table is refused while it is planned" begin
+  base = _mm_driver()
+  cases = ["a removed field" => (base, "Driver = Models.Model(\"driver\", driverid = Models.IDField(), forename = Models.CharField(max_length = 100, db_index = true))", "4b"),
+           "an added field" => (base, _mm_driver(", nick = Models.CharField(max_length = 8, null = true)"), "4b"),
+           "a retyped field" => (base, replace(base, "max_length = 8" => "max_length = 9"), "4b"),
+           "a dropped db_index" => (base, replace(base, ", db_index = true" => ""), "4b"),
+           "a dropped Index" => (_mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]"), base, "4b"),
+           "an added CheckConstraint" => (base, _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]"), "4c")]
+  for (label, (live_src, declared_src, phase)) in cases
+    e = _mm_err(() -> _mm_plan(_mm_my, live_src, declared_src))
+    @test (label, e isa PormG.UnsupportedConnectionError && occursin("phase $(phase)", sprint(showerror, e))) == (label, true)
+  end
+  # A table that lost its index and its composite (a stopped plan) is completed, not refused.
+  plan = _mm_plan(_mm_my, replace(base, ", db_index = true" => ""),
+                  _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]"))
+  @test sort!(collect(keys(plan[:driver]))) == ["Create index on forename", "Create index: drv_fc_idx"]
+end
+
+# What: a key or index over a column MySQL indexes only by a prefix — a TextField, a BinaryField, a
+# JSONField — refused for the whole models file before the diff.
+# SQL: none.
+# Why: left to MySQL the `CREATE INDEX` fails (error 1170, 3152) after the table committed, and the fix is
+# a retype phase 4a cannot plan; PostgreSQL and SQLite index such columns, so there it builds.
+@testset "#1130: a key over unbounded text is refused on MySQL, before the plan" begin
+  for (label, src) in ("a unique TextField" => "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(unique = true))",
+                       "an indexed BinaryField" => "Lap = Models.Model(\"lap\", id = Models.IDField(), raw = Models.BinaryField(db_index = true))",
+                       "a JSONField in an Index" => "Lap = Models.Model(\"lap\", id = Models.IDField(), meta = Models.JSONField(), n = Models.IntegerField(); indexes = [Models.Index(fields = (\"meta\", \"n\"))])")
+    e = _mm_err(() -> _mm_plan(_mm_my, "", src))
+    msg = e isa PormG.BackendCapabilityError ? sprint(showerror, e) : ""
+    @test (label, occursin("MySQL", msg) && occursin("CharField", msg)) == (label, true)
+    @test (label, _mm_plan(MmMockPostgres(), "", src) isa AbstractDict) == (label, true)
+  end
+  # The same columns without a key or index build.
+  @test haskey(_mm_plan(_mm_my, "", "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(), raw = Models.BinaryField(null = true))"), :lap)
 end

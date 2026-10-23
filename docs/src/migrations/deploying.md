@@ -186,7 +186,11 @@ result = PormG.Migrations.migrate("my_db"; atomic = false)
 The statements then run in order. When one fails, the ones before it stay applied, the plan is
 recorded as `failed`, and the error is raised. Fix the cause, run `makemigrations()` again, which plans
 what is still missing, and `migrate()` once more. `lock_timeout` and `statement_timeout` are refused on
-MySQL, which has neither for DDL.
+MySQL until a later phase of #1130 decides what they mean there.
+
+A second instance booting while the first applies a plan waits on the lock, then finds the plan
+recorded and reports `:already_applied`, as on PostgreSQL. Its schema check runs inside the lock only:
+before it, the first instance's half-applied plan would read as a changed schema.
 
 ## Gating a release on drift
 

@@ -72,11 +72,14 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             Mig.makemigrations(folder; interactive = false)
             plan = read(pending, String)
             @test occursin("CREATE TABLE IF NOT EXISTS `m4a_result`", plan) && !occursin("CREATE TABLE IF NOT EXISTS \"", plan)
+            # 3 tables, 2 foreign keys, 3 db_index indexes (circuitref and the two keys), 2 composites.
+            n_steps = count(r"^\"[^\"\n]+\" =>$"m, plan)
+            @test n_steps == 10
             e = try; Mig.migrate(folder; interactive = false); nothing; catch err; err; end
             @test e isa PormG.BackendCapabilityError && occursin("atomic = false", sprint(showerror, e))
             @test !Mig._live_table_exists(pool, "m4a_driver") && !Mig._migrations_table_exists(pool)
             r = Mig.migrate(folder; interactive = false, atomic = false)
-            @test r.outcome === :applied && r.n_statements >= 9
+            @test r.outcome === :applied && r.n_statements == n_steps
             st = Mig.status(folder)
             @test length(st.applied) == 1 && isempty(st.failed) && !st.pending
         end
@@ -114,7 +117,9 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             row = raw("SELECT `code`, `active`, `created` IS NOT NULL AS has_created FROM `m4a_driver`")
             @test row[1, :code] == "a\\b'c" && row[1, :active] == 1 && row[1, :has_created] == 1
             e = try; PormG.ConnectionPool.fetch(suite, "INSERT INTO `m4a_driver` (`forename`, `number`) VALUES ('Alain', -1)"); nothing; catch err; err; end
-            @test e isa PormG.PormGError
+            # MySQL's error 3819: the `>= 0` CHECK the DDL wrote, not another failure.
+            @test e isa PormG.IntegrityError && occursin("3819", sprint(showerror, e.cause))
+            @test raw("SELECT COUNT(*) AS n FROM `m4a_driver`")[1, :n] == 1
             PormG.ConnectionPool.fetch(suite, "INSERT INTO `m4a_circuit` (`name`, `url`, `circuitref`) VALUES ('Interlagos', 'u', 'interlagos')")
             PormG.ConnectionPool.fetch(suite, "INSERT INTO `m4a_result` (`driverid`) VALUES (1)")
             row = raw("SELECT `notes`, `grid`, `today` IS NOT NULL AS has_today FROM `m4a_result`")
@@ -136,6 +141,9 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             @test e isa PormG.UnsupportedConnectionError && occursin("phase 4b", sprint(showerror, e)) &&
                   occursin("forename", sprint(showerror, e))
             @test !isfile(pending)
+            # The drift gate fails on it the same way rather than reporting a plan it cannot build.
+            e = try; Mig.check(folder; kinds = [:schema_drift]); nothing; catch err; err; end
+            @test e isa PormG.UnsupportedConnectionError && occursin("phase 4b", sprint(showerror, e))
         end
 
         # What: #1268's acceptance — a plan stopped at a statement part-way, then finished by a re-plan.
@@ -172,6 +180,8 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
                 "AND TABLE_NAME = 'm4a_result' AND COLUMN_NAME = 'driverid'")))
 
             PormG.ConnectionPool.fetch(suite, "DROP TABLE `m4a_planted`")
+            # The drift gate reports what the stopped plan left out.
+            @test !isempty(Mig.check(folder; kinds = [:schema_drift]).findings)
             Mig.makemigrations(folder; interactive = false)
             rest = read(pending, String)
             @test occursin("ADD CONSTRAINT", rest) && !occursin("CREATE TABLE", rest)

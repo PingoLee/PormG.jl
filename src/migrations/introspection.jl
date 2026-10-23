@@ -2058,6 +2058,13 @@ end
 # Parameterized, per this file's own rule: the unparameterized siblings predate it and are left
 # alone, but an edited query does not inherit the exemption. That was cosmetic while this ran only
 # for a `db_constraint` flip; #498 puts it on the ordinary re-point path.
+# MySQL (#1130): the catalog lookups of a change to an existing table — a key or an index dropped — are
+# phase 4b's.
+get_constraints_fk(::PormGMySQL, table_name::Symbol, field_name::String) =
+  throw(Dialect._mysql_not_yet("Dropping or re-pointing a foreign key", "4b"))
+get_constraints_index(::PormGMySQL, table_name::Symbol, field_name::String) =
+  throw(Dialect._mysql_not_yet("Dropping an index", "4b"))
+
 function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT tc.constraint_name

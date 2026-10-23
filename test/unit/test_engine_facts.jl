@@ -105,7 +105,7 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_rebuilds_table, :_adopts_indexes, :_composite_name_key,
                                :_builtin_ignore_tables, :_builtin_ignore_tables_name,
                                :_parenthesizes_db_default, :_expression_default_findings,
-                               :_invalid_index_findings])
+                               :_invalid_index_findings, :_can_rename_index])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -194,9 +194,10 @@ end
   @test !_EF_QB._serializes_get_or_create(_EfMy())
   # Phase 3c-1: a bulk INSERT binds one parameter per cell, and counts its skips from MySQL's report.
   @test !_EF_QB._bulk_binds_column_arrays(_EfMy()) && _EF_QB._counts_skips_from_report(_EfMy())
-  # Phase 4a: MySQL alters in place and adopts no index it did not create; renaming an index is an
-  # alter, which phase 4b decides.
+  # Phase 4a: MySQL alters in place, renames an index in place, and adopts no index it did not create;
+  # a retype's cast rules are phase 4b's.
   @test !PormG.Migrations._rebuilds_table(_EfMy()) && !PormG.Migrations._adopts_indexes(_EfMy())
+  @test PormG.Migrations._can_rename_index(_EfMy())
   @test PormG.Migrations._composite_name_key(_EfMy(), "Result_Idx") == "result_idx"
-  @test_throws MethodError PormG.Migrations._can_rename_index(_EfMy())
+  @test_throws MethodError PormG.Migrations._no_implicit_cast(_EfMy(), PormG.CInt32(), PormG.CText())
 end

@@ -4819,6 +4819,22 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
   throw(_mysql_not_yet("Altering column \"$(field_name)\" of table \"$(catalog_table)\"", "4b"))
 end
 
+# The renderers of a change to an existing table, phase 4b's on MySQL (4c's for a declared CHECK). Each
+# refuses, so a plan that reaches one names its phase rather than raising a `MethodError`: the planner
+# calls them while it builds the plan, before `Migrations._refuse_mysql_alter_plan` sees it.
+for (f, what, phase) in ((:add_field, "Adding a column to an existing table", "4b"),
+                         (:drop_field, "Dropping a column", "4b"),
+                         (:rename_field, "Renaming a column", "4b"),
+                         (:rename_table, "Renaming a table", "4b"),
+                         (:drop_index, "Dropping an index", "4b"),
+                         (:rename_index, "Renaming an index", "4b"),
+                         (:drop_unique_constraint, "Dropping a unique key", "4b"),
+                         (:rename_constraint, "Renaming a constraint", "4b"),
+                         (:drop_check_constraint, "Dropping a CHECK constraint", "4b"),
+                         (:add_check_constraint, "A declared CheckConstraint", "4c"))
+  @eval $f(::PormGMySQL, args...; kwargs...) = throw(_mysql_not_yet($what, $phase))
+end
+
 # No `CASCADE`: MySQL's `DROP TABLE` takes none, and refuses a table another's foreign key references.
 drop_table(conn::PormGMySQL, table_name::Union{String, Symbol}) = """DROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));"""
 

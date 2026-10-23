@@ -11,7 +11,8 @@
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
-using Test, DataFrames
+using Test, DataFrames, Dates
+import Decimals
 import PormG.QueryBuilder: bulk_insert, bulk_update, allocate_primary_keys, resync_sequences
 
 module P3kModels
@@ -31,6 +32,13 @@ Car = Models.Model("p3k_car",
 Status = Models.Model("p3k_status",
   code = Models.CharField(primary_key = true, max_length = 10),
   label = Models.CharField())
+# Every kind of value bulk_update sends through a VALUES ROW column.
+Stint = Models.Model("p3k_stint",
+  id = Models.IDField(),
+  time = Models.FloatField(null = true),
+  pitted = Models.BooleanField(null = true),
+  at = Models.DateTimeField(null = true),
+  fee = Models.DecimalField(max_digits = 10, decimal_places = 2, null = true))
 # A many-to-many relation through an auto join table.
 Sponsor = Models.Model("p3k_sponsor",
   id = Models.IDField(),
@@ -42,7 +50,7 @@ Season = Models.Model("p3k_season",
 end
 
 # The tables, in drop order (children first).
-const _MYK_TABLES = ("p3k_car", "p3k_team", "p3k_status", "p3k_season", "p3k_sponsor")
+const _MYK_TABLES = ("p3k_car", "p3k_team", "p3k_status", "p3k_season", "p3k_sponsor", "p3k_stint", "p3k_plain_join")
 
 @testset "MySQL backend, phase 3c: bulk writes and the many-to-many manager (#1130)" begin
 if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
@@ -66,6 +74,8 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
         run("CREATE TABLE `p3k_car` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `team` BIGINT NOT NULL, `label` VARCHAR(255) NOT NULL, " *
             "CONSTRAINT `p3k_car_team_fk` FOREIGN KEY (`team`) REFERENCES `p3k_team` (`id`) ON DELETE RESTRICT)" * tail)
         run("CREATE TABLE `p3k_status` (`code` VARCHAR(10) PRIMARY KEY, `label` VARCHAR(255) NOT NULL)" * tail)
+        run("CREATE TABLE `p3k_stint` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `time` DOUBLE NULL, `pitted` TINYINT(1) NULL, " *
+            "`at` DATETIME(3) NULL, `fee` DECIMAL(10,2) NULL)" * tail)
         run("CREATE TABLE `p3k_sponsor` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL)" * tail)
         run("CREATE TABLE `p3k_season` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `year` INT NOT NULL)" * tail)
         o, r = rel.owner_column, rel.related_column
@@ -219,6 +229,18 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
                             filters = ["id__@in" => K.Team.objects.filter("ref" => "williams").values("id")])
             @test r.count == 1 && only(K.Team.objects.filter("ref" => "williams").values("name").list())[:name] == "Williams F1"
             @test only(K.Team.objects.filter("ref" => "lotus").values("name").list())[:name] == "Team Lotus"
+            # A float, a boolean, a timestamp with milliseconds and a decimal round-trip exactly, NULLs too.
+            a = K.Stint.objects.create("time" => 1.0).id
+            b = K.Stint.objects.create("time" => 2.0).id
+            at = DateTime(1988, 5, 15, 14, 30, 5, 123)
+            df = DataFrame(id = [a, b], time = [83.456789, missing], pitted = [true, false],
+                           at = [at, missing], fee = [parse(Decimals.Decimal, "1234.56"), parse(Decimals.Decimal, "0.05")])
+            @test bulk_update(K.Stint, df).count == 2
+            rows = Dict(row[:id] => row for row in K.Stint.objects.values("id", "time", "pitted", "at", "fee").list())
+            @test rows[a][:time] == 83.456789 && rows[a][:pitted] === true && DateTime(rows[a][:at]) == at &&
+                  rows[a][:fee] == parse(Decimals.Decimal, "1234.56")
+            @test ismissing(rows[b][:time]) && rows[b][:pitted] === false && ismissing(rows[b][:at]) &&
+                  rows[b][:fee] == parse(Decimals.Decimal, "0.05")
         end
 
         # What: the many-to-many manager adds, removes, clears and sets the links of one row.
@@ -239,6 +261,14 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
             @test linked() == sort([camel, jps])
             K.Season.sponsors(season.id).clear()
             @test isempty(linked())
+            # The NOT EXISTS shape needs no unique key: on a join table without one, a repeated add still
+            # writes one row (an INSERT IGNORE would write two).
+            run("CREATE TABLE `p3k_plain_join` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `o` BIGINT NOT NULL, `r` BIGINT NOT NULL)" * tail)
+            QB = PormG.QueryBuilder
+            for _ in 1:2
+                QB._m2m_add!(pool, PormG.config["p3k_my"], "`p3k_plain_join`", "`o`", "`r`", season.id, [marlboro])
+            end
+            @test only(DataFrame(run("SELECT COUNT(*) AS n FROM `p3k_plain_join`")).n) == 1
         end
     finally
         run("DROP TABLE IF EXISTS `$(rel.through_table)`")

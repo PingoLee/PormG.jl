@@ -1819,13 +1819,6 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL's report of a multi-row INSERT, and its duplicate-key errors
-# The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured),
-# in the session's `lc_messages` language and always in that order, so it is read by position; a
-# one-row INSERT has none. A duplicate on a unique key is errno 1062/1022/1586/1169; a foreign-key
-# failure or any other constraint is not, though every one of them carries SQLSTATE 23000.
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
 # MySQL bulk_update: a multi-table UPDATE over a VALUES ROW derived table; the many-to-many add
 # MySQL has no UPDATE … FROM. Expected SQL: `UPDATE t AS `Tb`, (VALUES ROW(?, ?), …) AS source (cols)
 # SET `Tb`.col = source.col WHERE `Tb`.key = source.key`, every SET target qualified (a bare one is
@@ -1861,6 +1854,13 @@ end
   @test my_add !== which(_MR_QB._m2m_add!, Tuple{MrMockSQLite, Any, Any, Any, Any, Any, Any})
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL's report of a multi-row INSERT, and its duplicate-key errors
+# The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured),
+# in the session's `lc_messages` language and always in that order, so it is read by position; a
+# one-row INSERT has none. A duplicate on a unique key is errno 1062/1022/1586/1169; a foreign-key
+# failure or any other constraint is not, though every one of them carries SQLSTATE 23000.
+# ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL extension: a multi-row INSERT's report, and a duplicate key by its number" begin
   ext = Base.get_extension(PormG, :PormGMySQLExt)
   @test ext._insert_report("Records: 4  Duplicates: 2  Warnings: 0") == (records = 4, duplicates = 2)

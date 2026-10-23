@@ -2490,8 +2490,8 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
   PostgreSQL binds one array per column, so a positive chunk is used as given (a non-positive
-  one falls back to 65,535 ÷ columns rows); SQLite binds one parameter per cell and caps it
-  automatically to stay under its bind-parameter limit.
+  one falls back to 65,535 ÷ columns rows); SQLite and MySQL bind one parameter per cell and cap it
+  automatically to stay under their bind-parameter limit.
 
 # Handler scope
 Filters already attached to `objct` are kept: they are AND'd with the `match_on=` merge condition
@@ -2749,7 +2749,7 @@ function _bulk_update(model::PormGModel,
   end
 
   # Security: Quote table name and field names. `quoted_fields` is the column list of the `source`
-  # derived table (PostgreSQL) / CTE (SQLite) below — an alias position, so fail-closed (#394).
+  # derived table (PostgreSQL, MySQL) / CTE (SQLite) below — an alias position, so fail-closed (#394).
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(field, connection) for field in fields]
 

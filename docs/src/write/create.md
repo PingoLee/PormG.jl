@@ -308,11 +308,14 @@ another one. That is any other unique field or `UniqueConstraint` whose columns 
 values, a primary key the row supplies, or a functional or partial `UniqueConstraint`. A NULL never
 conflicts, and neither does an id the database generates or a UUID PormG mints, and a unique key over
 the lookup's fields and more can only match the lookup's own row. `created` comes from the statement's
-own report when the primary key is `AUTO_INCREMENT`, and is exact. For any other primary key a pre-check
-by the lookup decides, without a lock, so it can be wrong when another session inserts or deletes that
-same key between the two statements. The row is read back with a locking read (`FOR SHARE`), so it is
-the stored row even inside a transaction whose snapshot predates it. A duplicate uses up an
-`AUTO_INCREMENT` value, as every MySQL `INSERT` that hits a duplicate does.
+own report when the primary key is `AUTO_INCREMENT`, and is exact. For any other primary key two reads
+by the lookup decide, one before the statement and one after, without a lock. Under REPEATABLE READ
+(MySQL's default) they are wrong only when another session deletes that row between them and the
+statement inserts it again; under READ COMMITTED, also when another session inserts the same row with
+the same values in between. The row is read back with a locking read (`FOR SHARE`), so it is the
+stored row even inside a transaction whose snapshot predates it; a row that cannot be read back raises
+`StatementError`. A duplicate uses up an `AUTO_INCREMENT` value, as every MySQL `INSERT` that hits a
+duplicate does.
 
 ### Rules and behavior
 
@@ -356,9 +359,9 @@ row, created = M.Status.objects.get_or_create(
   never updates a row, so the create path is a plain `INSERT`, as in Django. A competing insert of the same
   key makes it raise a duplicate-key error. PormG then re-reads the lookup and returns the winner with
   `created = false`, and when nothing matches (the row conflicted on another unique key) it raises the
-  `IntegrityError`, as PostgreSQL does. Inside a transaction the re-read locks the row
-  (`select_for_update`): a plain read would see the transaction's REPEATABLE READ snapshot, which
-  misses a winner committed after it. MySQL undoes only the failed statement, so an open transaction
+  `IntegrityError`, as PostgreSQL does. Inside a transaction the re-read is a locking read
+  (`FOR SHARE`): a plain read would see the transaction's REPEATABLE READ snapshot, which misses a
+  winner committed after it. The failed `INSERT` already holds that lock, so the read waits on nothing. MySQL undoes only the failed statement, so an open transaction
   stays usable. The lookup must be declared unique on the model (its primary key, a `unique = true`
   field, or a plain `UniqueConstraint` over exactly those fields), or a miss raises `QueryBuildError`
   before the `INSERT`.
@@ -367,8 +370,9 @@ row, created = M.Status.objects.get_or_create(
   `OperationalError`, and the call retried can succeed (a trigger or rule that skips the insert raises
   the same error, and every retry fails). On SQLite no other writer can interleave, so an
   insert that reports success but stores nothing the lookup finds (a trigger that drops the row, for
-  one) raises `StatementError`. Neither is a `UsageError`, so a handler that maps `UsageError` to a bad
-  request does not catch them.
+  one) raises `StatementError`, and so does MySQL's (its re-read after a successful `INSERT`), as does
+  MySQL's `update_or_create` when its row cannot be read back. None is a `UsageError`, so a handler that
+  maps `UsageError` to a bad request does not catch them.
 - **A `JSONField` lookup matches the whole document by equality.** A `Vector` or `Dict` lookup value is serialized to one JSON string, and the `SELECT` compares the column with that string. The `INSERT` binds the same string, so the read and the `ON CONFLICT` target use one comparison, as `update_or_create` does. The comparison differs by backend: **PostgreSQL compares `jsonb`**, so key order and whitespace do not matter. **SQLite compares the serialized text**, so the lookup finds a row written from the same value, but not one whose keys were stored in a different order. On SQLite, build a document key with a stable key order (an `OrderedDict`, or the same `Dict`) when you match on it. The create path still needs a UNIQUE constraint on the JSON column, like any other lookup.
 
 ## Creating with Relationships

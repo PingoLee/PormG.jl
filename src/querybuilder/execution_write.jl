@@ -396,9 +396,11 @@ end
 # packet's id is the inserted row's AUTO_INCREMENT value (generated or supplied), the matched row's
 # id on a changed duplicate, and 0 on an unchanged one. So with an AUTO_INCREMENT primary key,
 # `count == 1 && id != 0` is an insert, exactly (`_odku_created`). Without one the OK packet says 0 for
-# both an insert and an unchanged duplicate, and a pre-check by the target decides. That read takes no
-# lock (a `FOR UPDATE` on a missing key deadlocked two sessions creating different keys, measured), so
-# it can be wrong when another session inserts or deletes that same key between the two statements.
+# both an insert and an unchanged duplicate, and two plain reads by the target decide: a pre-check, and
+# after the statement a read that misses a row committed after the snapshot. Neither takes a lock (a
+# `FOR UPDATE` on a missing key deadlocked two sessions creating different keys, measured). Under
+# REPEATABLE READ they leave one race: a row another session deletes between the pre-check and the
+# statement, which then inserts it again, is reported as existing.
 function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model, sql, parameters,
                                safe_table_name, target_fields, show_query)
   if show_query !== :execute
@@ -411,7 +413,15 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
       !isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
                                                  safe_table_name, connection)...) |> Tables.rowtable)
     result = fetch(settings, sql, parameters)
-    created = _odku_created(counts_insert, existed, backend_num_affected_rows(connection, result),
+    count = backend_num_affected_rows(connection, result)
+    # Without AUTO_INCREMENT, a count of 1 is an insert or an unchanged hit. A plain read tells them apart
+    # for a row the pre-check could not see (committed after this transaction's REPEATABLE READ snapshot):
+    # it misses that row and sees this transaction's own insert (measured).
+    if !counts_insert && !existed && count == 1
+      existed = isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
+                                                          safe_table_name, connection)...) |> Tables.rowtable)
+    end
+    created = _odku_created(counts_insert, existed, count,
                             counts_insert ? backend_last_insert_id(connection, result) : 0)
     # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
     # a row another session committed after it, when this statement hit it unchanged (measured). The
@@ -527,11 +537,16 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     _format_single(model.fields[f], f, v, "get_or_create")
   end
 
-  # `lock` reads the latest committed row (`select_for_update`), for a re-read inside a transaction
-  # whose snapshot may predate the winner of a race (MySQL, #1267).
+  # `lock` makes it a locking read (`FOR SHARE`), which reads the latest committed row: MySQL's re-read
+  # after a duplicate inside a transaction, whose snapshot may predate the winner (#1267). The failed
+  # INSERT already holds that lock on the duplicate, so it waits on nothing; `FOR UPDATE` would ask for
+  # more, and two sessions that lost the same race deadlocked on it (measured, 1213).
   fetch_by_target = (; lock::Bool = false) -> begin
-    q = _get_or_create_lookup(model, target_fields, target_values)
-    lock ? q.select_for_update().first() : q.first()
+    lock || return _get_or_create_lookup(model, target_fields, target_values).first()
+    table = safe_table_identifier(Models.model_table_name(model), connection)
+    rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields, table, connection;
+                                             lock = true)...) |> Tables.rowtable
+    isempty(rows) ? nothing : PormGRow(_row_to_field_keyed_dict(rows[1], model, connection), model)
   end
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`

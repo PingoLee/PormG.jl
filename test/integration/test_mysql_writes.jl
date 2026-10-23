@@ -306,8 +306,9 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
                 @test W.Plain.objects.filter("code" => "MAN").count() == 0   # opens the snapshot
                 PormG.fetch(pool, "INSERT INTO `p3w_plain` (`code`, `label`) VALUES (?, ?)";
                             params = ["MAN", "Mansell"], ignore_tx = true)
-                row, _ = W.Plain.objects.update_or_create("code" => "MAN"; defaults = ["label" => "Mansell"])
+                row, created = W.Plain.objects.update_or_create("code" => "MAN"; defaults = ["label" => "Mansell"])
                 @test (row.code, row.label, row.note) == ("MAN", "Mansell", "from the server")
+                @test !created   # the row was there, though the pre-check's snapshot could not see it
             end
             # A hit refreshes an `auto_now` column, as update() does.
             first_row, created = W.Season.objects.update_or_create("year" => 1988; defaults = ["url" => "u1988"])
@@ -340,9 +341,12 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             QB.set_context!(params, :select)
             insert_sql = "INSERT INTO `p3w_circuit` (`ref`, `name`) VALUES ($(QB.add_parameter!(params, "spa")), " *
                          "$(QB.add_parameter!(params, "Spa-Francorchamps")))"
+            locked = Ref{Any}(nothing)   # outside a transaction the re-read takes no lock
             winner, created = QB._create_on_miss(pool, PormG.config["p3w_my"], W.Circuit, insert_sql, params,
-                                                 (; lock = false) -> W.Circuit.objects.filter("ref" => "spa").first(), ["ref"])
+                                                 (; lock = false) -> (locked[] = lock; W.Circuit.objects.filter("ref" => "spa").first()),
+                                                 ["ref"])
             @test !created && winner.name == "Spa" && W.Circuit.objects.filter("ref" => "spa").count() == 1
+            @test locked[] === false
             # Inside a transaction, the duplicate rolls back only its own statement.
             PormG.atomic(PormG.config["p3w_my"]) do
                 W.Circuit.objects.create("ref" => "imola", "name" => "Imola")

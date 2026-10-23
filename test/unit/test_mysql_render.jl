@@ -1646,6 +1646,14 @@ end
   @test e isa PormG.QueryBuildError && occursin("get_or_create on status requires its lookup field(s) (label)", sprint(showerror, e))
   @test goc(MrMyUp.Standing, "raceid" => 1, "driverid" => 2; defaults = ["points" => 1.0]) isa String
   @test !_MR_QB._serializes_get_or_create(MrMockMySQL())
+  # The re-read after a duplicate and the upsert's read-back are locking reads, and FOR SHARE: the
+  # failed INSERT or the ODKU already holds that lock, and FOR UPDATE deadlocked two sessions that
+  # lost the same race (measured, 1213). The pre-checks are plain reads.
+  row = (; insert = Dict{String,Any}("circuitref" => "monza"))
+  sql, params = _MR_QB._select_by_target("SELECT *", row, MrMyUp.Circuit, ["circuitref"], "`circuit`", MrMockMySQL(); lock = true)
+  @test sql == "SELECT * FROM `circuit` WHERE `circuitref` = ? LIMIT 1 FOR SHARE;" && params.where_params == Any["monza"]
+  @test _MR_QB._select_by_target("SELECT 1", row, MrMyUp.Circuit, ["circuitref"], "`circuit`", MrMockMySQL())[1] ==
+        "SELECT 1 FROM `circuit` WHERE `circuitref` = ? LIMIT 1;"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

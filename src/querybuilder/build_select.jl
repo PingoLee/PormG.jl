@@ -675,6 +675,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       if alias_name in from_columns
         order_expr = v_field_copy.field
         null_flag = _projection_null_key(alias_name, instruc)
+      else
+        push!(instruc.alias_null_keys, alias_name)   # rechecked once every join exists
       end
     end
     push!(instruc.order, order_expr === nothing ?

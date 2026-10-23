@@ -461,6 +461,43 @@ end
     q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
     @test key(q.values("surname" => "position", "resultid").order_by("-surname", later)) == "(`R1`.`position`"
   end
+  # … or reads it inside a window or a `Case` condition.
+  QB = _MR_QB
+  for later in (QB.SQLOrder(QB.SQLField(QB.Rank(over = QB.WindowOver(order_by = ["br__surname"])), "rk")),
+                QB.SQLOrder(QB.SQLField(QB.Rank(over = QB.WindowOver(partition_by = [CTE("br", "surname")])), "rk")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(CTE("br", "surname") => F("grid"), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                # A `When` condition keeps its path as written.
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When("br__surname" => F("grid"), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(QB.Q(CTE("br", "surname") => F("grid")), then = F("grid"))],
+                                                default = F("laps")), "c")),
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When(QB.Qor(CTE("br", "surname") => F("grid"), "grid" => F("laps")),
+                                                         then = F("grid"))], default = F("laps")), "c")),
+                # … on the value side of a condition too.
+                QB.SQLOrder(QB.SQLField(QB.Case([QB.When("grid" => CTE("br", "surname"), then = F("grid"))],
+                                                default = F("laps")), "c")))
+    q = _MR_MY.Result.objects
+    q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+    @test key(q.values("surname" => "position", "resultid").order_by("-surname", later)) == "(`R1`.`position`"
+  end
+  # Whatever that look-ahead misses is refused once every join exists, never run: a term that kept its
+  # alias in the key is rechecked against the finished statement's tables. A later term that joins the
+  # driver through a nested query's `OuterRef` is one; ordered first, it has joined it in time.
+  ex = QB.SQLOrder(QB.SQLField(QB.Exists(_MR_MY.Driver.objects.filter("driverid" => QB.OuterRef("driverid"),
+                                                                       "surname" => QB.OuterRef("driverid__surname"))), "ex"))
+  err = try; _mr_inspect(_MR_MY.Result.objects.values("surname" => "position").order_by("-surname", ex)); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, err))
+  @test endswith(order_of(_MR_MY.Result.objects.values("surname" => "position").order_by(ex, "-surname")),
+                 "(`Tb`.`position` IS NULL) DESC, `surname` DESC")
+  q = _MR_MY.Result.objects.values("pos2" => "position").order_by("-pos2")
+  instruc = QB.build(q.object)
+  @test instruc.alias_null_keys == ["pos2"]
+  @test QB._refuse_late_shadowed_null_key(q.object, instruc) === nothing
+  push!(instruc.alias_null_keys, "laps")
+  err = try; QB._refuse_late_shadowed_null_key(q.object, instruc); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, err)) &&
+        occursin("MySQL", sprint(showerror, err))
   # A term that names the projection by its path (`order_by("date__@year")` over `"name" => "date__@year"`).
   @test key(_MR_MY.Race.objects.values("name" => "date__@year").order_by("-date__@year")) == "(EXTRACT(YEAR FROM `Tb`.`date`)"
   # Every kind of projection: an aggregate, a window.

@@ -531,6 +531,9 @@ end
   # BY term that repeats a projection's SQL in its NULL sort key (`_projection_null_key`) binds them
   # again from here, so the projection is never rendered a second time.
   projection_params::Dict{String,Vector{Any}} = Dict{String,Vector{Any}}()
+  # #1130: the ORDER BY terms whose NULL sort key kept the projection's alias, which no FROM column
+  # named when ORDER BY rendered; `_refuse_late_shadowed_null_key` rechecks them once every join exists.
+  alias_null_keys::Vector{String} = String[]
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query

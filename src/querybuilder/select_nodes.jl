@@ -168,7 +168,9 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     end
   end
   # A CTE a later term orders by is joined when that term renders: `order_by("br__surname")`, which
-  # `_resolve_cte_string_paths!` has made a `CTEReference` before ORDER BY, or `CTE("br", "surname")`.
+  # `_resolve_cte_string_paths!` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or
+  # one read inside a window, a `Case` condition or a function. What this walk misses is caught after
+  # every join exists (`_refuse_late_shadowed_null_key`), so a gap is a refusal, never a wrong order.
   _order_cte_names!(tables, object.order)
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
@@ -212,15 +214,43 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   return cols
 end
 
-# The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it.
+# The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it. A
+# path into a CTE is one by then, inside a window or a `When` condition too (`_resolve_cte_string_paths!`).
 _order_cte_names!(out::Set{String}, x::CTEReference) = (push!(out, x.name); out)
 _order_cte_names!(out::Set{String}, x::Union{SQLOrder,SQLField}) = _order_cte_names!(out, x.field)
 _order_cte_names!(out::Set{String}, x::FExpression) =
   (_order_cte_names!(out, x.field_name); _order_cte_names!(out, x.operand))
 _order_cte_names!(out::Set{String}, x::FObject) =
   (_order_cte_names!(out, x.column); _order_cte_names!(out, collect(values(x.kwargs))))
+_order_cte_names!(out::Set{String}, x::WindowFunction) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, x.over.partition_by);
+   _order_cte_names!(out, x.over.order_by))
+_order_cte_names!(out::Set{String}, x::OperObject) =
+  (_order_cte_names!(out, x.column); _order_cte_names!(out, x.values))
+_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, x.filters)
+_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, x.or)
 _order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)
 _order_cte_names!(out::Set{String}, ::Any) = out
+
+# #1130: the check behind `_from_column_names`' look-ahead. `get_order_query` decides each alias term's
+# NULL key while ORDER BY renders, before the `cjoin`/`on()` and `cjoin_on` joins exist; here, at the end
+# of `build`, every join does. A term that kept its alias in the key (`instruc.alias_null_keys`) whose
+# name a table of the statement does have as a column after all would place its NULLs by that column,
+# so it is refused rather than run: a join the look-ahead did not foresee is a loud error, never a
+# silent order.
+function _refuse_late_shadowed_null_key(object::SQLObject, instruc::SQLInstruction)
+  isempty(instruc.alias_null_keys) && return nothing
+  columns = _from_column_names(object, instruc)
+  for name in instruc.alias_null_keys
+    name in columns || continue
+    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
+      "query reads has a column with that name. $(_backend_name(instruc.connection)) places NULLs with an " *
+      "`($(name) IS NULL)` sort key and reads `$(name)` there as that column, and PormG could not tell in time " *
+      "to key it on the projection. Project it under a name no column has, e.g. " *
+      "\e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
+  end
+  return nothing
+end
 
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))

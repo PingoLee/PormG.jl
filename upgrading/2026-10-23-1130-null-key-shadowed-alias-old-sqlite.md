@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1130 ; `src/querybuilder/build_select.jl` (`get_order_query`), `src/querybuilder/select_nodes.jl` (`_projection_null_key`)
 - **Recorded**: 2026-10-23
-- **Severity**: behavior change, SQLite before 3.30.0 only. An `order_by` on a projected name that is also a column of a table the query reads returns its NULLs where the placement says (last ascending, first descending), where it placed them by that column, with no error. PostgreSQL and SQLite 3.30.0 or later are unchanged.
+- **Severity**: behavior change, SQLite before 3.30.0 only. An `order_by` on a projected name that is also a column of a table the query reads returns its NULLs where the placement says (last ascending, first descending), where it placed them by that column, with no error. One such ordering now raises `QueryBuildError` instead (below). PostgreSQL and SQLite 3.30.0 or later are unchanged.
 
 ### What changed
 
@@ -17,10 +17,17 @@ The key is now the projection's own SQL wherever a table the query reads has a c
 (`("Tb"."position" IS NULL)`), with any value the projection binds bound again for it. The term itself
 still orders by the name. A name no column has keeps it in the key, as before.
 
+PormG decides the key while it renders `ORDER BY`, and a few joins are added after that. When the
+table with the column is joined only by a later term through a nested query, such as an
+`Exists(...)` or a `Subquery(...)` whose `OuterRef("driverid__surname")` joins the driver, the query
+raises `QueryBuildError` naming the projection, where it returned the NULLs in the wrong place. Name
+the projection after no column, or order by that term first.
+
 | call on SQLite < 3.30 | before | now |
 |---|---|---|
 | `M.Result.objects.values("laps" => "position").order_by("-laps")` | the NULL positions last: the key tested `laps`, never NULL | the NULL positions first |
 | `M.Result.objects.values("year" => "position", "raceid__name").order_by("year")` | the key tested the race's `year` | the NULL positions last |
+| `M.Result.objects.values("surname" => "position").order_by("-surname", SQLOrder(SQLField(Exists(…OuterRef("driverid__surname")…), "ex")))` | the key tested the driver's `surname` | `QueryBuildError`: rename the projection, or order by the `Exists` term first |
 
 ### Who this affects
 

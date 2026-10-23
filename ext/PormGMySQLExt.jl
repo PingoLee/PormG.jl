@@ -414,7 +414,7 @@ PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last
 # three counts in that order, so they are read by position, never by their English labels. A no-op
 # duplicate is counted only because the pool connects with `found_rows` (`_connect_args`); without it,
 # MySQL reports a duplicate it left unchanged as no duplicate at all.
-const _INSERT_REPORT = r"^\D*(\d+)\D+(\d+)\D+(\d+)\D*$"
+const _INSERT_REPORT = r"^[^0-9]*([0-9]+)[^0-9]+([0-9]+)[^0-9]+([0-9]+)[^0-9]*$"
 function _insert_report(info::AbstractString)
   m = match(_INSERT_REPORT, info)
   m === nothing && return nothing

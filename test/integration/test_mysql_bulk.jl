@@ -142,9 +142,10 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c-1)")
             @test r.count == 2
             @test ismissing(r.rows.id[1]) && ismissing(r.rows.id[3])   # an old row, and the later repeat
             @test r.rows.id[2] == ids["zakspeed"] && r.rows.id[4] == ids["osella"] && r.rows.name[2] == "Zakspeed"
-            r = bulk_insert(K.Team, DataFrame(ref = ["osella", "coloni"], name = ["Osella Corse", "Coloni"]);
+            r = bulk_insert(K.Team, DataFrame(ref = ["osella", "life"], name = ["Osella Corse", "Life"]);
                             on_conflict = (action = :update, target = ["ref"], set = ["name"]), returning = ["id", "name"])
-            @test r.rows.id[1] == ids["osella"] && r.rows.name == ["Osella Corse", "Coloni"] && !ismissing(r.rows.id[2])
+            @test r.rows.id[1] == ids["osella"] && r.rows.name == ["Osella Corse", "Life"]
+            @test r.rows.id[2] == only(K.Team.objects.filter("ref" => "life").values("id").list())[:id]   # a new row
             # Inside a transaction whose snapshot predates a row another session committed, the upsert
             # meets that row unchanged; the read-back locks, so it still finds it.
             PormG.atomic(PormG.config["p3k_my"]) do

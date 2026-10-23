@@ -1423,9 +1423,12 @@ end
 # `SQLITE_MAX_EXPR_DEPTH`. Measured with the SQLite the driver ships: 8,000 keys pass, 16,000 fail
 # with "Expression tree is too large (maximum depth 10000)" — and a narrow frame with a raised
 # `chunk_size` reaches that, since the chunk cap is the 32,766-parameter limit ÷ columns. A stock
-# SQLite build defaults to 1000, hence a batch well under both. A single-column key is one `IN (…)`
-# list and needs no batching.
+# SQLite build defaults to 1000, hence a batch well under both. An unlocked single-column key is one
+# `IN (…)` list and needs no batching.
 const _SQLITE_READ_BACK_BATCH = 200
+# A LOCKING single-column read-back (MySQL, `_bulk_read_back`) is batched too: a long `IN (…)` can lose
+# MySQL's range access past `range_optimizer_max_mem_size`, and a scan under `FOR UPDATE` locks every
+# row it reads.
 const _LOCKED_READ_BACK_BATCH = 1000
 
 # Read-back without RETURNING (SQLite, MySQL): the rows whose key is one of `keys` (raw input tuples),
@@ -1439,9 +1442,9 @@ function _bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector
   isempty(keys) && return DataFrames.DataFrame([field => Any[] for field in fields])
   # A locking read is batched for a one-column key too: a long `IN (…)` can lose MySQL's range access
   # (`range_optimizer_max_mem_size`), and a scan under `FOR UPDATE` would lock every row it reads.
-  batch = length(key) > 1 ? _SQLITE_READ_BACK_BATCH : lock ? _LOCKED_READ_BACK_BATCH : typemax(Int)
-  if length(keys) > batch
-    batches = Iterators.partition(keys, batch)
+  per = length(key) > 1 ? _SQLITE_READ_BACK_BATCH : lock ? _LOCKED_READ_BACK_BATCH : typemax(Int)
+  if length(keys) > per
+    batches = Iterators.partition(keys, per)
     return reduce(vcat, [_bulk_read_back(objct, model, key, collect(batch), fields; lock = lock) for batch in batches];
       cols = :union)
   end
@@ -1729,11 +1732,12 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           # No RETURNING (SQLite, MySQL; see the #671 block above `_normalize_bulk_returning`). Under DO
           # NOTHING, first note which keys the table already held, so a read-back row with one of
           # them is not reported as written by this call. Every read runs on the pinned transaction
-          # connection. On SQLite nothing can land between them and the INSERT. On MySQL a row another
-          # session commits in between is skipped by the INSERT and, being newer than the
-          # transaction's REPEATABLE READ snapshot, invisible to both plain reads: `missing`, as it
-          # should be. Outside DO NOTHING the read-back locks (`_locks_rows`), to see every row the
-          # statement wrote or met (#1267).
+          # connection. On SQLite nothing can land between them and the INSERT. On MySQL another
+          # session can: a row it inserts in between is skipped by the INSERT and, under REPEATABLE
+          # READ, invisible to both plain reads (`missing`, right), but under READ COMMITTED the
+          # read-back sees it as written by this call; a row it deletes in between is written by this
+          # call and reported `missing`, under either level. The count stays exact. Outside DO NOTHING
+          # the read-back locks (`_locks_rows`), to see every row the statement wrote or met (#1267).
           chunk_keys = unique([Tuple(source[i] for source in key_sources) for i in chunk_range
             if !any(source -> source[i] === nothing || ismissing(source[i]), key_sources)])
           existing = Set{Any}()
@@ -2212,8 +2216,8 @@ end
 # holds a value when it takes part in the INSERT and is non-NULL in at least one row, or the database
 # fills it; an auto pk left out and a UUID PormG filled are new. The reading is per column, not per row,
 # so a composite key whose members are set in different rows is still counted: an over-refusal, never
-# a missed key. An untargeted `:nothing` means "skip a
-# conflict on any unique key", which is what MySQL does, so it is not checked.
+# a missed key. An untargeted `:nothing` means "skip a conflict on any unique key", which is what
+# MySQL does, so it is not checked.
 function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Symbol, fields_df::Vector{String},
                                      mapping, df::DataFrames.DataFrame, connection)
   _supports(connection, :upsert_conflict_target) && return nothing
@@ -2402,9 +2406,12 @@ function _run_bulk_insert(connection::PormGMySQL, model::PormGModel, sql::String
   conflict === :update && return Int(rows)
   skip_by_error && return 1
   report = backend_insert_report(connection, result)
-  report === nothing && throw(StatementError(_backend_name(connection),
-    "bulk_insert: the multi-row INSERT reported no row counts, so the rows on_conflict = :nothing " *
-    "skipped cannot be counted."))
+  # The report is read by position (`backend_insert_report`), so it is checked against the chunk: it
+  # carried `rows` rows, and no more of them met a duplicate.
+  (report === nothing || report.records != rows || !(0 <= report.duplicates <= rows)) &&
+    throw(StatementError(_backend_name(connection),
+      "bulk_insert: the multi-row INSERT did not report the row counts of its $(rows) rows, so the rows " *
+      "on_conflict = :nothing skipped cannot be counted."))
   return report.records - report.duplicates
 end
 

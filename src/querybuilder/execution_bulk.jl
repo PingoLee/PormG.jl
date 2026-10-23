@@ -1426,6 +1426,7 @@ end
 # SQLite build defaults to 1000, hence a batch well under both. A single-column key is one `IN (…)`
 # list and needs no batching.
 const _SQLITE_READ_BACK_BATCH = 200
+const _LOCKED_READ_BACK_BATCH = 1000
 
 # Read-back without RETURNING (SQLite, MySQL): the rows whose key is one of `keys` (raw input tuples),
 # projecting `fields`, through the ORM so the values are bound as parameters and parsed like any other
@@ -1436,8 +1437,11 @@ const _SQLITE_READ_BACK_BATCH = 200
 function _bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector{String},
     keys::Vector, fields::Vector{String}; lock::Bool = false)
   isempty(keys) && return DataFrames.DataFrame([field => Any[] for field in fields])
-  if length(key) > 1 && length(keys) > _SQLITE_READ_BACK_BATCH
-    batches = Iterators.partition(keys, _SQLITE_READ_BACK_BATCH)
+  # A locking read is batched for a one-column key too: a long `IN (…)` can lose MySQL's range access
+  # (`range_optimizer_max_mem_size`), and a scan under `FOR UPDATE` would lock every row it reads.
+  batch = length(key) > 1 ? _SQLITE_READ_BACK_BATCH : lock ? _LOCKED_READ_BACK_BATCH : typemax(Int)
+  if length(keys) > batch
+    batches = Iterators.partition(keys, batch)
     return reduce(vcat, [_bulk_read_back(objct, model, key, collect(batch), fields; lock = lock) for batch in batches];
       cols = :union)
   end
@@ -2205,8 +2209,10 @@ end
 
 # MySQL's `ON DUPLICATE KEY UPDATE` names no target (#1267): a targeted DO NOTHING or a DO UPDATE runs
 # only when the target is the one unique key these rows can conflict on, read from the frame. A column
-# holds a value when it takes part in the INSERT and is not NULL in every row, or the database fills
-# it; an auto pk left out and a UUID PormG filled are new. An untargeted `:nothing` means "skip a
+# holds a value when it takes part in the INSERT and is non-NULL in at least one row, or the database
+# fills it; an auto pk left out and a UUID PormG filled are new. The reading is per column, not per row,
+# so a composite key whose members are set in different rows is still counted: an over-refusal, never
+# a missed key. An untargeted `:nothing` means "skip a
 # conflict on any unique key", which is what MySQL does, so it is not checked.
 function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Symbol, fields_df::Vector{String},
                                      mapping, df::DataFrames.DataFrame, connection)
@@ -2235,7 +2241,9 @@ function _frame_conflict_reading(model::PormGModel, fields_df::Vector{String}, m
 end
 
 # DO NOTHING on MySQL (`Dialect.on_conflict_clause`'s `noop`): an assignment that writes nothing, on the
-# first inserted column that is not AUTO_INCREMENT, qualified by the table.
+# first inserted column that is not AUTO_INCREMENT, qualified by the table. A frame whose only column is
+# the AUTO_INCREMENT pk supplies every id, so it falls back to that column: error 1869 comes only from an
+# id the statement generates.
 function _bulk_noop_assignment(model::PormGModel, fields_df::Vector{String}, connection)
   isempty(fields_df) && return nothing
   i = findfirst(f -> !_is_auto_generated_bulk_primary_key(model.fields[f]), fields_df)

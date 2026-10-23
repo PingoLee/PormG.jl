@@ -1776,6 +1776,10 @@ end
   supplied = DataFrames.DataFrame(token = [UUIDs.uuid4(), UUIDs.uuid4()], label = ["a", "b"], note = ["x", "y"])
   @test refused(caught(() -> bulk(MrMyUp.Token, supplied; on_conflict = (action = :update, target = ["label"], set = ["note"]))),
                 "(token)")
+  # A unique column the database fills (`db_default`) can conflict though the frame leaves it out.
+  pits = DataFrames.DataFrame(ref = ["a", "b"], note = ["x", "y"])
+  @test refused(caught(() -> bulk(MrMyUp.Pit, pits; on_conflict = (action = :update, target = ["ref"], set = ["note"]))),
+                "(stamp)")
   e = caught(() -> bulk(MrMyUp.Status, DataFrames.DataFrame(code = ["F"], label = ["x"]);
                         on_conflict = (action = :nothing, target = ["label"])))
   @test e isa PormG.QueryBuildError && occursin("requires its on_conflict target (label) to be a unique key", sprint(showerror, e))
@@ -1816,8 +1820,9 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MySQL's report of a multi-row INSERT, and its duplicate-key errors
-# The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured);
-# a one-row INSERT has none. A duplicate on a unique key is errno 1062/1022/1586/1169; a foreign-key
+# The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured),
+# in the session's `lc_messages` language and always in that order, so it is read by position; a
+# one-row INSERT has none. A duplicate on a unique key is errno 1062/1022/1586/1169; a foreign-key
 # failure or any other constraint is not, though every one of them carries SQLSTATE 23000.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL extension: a multi-row INSERT's report, and a duplicate key by its number" begin
@@ -1825,9 +1830,12 @@ end
   @test ext._insert_report("Records: 4  Duplicates: 2  Warnings: 0") == (records = 4, duplicates = 2)
   @test ext._insert_report("Records: 3  Duplicates: 0  Warnings: 1") == (records = 3, duplicates = 0)
   @test ext._insert_report("") === nothing
-  @test ext._insert_report("Rows matched: 2  Changed: 1  Warnings: 0") === nothing
+  # Measured on 8.4 under `lc_messages` pt_BR, de_DE and ja_JP.
+  @test ext._insert_report("Registros: 2 - Duplicados: 1 - Avisos: 0") == (records = 2, duplicates = 1)
+  @test ext._insert_report("Datensätze: 2  Duplikate: 1  Warnungen: 0") == (records = 2, duplicates = 1)
+  @test ext._insert_report("レコード数: 2  重複数: 1  警告: 0") == (records = 2, duplicates = 1)
   integrity(errno) = PormG.IntegrityError("MySQL", MySQL.Protocol.Error(errno, "x", "23000"); sqlstate = "23000")
-  @test ext._is_duplicate_key(integrity(1062)) && ext._is_duplicate_key(integrity(1586))
+  @test all(ext._is_duplicate_key ∘ integrity, (1062, 1022, 1586, 1169))
   @test !ext._is_duplicate_key(integrity(1452)) && !ext._is_duplicate_key(integrity(1048))
   @test !ext._is_duplicate_key(PormG.StatementError("MySQL", MySQL.Protocol.Error(1062, "x", "23000")))
 end

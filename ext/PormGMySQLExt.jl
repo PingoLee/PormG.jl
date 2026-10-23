@@ -409,7 +409,12 @@ PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last
 # which `ON DUPLICATE KEY UPDATE` then updated or left as they were. Measured on 8.4: four rows, two of
 # them duplicates, report `Records: 4  Duplicates: 2`, while the affected-row count under `found_rows`
 # is 4 for both an insert and a skip. A one-row INSERT reports no text, so this is `nothing` for it.
-const _INSERT_REPORT = r"Records:\s*(\d+)\s+Duplicates:\s*(\d+)"
+# The text follows the session's `lc_messages` (measured: `Registros: 2 - Duplicados: 1 - Avisos: 0`
+# under `pt_BR`, `レコード数: 2  重複数: 1  警告: 0` under `ja_JP`), and in every language it is the
+# three counts in that order, so they are read by position, never by their English labels. A no-op
+# duplicate is counted only because the pool connects with `found_rows` (`_connect_args`); without it,
+# MySQL reports a duplicate it left unchanged as no duplicate at all.
+const _INSERT_REPORT = r"^\D*(\d+)\D+(\d+)\D+(\d+)\D*$"
 function _insert_report(info::AbstractString)
   m = match(_INSERT_REPORT, info)
   m === nothing && return nothing

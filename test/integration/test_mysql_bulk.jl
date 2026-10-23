@@ -87,6 +87,13 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c-1)")
             r = bulk_insert(K.Team, DataFrame(ref = ["ligier", "minardi", "minardi"], name = ["x", "Minardi", "y"]);
                             on_conflict = (action = :nothing, target = ["ref"]))
             @test r.count == 1
+            # Chunks of two over three rows: the last chunk is one row, sent without the clause.
+            r = bulk_insert(K.Team, DataFrame(ref = ["ligier", "minardi", "coloni"], name = ["x", "y", "Coloni"]);
+                            on_conflict = :nothing, chunk_size = 2)
+            @test r.count == 1 && K.Team.objects.filter("ref" => "coloni").count() == 1
+            r = bulk_insert(K.Team, DataFrame(ref = ["ligier", "lola", "coloni"], name = ["x", "Lola", "y"]);
+                            on_conflict = :nothing, chunk_size = 2)
+            @test r.count == 1 && only(K.Team.objects.filter("ref" => "coloni").values("name").list())[:name] == "Coloni"
             # One row: new, then a duplicate.
             @test bulk_insert(K.Team, DataFrame(ref = ["arrows"], name = ["Arrows"]); on_conflict = :nothing).count == 1
             @test bulk_insert(K.Team, DataFrame(ref = ["arrows"], name = ["x"]); on_conflict = :nothing).count == 0

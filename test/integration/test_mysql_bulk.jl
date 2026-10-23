@@ -38,7 +38,12 @@ Stint = Models.Model("p3k_stint",
   time = Models.FloatField(null = true),
   pitted = Models.BooleanField(null = true),
   at = Models.DateTimeField(null = true),
-  fee = Models.DecimalField(max_digits = 10, decimal_places = 2, null = true))
+  fee = Models.DecimalField(max_digits = 20, decimal_places = 2, null = true))
+# A table on MySQL 8's default collation (utf8mb4_0900_ai_ci), not PormG's binary one.
+Garage = Models.Model("p3k_garage",
+  id = Models.IDField(),
+  ref = Models.CharField(),
+  name = Models.CharField())
 # A many-to-many relation through an auto join table.
 Sponsor = Models.Model("p3k_sponsor",
   id = Models.IDField(),
@@ -50,7 +55,8 @@ Season = Models.Model("p3k_season",
 end
 
 # The tables, in drop order (children first).
-const _MYK_TABLES = ("p3k_car", "p3k_team", "p3k_status", "p3k_season", "p3k_sponsor", "p3k_stint", "p3k_plain_join")
+const _MYK_TABLES = ("p3k_car", "p3k_team", "p3k_status", "p3k_season", "p3k_sponsor", "p3k_stint", "p3k_plain_join",
+                     "p3k_garage")
 
 @testset "MySQL backend, phase 3c: bulk writes and the many-to-many manager (#1130)" begin
 if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
@@ -75,7 +81,9 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
             "CONSTRAINT `p3k_car_team_fk` FOREIGN KEY (`team`) REFERENCES `p3k_team` (`id`) ON DELETE RESTRICT)" * tail)
         run("CREATE TABLE `p3k_status` (`code` VARCHAR(10) PRIMARY KEY, `label` VARCHAR(255) NOT NULL)" * tail)
         run("CREATE TABLE `p3k_stint` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `time` DOUBLE NULL, `pitted` TINYINT(1) NULL, " *
-            "`at` DATETIME(3) NULL, `fee` DECIMAL(10,2) NULL)" * tail)
+            "`at` DATETIME(3) NULL, `fee` DECIMAL(20,2) NULL)" * tail)
+        run("CREATE TABLE `p3k_garage` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `ref` VARCHAR(255) NOT NULL, " *
+            "`name` VARCHAR(255) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci")
         run("CREATE TABLE `p3k_sponsor` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL)" * tail)
         run("CREATE TABLE `p3k_season` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `year` INT NOT NULL)" * tail)
         o, r = rel.owner_column, rel.related_column
@@ -229,18 +237,29 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
                             filters = ["id__@in" => K.Team.objects.filter("ref" => "williams").values("id")])
             @test r.count == 1 && only(K.Team.objects.filter("ref" => "williams").values("name").list())[:name] == "Williams F1"
             @test only(K.Team.objects.filter("ref" => "lotus").values("name").list())[:name] == "Team Lotus"
-            # A float, a boolean, a timestamp with milliseconds and a decimal round-trip exactly, NULLs too.
+            # A float, a boolean, a timestamp with milliseconds and a decimal round-trip exactly, and a
+            # NULL overwrites a value. The float needs all 17 digits; the decimal has more than a double holds.
             a = K.Stint.objects.create("time" => 1.0).id
-            b = K.Stint.objects.create("time" => 2.0).id
+            b = K.Stint.objects.create("time" => 2.0, "pitted" => true, "at" => DateTime(1988, 1, 1),
+                                       "fee" => parse(Decimals.Decimal, "1.00")).id
             at = DateTime(1988, 5, 15, 14, 30, 5, 123)
-            df = DataFrame(id = [a, b], time = [83.456789, missing], pitted = [true, false],
-                           at = [at, missing], fee = [parse(Decimals.Decimal, "1234.56"), parse(Decimals.Decimal, "0.05")])
+            wide = parse(Decimals.Decimal, "123456789012345678.91")
+            df = DataFrame(id = [a, b], time = [0.1 + 0.2, missing], pitted = [true, missing],
+                           at = [at, missing], fee = [wide, missing])
             @test bulk_update(K.Stint, df).count == 2
             rows = Dict(row[:id] => row for row in K.Stint.objects.values("id", "time", "pitted", "at", "fee").list())
-            @test rows[a][:time] == 83.456789 && rows[a][:pitted] === true && DateTime(rows[a][:at]) == at &&
-                  rows[a][:fee] == parse(Decimals.Decimal, "1234.56")
-            @test ismissing(rows[b][:time]) && rows[b][:pitted] === false && ismissing(rows[b][:at]) &&
-                  rows[b][:fee] == parse(Decimals.Decimal, "0.05")
+            @test rows[a][:time] === 0.1 + 0.2 && rows[a][:pitted] === true && DateTime(rows[a][:at]) == at &&
+                  rows[a][:fee] == wide
+            @test all(ismissing, (rows[b][:time], rows[b][:pitted], rows[b][:at], rows[b][:fee]))
+            @test only(DataFrame(run("SELECT CAST(`at` AS CHAR) AS t FROM `p3k_stint` WHERE `id` = ?"; params = [a])).t) ==
+                  "1988-05-15 14:30:05.123"
+            # On a case-insensitive table a text match key compares by the column's collation, as a filter does.
+            for (ref, name) in (("lotus", "x"), ("brabham", "y"))
+                K.Garage.objects.create("ref" => ref, "name" => name)
+            end
+            @test bulk_update(K.Garage, DataFrame(ref = ["LOTUS"], name = ["Lotus"]); match_on = ["ref"]).count == 1
+            @test only(K.Garage.objects.filter("ref" => "lotus").values("name").list())[:name] == "Lotus"
+            @test K.Garage.objects.filter("ref" => "LOTUS").count() == 1   # the filter agrees
         end
 
         # What: the many-to-many manager adds, removes, clears and sets the links of one row.

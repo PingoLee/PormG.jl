@@ -2643,7 +2643,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
   # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
-  # limit (#84). On SQLite each row binds one param per set column *and* per match key
+  # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
   # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
   # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
   effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
@@ -2652,7 +2652,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
   # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
-  # SQLite binds each cell as it goes and collects `(?, ?, …)` row tuples for its VALUES CTE.
+  # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
+  # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
   pg_arrays = _bulk_binds_column_arrays(connection)
   casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
   new_columns() = [Any[] for _ in joined_columns]

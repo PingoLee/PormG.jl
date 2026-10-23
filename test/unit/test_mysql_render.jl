@@ -76,7 +76,9 @@ PormG.config["mr_my_cross"] = PormG.Configuration.Settings(connections = MrMockM
 module MrMyCrossA
 import PormG
 import PormG.Models
-Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField())
+Team = Models.Model(teamid = Models.IDField(), name = Models.CharField(), country = Models.CharField())
+Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField(),
+  teamid = Models.ForeignKey(Team, pk_field = "teamid", on_delete = "RESTRICT", null = true))
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 module MrMyCrossB
@@ -438,6 +440,18 @@ end
   @test key(MrMyCrossB.Lap.objects.values("pos2" => "position", "driverid__nationality").order_by("-pos2")) == "(`pos2`"
   @test key(MrMyCrossA.Driver.objects.values("position" => "surname", "laps__lapid").order_by("-position")) ==
         "(`Tb`.`surname`"
+  # Each hop of a later path counts, not only its last (`surname` is the driver's, two hops from `lap`);
+  # its last segment is a column even when it is a ForeignKey, so `driverid__teamid` joins no team and
+  # the team's `country` shadows nothing.
+  @test key(MrMyCrossB.Lap.objects.values("surname" => "position").order_by("-surname", "driverid__teamid__name")) ==
+        "(`Tb`.`position`"
+  @test key(MrMyCrossB.Lap.objects.values("country" => "position").order_by("-country", "driverid__teamid")) == "(`country`"
+  # A relation path a `cjoin_on` ON clause names is joined after ORDER BY too: `year` is the race's.
+  q = _MR_MY.Result.objects.values("year" => "position", "resultid")
+  q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid"), Joined("d", "dob") == F("raceid__date")])
+  @test key(q.order_by("-year")) == "(`Tb`.`position`"
+  # A term that names the projection by its path (`order_by("date__@year")` over `"name" => "date__@year"`).
+  @test key(_MR_MY.Race.objects.values("name" => "date__@year").order_by("-date__@year")) == "(EXTRACT(YEAR FROM `Tb`.`date`)"
   # Every kind of projection: an aggregate, a window.
   @test key(_MR_MY.Result.objects.values("driverid", "laps" => Max("position")).order_by("laps")) == "(MAX(`Tb`.`position`)"
   @test key(_MR_MY.Result.objects.values("resultid", "laps" => _MR_QB.Rank(over = _MR_QB.WindowOver(order_by = ["-points"]))).order_by("laps")) ==

@@ -30,11 +30,11 @@ column of the model or of a model the query joins, and whose projection can be N
 ### How to find the calls to migrate
 
 ```bash
-grep -rnE '"[A-Za-z_]+" *=> *' --include=*.jl src/
+grep -rlE 'order_by\(' --include=*.jl src/ | xargs grep -nE 'values\(.*"[A-Za-z_]+" *=>'
 ```
 
-For each projection renamed this way, check whether a query orders by its name and whether that name
-is also a column of a table the query reads.
+For each projection named this way in a file that orders, check whether a query orders by its name
+and whether that name is also a column of a table the query reads.
 
 ### Migrate your app
 

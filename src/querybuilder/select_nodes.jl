@@ -121,9 +121,9 @@ end
 # path's join, a function's typed render and a literal's bind alike.
 #
 # Measured on MySQL 8.4: the key reads the projection for a column, an aggregate and a window, bound or
-# not. Under DISTINCT, or GROUP BY, MySQL also requires every column the key reads outside an aggregate
-# to be a projected or grouped column, so a key over `position + 1` there is MySQL's error 3065 or 1055:
-# loud, on that engine only, and left to it (#1087).
+# not. Under DISTINCT, or GROUP BY, MySQL can also require the columns the key computes from to be
+# projected or grouped, so a key over `position + 1`, a `CASE` or `LAG(position)` there is its error
+# 3065 or 1055 (`RANK()` and an aggregate pass): loud, on that engine only, and left to it (#1087).
 function _projection_null_key(name::AbstractString, instruc::SQLInstruction)::String
   for i in eachindex(instruc.select)
     isassigned(instruc.select, i) || continue
@@ -144,16 +144,23 @@ end
 # the `cjoin_on` targets, and the models of the base model's module.
 #
 # Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
-# that point: an `order_by` path a later term resolves, and the `cjoin`/`on()` paths `build` materializes
-# after ORDER BY (#404 fixes that order). Each hop of such a path is walked without joining it.
+# that point (#404 fixes that order): an `order_by` path a later term resolves, the relation paths a
+# `cjoin_on` ON clause names, and the `cjoin`/`on()` paths. Each hop of such a path is walked without
+# joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
+# (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
   end
-  for path in Iterators.flatten((keys(object.custom_join), _projected_paths(object.order)))
+  column_hops(path) = (segs = split(String(first(split(lstrip(path, '-'), "__@"))), "__"); segs[1:end-1])
+  hops = Iterators.flatten((
+    (split(p, "__") for p in keys(object.custom_join)),
+    (column_hops(p) for p in _projected_paths(object.order)),
+    (segs[1:end-1] for segs in instruc.cjoin_on_paths)))
+  for segs in hops
     model = object.model
-    for (i, seg) in enumerate(split(String(first(split(lstrip(path, '-'), "__@"))), "__"))
+    for (i, seg) in enumerate(segs)
       step = _relation_step(object, model, seg, i == 1)
       step === nothing && break
       model = step[2]

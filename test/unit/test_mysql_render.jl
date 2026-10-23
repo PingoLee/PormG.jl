@@ -1485,3 +1485,139 @@ end
   @test _MR_QB._locks_cascade_parents(MrMockMySQL()) && !_MR_QB._locks_cascade_parents(MrMockSQLite())
   @test PormG.Kernel._supports(MrMockPostgres(), :deferred_foreign_keys) && PormG.Kernel._supports(MrMockSQLite(), :deferred_foreign_keys)
 end
+
+# Upsert models on their own keys (#1267): unique keys of every kind a row can conflict on.
+for (modname, key, conn) in ((:MrMyUp, "mr_my_up", MrMockMySQL()), (:MrPGUp, "mr_pg_up", MrMockPostgres()),
+                             (:MrSLUp, "mr_sl_up", MrMockSQLite()))
+  PormG.config[key] = PormG.Configuration.Settings(connections = conn, change_data = true, db_def_folder = key)
+  @eval module $modname
+  import PormG
+  import PormG.Models
+  # Two unique keys besides the pk; NOT NULL, so a row always supplies both.
+  Circuit = Models.Model("circuit", circuitid = Models.IDField(), circuitref = Models.CharField(unique = true),
+                         name = Models.CharField(unique = true), location = Models.CharField(null = true))
+  # A nullable unique key: a row that leaves it NULL cannot conflict on it.
+  Constructor = Models.Model("constructor", constructorid = Models.IDField(),
+                             constructorref = Models.CharField(unique = true),
+                             code = Models.CharField(null = true, unique = true),
+                             nationality = Models.CharField(null = true))
+  # A primary key without AUTO_INCREMENT.
+  Status = Models.Model("status", code = Models.CharField(primary_key = true, max_length = 10),
+                        label = Models.CharField())
+  # A composite UniqueConstraint with a nullable member.
+  Standing = Models.Model("standing"; standingid = Models.IDField(), raceid = Models.IntegerField(),
+                          driverid = Models.IntegerField(null = true), points = Models.FloatField(),
+                          constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"))])
+  # A functional UniqueConstraint: SQL text PormG cannot evaluate against a row.
+  Season = Models.Model("season"; seasonid = Models.IDField(), year = Models.IntegerField(unique = true),
+                        url = Models.CharField(),
+                        constraints = [Models.UniqueConstraint(expressions = ("lower(url)",), name = "season_url_ci")])
+  # A UUID primary key PormG mints when the row leaves it out.
+  Token = Models.Model("token", token = Models.UUIDField(primary_key = true, auto_add = true),
+                       label = Models.CharField(unique = true), note = Models.CharField(null = true))
+  PormG.Models.set_models(@__MODULE__, $key)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL update_or_create: ON DUPLICATE KEY UPDATE only when the lookup is the one key the row can hit
+# MySQL's ON DUPLICATE KEY UPDATE names no target and updates whichever row a unique key matched
+# (#1267: measured, a conflict on `code` rewrote another driver). Expected SQL:
+# `INSERT … AS `__pormg_new` ON DUPLICATE KEY UPDATE c = `__pormg_new`.c`. A lookup that is not a unique
+# key of the model raises QueryBuildError; another key the row can conflict on (supplied and not NULL,
+# a supplied primary key, any functional or partial constraint) raises BackendCapabilityError naming
+# `upsert_conflict_target` and that key. A NULL member, an omitted auto id or a minted UUID cannot
+# conflict, so those rows build. PostgreSQL and SQLite name their target and build every shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL update_or_create: ON DUPLICATE KEY UPDATE only when the lookup is the only key it can hit" begin
+  caught(f) = try; f(); nothing; catch e; e; end
+  uoc(m, lookup...; defaults, q = :sql) = m.objects.update_or_create(lookup...; defaults = defaults, show_query = q)
+  d = uoc(MrMyUp.Constructor, "constructorref" => "mclaren"; defaults = ["nationality" => "British"], q = :dict)
+  @test occursin(")\nAS `__pormg_new` ON DUPLICATE KEY UPDATE `nationality` = `__pormg_new`.`nationality`", d[:sql_text])
+  @test !occursin("ON CONFLICT", d[:sql_text]) && !occursin("RETURNING", d[:sql_text])
+  @test d[:parameters] == Any["mclaren", "British"]
+  # The nullable unique `code`: left out, it is NULL and cannot conflict; supplied, it can.
+  e = caught(() -> uoc(MrMyUp.Constructor, "constructorref" => "mclaren"; defaults = ["code" => "MCL"]))
+  @test e isa PormG.BackendCapabilityError
+  msg = sprint(showerror, e)
+  @test occursin("update_or_create on constructor", msg) && occursin("(code)", msg) && occursin("MySQL", msg) &&
+        occursin("names the unique key it updates on", msg)
+  # … and written as `nothing`, it is NULL as well.
+  @test occursin("ON DUPLICATE KEY UPDATE `code` = `__pormg_new`.`code`", uoc(MrMyUp.Constructor,
+          "constructorref" => "mclaren"; defaults = Pair{String,Any}["code" => nothing, "nationality" => "British"]))
+  # A supplied auto id is a key the row can conflict on; an omitted one is a new value.
+  e = caught(() -> uoc(MrMyUp.Constructor, "constructorref" => "mclaren"; defaults = ["constructorid" => 5]))
+  @test e isa PormG.BackendCapabilityError && occursin("(constructorid)", sprint(showerror, e))
+  # Two NOT NULL unique keys: whichever is the lookup, the row supplies the other.
+  e = caught(() -> uoc(MrMyUp.Circuit, "circuitref" => "monza"; defaults = ["name" => "Monza"]))
+  @test e isa PormG.BackendCapabilityError && occursin("(name)", sprint(showerror, e)) &&
+        !occursin("(circuitref)", sprint(showerror, e))
+  # A composite constraint conflicts only when every member is set.
+  @test uoc(MrMyUp.Standing, "standingid" => 7; defaults = Pair{String,Any}["raceid" => 1, "points" => 2.0]) isa String
+  e = caught(() -> uoc(MrMyUp.Standing, "standingid" => 7; defaults = Pair{String,Any}["raceid" => 1, "driverid" => 3, "points" => 2.0]))
+  @test e isa PormG.BackendCapabilityError && occursin("(raceid, driverid)", sprint(showerror, e))
+  @test uoc(MrMyUp.Standing, "raceid" => 1, "driverid" => 3; defaults = ["points" => 2.0]) isa String
+  @test uoc(MrMyUp.Standing, "driverid" => 3, "raceid" => 1; defaults = ["points" => 2.0]) isa String   # a set, not a sequence
+  # A functional constraint always counts: PormG cannot evaluate `lower(url)` against the row.
+  e = caught(() -> uoc(MrMyUp.Season, "year" => 1988; defaults = ["url" => "u"]))
+  @test e isa PormG.BackendCapabilityError && occursin("a functional or partial UniqueConstraint", sprint(showerror, e))
+  # A UUID pk PormG mints is a new value; one the caller supplies is a key the row can conflict on.
+  @test occursin("ON DUPLICATE KEY UPDATE `note`", uoc(MrMyUp.Token, "label" => "a"; defaults = ["note" => "n"]))
+  e = caught(() -> uoc(MrMyUp.Token, "label" => "a"; defaults = ["token" => UUIDs.uuid4(), "note" => "n"]))
+  @test e isa PormG.BackendCapabilityError && occursin("(token)", sprint(showerror, e))
+  # A primary key without AUTO_INCREMENT is the lookup itself.
+  @test occursin("ON DUPLICATE KEY UPDATE `label`", uoc(MrMyUp.Status, "code" => "F"; defaults = ["label" => "Finished"]))
+  # A lookup that is not a unique key: the row could not be found by it.
+  for (m, lookup, defaults) in ((MrMyUp.Status, ("label" => "x",), ["code" => "F"]),
+                                (MrMyUp.Standing, ("raceid" => 1,), ["points" => 2.0]),
+                                (MrMyUp.Season, ("url" => "u",), ["year" => 1988]))
+    e = caught(() -> uoc(m, lookup...; defaults = defaults))
+    @test e isa PormG.QueryBuildError && occursin("to be a unique key of the model", sprint(showerror, e))
+  end
+  # PostgreSQL and SQLite name the target, so every shape above builds there.
+  for models in (MrPGUp, MrSLUp)
+    @test occursin("ON CONFLICT (\"circuitref\") DO UPDATE SET \"name\" = EXCLUDED.\"name\"",
+                   uoc(models.Circuit, "circuitref" => "monza"; defaults = ["name" => "Monza"]))
+    @test uoc(models.Constructor, "constructorref" => "mclaren"; defaults = ["code" => "MCL"]) isa String
+    @test uoc(models.Season, "year" => 1988; defaults = ["url" => "u"]) isa String
+  end
+  @test !PormG.Kernel._supports(MrMockMySQL(), :upsert_conflict_target)
+  @test PormG.Kernel._supports(MrMockPostgres(), :upsert_conflict_target) && PormG.Kernel._supports(MrMockSQLite(), :upsert_conflict_target)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL update_or_create's `created`: read from the statement's own report
+# Measured on 8.4 under `found_rows`: an insert counts 1, a duplicate it changed 2, an unchanged one 1;
+# the OK packet's id is the inserted row's AUTO_INCREMENT value, the matched row's on a changed
+# duplicate, 0 on an unchanged one. Expected: with an AUTO_INCREMENT pk, created only for (1, id ≠ 0);
+# without one (the id is always 0), created when the pre-check found no row and the count is not 2.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL update_or_create: created from the count and the OK packet's id" begin
+  created = _MR_QB._odku_created
+  @test created(true, false, 1, 42)       # an insert
+  @test !created(true, false, 2, 42)      # a duplicate it changed (the id is the matched row's)
+  @test !created(true, false, 1, 0)       # a duplicate already holding the values
+  @test !created(false, true, 1, 0)       # no AUTO_INCREMENT: the pre-check found the row
+  @test created(false, false, 1, 0)       # … found none, and nothing was changed twice
+  @test !created(false, false, 2, 0)      # … found none, but another session's row was updated
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL get_or_create: a miss is a plain INSERT the lookup's unique index guards
+# get_or_create never updates a row, so another key the row can conflict on is MySQL's IntegrityError,
+# as on PostgreSQL, not a refusal. Expected SQL on a miss: `INSERT INTO … VALUES (…)` with no ON
+# CONFLICT and no ON DUPLICATE KEY. A lookup that is not a unique key of the model raises
+# QueryBuildError on the miss path. PostgreSQL and SQLite keep `ON CONFLICT (lookup) DO NOTHING`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL get_or_create: a plain INSERT, the lookup a unique key of the model" begin
+  goc(m, lookup...; defaults = Pair[]) = m.objects.get_or_create(lookup...; defaults = defaults, show_query = :sql)
+  sql = goc(MrMyUp.Circuit, "circuitref" => "monza"; defaults = ["name" => "Monza"])
+  @test endswith(sql, ") VALUES (\n  ?, ?\n)\n") && !occursin("ON CONFLICT", sql) && !occursin("DUPLICATE", sql)
+  @test occursin("ON CONFLICT (\"circuitref\") DO NOTHING", goc(MrPGUp.Circuit, "circuitref" => "monza"; defaults = ["name" => "Monza"]))
+  @test occursin("ON CONFLICT (\"circuitref\") DO NOTHING", goc(MrSLUp.Circuit, "circuitref" => "monza"; defaults = ["name" => "Monza"]))
+  e = try; goc(MrMyUp.Status, "label" => "x"; defaults = ["code" => "F"]); nothing; catch err; err; end
+  @test e isa PormG.QueryBuildError && occursin("get_or_create on status requires its lookup field(s) (label)", sprint(showerror, e))
+  @test goc(MrMyUp.Standing, "raceid" => 1, "driverid" => 2; defaults = ["points" => 1.0]) isa String
+  @test !_MR_QB._serializes_get_or_create(MrMockMySQL()) && !_MR_QB._upsert_names_target(MrMockMySQL())
+  @test _MR_QB._upsert_names_target(MrMockPostgres()) && _MR_QB._upsert_names_target(MrMockSQLite())
+end

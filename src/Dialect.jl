@@ -2648,6 +2648,22 @@ function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{
   return "ON CONFLICT$(target_sql) DO UPDATE SET $(assignments)"
 end
 
+# MySQL (#1267): `AS <row alias> ON DUPLICATE KEY UPDATE c = <alias>.c, …`, the row alias of 8.0.19 in
+# place of the deprecated `VALUES(c)`. It names no target: the caller has already checked that the
+# target is the one unique key the row can conflict on (`_refuse_unnamed_upsert_target`). There is no
+# DO NOTHING here: its spelling (`pk = <table>.pk`, qualified because the alias makes a bare `pk`
+# ambiguous) needs the table, and no single-row path asks for it.
+function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String}, conn::PormGMySQL)::String
+  action === :update ||
+    throw(QueryBuildError("on_conflict_clause: MySQL renders only action :update here, got :$action"))
+  isempty(target) &&
+    throw(QueryBuildError("on_conflict_clause: action :update requires a non-empty conflict target"))
+  isempty(set) &&
+    throw(QueryBuildError("on_conflict_clause: action :update requires a non-empty set column list"))
+  assignments = join(["$col = `__pormg_new`.$col" for col in set], ", ")
+  return "AS `__pormg_new` ON DUPLICATE KEY UPDATE $(assignments)"
+end
+
 """
     for_update_clause(nowait, skip_locked, no_key, of_aliases, conn) -> String
 

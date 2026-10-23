@@ -192,12 +192,14 @@ const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
     "src/querybuilder/engine_facts.jl" => Dict(
         "set_context!(params, :where)" => 1),
     # insert and upsert rows (`:select`); update()'s SET list (`:update`); a temp-table insert
-    # (`tp`); the mutation predicate and update fence re-emitting their lifted runs under `:where`.
+    # (`tp`); the mutation predicate and update fence re-emitting their lifted runs under `:where`;
+    # MySQL's upsert pre-check and read-back by the lookup (`params`, #1267), each its own statement.
     "src/querybuilder/execution_write.jl" => Dict(
         "set_context!(parameters, :select)" => 3,
         "set_context!(parameters, :update)" => 1,
         "set_context!(parameters, :where)" => 3,
-        "set_context!(tp, :where)" => 1),
+        "set_context!(tp, :where)" => 1,
+        "set_context!(params, :where)" => 1),
     # bulk insert / bulk update rows, and each bulk_update chunk's forked collector.
     "src/querybuilder/execution_bulk.jl" => Dict(
         "set_context!(parameters, :select)" => 3,

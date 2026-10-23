@@ -471,11 +471,12 @@ is safe to show a user — see
     Enforcement is **not retroactive**: rows already dangling in an existing database stay as they
     are, and only new statements are checked.
 
-    **Inside a transaction the check happens at `COMMIT`, not at the statement**, on both backends
-    (PostgreSQL foreign keys are `DEFERRABLE INITIALLY DEFERRED`; SQLite matches with
+    **Inside a transaction the check happens at `COMMIT`, not at the statement**, on PostgreSQL and
+    SQLite (PostgreSQL foreign keys are `DEFERRABLE INITIALLY DEFERRED`; SQLite matches with
     `PRAGMA defer_foreign_keys`). So a block that writes children before their parents commits
     normally — the inconsistency only has to be gone by the end. The example above is autocommit, so
-    it raises immediately.
+    it raises immediately. **MySQL checks at the statement**, in a transaction too: write the parents
+    first there ([Backends](../backends.md)).
 
     For the rarer case where a violation must actually persist — a repair, or one planted in a
     SQLite test — [`without_foreign_keys`](@ref) suspends enforcement for a block on a single pinned

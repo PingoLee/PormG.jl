@@ -453,7 +453,7 @@ The recorded tables whose live fingerprint is not the one the plan header record
 inside `migrate`'s write transaction, the caller binds the transaction's connection with
 `with_tx_context`, so the read sees what the transaction sees.
 """
-function _schema_precondition_drift(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function _schema_precondition_drift(connection::_SQLEngine, settings::PormGSettings,
                                     recorded::AbstractDict{String, String})
   # #1162: the plan floor, which the read alone (9.6) no longer implies.
   _require_plan_floor(connection)
@@ -475,7 +475,7 @@ _plan_precondition_error(drift, recorded::AbstractDict{String, String})::PlanPre
     "Run makemigrations() against this database to plan from what it holds, or remove the plan's " *
     "`$(strip(SCHEMA_TABLE_HEADER))` lines to apply it without the check.", drift)
 
-function _check_schema_precondition(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function _check_schema_precondition(connection::_SQLEngine, settings::PormGSettings,
                                     recorded::AbstractDict{String, String})::Nothing
   drift = _schema_precondition_drift(connection, settings, recorded)
   isempty(drift) || throw(_plan_precondition_error(drift, recorded))
@@ -779,6 +779,7 @@ end
 
 _precheck_ph(::PormGPostgres, i::Int)::String = "\$$(i)"
 _precheck_ph(::PormGSQLite, ::Int)::String = "?"
+_precheck_ph(::PormGMySQL, ::Int)::String = "?"
 
 const _INT_RANGE = Dict(16 => (typemin(Int16), typemax(Int16)),
                         32 => (typemin(Int32), typemax(Int32)),
@@ -822,6 +823,22 @@ ALTER would fail on — not an estimate:
   which `cidr`'s input function refuses in the plan's `USING`. `CAST(… AS cidr)` is the assignment
   cast, which zeroes those bits, so a value it changes is one the ALTER fails on. Any version.
 """
+# MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
+# existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
+# kind comes from a column change, which is phase 4b's.
+function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
+                       server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
+  lossy_alter_class(f) === :rows || return nothing
+  f.kind === :add_foreign_key ||
+    throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
+  q(name) = Dialect._ddl_ident(conn, name)
+  col = q(f.column)
+  parent, key = f.references
+  return ("SELECT COUNT(*) AS n FROM $(q(f.table)) AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
+          "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
+          "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+end
+
 function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
@@ -957,6 +974,12 @@ end
 _live_column_exists(conn::PormGSQLite, table::AbstractString, column::AbstractString)::Bool =
   String(column) in _sqlite_table_xinfo_columns(conn, table)
 
+function _live_column_exists(conn::PormGMySQL, table::AbstractString, column::AbstractString)::Bool
+  rows = fetch(conn, "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+               [String(table), String(column)]) |> DataFrame
+  return nrow(rows) > 0 && rows[1, :n] > 0
+end
+
 function _live_table_exists(conn::PormGPostgres, table::AbstractString)::Bool
   rows = fetch(conn, "SELECT count(*) AS n FROM pg_class WHERE oid = to_regclass(quote_ident(\$1))",
                [String(table)]) |> DataFrame
@@ -966,12 +989,18 @@ end
 _live_table_exists(conn::PormGSQLite, table::AbstractString)::Bool =
   !isempty(_sqlite_table_xinfo_columns(conn, table))
 
+function _live_table_exists(conn::PormGMySQL, table::AbstractString)::Bool
+  rows = fetch(conn, "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+               [String(table)]) |> DataFrame
+  return nrow(rows) > 0 && rows[1, :n] > 0
+end
+
 # Does the live schema still describe what the finding is about? For a change to an existing column,
 # the column is there; for a column the plan ADDS (#829), the table is there and the column is NOT —
 # a header naming a column that already exists was applied already (the #81 re-archive) or edited.
 # A table-level constraint (#830) names no single column: a CHECK applies while its table is there,
 # a composite while every member is.
-function _finding_applies(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool
+function _finding_applies(conn::_SQLEngine, f::LossyAlter)::Bool
   f.kind === :add_not_null &&
     return _live_table_exists(conn, f.table) && !_live_column_exists(conn, f.table, f.column)
   f.kind === :add_check && return _live_table_exists(conn, f.table)
@@ -986,7 +1015,7 @@ end
 #
 # A CHECK whose condition is not declared in the models (`_anchor_check_conditions`) is the other
 # uncountable case: there is no trusted condition to count with.
-function _finding_countable(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool
+function _finding_countable(conn::_SQLEngine, f::LossyAlter)::Bool
   f.kind === :add_check && return f.condition !== nothing
   f.kind === :add_foreign_key && return _live_column_exists(conn, f.references[1], f.references[2])
   return true
@@ -1011,6 +1040,13 @@ aborting the rest; any other failure is raised.
 lock to wait on, so it takes and ignores them.
 """
 function _precheck_lossy_alters(conn::PormGSQLite, findings::Vector{LossyAlter};
+                                timeouts = nothing)::Vector{LossyAlter}
+  return LossyAlter[c for c in (_precheck_one(conn, f) for f in findings) if c !== nothing]
+end
+
+# MySQL (#1130 phase 4a): the counts are plain reads, as on SQLite. A `lock_wait` bounds the wait for the
+# migration lock, not a row read: InnoDB's consistent read takes no lock to wait on.
+function _precheck_lossy_alters(conn::PormGMySQL, findings::Vector{LossyAlter};
                                 timeouts = nothing)::Vector{LossyAlter}
   return LossyAlter[c for c in (_precheck_one(conn, f) for f in findings) if c !== nothing]
 end
@@ -1072,7 +1108,7 @@ end
 
 # One finding, counted — or `nothing` when its column is gone. On PostgreSQL it runs inside
 # `_precheck_lossy_alters`' transaction context, so the plain `fetch`es use its connection.
-function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
+function _precheck_one(conn::_SQLEngine, f::LossyAlter;
                       server_version::Union{Nothing, Int} = nothing)::Union{Nothing, LossyAlter}
   if !_finding_applies(conn, f)
     _warn_stale_lossy_alter(f)
@@ -1219,7 +1255,7 @@ end
 # ==============================================================================
 
 """
-    init_migrations(connection::Union{PormGPostgres, PormGSQLite})
+    init_migrations(connection::_SQLEngine)
 
 Create the pormg_migrations history table if it does not already exist.
 `migrate()`, `mark_applied`, `mark_failed` and `remove_migration_record` call it themselves; it can
@@ -1238,6 +1274,12 @@ function init_migrations(connection::PormGSQLite)
   fetch(connection, ddl)
   _ensure_format_version_column(connection)
   _ensure_canonical_applied_at(connection)
+  nothing
+end
+
+function init_migrations(connection::PormGMySQL)
+  fetch(connection, Dialect.create_migrations_table(connection))
+  _ensure_format_version_column(connection)
   nothing
 end
 
@@ -1281,7 +1323,7 @@ routine `NOTICE: column already exists` on every `init_migrations` call (which `
 and `mark_applied` all trigger). The PostgreSQL `ALTER` additionally keeps `IF NOT EXISTS` to stay
 safe against a concurrent migration adding the column between this probe and the `ALTER`.
 """
-function _ensure_format_version_column(connection::Union{PormGPostgres, PormGSQLite})
+function _ensure_format_version_column(connection::_SQLEngine)
   cols = DataFrame(fetch(connection, Dialect.migrations_table_info_sql(connection)))
   has_col = nrow(cols) > 0 && "format_version" in string.(cols.name)
   has_col || fetch(connection, Dialect.add_format_version_column_sql(connection))
@@ -1306,7 +1348,7 @@ end
 # `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses. (`fetch(…; conn)` used
 # to release the connection it ran on, which would have handed the open transaction's handle back
 # to the pool; a passed `conn` is borrowed since #970, but this keeps the one idiom.)
-function _history_rows(connection::Union{PormGPostgres, PormGSQLite}, sql::String; conn = nothing)::DataFrame
+function _history_rows(connection::_SQLEngine, sql::String; conn = nothing)::DataFrame
   conn === nothing && return DataFrame(fetch(connection, sql))
   rows, _ = with_transaction(connection, sql; conn = conn)
   return DataFrame(rows)
@@ -1328,12 +1370,17 @@ function _migrations_table_exists(connection::PormGSQLite; conn = nothing)::Bool
   return nrow(df) > 0 && df[1, 1] > 0
 end
 
+function _migrations_table_exists(connection::PormGMySQL; conn = nothing)::Bool
+  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
+  return nrow(df) > 0 && df[1, 1] > 0
+end
+
 """
     _get_applied_migrations(connection; conn = nothing) -> Vector{NamedTuple}
 
 Fetch all migration records from the history table, ordered by version.
 """
-function _get_applied_migrations(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)
+function _get_applied_migrations(connection::_SQLEngine; conn = nothing)
   if !_migrations_table_exists(connection; conn = conn)
     return NamedTuple[]
   end
@@ -1358,7 +1405,7 @@ failure is recognised as already-applied and skipped instead of being destructiv
 The whole record rather than its checksum because `migrate` reports the matched row's `version` in
 its [`MigrationResult`](@ref) (#737).
 """
-function _latest_applied(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)
+function _latest_applied(connection::_SQLEngine; conn = nothing)
   latest = nothing
   for r in _get_applied_migrations(connection; conn = conn)
     # records come back ordered by version ASC, so the last applied row we see is the newest.
@@ -1374,7 +1421,7 @@ end
 
 The checksum of `_latest_applied`'s record, or `nothing` when nothing has been applied yet.
 """
-function _latest_applied_checksum(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)::Union{String, Nothing}
+function _latest_applied_checksum(connection::_SQLEngine; conn = nothing)::Union{String, Nothing}
   latest = _latest_applied(connection; conn = conn)
   latest === nothing && return nothing
   return String(latest[:checksum])
@@ -1405,6 +1452,10 @@ end
 
 _get_live_table_names(connection::PormGSQLite)::Vector{String} = sort!(_sqlite_user_table_names(connection))
 
+# The base tables of the connection's database, as `read_live_schema(::PormGMySQL)` enumerates them.
+_get_live_table_names(connection::PormGMySQL)::Vector{String} =
+  sort!(String[_mysql_str(r.tbl) for r in eachrow(fetch(connection, _MYSQL_TABLES_SQL) |> DataFrame)])
+
 """
     _record_migration(connection, version, name, checksum, sql_content, status, is_destructive; conn)
 
@@ -1419,7 +1470,7 @@ owns it (the migration transaction) and frees it itself; without this, the fire-
 sites (`mark_applied` / `mark_failed` and the lifecycle failure paths) would take a write connection
 and never return it on success, a slow pool leak.
 """
-function _record_migration(pool::Union{PormGPostgres, PormGSQLite}, version::String, name::String,
+function _record_migration(pool::_SQLEngine, version::String, name::String,
                            checksum::String, sql_content::String, status::String, is_destr::Bool;
                            conn = nothing)
   # SQLite stores the bound `Bool` as the integer `1`/`0` the column has always held.
@@ -1434,7 +1485,7 @@ end
 Update the status of an existing migration record. Both values are bound (#846), and the connection
 is released iff it was acquired here, as in `_record_migration`.
 """
-function _update_migration_status(pool::Union{PormGPostgres, PormGSQLite}, version::String, new_status::String;
+function _update_migration_status(pool::_SQLEngine, version::String, new_status::String;
                                   conn = nothing)
   with_transaction(pool, Dialect.update_migration_status_sql(pool);
                    conn = conn, release_conn = conn === nothing, params = Any[new_status, version])
@@ -1516,7 +1567,7 @@ first — empty until the first one runs.
 `status()` does not compare the live schema with the models — that is
 `check(db; kinds = [:schema_drift])`. It is read-only, and does not create the history table.
 """
-function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
+function status(connection::_SQLEngine, settings::PormGSettings)::MigrationStatus
   # #683: every folder-reading entry point refuses a `register_connection` entry first — its
   # `db_def_folder` is a label, and `joinpath` would read `./dynamic_connection/` instead.
   Configuration._require_folder_backed(settings, "status")
@@ -1885,7 +1936,7 @@ checks each such column still exists and, for a change that can fail on existing
 rows with a read-only `SELECT COUNT(*)`, reported in `r.lossy_alters`. A plan with no such change
 reads nothing.
 """
-function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::DryRunResult
+function dry_run(connection::_SQLEngine, settings::PormGSettings)::DryRunResult
   Configuration._require_folder_backed(settings, "dry_run")
   migration_plan = _load_migration_plan(settings)
   # The same ordering `_order_statements` returns, with each label kept, so the data steps can be
@@ -2433,7 +2484,7 @@ end
 # connection usually carries). Here the plan is built in memory with `interactive = false` — no
 # prompt, no file — `change_db` is not consulted, and the live read has no `try` around it, as in
 # `makemigrations` since #1018: a gate must never report clean because it could not look.
-function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+function _schema_drift_findings(connection::_SQLEngine, settings::PormGSettings;
                                 ignore_table::Vector{String},
                                 include_table::Union{Vector{String}, Nothing},
                                 models_file)::Vector{SchemaCheckFinding}
@@ -2631,7 +2682,7 @@ Schema Check (postgres):
 
 See also [`SchemaCheckResult`](@ref), [`SchemaCheckFinding`](@ref).
 """
-function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+function check(connection::_SQLEngine, settings::PormGSettings;
                kinds::AbstractVector{Symbol} = [:expression_default],
                ignore_table::Union{Vector{String}, Nothing} = nothing,
                include_table::Union{Vector{String}, Nothing} = nothing,
@@ -2679,6 +2730,12 @@ end
 _invalid_index_findings(connection::PormGPostgres; ignore_table, include_table) =
   _pg_invalid_index_findings(connection; ignore_table = ignore_table, include_table = include_table)
 _invalid_index_findings(::PormGSQLite; ignore_table, include_table) = SchemaCheckFinding[]
+# MySQL (#1130 phase 4a): no index is left invalid — PostgreSQL's comes from a failed `CREATE INDEX
+# CONCURRENTLY`, and an InnoDB index build either completes or is rolled back. The expression-default
+# finding advises declaring the expression as a `db_default`, which MySQL refuses outside the portable
+# vocabulary until phase 4c, so there is no advice to give yet.
+_invalid_index_findings(::PormGMySQL; ignore_table, include_table) = SchemaCheckFinding[]
+_expression_default_findings(::PormGMySQL; ignore_table, include_table) = SchemaCheckFinding[]
 
 function check(settings::PormGSettings; kwargs...)::SchemaCheckResult
   check(settings.connections, settings; kwargs...)
@@ -3175,7 +3232,7 @@ end
 # ==============================================================================
 
 """
-    migrate(connection::PormGBackend, settings; interactive, destructive, name, lock_wait, lock_timeout, statement_timeout) -> MigrationResult
+    migrate(connection::PormGBackend, settings; interactive, destructive, name, lock_wait, lock_timeout, statement_timeout, atomic) -> MigrationResult
     migrate(db::String; config, kwargs...) -> MigrationResult
 
 Apply the pending migration plan (`pending_migrations.jl`) to a database, PostgreSQL or SQLite, and
@@ -3207,6 +3264,12 @@ SQLite has no advisory lock, so steps 4–6 run unlocked there; its #81 check an
 precondition run inside the `BEGIN IMMEDIATE` write transaction instead, so two processes that race
 on one file cannot both apply the same plan, nor change a table between the check and the apply.
 
+MySQL (#1268) takes a named lock (`GET_LOCK`) in step 3, but has no transactional DDL: each statement
+commits on its own. A plan of more than one statement is refused in step 1 with
+`BackendCapabilityError` unless `atomic = false`; then step 5 runs the statements in order and records
+the plan once all of them ran, or as `failed` when one raised, leaving the ones before it applied.
+`makemigrations` afterwards plans what is still missing.
+
 A plan with no `# pormg-schema-table:` header — one generated before #739, or one whose lines were
 deleted on purpose — is applied without the precondition.
 
@@ -3229,9 +3292,14 @@ deleted on purpose — is applied without the precondition.
   long as that query runs.
 - `statement_timeout::Union{Real,Nothing}=nothing`: seconds any one plan statement may run before
   the migration fails and rolls back (PostgreSQL `SET LOCAL statement_timeout`).
+- `atomic::Bool=true`: `false` accepts a plan that cannot apply whole — one of more than one
+  statement on a backend without transactional DDL (MySQL, `transactional_ddl`). PostgreSQL and
+  SQLite always apply a plan whole, so there it changes nothing.
 
-The three timeouts are PostgreSQL-only, and SQLite accepts and ignores them, so one deploy script
-can run on either engine. Each must be a positive number of seconds.
+`lock_timeout` and `statement_timeout` are PostgreSQL's. SQLite accepts and ignores them, so one deploy
+script can run on both; MySQL refuses them (`UnsupportedConnectionError`), since it has neither for
+DDL. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each must be a positive number of
+seconds.
 
 Use [`dry_run`](@ref) to inspect a plan without applying it.
 """
@@ -3241,7 +3309,8 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
                  name::String = "pending_migration",
                  lock_wait::Real = 30,
                  lock_timeout::Union{Real, Nothing} = nothing,
-                 statement_timeout::Union{Real, Nothing} = nothing)::MigrationResult
+                 statement_timeout::Union{Real, Nothing} = nothing,
+                 atomic::Bool = true)::MigrationResult
   # --- Phase 1: Validate. Nothing here writes to the database. ---
   # First of all, because the folder is where the plan is read from (#683).
   Configuration._require_folder_backed(settings, "migrate")
@@ -3275,6 +3344,9 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # column below 12 — is refused here, before anything is written. `makemigrations` refuses it too,
   # but a plan made against a newer server can be applied to an older one.
   _refuse_statements_above_server(connection, ordered_statements)
+  # #1268: a plan applies whole or not at all only where its DDL runs in one transaction.
+  _require_atomic_plan(connection, ordered_statements, atomic)
+  _require_migration_timeouts(connection, timeouts)
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
   # lock meanwhile would stall every other instance booting against this database. TTY-aware:
@@ -3329,9 +3401,33 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
                                schema_tables = schema_tables)
 end
 
+# #1268: `migrate` promises a plan applies whole or not at all, which holds where the plan's DDL runs
+# inside one transaction (`:transactional_ddl`). Where it does not — each MySQL DDL statement commits on
+# its own — a plan of more than one statement is refused unless the caller accepts a part-applied
+# schema with `atomic = false`. One statement is atomic anywhere (MySQL 8.0's DDL is atomic per
+# statement), so it runs as it is.
+function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool)::Nothing
+  (atomic && length(statements) > 1) || return nothing
+  _require_feature(connection, :transactional_ddl,
+                   "Applying a migration plan of $(length(statements)) statements as one change";
+                   why = "Each statement commits on its own, so a failure part-way leaves the statements " *
+                         "before it applied. Call `migrate(…; atomic = false)` to apply it statement by " *
+                         "statement; after a failure, run `makemigrations` again, and `migrate` applies " *
+                         "the steps still missing.")
+end
+
+# `lock_timeout` and `statement_timeout` are PostgreSQL's `SET LOCAL` settings on the migration
+# transaction (#737). MySQL has neither for DDL (its `max_execution_time` bounds a SELECT only), so an
+# opt-in is refused there rather than ignored.
+_require_migration_timeouts(::Union{PormGPostgres, PormGSQLite}, ::_MigrationTimeouts)::Nothing = nothing
+function _require_migration_timeouts(connection::PormGMySQL, timeouts::_MigrationTimeouts)::Nothing
+  (timeouts.lock_timeout_ms === nothing && timeouts.statement_timeout_ms === nothing) && return nothing
+  throw(Dialect._mysql_not_yet("migrate(…; lock_timeout, statement_timeout)", "4b"))
+end
+
 # Whether `checksum` is the latest applied migration's — the #81 guard's question, asked outside
 # the lock and without creating the history table, which `migrate` has not ensured yet at this point.
-_plan_is_latest_applied(connection::Union{PormGPostgres, PormGSQLite}, checksum::String)::Bool =
+_plan_is_latest_applied(connection::_SQLEngine, checksum::String)::Bool =
   _migrations_table_exists(connection) && _latest_applied_checksum(connection) == checksum
 
 # ==============================================================================
@@ -3386,6 +3482,70 @@ function _run_locked_lifecycle(connection::PormGSQLite, settings::PormGSettings,
                     version, name, checksum, has_destructive, timeouts; schema_tables = schema_tables)
 end
 
+# MySQL serializes on `GET_LOCK`, the advisory lock `with_advisory_lock` takes there (#1269), under the
+# same key: a MySQL named lock is server-wide, so two databases on one server share it, which only
+# serializes migrations that could have run side by side.
+function _run_locked_lifecycle(connection::PormGMySQL, settings::PormGSettings,
+                               ordered_statements, all_sql, version, name, checksum, has_destructive;
+                               timeouts::_MigrationTimeouts = _migration_timeouts(),
+                               schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)
+  AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings); wait=true, timeout_ms=timeouts.lock_wait_ms) do
+    _locked_migration(connection, settings, ordered_statements, all_sql,
+                      version, name, checksum, has_destructive, timeouts; schema_tables = schema_tables)
+  end
+end
+
+# MySQL (#1268): no transaction to put the plan in, since each DDL statement commits on its own. The
+# statements run in order, and the history row is written once all of them have, `failed` when one
+# raised — the statements before it stay applied. Reached only with `atomic = false`, or for a plan of
+# one statement (`_require_atomic_plan`). A re-run finishes the plan through a new one: `makemigrations`
+# reads the part-applied schema and plans the steps still missing.
+function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSettings,
+                                      ordered_statements::Vector{String}, all_sql::String,
+                                      version::String, name::String, checksum::String,
+                                      has_destructive::Bool,
+                                      ::_MigrationTimeouts = _migration_timeouts();
+                                      schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
+  date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
+  # The #81 guard, as on PostgreSQL: a plan already applied whose files were not archived.
+  latest = _latest_applied(connection)
+  if latest !== nothing && String(latest[:checksum]) == checksum
+    @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
+    try
+      _archive_migration_files(settings, date_str)
+    catch e
+      @error "Error archiving already-applied migration files" exception=e
+    end
+    return MigrationResult(:already_applied, string(latest[:version]), 0)
+  end
+  schema_tables === nothing || _check_schema_precondition(connection, settings, schema_tables)
+
+  applied = 0
+  try
+    for statement in ordered_statements
+      @debug "Executing: $statement"
+      fetch(connection, statement)
+      applied += 1
+    end
+  catch e
+    try
+      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
+    catch record_err
+      @error "Failed to record migration failure in history table" exception=record_err
+    end
+    @error "Error applying migrations: the statements before the failed one stay applied; run `makemigrations` again and `migrate` to apply the rest" applied = applied total = length(ordered_statements) exception=e
+    rethrow(e)
+  end
+  _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive)
+  @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
+  try
+    _archive_migration_files(settings, date_str)
+  catch e
+    @error "Error archiving migration files (migration was applied successfully)" exception=e
+  end
+  return MigrationResult(:applied, version, length(ordered_statements))
+end
+
 # Everything `migrate` writes, in the order it writes it — on PostgreSQL all of it inside the
 # advisory lock (#737). The history-table DDL and the extension install used to run BEFORE the lock,
 # on every call: N instances booting together each issued `CREATE TABLE IF NOT EXISTS` and, with
@@ -3396,7 +3556,7 @@ end
 # The extension install stays ahead of the empty-plan return on purpose: `migrate` is the one
 # change_db-gated home for that DDL, so it provisions extensions even when there is no schema diff
 # (`docs/src/configuration/connection_yml.md`).
-function _locked_migration(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function _locked_migration(connection::_SQLEngine, settings::PormGSettings,
                            ordered_statements::Vector{String}, all_sql::String, version::String,
                            name::String, checksum::String, has_destructive::Bool,
                            timeouts::_MigrationTimeouts;
@@ -3706,7 +3866,7 @@ verifiable — passing neither is refused rather than fabricated (issue #81). De
 classified from `sql_content` when provided instead of being hard-coded, so a manually-reconciled
 destructive migration is still flagged in history.
 """
-function mark_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function mark_applied(connection::_SQLEngine, settings::PormGSettings,
                       version::String, name::String;
                       checksum::String = "", sql_content::String = "")
   # Validate arguments before touching the DB so a bad call is a pure ArgumentError.
@@ -3731,7 +3891,7 @@ ops that change an EXISTING record call it first (#733): their `UPDATE`/`DELETE`
 on a mistyped version, and they used to log success regardless — so the operator believed a record
 was reconciled when nothing had changed.
 """
-function _require_recorded_version(connection::Union{PormGPostgres, PormGSQLite}, version::String, op::String)
+function _require_recorded_version(connection::_SQLEngine, version::String, op::String)
   any(r -> string(r[:version]) == version, _get_applied_migrations(connection)) && return nothing
   throw(InvalidMigrationError(
     "$op: no migration record has version '$version', so nothing was changed. " *
@@ -3746,7 +3906,7 @@ Useful after manual investigation of a partially-applied migration.
 
 Raises `InvalidMigrationError` when no record has `version`, and changes nothing.
 """
-function mark_failed(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function mark_failed(connection::_SQLEngine, settings::PormGSettings,
                      version::String)
   # Before `init_migrations`, so a refused call does not even create the history table.
   _require_recorded_version(connection, version, "mark_failed")
@@ -3769,7 +3929,7 @@ manual rollbacks or test scenarios.
 
 Raises `InvalidMigrationError` when no record has `version`, and changes nothing.
 """
-function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function remove_migration_record(connection::_SQLEngine, settings::PormGSettings,
                                  version::String)
   # Before `init_migrations`, so a refused call does not even create the history table.
   _require_recorded_version(connection, version, "remove_migration_record")
@@ -3917,6 +4077,10 @@ function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, se
   return _run_once_locked(f, connection, settings, step, transaction, timeouts)
 end
 
+# MySQL (#1130): a data step is phase 4b's. Refused before `f` runs or the step table is touched.
+run_once(f::Function, connection::PormGMySQL, settings::PormGSettings, name::AbstractString; kwargs...)::Symbol =
+  throw(Dialect._mysql_not_yet("run_once", "4b"))
+
 function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,PormGSettings} = config,
                   transaction::Bool = true, lock_wait::Real = 30)::Symbol
   settings = config[db]
@@ -3984,7 +4148,7 @@ _record_data_step(connection::Union{PormGPostgres, PormGSQLite}, step::String, t
 
 # The recorded data steps for `status()`: empty when the table does not exist yet, which `status`
 # reports rather than creates — it is read-only.
-function _data_steps(connection::Union{PormGPostgres, PormGSQLite})::Vector{NamedTuple}
+function _data_steps(connection::_SQLEngine)::Vector{NamedTuple}
   exists = DataFrame(fetch(connection, Dialect.data_steps_table_exists_sql(connection)))[1, 1]
   (exists === true || (exists isa Integer && exists > 0)) || return NamedTuple[]
   rows = DataFrame(fetch(connection, Dialect.select_all_data_steps_sql(connection)))

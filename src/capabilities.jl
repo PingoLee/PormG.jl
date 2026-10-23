@@ -58,6 +58,11 @@ const _BACKEND_FEATURES = (
   # #1266: PostgreSQL draws ids from the pk's sequence, SQLite reserves them in `sqlite_sequence`;
   # MySQL's AUTO_INCREMENT cannot be drawn ahead of the INSERT.
   :preallocated_keys      => "drawing auto-increment keys before the rows are written",
+  # #1268: PostgreSQL's DDL is transactional, and SQLite's runs inside `BEGIN IMMEDIATE`; each MySQL DDL
+  # statement commits on its own (atomic alone on 8.0+, but a plan of several is not).
+  :transactional_ddl      => "transactional DDL (a migration plan's statements in one transaction, applied whole or not at all)",
+  # MySQL has no partial index (`CREATE INDEX … WHERE`).
+  :partial_indexes        => "a partial index (an index with a `WHERE` condition)",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
@@ -89,14 +94,18 @@ for f in _FEATURE_NAMES
   @eval _has_feature(::Type{<:PormGPostgres}, ::Val{$(QuoteNode(f))}) = true
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
-          :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys)
+          :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys,
+          :transactional_ddl, :partial_indexes)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
 # connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269). Phase 2c-2: `ROUND`
 # takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4). Phase 2c-3b: window functions
 # (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.
-for f in (:supported_server, :advisory_locks, :negative_round_precision, :window_functions)
+# Phase 4a: migrations on a schema created from nothing — reading the schema from `information_schema`
+# and a migration plan's DDL, both from the 8.4 floor, with no version row of their own.
+for f in (:supported_server, :advisory_locks, :negative_round_precision, :window_functions,
+          :schema_introspection, :migration_plans)
   @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 

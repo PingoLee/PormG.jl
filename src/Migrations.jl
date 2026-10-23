@@ -54,7 +54,7 @@ import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name, model_table_name, model_is_managed, fk_target_table
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
-import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
+import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL, _SQLEngine
 # The canonical column IR (#507). The NOUNS live in `Kernel` (`src/column_ir.jl`) because `Dialect`
 # renders an ALTER from a `ColumnDelta` and is included before this module; the COMPILER that turns a
 # `PormGField` into a `ColumnSpec` is `migrations/column_spec.jl`, here, where `Models` and `Dialect`
@@ -91,7 +91,7 @@ import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
 # The two forward type maps (`sqlite_type_map` / `postgres_type_map`) were imported here until #522
 # retired them: the readers compile a catalog type through `parse_canonical_type` now, and nothing
 # maps a rendered type back to a field struct any more.
-import PormG: sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
+import PormG: sqlite_ignore_schema, postgres_ignore_table, mysql_ignore_table, _EXTRA_IGNORE_TABLES
 # #522: `convertSQLToModel(::String)` executes its statement in a throwaway SQLite file and reads it
 # back through the live reader, so the pool constructor and its close are needed here — and, per the
 # #276 note above, must be on an explicit import list to be visible in this module.

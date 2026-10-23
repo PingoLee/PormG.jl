@@ -16,11 +16,16 @@
 # per-slot `ALTER` statements and named constraint DDL instead.
 _rebuilds_table(::PormGPostgres) = false
 _rebuilds_table(::PormGSQLite) = true
+# MySQL alters in place (`ALTER TABLE … MODIFY COLUMN`, named constraints), as PostgreSQL does (#1130).
+_rebuilds_table(::PormGMySQL) = false
 
 # An index the declaration matches but PormG did not create is ADOPTED by stamping PormG's marker in
 # its comment (#29). SQLite has no comment on an index to stamp.
 _adopts_indexes(::PormGPostgres) = true
 _adopts_indexes(::PormGSQLite) = false
+# MySQL has an index COMMENT, but PormG writes no marker there until phase 4c (#1130): an index it did
+# not create is not adopted.
+_adopts_indexes(::PormGMySQL) = false
 
 # A renamed model-level index is renamed in place. SQLite has no `ALTER INDEX … RENAME`, so the index
 # is dropped and re-created under its new name.
@@ -32,14 +37,19 @@ _can_rename_index(::PormGSQLite) = false
 # case-insensitively.
 _composite_name_key(conn::PormGPostgres, name::String)::String = _catalog_index_name(conn, name)
 _composite_name_key(conn::PormGSQLite, name::String)::String = lowercase(_catalog_index_name(conn, name))
+# MySQL keeps the name (one longer than 64 characters is error 1059) and compares index names
+# case-insensitively.
+_composite_name_key(conn::PormGMySQL, name::String)::String = lowercase(_catalog_index_name(conn, name))
 
 # The built-in ignore list a connection reads the schema with (`_backend_ignore_tables` adds the
 # `unignore_defaults:` entries on top).
 _builtin_ignore_tables(::PormGPostgres)::Vector{String} = postgres_ignore_table
 _builtin_ignore_tables(::PormGSQLite)::Vector{String} = sqlite_ignore_schema
+_builtin_ignore_tables(::PormGMySQL)::Vector{String} = mysql_ignore_table
 # … and that list's name, as a refusal names it (#805).
 _builtin_ignore_tables_name(::PormGPostgres) = "postgres_ignore_table"
 _builtin_ignore_tables_name(::PormGSQLite) = "sqlite_ignore_schema"
+_builtin_ignore_tables_name(::PormGMySQL) = "mysql_ignore_table"
 
 # A retype between two types with no implicit cast needs `USING` — the column holds the OLD type until
 # it runs, so a CHECK count against it would compare the wrong type (#828). SQLite's rebuild copies

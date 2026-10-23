@@ -1792,6 +1792,10 @@ _format_default_sql_value(default_value::AbstractVector{UInt8}, ::PormGPostgres)
 _format_default_sql_value(default_value::AbstractVector{UInt8}, ::PormGSQLite)::String =
   "X'$(bytes2hex(default_value))'"
 _format_default_sql_value(default_value, ::PormGBackend) = _format_default_sql_value(default_value)
+# MySQL reads a backslash in a string literal as an escape (the session's `sql_mode` keeps them), so a
+# default's backslashes are doubled as well as its quotes (#1130 phase 4a).
+_format_default_sql_value(default_value::AbstractString, ::PormGMySQL)::String =
+  "'" * replace(default_value, "\\" => "\\\\", "'" => "''") * "'"
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -4621,5 +4625,253 @@ Every recorded data step, in the order they were applied.
 function select_all_data_steps_sql(conn::Union{PormGPostgres, PormGSQLite})::String
   return """SELECT "name", "transactional", "applied_at" FROM pormg_migrations_data ORDER BY "id" ASC;"""
 end
+
+# ── MySQL DDL (#1130 phase 4a: a schema created from nothing) ─────────────────────────────────────
+#
+# Every MySQL statement quotes with backticks: the session's `sql_mode` leaves out `ANSI_QUOTES`, so a
+# double-quoted name is a string literal there (`ORDER BY "version"` would order by a constant). The
+# planner quotes its identifiers through `_ddl_ident`, which is this file's escape on PostgreSQL and
+# SQLite and the backtick one on MySQL.
+#
+# Measured on MySQL 8.4 (the probes are recorded in the 4a PR):
+#   * `DATETIME(3) DEFAULT CURRENT_TIMESTAMP` is error 1067: the default takes the column's precision,
+#     `CURRENT_TIMESTAMP(3)`, which reads back as `CURRENT_TIMESTAMP(3)`; `(CURRENT_DATE)` reads back as
+#     `curdate()`, both flagged `DEFAULT_GENERATED`.
+#   * a TEXT/BLOB/JSON column takes only an expression default (error 1101 for a bare literal), so a
+#     literal is written `('…')`, which reads back as `_utf8mb4\'…\'`.
+#   * there is no `CREATE INDEX IF NOT EXISTS`, and a two-statement batch is a syntax error.
+#   * InnoDB accepts `ON DELETE SET DEFAULT` and reports it, but enforces RESTRICT (1451). PormG's delete
+#     collector applies SET_DEFAULT itself before it deletes the parent (#1130 phase 3a).
+
+"""
+    _ddl_ident(conn, name) -> String
+
+One identifier as DDL writes it on `conn`: `"name"` (with `"` doubled) on PostgreSQL and SQLite,
+`` `name` `` (with `` ` `` doubled) on MySQL. The planner quotes every table, column, index and
+constraint name it hands a renderer through this, so the renderer receives the engine's own quoting.
+"""
+_ddl_ident(::Union{PormGPostgres, PormGSQLite}, name::Union{AbstractString, Symbol})::String =
+  "\"$(_quote_table_ddl(name))\""
+_ddl_ident(::PormGMySQL, name::Union{AbstractString, Symbol})::String = "`$(replace(String(name), "`" => "``"))`"
+
+# The table options every MySQL `CREATE TABLE` carries: InnoDB (foreign keys, transactions) and the
+# binary utf8mb4 collation the connection pins, so a text comparison means what it means elsewhere
+# (#1265).
+const MYSQL_TABLE_OPTIONS = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"
+
+# A `db_default` outside the portable vocabulary is refused until phase 4c: MySQL re-prints an expression
+# (`'x'` as `_utf8mb4\'x\'`, `CURRENT_TIMESTAMP(3)` as itself), and the ownership marker that lets
+# PostgreSQL tell its own default from a changed one cannot be written by a MySQL statement.
+_parenthesizes_db_default(::PormGMySQL) = true
+
+_mysql_not_yet(what::AbstractString, phase::AbstractString = "4c") = UnsupportedConnectionError(
+  "$(what) is not supported on MySQL yet: the MySQL migrations arrive in phases, and this one is phase " *
+  "$(phase)'s (#1130).")
+
+function _get_column_type(field::PormGField, conn::PormGMySQL; type_map = nothing)::String
+  field isa sIDField && return "BIGINT"
+  field isa sCharField && return "VARCHAR($(hasproperty(field, :max_length) ? field.max_length : 250))"
+  field isa sURLField && return "VARCHAR($(hasproperty(field, :max_length) ? field.max_length : 200))"
+  field isa sSlugField && return "VARCHAR($(hasproperty(field, :max_length) ? field.max_length : 50))"
+  # LONGTEXT, not TEXT: TEXT holds 64 KiB, a bound the text column has on no other engine.
+  field isa sTextField && return "LONGTEXT"
+  field isa sBooleanField && return "TINYINT(1)"
+  field isa sIntegerField && return "INT"
+  field isa sBigIntegerField && return "BIGINT"
+  # No UNSIGNED: an unsigned column turns a subtraction below zero into an error, a different meaning;
+  # the non-negative CHECK keeps the bound, as on PostgreSQL.
+  field isa sPositiveSmallIntegerField && return "SMALLINT"
+  field isa sPositiveIntegerField && return "INT"
+  field isa sFloatField && return "DOUBLE"
+  if field isa sDecimalField
+    p = hasproperty(field, :max_digits) ? field.max_digits : 10
+    s = hasproperty(field, :decimal_places) ? field.decimal_places : 2
+    return "DECIMAL($(p),$(s))"
+  end
+  field isa sDateField && return "DATE"
+  field isa sDateTimeField && return "DATETIME(3)"     # what PormG reads and writes (#1270)
+  field isa sTimeField && return "TIME(6)"             # microseconds, as PostgreSQL's `time`
+  field isa sDurationField && return "BIGINT"          # its microseconds (#1130 phase 2b)
+  field isa sRelationalColumn && return "BIGINT"       # the referenced key's type, as on PostgreSQL (#408)
+  field isa sUUIDField && return "CHAR(36)"            # the text MySQL compares a uuid as (#1270)
+  field isa sJSONField && return "JSON"
+  field isa sBinaryField && return "LONGBLOB"
+  # Network types, arrays and a tsvector are refused by `_refuse_unsupported_type` before any DDL; this
+  # text is the migration compiler's only.
+  return "LONGTEXT"
+end
+
+# A column whose type takes no literal default (error 1101), so a literal is written as an expression.
+_mysql_expression_only(base_type::AbstractString)::Bool =
+  occursin(r"^(LONGTEXT|LONGBLOB|JSON)$", base_type)
+
+# The `DEFAULT` clause, or `nothing`. The portable vocabulary is spelled the way MySQL requires it on
+# this column; any other expression is refused (`_mysql_not_yet`).
+function _mysql_default_clause(field::PormGField, col_name::AbstractString, base_type::AbstractString,
+                               conn::PormGMySQL; temporary_default = nothing)::Union{String, Nothing}
+  # A per-engine pin names `postgres` and `sqlite` only (the constructor takes no `mysql` key), so its
+  # refusal's advice — add the MySQL spelling — could not be followed yet.
+  hasfield(typeof(field), :db_default) && getfield(field, :db_default) isa NamedTuple &&
+    throw(_mysql_not_yet("The per-engine db_default on column \"$(col_name)\" (MySQL takes " *
+                         "$(join(PORTABLE_DB_DEFAULTS, " and ")) until then)"))
+  db_expr = db_default_sql(field, conn)
+  if db_expr !== nothing
+    word = uppercase(db_expr)
+    word == "CURRENT_TIMESTAMP" && return "DEFAULT " *
+      (Base.startswith(base_type, "DATETIME(") ? "CURRENT_TIMESTAMP$(base_type[9:end])" : "CURRENT_TIMESTAMP")
+    word == "CURRENT_DATE" && return "DEFAULT (CURRENT_DATE)"
+    throw(_mysql_not_yet("The db_default $(db_expr) on column \"$(col_name)\" (an expression other than " *
+                         "$(join(PORTABLE_DB_DEFAULTS, ", ")))"))
+  end
+  value = field.default !== nothing ? field.default : temporary_default
+  value === nothing && return nothing
+  value isa AbstractVector{UInt8} && throw(_mysql_not_yet("A default value for the binary column \"$(col_name)\""))
+  literal = _format_default_sql_value(value, conn)
+  return _mysql_expression_only(base_type) ? "DEFAULT ($(literal))" : "DEFAULT $(literal)"
+end
+
+function field_to_column(col_name::String, field::PormGField, conn::PormGMySQL; temporary_default::Any = nothing)::String
+  col_name = field_db_column(field, col_name)        # db_column when set (#50)
+  _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
+  generated_sql(field) === nothing || throw(_mysql_not_yet("The generated column \"$(col_name)\""))
+  base_type = _get_column_type(field, conn)
+  ident = _ddl_ident(conn, col_name)
+  parts = String[ident, base_type]
+  push!(parts, (hasproperty(field, :null) && field.null) ? "NULL" : "NOT NULL")
+  default = _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default)
+  default === nothing || push!(parts, default)
+  primary = hasproperty(field, :primary_key) && getfield(field, :primary_key)
+  primary && field isa sIDField && push!(parts, "AUTO_INCREMENT")
+  field.unique && !primary && push!(parts, "UNIQUE")
+  primary && push!(parts, "PRIMARY KEY")
+  # PormG's own CHECKs, as on the other engines; the reader recognises their fixed shapes.
+  _requires_non_negative_check(field) && push!(parts, "CHECK ($(ident) >= 0)")
+  _requires_byte_length_check(field) && push!(parts, "CHECK (LENGTH($(ident)) <= $(field.max_length))")
+  return join(parts, " ")
+end
+
+function create_table(conn::PormGMySQL, table_name::String, columns::Vector{String})
+  return """CREATE TABLE IF NOT EXISTS $(_ddl_ident(conn, table_name)) (\n  $(join(columns, ",\n  "))
+    ) $(MYSQL_TABLE_OPTIONS);"""
+end
+
+# As on PostgreSQL, the table carries no foreign key: the planner adds each with `add_foreign_key` once
+# every table exists. A declared `CheckConstraint` is refused until phase 4c: a MySQL constraint takes no
+# comment, so there is nowhere to keep the marker that says PormG owns it.
+function create_table(conn::PormGMySQL, model::PormGModel)
+  isempty(Models.declared_check_constraints(model)) ||
+    throw(_mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
+  columns = String[]
+  for (field_name, field) in model.fields
+    field isa sManyToManyField && continue
+    push!(columns, field_to_column(string(field_name), field, conn))
+  end
+  return create_table(conn, model_table_name(model), columns)
+end
+
+# `table_name` arrives quoted by the planner (`_ddl_ident`), as every argument below but the table.
+function add_foreign_key(conn::PormGMySQL, table_name::Union{Symbol, String}, constraint_name::String, field_name::String,
+                         ref_table_name::String, ref_field_name::String; on_delete::Union{String, Nothing} = nothing)
+  on_delete_clause = on_delete !== nothing ? " ON DELETE $on_delete" : ""
+  # Checked at the statement: InnoDB has no deferrable foreign key (#1272).
+  return """ALTER TABLE $(_ddl_ident(conn, table_name)) ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause;"""
+end
+
+# The options an index takes on PostgreSQL that MySQL has no counterpart for, or that phase 4c owns.
+function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, include, expressions, condition)
+  method == "btree" || throw(_capability_error(conn, :index_methods, "An index declaring method = \"$(method)\""))
+  any(!isnothing, opclasses) && throw(_capability_error(conn, :index_methods, "An index declaring opclasses = $(Tuple(opclasses))"))
+  isempty(include) || throw(_capability_error(conn, :index_methods, "An index declaring include = $(Tuple(include))"))
+  condition === nothing || throw(_capability_error(conn, :partial_indexes, "An index declaring condition = $(repr(condition))"))  # refusal-value-ok: the model's own index condition (DDL)
+  isempty(expressions) || throw(_mysql_not_yet("A functional index (expressions = $(Tuple(expressions)))"))
+  return nothing
+end
+
+# No `IF NOT EXISTS`: MySQL has none for an index (measured). The planner emits a create only for an
+# index the live schema lacks.
+function create_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
+                      if_not_exists::Bool = true, method::String = "btree",
+                      descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
+                      expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
+                      marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
+  _refuse_mysql_index_options(conn; method, opclasses, include, expressions, condition)
+  members = join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
+  return """CREATE INDEX $(index_name) ON $(table_name) ($(members));"""
+end
+
+function create_unique_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
+                             if_not_exists::Bool = true, expressions::AbstractVector = String[],
+                             condition::Union{AbstractString, Nothing} = nothing,
+                             marker::Union{String, Nothing} = nothing)
+  _refuse_mysql_index_options(conn; method = "btree", opclasses = Union{String, Nothing}[], include = String[],
+                              expressions, condition)
+  members = join(_index_members(columns, Bool[], Union{String, Nothing}[]), ", ")
+  return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(members));"""
+end
+
+# The one column change phase 4a plans on MySQL is a foreign key added to a column that has none
+# (`Migrations._require_column_alters`): the column itself is unchanged, so there is nothing to alter, and
+# the planner adds the constraint after (`add_foreign_key`), as on PostgreSQL. Any other change is phase
+# 4b's.
+function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField,
+                     delta::ColumnDelta; catalog_table::Union{Symbol,String} = model_table_name(model))::String
+  delta.changed == [:reference] && delta.old_spec.reference === nothing && return ""
+  throw(_mysql_not_yet("Altering column \"$(field_name)\" of table \"$(catalog_table)\"", "4b"))
+end
+
+# No `CASCADE`: MySQL's `DROP TABLE` takes none, and refuses a table another's foreign key references.
+drop_table(conn::PormGMySQL, table_name::Union{String, Symbol}) = """DROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));"""
+
+# The history table on MySQL: an AUTO_INCREMENT id, `DATETIME(3)` stamps, and `('')` for the TEXT
+# default (a literal is refused there).
+function create_migrations_table(conn::PormGMySQL)::String
+  return """CREATE TABLE IF NOT EXISTS `pormg_migrations` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `version` VARCHAR(17) NOT NULL UNIQUE,
+  `name` VARCHAR(255) NOT NULL,
+  `checksum` VARCHAR(64) NOT NULL,
+  `sql_content` LONGTEXT NOT NULL DEFAULT (''),
+  `applied_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `status` VARCHAR(20) NOT NULL DEFAULT 'applied',
+  `is_destructive` TINYINT(1) NOT NULL DEFAULT 0,
+  `format_version` INT NOT NULL DEFAULT 1
+) $(MYSQL_TABLE_OPTIONS);"""
+end
+
+insert_migration_record_sql(conn::PormGMySQL)::String =
+  """INSERT INTO `pormg_migrations` (`version`, `name`, `checksum`, `sql_content`, `status`, `is_destructive`, `format_version`) VALUES (?, ?, ?, ?, ?, ?, ?);"""
+update_migration_status_sql(conn::PormGMySQL)::String =
+  """UPDATE `pormg_migrations` SET `status` = ? WHERE `version` = ?;"""
+select_all_migrations_sql(conn::PormGMySQL)::String =
+  """SELECT `id`, `version`, `name`, `checksum`, `sql_content`, `applied_at`, `status`, `is_destructive`, `format_version` FROM `pormg_migrations` ORDER BY `version` ASC;"""
+select_migration_by_version_sql(conn::PormGMySQL)::String =
+  """SELECT `id`, `version`, `name`, `checksum`, `sql_content`, `applied_at`, `status`, `is_destructive`, `format_version` FROM `pormg_migrations` WHERE `version` = ?;"""
+delete_migration_record_sql(conn::PormGMySQL)::String =
+  """DELETE FROM `pormg_migrations` WHERE `version` = ?;"""
+# Scoped to the connection's database: MySQL's `information_schema` lists every schema on the server.
+migrations_table_exists_sql(conn::PormGMySQL)::String =
+  """SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pormg_migrations';"""
+add_format_version_column_sql(conn::PormGMySQL)::String =
+  """ALTER TABLE `pormg_migrations` ADD COLUMN `format_version` INT NOT NULL DEFAULT 1;"""
+migrations_table_info_sql(conn::PormGMySQL)::String =
+  """SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pormg_migrations';"""
+
+function create_data_steps_table(conn::PormGMySQL)::String
+  return """CREATE TABLE IF NOT EXISTS `pormg_migrations_data` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(255) NOT NULL UNIQUE,
+  `transactional` TINYINT(1) NOT NULL,
+  `applied_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `format_version` INT NOT NULL DEFAULT 1
+) $(MYSQL_TABLE_OPTIONS);"""
+end
+data_steps_table_exists_sql(conn::PormGMySQL)::String =
+  """SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pormg_migrations_data';"""
+insert_data_step_sql(conn::PormGMySQL)::String =
+  """INSERT INTO `pormg_migrations_data` (`name`, `transactional`, `format_version`) VALUES (?, ?, 1);"""
+select_data_step_sql(conn::PormGMySQL)::String =
+  """SELECT `id` FROM `pormg_migrations_data` WHERE `name` = ?;"""
+select_all_data_steps_sql(conn::PormGMySQL)::String =
+  """SELECT `name`, `transactional`, `applied_at` FROM `pormg_migrations_data` ORDER BY `id` ASC;"""
 
 end

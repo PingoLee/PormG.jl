@@ -511,13 +511,14 @@ function process_collector!(collector::DeletionCollector)
   collect_fast_deletes!(collector)
   
   # Topologically sort models for deletion
-  collector.sorted_models = topological_sort(collector.dependencies; connection = collector.connection)
+  collector.sorted_models = topological_sort(collector.dependencies)
 end
 
 function should_check_related_existence(collector::DeletionCollector)::Bool
   pool = collector.settings.connections
   connection_pool = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-  return pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool
+  return pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool ||
+         pool isa connection_pool.MySQLConnectionPool   # #1130: a live MySQL pool probes like the others
 end
 
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
@@ -698,22 +699,16 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
 end
 
 # Children first: the reverse of a parents-first walk. A cycle in `dependencies` — two tables whose
-# rows reference each other, or one table's rows referencing others of the same table — has no order
-# in which every statement leaves the foreign keys satisfied. Refused as a `QueryBuildError` on every
-# engine. On an engine whose foreign keys cannot be checked at COMMIT (MySQL, `:deferred_foreign_keys`),
-# it is that missing feature PormG would need, so the refusal names it there (#1272).
-function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}}; connection = nothing)
+# rows reference each other, or one table's rows referencing others of the same table — has no such
+# order, and is refused on every engine; on MySQL, which checks a foreign key at each statement
+# (#1272), no order of statements could carry it either.
+function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   result = Vector{PormGModel}()
   temp_mark = Set{PormGModel}()
   perm_mark = Set{PormGModel}()
   
   function visit(node)
     if node in temp_mark
-      connection === nothing || _supports(connection, :deferred_foreign_keys) ||
-        throw(_capability_error(connection, :deferred_foreign_keys,
-          "Deleting rows of $(node.name) whose foreign keys form a cycle (rows that reference rows of the same table, or tables that reference each other)";
-          why = "Every statement of a delete is checked as it runs, so no order of them leaves those keys satisfied. " *
-                "Delete the rows in an order you choose, one level at a time, or declare the foreign key ON DELETE CASCADE in the schema."))
       throw(QueryBuildError("Circular dependency detected in model relationships"))
     end
     
@@ -1047,7 +1042,7 @@ function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQ
   work = deepcopy(key[:objct].object)
   empty!(work.values)
   # #1002: a row predicate — `pk IN (…)` and an `EXISTS` fence — so a repeated row is invisible.
-  return build(work, connection=connection, parameters=parameters, semi_join=true)
+  return build(work, connection=connection, parameters=parameters, semi_join=true, mutation=true)
 end
 
 function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

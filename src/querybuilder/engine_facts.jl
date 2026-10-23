@@ -91,12 +91,11 @@ function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
   pk === nothing && return nothing
   name = String(pk)
   field = model.fields[name]
-  value = if _is_auto_generated_bulk_primary_key(field)
-    id = backend_last_insert_id(conn, result)
-    id == 0 ? nothing : id
-  else
-    haskey(insert, name) ? _format_single(field, name, insert[name], "insert") : nothing
-  end
+  # The OK packet's id first: it is the stored value whether the server generated it or the caller
+  # supplied it (a supplied 0 generates one). It is 0 when the table has no AUTO_INCREMENT, and then a
+  # supplied key is read back by the value the INSERT bound.
+  id = _is_auto_generated_bulk_primary_key(field) ? backend_last_insert_id(conn, result) : 0
+  value = id != 0 ? id : haskey(insert, name) ? _format_single(field, name, insert[name], "insert") : nothing
   value === nothing && return nothing
   params = get_parameter(conn)
   set_context!(params, :where)
@@ -173,6 +172,14 @@ function _update_row_count(conn::PormGSQLite, settings, sql, parameters)
 end
 _update_row_count(conn::PormGMySQL, settings, sql, parameters) =
   backend_num_affected_rows(conn, fetch(settings, sql, parameters))
+
+# An UPDATE's SET items are assigned in order, so an item reads a column an earlier one already wrote
+# at its new value: MySQL's single-table UPDATE (measured on 8.4; its multi-table order is unspecified).
+# PostgreSQL and SQLite evaluate every item against the row as it was (#1130,
+# `_refuse_set_reading_assigned`).
+_assigns_set_in_order(::PormGPostgres) = false
+_assigns_set_in_order(::PormGSQLite) = false
+_assigns_set_in_order(::PormGMySQL) = true
 
 # `select_for_update()` takes a real row lock. On SQLite the clause renders `""` (#26), so the guard
 # that exists because of the lock itself — no `distinct()` — does not apply. The transaction

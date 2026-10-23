@@ -1183,6 +1183,32 @@ function _refuse_update_non_number(f_meta, field::AbstractString, value, instruc
     "Write a numeric expression into `$(field)`, or write the value into a field of its own type."))
 end
 
+# #1130: an UPDATE whose SET reads a column another item of the same SET writes, on an engine that
+# assigns SET items in order (`_assigns_set_in_order`, MySQL). Every item means the row as it was: a
+# swap `update("laps" => F("grid"), "grid" => F("laps"))` exchanges the two on PostgreSQL and SQLite.
+# MySQL's single-table UPDATE reads an item already assigned at its new value (measured on 8.4: the
+# swap writes `grid` into both), and leaves the order of a multi-table one unspecified. So an item that
+# reads a column written EARLIER in the SET is refused, or, in the multi-table form, written anywhere
+# else in it. An item that reads its own column (`"laps" => F("laps") + 1`), or one written later in a
+# single-table SET, reads the old value and builds. A column is read when its alias-qualified name is
+# in the item's SQL, the only spelling PormG renders a target column in.
+function _refuse_set_reading_assigned(fields::Vector{String}, parts::Vector{String}, alias::String,
+                                      multi_table::Bool, connection)
+  columns = [first(split(p, " = "; limit = 2)) for p in parts]
+  for (i, part) in enumerate(parts)
+    rhs = last(split(part, " = "; limit = 2))
+    for (j, column) in enumerate(columns)
+      (j == i || (!multi_table && j > i)) && continue
+      occursin(string(alias, ".", column), rhs) || continue
+      throw(QueryBuildError("update(\"$(fields[i])\" => …) reads `$(fields[j])`, which the same update() also " *
+        "writes. $(_backend_name(connection)) assigns an UPDATE's SET items in order, so it would read the new " *
+        "value of `$(fields[j])`, where the update means the row as it was. Split it into two update() calls, " *
+        "or write the value both items mean."))
+    end
+  end
+  return nothing
+end
+
 # The `UPDATE … FROM` text PostgreSQL and SQLite share (`_update_from_sql`).
 _update_from_clause_sql(table, alias, set_parts, from_clause, where_sql) = """
   UPDATE $(table) AS $(alias)
@@ -1218,7 +1244,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
   # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
   # itself (`_get_join_condition_list`).
-  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true)
+  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
@@ -1241,6 +1267,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Switch context to :update for SET clause params (SET appears before WHERE/JOIN in SQL)
   set_context!(parameters, :update)
   set_clause_parts = String[]
+  set_fields = String[]   # #1130: the field each SET item writes, item for item
   for field in keys(objct.insert)    
     # Validation checks
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
@@ -1266,7 +1293,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
           "operand (#1021)."))
       _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
-      push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
     # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
     # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
     # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
@@ -1275,11 +1302,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       f_value = _set_update_query(objct.insert[field], instruction)
       _refuse_update_non_number(model.fields[field], field, objct.insert[field], instruction)
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
-      push!(set_clause_parts, "$(quoted_field) = $(f_value)")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
       formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")
       placeholder = add_parameter!(parameters, formatted_value)
-      push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
+      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end
   end
    
@@ -1290,6 +1317,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   safe_alias = quote_identifier(instruction.alias, connection)
 
   has_joins = !isempty(instruction.row_join)
+  multi_table = false   # #1130: MySQL's multi-table UPDATE, whose SET order is unspecified
   sql = ""
   
   if has_joins
@@ -1321,7 +1349,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           fence_work = deepcopy(real_obj)
           empty!(fence_work.values)
           mark = nested_parameter_mark(parameters)
-          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true)
+          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
+                        mutation=true)
           fence_run = detach_nested_run!(parameters, mark)
           set_context!(parameters, :where)
           reattach_parameters!(parameters, fence_run)
@@ -1347,6 +1376,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         
         sql = _update_from_sql(connection, safe_table_name, safe_alias, set_clause_parts, from_clause,
                                join(final_where, " AND "))
+        multi_table = true
       end
     end
   else
@@ -1357,6 +1387,9 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     WHERE $(join(instruction._where, " AND \n   "))
     """
   end
+
+  _assigns_set_in_order(connection) &&
+    _refuse_set_reading_assigned(set_fields, set_clause_parts, safe_alias, multi_table, connection)
 
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model.name, :update; 

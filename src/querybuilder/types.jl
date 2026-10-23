@@ -534,6 +534,8 @@ end
   # #1130: the ORDER BY terms whose NULL sort key kept the projection's alias, which no FROM column
   # named when ORDER BY rendered; `_refuse_late_shadowed_null_key` rechecks them once every join exists.
   alias_null_keys::Vector{String} = String[]
+  # #1130: this build is the predicate of an UPDATE or DELETE (`build(…; mutation = true)`).
+  mutation::Bool = false
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query

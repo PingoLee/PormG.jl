@@ -147,6 +147,10 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
             @test W.Driver.objects.filter("id" => alesi.id).update("surname" => F("team__name")) == 1
             @test only(W.Driver.objects.filter("id" => alesi.id).values("surname").list())[:surname] == "Ferrari"
             W.Driver.objects.filter("id" => alesi.id).update("surname" => "Alesi")
+            # A SET that reads a column the same update writes would read its new value on MySQL: refused.
+            e = caught(() -> W.Team.objects.filter("id" => mclaren).update("name" => F("country"), "country" => F("name")))
+            @test e isa PormG.QueryBuildError && occursin("in order", msg(e))
+            @test only(W.Team.objects.filter("id" => mclaren).values("name", "country").list())[:name] == "McLaren"
             # `save` writes the fields the row changed.
             row = W.Driver.objects.filter("id" => senna.id).get()
             row.points = 9.0
@@ -171,7 +175,7 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
             total, counts = W.Driver.objects.filter("id" => ids["Prost"]).delete()
             @test total == 1 && counts == Dict("p3w_driver" => 1)
             note = only(W.Note.objects.filter("text" => "prost").values("driver", "fallback").list())
-            @test ismissing(note[:driver]) || note[:driver] === nothing
+            @test ismissing(note[:driver])
             @test note[:fallback] == 1
             # PROTECT: refused before anything is deleted.
             e = caught(() -> W.Driver.objects.filter("id" => ids["Alesi"]).delete())
@@ -186,7 +190,19 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
             @test total == 2 && counts == Dict("p3w_team" => 1, "p3w_driver" => 1)
             @test W.Driver.objects.filter("id" => ids["Alesi"]).count() == 0
             alesi_note = only(W.Note.objects.filter("text" => "alesi").values("driver").list())
-            @test ismissing(alesi_note[:driver]) || alesi_note[:driver] === nothing
+            @test ismissing(alesi_note[:driver])
+            # A filter that reads the table the statement writes (`id__@in` over the same model): MySQL
+            # refuses such a subquery (error 1093) unless it is read through a derived table, which a
+            # mutation's membership subquery is. The same path scopes a cascade child by its parents.
+            williams = only(W.Team.objects.filter("name" => "Williams").values("id").list())[:id]
+            mansell = W.Driver.objects.create("team" => williams, "surname" => "Mansell")
+            patrese = W.Driver.objects.create("team" => williams, "surname" => "Patrese")
+            same = () -> W.Driver.objects.filter("team" => williams, "surname" => "Mansell").values("id")
+            @test W.Driver.objects.filter("id__@in" => same()).update("points" => 3.0) == 1
+            @test only(W.Driver.objects.filter("id" => mansell.id).values("points").list())[:points] === 3.0
+            total, counts = W.Driver.objects.filter("id__@in" => same()).delete()
+            @test total == 1 && counts == Dict("p3w_driver" => 1)
+            @test [r[:id] for r in W.Driver.objects.filter("team" => williams).values("id").list()] == [patrese.id]
             # A joined filter on the root: the derived-table selection, then the fence.
             mclaren = only(W.Team.objects.filter("name" => "McLaren").values("id").list())[:id]
             extra = W.Driver.objects.create("team" => mclaren, "surname" => "Berger")
@@ -201,9 +217,9 @@ if only_on(:mysql, "writes through the MySQL query builder (phase 3a)")
         @testset "no deferred foreign keys: self-referencing deletes and without_foreign_keys are refused" begin
             root = W.Node.objects.create("name" => "root")
             W.Node.objects.create("up" => root.id, "name" => "leaf")
+            # Refused as on every engine: no order of statements leaves the rows' keys satisfied.
             e = caught(() -> W.Node.objects.filter("id" => root.id).delete())
-            @test e isa PormG.BackendCapabilityError && occursin("MySQL", msg(e)) &&
-                  occursin("checked at COMMIT", msg(e))
+            @test e isa PormG.QueryBuildError && occursin("Circular dependency", msg(e))
             @test W.Node.objects.count() == 2
             e = caught(() -> PormG.ConnectionPool.without_foreign_keys(() -> nothing, pool))
             @test e isa PormG.BackendCapabilityError && occursin("without_foreign_keys", msg(e))

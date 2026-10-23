@@ -1267,6 +1267,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.
     # #1130: the queryset's one column, typed by its own build, for the interval check below.
     inner_kind = Ref{Any}(nothing)
+    correlated_before = length(instruc.outer_refs)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
                          semi_join = !_is_sliced(getfield(v.values, :object)),
                          built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
@@ -1277,6 +1278,17 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     _stores_interval_as_units(instruc.connection) && inner_kind[] !== nothing &&
       _is_interval_operand_side(v, instruc) != (inner_kind[] isa CInterval) &&
       _refuse_interval_against_number(v.operator, instruc)
+    # #1130: in an UPDATE or DELETE on MySQL, a subquery that reads the table the statement writes is
+    # error 1093 — a cascade child scoped by its parents, which a filter through the children chose
+    # (`Race.filter("result__grid" => 1).delete()` deletes results `IN (SELECT … race JOIN result …)`).
+    # A derived table is materialized first and accepted (measured on 8.4). Only one that does not
+    # read the outer row: a correlated one (an `OuterRef` into this statement) cannot be a derived
+    # table, and is left to MySQL's own error.
+    if instruc.mutation && _materializes_target_key_set(instruc.connection) &&
+       length(instruc.outer_refs) == correlated_before
+      placeholders = string("SELECT * FROM (", placeholders, ") AS ",
+                            quote_identifier("__pormg_members", instruc.connection))
+    end
     # #586: `column` was rendered before the subquery, so its markers number ahead of the
     # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.
     return string(column, " ", v.operator, " ($placeholders)")

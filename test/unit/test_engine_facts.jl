@@ -88,7 +88,7 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # 1093 wrap around a subquery on the table a mutation writes.
                                :_insert_returns_rows, :_inserted_row_query, :_update_row_count,
                                :_update_from_sql, :_affected_row_count, :_locks_cascade_parents,
-                               :_materializes_target_key_set])
+                               :_materializes_target_key_set, :_assigns_set_in_order])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

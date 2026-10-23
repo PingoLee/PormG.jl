@@ -142,7 +142,11 @@ function build(object::SQLObject;
   distinct_rows::Bool=false,
   # #1002: projected paths a terminal cleared before building (`count()`, `exists()`), which still
   # declare their joins — `count()` counts the rows `list()` returns.
-  declared_paths::Vector{String}=String[])
+  declared_paths::Vector{String}=String[],
+  # #1130: the statement is an UPDATE or DELETE of `object`'s table (the predicate a mutation scopes
+  # its rows by), so a membership subquery on an engine that cannot read the table it writes is read
+  # through a derived table (`_materializes_target_key_set`).
+  mutation::Bool=false)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
   ensure_transaction_scope(object.model, connection)
@@ -162,6 +166,7 @@ function build(object::SQLObject;
     django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
     parameters=parameters,
     outer=outer,
+    mutation=mutation,
   )
 
   # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is

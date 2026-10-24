@@ -504,6 +504,20 @@ end
 # `_add_new_table` hands it an empty live side, `_alter_table_fields` hands it the table's
 # `LiveTable.composites`, and one body decides for both.
 
+# A name PormG derives for a model-level index (`composite_index_name`, `<table>_<cols>_uniq`; no `name=`)
+# must fit the engine. PostgreSQL cuts a long one itself and every comparison already reads it cut
+# (`_catalog_index_name`); MySQL refuses one over 64 characters (error 1059), so there it is cut to 55 and
+# given 8 hex digits of its own hash — the same on every plan, so a table created now and the diff later
+# agree. A derived name is no intent (#161): a composite is matched by its shape, never by it. A name the
+# model wrote is the model's, and MySQL's refusal of a long one stands.
+_fit_derived_name(::Union{PormGPostgres, PormGSQLite}, d::DeclaredComposite)::DeclaredComposite = d
+function _fit_derived_name(::PormGMySQL, d::DeclaredComposite)::DeclaredComposite
+  (d.explicit || length(d.name) <= 64) && return d
+  name = first(d.name, 55) * "_" * bytes2hex(SHA.sha256(d.name))[1:8]
+  return DeclaredComposite(name, d.columns, d.unique, d.explicit, d.auto, d.method, d.descending, d.opclasses,
+                           d.expressions, d.condition, d.include)
+end
+
 """
     _catalog_index_name(conn, name) -> String
 
@@ -757,7 +771,7 @@ function _plan_composite_actions!(conn::_SQLEngine,
                                   # #934: the live columns this plan retypes, which a partial
                                   # UniqueConstraint's condition cannot be counted over.
                                   retyped::Set{String} = Set{String}())::Set{String}
-  declared = declared_composites(model)
+  declared = DeclaredComposite[_fit_derived_name(conn, d) for d in declared_composites(model)]
   table = String(model_table_name(model))
   declared_cols = _model_physical_columns(model)
 

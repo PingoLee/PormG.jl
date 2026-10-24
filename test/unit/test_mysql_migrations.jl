@@ -533,3 +533,20 @@ end
   @test !any(st -> startswith(st, "CREATE INDEX"), _MM._ensure_table_statements(_mm_my, _MmResult; indexes = false))
   @test _MD.drop_table_only(_mm_my, "result") == "DROP TABLE IF EXISTS `result`;"
 end
+
+# What: a model-level index name PormG derives, fitted to MySQL's 64-character limit.
+# SQL: `CREATE UNIQUE INDEX `<first 55>_<8 hex>` …` for a derived name past 64 characters.
+# Why: a many-to-many join table's derived name (`<table>_<col>_<col>_uniq`) runs past 64 characters,
+# which MySQL refuses (1059) where PostgreSQL cuts it itself; the fitted name must be the same on every
+# plan, and a name the model wrote is left as written.
+@testset "#1130: a long derived index name fits MySQL" begin
+  long = "m2m_driver_endorsement_scratch_sponsors_m2m_driver_endorsement_scratch_id_m2m_sponsor_scratch_id_uniq"
+  d = _MM.DeclaredComposite(long, ["a", "b"], true, false, true)
+  fitted = _MM._fit_derived_name(_mm_my, d)
+  @test length(fitted.name) == 64 && startswith(fitted.name, first(long, 55) * "_")
+  @test fitted.name == _MM._fit_derived_name(_mm_my, d).name                 # the same on every plan
+  @test fitted.columns == d.columns && fitted.unique && fitted.auto
+  @test _MM._fit_derived_name(_mm_my, _MM.DeclaredComposite(long, ["a"], true, true, false)).name == long   # explicit
+  @test _MM._fit_derived_name(_mm_my, _MM.DeclaredComposite("short_uniq", ["a"], true, false, false)).name == "short_uniq"
+  @test _MM._fit_derived_name(MmMockPostgres(), d).name == long
+end

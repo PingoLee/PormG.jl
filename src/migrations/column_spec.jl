@@ -1387,7 +1387,7 @@ Not a finding: a nullable column; one with a `default` or `db_default` (both fil
 the planner gives a temporary default (`_get_temporary_default_value`, #607); and an identity, which
 the engine fills itself. `spec` is the declared column's; `table` is the catalog's name for the table.
 """
-function _lossy_add_column(spec::ColumnSpec, ::Union{PormGPostgres, PormGSQLite};
+function _lossy_add_column(spec::ColumnSpec, ::_SQLEngine;
                            table::AbstractString, temporary_default::Any = nothing)::Vector{LossyAlter}
   (spec.nullable || !(spec.default isa NoDefault) || temporary_default !== nothing ||
    spec.identity !== nothing) && return LossyAlter[]
@@ -1404,6 +1404,7 @@ end
 # engine, not a stale type, decides that ALTER).
 _byte_length_countable(old::CanonicalType, ::PormGPostgres)::Bool = old isa Union{CBytes, _TextType}
 _byte_length_countable(::CanonicalType, ::PormGSQLite)::Bool = true
+_byte_length_countable(::CanonicalType, ::PormGMySQL)::Bool = true   # `LENGTH` measures any value
 
 function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLite, finding)::Vector{LossyAlter}
   # SQLite enforces no length, width, precision or scale, so the only type change that alters a
@@ -1464,6 +1465,53 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, conn::PormGP
     new isa CDate && push!(found, finding(:to_date))
     new isa CTime && push!(found, finding(:to_time))
     new isa CDateTime && old.with_timezone && !new.with_timezone && push!(found, finding(:drop_timezone))
+  end
+  return found
+end
+
+# MySQL (#1130 phase 4b): `MODIFY COLUMN` converts every pair (`_no_implicit_cast` is false), and under the
+# strict `sql_mode` PormG pins a row that does not convert or fit fails the ALTER instead of being cut or
+# clipped — so those changes are counted (`:rows`), measured on 8.4 for each kind below:
+#   * a string too long for the new length (1265/1406) — trailing spaces included, unlike PostgreSQL;
+#   * an integer out of the new range (1264), a `TINYINT(1)` (a boolean) included;
+#   * a decimal with too many whole digits (1264);
+#   * text that is not a number, a date, a time, JSON or a UUID (1366, 1292, 3140; a UUID column is a
+#     `CHAR(36)`, which takes any text, so PormG counts the values that are not UUIDs).
+# What MySQL applies and changes — a fraction rounded off (a lower scale, a number into an integer), a
+# timestamp's time of day or date dropped, a number into a boolean — is reported as on PostgreSQL.
+function _lossy_type_alters(old::CanonicalType, new::CanonicalType, conn::PormGMySQL, finding)::Vector{LossyAlter}
+  found = LossyAlter[]
+  if old isa _TextType && new isa Union{_NumericType, CBool, CDate, CTime, CDateTime, CJSON, CUUID}
+    push!(found, finding(:text_cast))
+    return found
+  end
+  if new isa CVarChar && new.length !== nothing
+    (old isa CVarChar && old.length !== nothing && old.length <= new.length) ||
+      push!(found, finding(:varchar_length; bound = new.length))
+  end
+  if new isa _IntType
+    if old isa Union{CFloat64, CDecimal} && _exceeds(_frac_digits(old), 0)
+      push!(found, finding(:to_integer))
+    end
+    too_wide = old isa _IntType ? _int_bits(old) > _int_bits(new) :
+               old isa Union{CFloat64, CDecimal} ? _exceeds(_whole_digits(old), _int_safe_digits(new)) : false
+    too_wide && push!(found, finding(:integer_range; bound = _int_bits(new)))
+  end
+  if new isa CBool && old isa Union{_IntType, CFloat64, CDecimal}
+    push!(found, finding(:integer_range; bound = 8))   # a TINYINT holds -128..127
+    push!(found, finding(:to_boolean))
+  end
+  if new isa CDecimal && new.precision !== nothing && old isa _NumericType
+    new_whole, new_scale = _whole_digits(new), _decimal_scale(new)
+    old_whole, old_frac = _whole_digits(old), _frac_digits(old)
+    fewer_whole = _exceeds(old_whole, new_whole)
+    carry = old_whole == new_whole && _exceeds(old_frac, new_scale)
+    (fewer_whole || carry) && push!(found, finding(:decimal_precision; bound = new_whole, scale = new_scale))
+    _exceeds(old_frac, new_scale) && push!(found, finding(:decimal_scale; scale = new_scale))
+  end
+  if old isa CDateTime
+    new isa CDate && push!(found, finding(:to_date))
+    new isa CTime && push!(found, finding(:to_time))
   end
   return found
 end

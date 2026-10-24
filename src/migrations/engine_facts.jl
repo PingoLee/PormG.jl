@@ -59,11 +59,15 @@ _builtin_ignore_tables_name(::PormGMySQL) = "mysql_ignore_table"
 # values through the new column's affinity, so nothing is castless there.
 _no_implicit_cast(::PormGPostgres, old::CanonicalType, new::CanonicalType)::Bool = _pg_no_implicit_cast(old, new)
 _no_implicit_cast(::PormGSQLite, ::CanonicalType, ::CanonicalType)::Bool = false
+# MySQL's `MODIFY COLUMN` converts between any two of the types PormG writes; a value that does not
+# convert or fit fails the row under strict mode (measured on 8.4), which the row pre-checks count.
+_no_implicit_cast(::PormGMySQL, ::CanonicalType, ::CanonicalType)::Bool = false
 
 # A retype carries a `USING` clause, before which `alter_field` drops the column's expression default
 # (#828). SQLite's rebuild has no `USING`.
 _retype_has_using(::PormGPostgres, old::CanonicalType, new::CanonicalType)::Bool = _pg_retype_has_using(old, new)
 _retype_has_using(::PormGSQLite, ::CanonicalType, ::CanonicalType)::Bool = false
+_retype_has_using(::PormGMySQL, ::CanonicalType, ::CanonicalType)::Bool = false   # MODIFY has no USING
 
 # A lengthless TEXT primary key is what `UUIDField(primary_key = true)` renders, so `inspectdb` emits
 # that. On PostgreSQL a uuid key renders `uuid`, and a bare `text` key has no declaration.
@@ -92,9 +96,13 @@ _pk_precheck_counts_nulls(::PormGMySQL) = true
 # text `'-5'` into an INTEGER-affinity column as `-5`, so it compares the number the text becomes.
 _negative_value_predicate(::PormGPostgres, col::AbstractString)::String = "$col < 0"
 _negative_value_predicate(::PormGSQLite, col::AbstractString)::String = "CAST($col AS REAL) < 0"
+# MySQL compares a text value with a number by the number it reads (`'-5' < 0`), as the retype would.
+_negative_value_predicate(::PormGMySQL, col::AbstractString)::String = "$col < 0"
 
 # The pre-check predicate for a value longer, in bytes, than the bound placeholder `ph`.
 _byte_length_predicate(::PormGPostgres, col::AbstractString, ph::AbstractString)::String =
   "octet_length($col) > $(ph)::integer"
 _byte_length_predicate(::PormGSQLite, col::AbstractString, ph::AbstractString)::String =
   "length(CAST($col AS BLOB)) > $(ph)"
+# MySQL's `LENGTH` counts bytes (`CHAR_LENGTH` counts characters), of any value.
+_byte_length_predicate(::PormGMySQL, col::AbstractString, ph::AbstractString)::String = "LENGTH($col) > $(ph)"

@@ -2060,10 +2060,50 @@ end
 # for a `db_constraint` flip; #498 puts it on the ordinary re-point path.
 # MySQL (#1130): the catalog lookups of a change to an existing table — a key or an index dropped — are
 # phase 4b's.
-get_constraints_fk(::PormGMySQL, table_name::Symbol, field_name::String) =
-  throw(Dialect._mysql_not_yet("Dropping or re-pointing a foreign key", "4b"))
-get_constraints_index(::PormGMySQL, table_name::Symbol, field_name::String) =
-  throw(Dialect._mysql_not_yet("Dropping an index", "4b"))
+# MySQL (#1130 phase 4b): a column's foreign key, and its `db_index` index — single-column, not unique, and
+# not the index InnoDB made for a foreign key (named after it), as the reader decides it. Bound by value.
+function get_constraints_fk(conn::PormGMySQL, table_name::Symbol, field_name::String)::Union{String, Nothing}
+  rows = fetch(conn, """
+    SELECT CONSTRAINT_NAME AS name FROM information_schema.KEY_COLUMN_USAGE
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+     ORDER BY CONSTRAINT_NAME""", [String(table_name), field_name]) |> DataFrame
+  return nrow(rows) == 0 ? nothing : _mysql_str(rows[1, :name])
+end
+function get_constraints_index(conn::PormGMySQL, table_name::Symbol, field_name::String)::Union{String, Nothing}
+  rows = fetch(conn, """
+    SELECT s.INDEX_NAME AS name FROM information_schema.STATISTICS s
+     WHERE s.TABLE_SCHEMA = DATABASE() AND s.TABLE_NAME = ? AND s.COLUMN_NAME = ? AND s.NON_UNIQUE = 1
+       AND s.SUB_PART IS NULL
+       AND (SELECT COUNT(*) FROM information_schema.STATISTICS o WHERE o.TABLE_SCHEMA = s.TABLE_SCHEMA
+              AND o.TABLE_NAME = s.TABLE_NAME AND o.INDEX_NAME = s.INDEX_NAME) = 1
+       AND NOT EXISTS (SELECT 1 FROM information_schema.REFERENTIAL_CONSTRAINTS r
+                        WHERE r.CONSTRAINT_SCHEMA = s.TABLE_SCHEMA AND r.TABLE_NAME = s.TABLE_NAME
+                          AND r.CONSTRAINT_NAME = s.INDEX_NAME)
+     ORDER BY s.INDEX_NAME""", [String(table_name), field_name]) |> DataFrame
+  return nrow(rows) == 0 ? nothing : _mysql_str(rows[1, :name])
+end
+
+# Whether dropping foreign key `constraint_name` leaves an index behind that PormG must drop with it:
+# InnoDB's own index for the key, named after the constraint (`Dialect.drop_foreign_key(::PormGMySQL)`).
+# PostgreSQL and SQLite create no index for a key.
+_foreign_key_leaves_index(::Union{PormGPostgres, PormGSQLite}, table_name, constraint_name)::Bool = false
+function _foreign_key_leaves_index(conn::PormGMySQL, table_name, constraint_name::AbstractString)::Bool
+  rows = fetch(conn, """
+    SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?""",
+    [String(table_name), String(constraint_name)]) |> DataFrame
+  return nrow(rows) > 0 && rows[1, :n] > 0
+end
+
+# The views that read any of `tables`, as `_throw_dropped_table_dependents` reports them.
+function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String})::Vector{Tuple{String, String}}
+  isempty(tables) && return Tuple{String, String}[]
+  rows = fetch(conn, """
+    SELECT TABLE_NAME AS tbl, VIEW_NAME AS view FROM information_schema.VIEW_TABLE_USAGE
+     WHERE TABLE_SCHEMA = DATABASE() AND VIEW_SCHEMA = DATABASE() AND TABLE_NAME IN ($(join(fill("?", length(tables)), ", ")))
+     ORDER BY VIEW_NAME, TABLE_NAME""", Any[tables...]) |> DataFrame
+  return Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in eachrow(rows)]
+end
 
 function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
@@ -4848,6 +4888,9 @@ _mysql_unescape(s::AbstractString)::String =
     c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : c == '0' ? "\0" : c == 'Z' ? "\x1a" : string(c)
   end)
 
+# The bare `pormg:index` marker as a whole token of an index's COMMENT (not the hashed `pormg:index:<h>`).
+const _MYSQL_INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?![0-9A-Za-z_:])")
+
 const _MYSQL_NON_NEGATIVE_CHECK_RE = r"^\(`((?:[^`]|``)+)` >= 0\)$"
 const _MYSQL_BYTE_LENGTH_CHECK_RE = r"^\(length\(`((?:[^`]|``)+)`\) <= (\d+)\)$"i
 
@@ -4894,7 +4937,7 @@ const _MYSQL_COLUMNS_SQL = """
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_STATISTICS_SQL = """
   SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, NON_UNIQUE AS non_unique, COLUMN_NAME AS col,
-         COLLATION AS coll, SUB_PART AS sub_part
+         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
 const _MYSQL_FOREIGN_KEYS_SQL = """
@@ -4911,6 +4954,30 @@ const _MYSQL_CHECKS_SQL = """
     JOIN information_schema.CHECK_CONSTRAINTS cc
       ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
    WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.CONSTRAINT_TYPE = 'CHECK'"""
+
+# The names of PormG's CHECKs on one column of a MySQL table, matched by the reader's own shape for the
+# kind: MySQL names a CHECK itself (`<table>_chk_<n>`), so a `DROP CHECK` must ask. Bound by value.
+function _mysql_column_checks(conn::PormGMySQL, table_name::AbstractString, column::AbstractString,
+                              shape::Regex)::Vector{String}
+  rows = fetch(conn, """
+    SELECT cc.CONSTRAINT_NAME AS name, cc.CHECK_CLAUSE AS clause
+      FROM information_schema.TABLE_CONSTRAINTS tc
+      JOIN information_schema.CHECK_CONSTRAINTS cc
+        ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+     WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'CHECK'
+     ORDER BY cc.CONSTRAINT_NAME""", [String(table_name)]) |> DataFrame
+  out = String[]
+  for r in eachrow(rows)
+    m = match(shape, strip(something(_mysql_str(r.clause), "")))
+    m === nothing && continue
+    lowercase(replace(m[1], "``" => "`")) == lowercase(String(column)) && push!(out, _mysql_str(r.name))
+  end
+  return out
+end
+get_constraints_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
+  _mysql_column_checks(conn, table_name, field_name, _MYSQL_NON_NEGATIVE_CHECK_RE)
+get_constraints_byte_length_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
+  _mysql_column_checks(conn, table_name, field_name, _MYSQL_BYTE_LENGTH_CHECK_RE)
 
 function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_rows, fk_rows, check_rows)::LiveTable
   # Single-column foreign keys by child column; a multi-column one is skipped, as on the other engines
@@ -4968,9 +5035,12 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
         continue
       end
     end
+    # PormG's bare marker, written as the index's COMMENT (`Dialect.create_index(::PormGMySQL)`).
+    comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
+    marker = comment !== nothing && occursin(_MYSQL_INDEX_MARKER_RE, comment) ? INDEX_MARKER : nothing
     push!(composites, LiveComposite(idx, cols, unique, false, "btree", desc,
                                     Union{String, Nothing}[nothing for _ in cols], fill(true, length(cols)),
-                                    nothing, nothing))
+                                    marker, (comment === nothing || isempty(comment)) ? nothing : comment))
   end
 
   columns = OrderedDict{String, ColumnSpec}()

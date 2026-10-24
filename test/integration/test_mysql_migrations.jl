@@ -132,24 +132,24 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             @test row[1, :notes] == "it's" && row[1, :grid] == 0 && row[1, :has_today] == 1
         end
 
-        # What: a plan of one statement, and a plan that would change a table that exists.
-        # SQL: `CREATE TABLE IF NOT EXISTS `m4a_season` (…)` alone; no SQL for the second.
-        # Why: one statement is atomic on MySQL 8.0+, so it needs no opt-in; changing an existing column
-        # is phase 4b's and is refused when planned, before a plan is written.
-        @testset "one statement runs as it is; a change to an existing table is refused" begin
+        # What: a plan of one statement, and a change to a table that exists, reported then applied.
+        # SQL: `CREATE TABLE IF NOT EXISTS `m4a_season` (…)` alone; then
+        #      `ALTER TABLE `m4a_driver` MODIFY COLUMN `forename` VARCHAR(120) NOT NULL;`.
+        # Why: one statement is atomic on MySQL 8.0+, so it needs no opt-in; since phase 4b a change to an
+        # existing column is planned (MySQL's own `MODIFY`), and the drift gate reports it before it runs.
+        @testset "one statement runs as it is; a change to an existing table is planned" begin
             write_models("Season = Models.Model(\"m4a_season\", seasonid = Models.IDField(), year = Models.IntegerField())\n")
             Mig.makemigrations(folder; interactive = false)
             @test Mig.migrate(folder; interactive = false).outcome === :applied
             @test Mig._live_table_exists(pool, "m4a_season")
             write(models_path, replace(read(models_path, String), "forename = Models.CharField(max_length = 100)" =>
                                                                   "forename = Models.CharField(max_length = 120)"))
-            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("phase 4b", sprint(showerror, e)) &&
-                  occursin("forename", sprint(showerror, e))
+            @test !isempty(Mig.check(folder; kinds = [:schema_drift]).findings)
+            Mig.makemigrations(folder; interactive = false)
+            @test occursin("MODIFY COLUMN `forename` VARCHAR(120) NOT NULL", read(pending, String))
+            @test Mig.migrate(folder; interactive = false).outcome === :applied
+            Mig.makemigrations(folder; interactive = false)
             @test !isfile(pending)
-            # The drift gate fails on it the same way rather than reporting a plan it cannot build.
-            e = try; Mig.check(folder; kinds = [:schema_drift]); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("phase 4b", sprint(showerror, e))
         end
 
         # What: #1268's acceptance — a plan stopped at a statement part-way, then finished by a re-plan.

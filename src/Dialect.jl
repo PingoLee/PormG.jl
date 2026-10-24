@@ -32,7 +32,7 @@ import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_revers
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
 # `_byte_bound` are underscore-private, hence named explicitly.
-import PormG: ColumnDelta, LiteralDefault, ExpressionDefault, NoDefault, GeneratedExpression
+import PormG: ColumnDelta, ColumnSpec, LiteralDefault, ExpressionDefault, NoDefault, GeneratedExpression
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
@@ -3365,7 +3365,8 @@ DROP TABLE "$table_name";
 ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
-function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol})
+function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol};
+                      old_spec = nothing, new_spec = nothing)   # MySQL's reads them (#1130); a rename here touches nothing else
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$(_quote_table_ddl(old_field_name))" TO "$(_quote_table_ddl(new_field_name))";"""
 end
 
@@ -3382,7 +3383,8 @@ end
 # alteration` already documents -- the DROP used to abort the migration and now silently no-ops,
 # leaving the old constraint in place beside the new one. Narrowing `IF EXISTS` to the deletion
 # path would not help: the CASCADE hazard reaches the repoint path too.
-function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
+function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String;
+                          with_index::Bool = false)   # MySQL's (#1130); PostgreSQL's index is never the key's
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
 end
 
@@ -3394,10 +3396,10 @@ end
 # The CREATE side escapes the index name (`planner.jl` wraps it in `_quote_table_ddl` before handing
 # it to `create_index`), so the DROP side must too (#394) — otherwise an index whose declared name
 # carries a `"` is created under one spelling and dropped under another, and `IF EXISTS` hides it.
-function drop_index(conn::PormGPostgres, index_name::String)
+function drop_index(conn::PormGPostgres, index_name::String; table = nothing)   # `table`: MySQL's (#1130)
   return """DROP INDEX IF EXISTS "$(_quote_table_ddl(index_name))";"""
 end
-function drop_index(conn::PormGSQLite, index_name::String)
+function drop_index(conn::PormGSQLite, index_name::String; table = nothing)
   return """DROP INDEX IF EXISTS "$(_quote_table_ddl(index_name))";"""
 end
 
@@ -3542,7 +3544,7 @@ end
 # A bare index renames in place. A constraint-backed one is renamed through its constraint, which
 # renames the backing index with it, so the statement names the `pg_constraint` row the reader keyed
 # it by.
-function rename_index(conn::PormGPostgres, old_name::String, new_name::String)
+function rename_index(conn::PormGPostgres, old_name::String, new_name::String; table = nothing)
   return """ALTER INDEX "$(_quote_table_ddl(old_name))" RENAME TO "$(_quote_table_ddl(new_name))";"""
 end
 
@@ -4730,23 +4732,42 @@ function _mysql_default_clause(field::PormGField, col_name::AbstractString, base
   return _mysql_expression_only(base_type) ? "DEFAULT ($(literal))" : "DEFAULT $(literal)"
 end
 
-function field_to_column(col_name::String, field::PormGField, conn::PormGMySQL; temporary_default::Any = nothing)::String
-  col_name = field_db_column(field, col_name)        # db_column when set (#50)
+# A column's definition without its keys and CHECKs: the name, the type, `NULL`/`NOT NULL`, the default
+# and `AUTO_INCREMENT` — exactly what `ALTER TABLE … MODIFY COLUMN` replaces. MODIFY drops whatever it
+# does not restate (measured on 8.4: the default, `AUTO_INCREMENT`, `NOT NULL`), and keeps the column's
+# indexes and CHECKs, so restating `UNIQUE` there would add a second unique index (`c_2`).
+function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
+                            temporary_default::Any = nothing)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
   generated_sql(field) === nothing || throw(_mysql_not_yet("The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)
-  ident = _ddl_ident(conn, col_name)
-  parts = String[ident, base_type]
+  parts = String[_ddl_ident(conn, col_name), base_type]
   push!(parts, (hasproperty(field, :null) && field.null) ? "NULL" : "NOT NULL")
   default = _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default)
   default === nothing || push!(parts, default)
+  _mysql_auto_increments(field) && push!(parts, "AUTO_INCREMENT")
+  return join(parts, " ")
+end
+
+# `AUTO_INCREMENT` is written on an `IDField` key and nowhere else (`_column_identity(::PormGMySQL)`).
+_mysql_auto_increments(field::PormGField)::Bool =
+  field isa sIDField && hasproperty(field, :primary_key) && getfield(field, :primary_key)
+
+# PormG's two column CHECKs, in the shapes the reader recognises (`(`c` >= 0)`, `(length(`c`) <= n)`).
+# Not the shared `_non_negative_check_clause`, which double-quotes the name: a string literal on MySQL.
+_mysql_non_negative_check(ident::AbstractString)::String = "CHECK ($(ident) >= 0)"
+_mysql_byte_length_check(ident::AbstractString, n::Integer)::String = "CHECK (LENGTH($(ident)) <= $(n))"
+
+function field_to_column(col_name::String, field::PormGField, conn::PormGMySQL; temporary_default::Any = nothing)::String
+  col_name = field_db_column(field, col_name)        # db_column when set (#50)
+  ident = _ddl_ident(conn, col_name)
+  parts = String[_mysql_column_body(col_name, field, conn; temporary_default = temporary_default)]
   primary = hasproperty(field, :primary_key) && getfield(field, :primary_key)
-  primary && field isa sIDField && push!(parts, "AUTO_INCREMENT")
   field.unique && !primary && push!(parts, "UNIQUE")
   primary && push!(parts, "PRIMARY KEY")
   # PormG's own CHECKs, as on the other engines; the reader recognises their fixed shapes.
-  _requires_non_negative_check(field) && push!(parts, "CHECK ($(ident) >= 0)")
-  _requires_byte_length_check(field) && push!(parts, "CHECK (LENGTH($(ident)) <= $(field.max_length))")
+  _requires_non_negative_check(field) && push!(parts, _mysql_non_negative_check(ident))
+  _requires_byte_length_check(field) && push!(parts, _mysql_byte_length_check(ident, field.max_length))
   return join(parts, " ")
 end
 
@@ -4788,7 +4809,10 @@ function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, includ
 end
 
 # No `IF NOT EXISTS`: MySQL has none for an index (measured). The planner emits a create only for an
-# index the live schema lacks.
+# index the live schema lacks. An advanced index (a descending member, #29) carries PormG's bare ownership
+# marker as its `COMMENT`, written with it — the marker is a constant, so unlike an expression's hashed
+# one it needs nothing the server computes — and the reader reads it back from `INDEX_COMMENT`: without
+# it, a descending index PormG created would read as hand-made, and never be dropped.
 function create_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
@@ -4796,7 +4820,8 @@ function create_index(conn::PormGMySQL, index_name::String, table_name::String, 
                       marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
   _refuse_mysql_index_options(conn; method, opclasses, include, expressions, condition)
   members = join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
-  return """CREATE INDEX $(index_name) ON $(table_name) ($(members));"""
+  comment = marker == INDEX_MARKER ? " COMMENT '$(INDEX_MARKER)'" : ""
+  return """CREATE INDEX $(index_name) ON $(table_name) ($(members))$(comment);"""
 end
 
 function create_unique_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
@@ -4809,35 +4834,142 @@ function create_unique_index(conn::PormGMySQL, index_name::String, table_name::S
   return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(members));"""
 end
 
-# The one column change phase 4a plans on MySQL is a foreign key added to a column that has none
-# (`Migrations._require_column_alters`): the column itself is unchanged, so there is nothing to alter, and
-# the planner adds the constraint after (`add_foreign_key`), as on PostgreSQL. Any other change is phase
-# 4b's.
+# A column change on MySQL (#1130 phase 4b): ONE `ALTER TABLE` whose clauses carry every slot of the delta,
+# so the change applies whole or not at all — MySQL's DDL commits each statement, and an `ALTER TABLE` is
+# atomic on its own (#1268). In order:
+#   1. `DROP CHECK` for PormG's CHECKs the column loses (looked up by name; MySQL names them itself);
+#   2. one `MODIFY COLUMN` restating the whole column body when its type, nullability, default or
+#      identity changed — MODIFY replaces what it does not restate, so a default change goes through it
+#      too (`ALTER COLUMN … SET DEFAULT ('x')` on a LONGTEXT is error 1101). No `USING`: MySQL converts,
+#      and its strict mode fails a row that does not convert or fit;
+#   3. `ADD CHECK` for the CHECKs it gains;
+#   4. `ADD UNIQUE INDEX `c` (`c`)` / `DROP INDEX `c``, named after the column as an inline `UNIQUE` is;
+#   5. `ADD` / `DROP PRIMARY KEY`, with the `AUTO_INCREMENT` the MODIFY adds or removes (one statement
+#      keeps the identity on a key throughout).
+# The foreign key is the planner's (`:reference` is dropped and added around this, as on PostgreSQL). A
+# column renamed in the same plan had its CHECKs re-added by `rename_field`, under the new name.
 function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField,
                      delta::ColumnDelta; catalog_table::Union{Symbol,String} = model_table_name(model))::String
-  delta.changed == [:reference] && delta.old_spec.reference === nothing && return ""
-  throw(_mysql_not_yet("Altering column \"$(field_name)\" of table \"$(catalog_table)\"", "4b"))
+  col = field_db_column(new_field, string(field_name))
+  live_column = isempty(delta.old_spec.name) ? col : delta.old_spec.name
+  renamed = live_column != col
+  catalog = string(catalog_table)
+  ident = _ddl_ident(conn, col)
+  clauses = String[]
+  if :checks in delta && !renamed
+    _has_non_negative(delta.old_spec) && !_has_non_negative(delta.new_spec) &&
+      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_checks(conn, catalog, live_column)))
+    old_bound, new_bound = _byte_bound(delta.old_spec), _byte_bound(delta.new_spec)
+    old_bound !== nothing && old_bound != new_bound &&
+      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_byte_length_checks(conn, catalog, live_column)))
+  end
+  adds_key = :primary_key in delta && delta.new_spec.primary_key
+  drops_key = :primary_key in delta && delta.old_spec.primary_key
+  adds_key && push!(clauses, "ADD PRIMARY KEY ($(ident))")
+  any(s -> s in delta, (:type, :nullable, :default, :identity)) &&
+    push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn))
+  drops_key && push!(clauses, "DROP PRIMARY KEY")
+  if :checks in delta && !renamed
+    _has_non_negative(delta.new_spec) && !_has_non_negative(delta.old_spec) &&
+      push!(clauses, "ADD " * _mysql_non_negative_check(ident))
+    new_bound = _byte_bound(delta.new_spec)
+    new_bound !== nothing && new_bound != _byte_bound(delta.old_spec) &&
+      push!(clauses, "ADD " * _mysql_byte_length_check(ident, new_bound))
+  end
+  if :unique in delta
+    delta.new_spec.unique && !delta.new_spec.primary_key && push!(clauses, "ADD UNIQUE INDEX $(ident) ($(ident))")
+    delta.old_spec.unique && !delta.old_spec.primary_key && !delta.new_spec.unique &&
+      push!(clauses, "DROP INDEX $(ident)")
+  end
+  isempty(clauses) && return ""
+  return "ALTER TABLE $(_ddl_ident(conn, model_table_name(model))) $(join(clauses, ", "));"
 end
 
-# The renderers of a change to an existing table, phase 4b's on MySQL (4c's for a declared CHECK). Each
-# refuses, so a plan that reaches one names its phase rather than raising a `MethodError`: the planner
-# calls them while it builds the plan, before `Migrations._refuse_mysql_alter_plan` sees it.
-for (f, what, phase) in ((:add_field, "Adding a column to an existing table", "4b"),
-                         (:drop_field, "Dropping a column", "4b"),
-                         (:rename_field, "Renaming a column", "4b"),
-                         (:rename_table, "Renaming a table", "4b"),
-                         (:drop_index, "Dropping an index", "4b"),
-                         (:rename_index, "Renaming an index", "4b"),
-                         (:drop_unique_constraint, "Dropping a unique key", "4b"),
-                         (:rename_constraint, "Renaming a constraint", "4b"),
-                         (:drop_check_constraint, "Dropping a CHECK constraint", "4b"),
+# A column added to a table that exists: its whole definition, keys and CHECKs inline as `CREATE TABLE`
+# writes them. The foreign key is the planner's (`_add_constrains`).
+add_field(conn::PormGMySQL, table_name::Union{String,Symbol}, field_name::String, field::PormGField;
+          temporary_default::Any = nothing, model::Union{PormGModel,Nothing} = nothing)::String =
+  "ALTER TABLE $(_ddl_ident(conn, table_name)) ADD COLUMN $(field_to_column(field_name, field, conn; temporary_default = temporary_default));"
+
+# A CHECK that names only this column goes with it (measured); its foreign key is dropped first by the
+# planner (`_drop_fk_constraint_in_alteration`).
+drop_field(conn::PormGMySQL, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})::String =
+  "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP COLUMN $(_ddl_ident(conn, field_name));"
+
+# A renamed column, in one statement with what names it: MySQL refuses to rename a column a CHECK names
+# (error 3959), so PormG's CHECKs are dropped and the ones the new column keeps added back, and the
+# column's own unique index keeps the old name after `RENAME COLUMN` (measured), so it is renamed too —
+# the reader takes a unique index as the column's only when it carries the column's name. `old_spec` and
+# `new_spec` are the delta's; without them (a bare rename) nothing beside the column is touched.
+function rename_field(conn::PormGMySQL, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol},
+                      new_field_name::Union{String,Symbol};
+                      old_spec::Union{ColumnSpec, Nothing} = nothing, new_spec::Union{ColumnSpec, Nothing} = nothing)::String
+  old_ident, new_ident = _ddl_ident(conn, old_field_name), _ddl_ident(conn, new_field_name)
+  table = string(table_name)
+  clauses = String[]
+  if old_spec !== nothing && !isempty(old_spec.checks)
+    _has_non_negative(old_spec) &&
+      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_checks(conn, table, string(old_field_name))))
+    _byte_bound(old_spec) === nothing ||
+      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_byte_length_checks(conn, table, string(old_field_name))))
+  end
+  push!(clauses, "RENAME COLUMN $(old_ident) TO $(new_ident)")
+  old_spec !== nothing && old_spec.unique && !old_spec.primary_key &&
+    push!(clauses, "RENAME INDEX $(old_ident) TO $(new_ident)")
+  # The CHECKs the renamed column ends with — the new spec's, so `alter_field` (which skips a renamed
+  # column's CHECKs) has nothing left to add or drop.
+  keep = new_spec === nothing ? old_spec : new_spec
+  if keep !== nothing
+    _has_non_negative(keep) && push!(clauses, "ADD " * _mysql_non_negative_check(new_ident))
+    bound = _byte_bound(keep)
+    bound === nothing || push!(clauses, "ADD " * _mysql_byte_length_check(new_ident, bound))
+  end
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) $(join(clauses, ", "));"
+end
+
+# A foreign key dropped (re-pointed, removed, or its column dropped). `with_index` drops, in the same
+# statement, the index InnoDB created for it — named after the constraint, and left behind by `DROP
+# FOREIGN KEY` (measured) — which a fresh create of the declared table would not have: the reader takes
+# it as an undeclared `db_index` once the key is gone. The planner asks the catalog whether it is there
+# (`Migrations._foreign_key_leaves_index`); an index PormG declared on the column is a different one.
+function drop_foreign_key(conn::PormGMySQL, table_name::Union{Symbol, String}, constraint_name::String;
+                          with_index::Bool = false)::String
+  ident = _ddl_ident(conn, constraint_name)
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP FOREIGN KEY $(ident)" *
+         (with_index ? ", DROP INDEX $(ident);" : ";")
+end
+
+# An index is named per table on MySQL, so its drop and its rename name the table. No `IF EXISTS`: the
+# planner drops an index the catalog holds. An index a foreign key needs cannot be dropped (error 1553):
+# MySQL keeps every foreign key indexed, so a `db_index` turned off on a column that keeps its key is left
+# to MySQL's refusal.
+drop_index(conn::PormGMySQL, index_name::String; table::Union{String, Symbol})::String =
+  "DROP INDEX $(_ddl_ident(conn, index_name)) ON $(_ddl_ident(conn, table));"
+rename_index(conn::PormGMySQL, old_name::String, new_name::String; table::Union{String, Symbol})::String =
+  "ALTER TABLE $(_ddl_ident(conn, table)) RENAME INDEX $(_ddl_ident(conn, old_name)) TO $(_ddl_ident(conn, new_name));"
+
+# The foreign keys, their indexes and the CHECKs InnoDB named after the table follow it (measured).
+rename_table(conn::PormGMySQL, old_table_name::String, new_table_name::String)::String =
+  "RENAME TABLE $(_ddl_ident(conn, old_table_name)) TO $(_ddl_ident(conn, new_table_name));"
+
+# PormG's MySQL reader takes no unique index as a constraint (a MySQL UNIQUE is an index), so the planner
+# never asks for these; a declared CHECK is phase 4c's.
+for (f, what, phase) in ((:drop_unique_constraint, "Dropping a constraint-backed unique key", "4c"),
+                         (:rename_constraint, "Renaming a constraint", "4c"),
+                         (:drop_check_constraint, "Dropping a declared CheckConstraint", "4c"),
                          (:add_check_constraint, "A declared CheckConstraint", "4c"),
                          (:comment_check_constraint, "A declared CheckConstraint", "4c"))
   @eval $f(::PormGMySQL, args...; kwargs...) = throw(_mysql_not_yet($what, $phase))
 end
 
-# No `CASCADE`: MySQL's `DROP TABLE` takes none, and refuses a table another's foreign key references.
-drop_table(conn::PormGMySQL, table_name::Union{String, Symbol}) = """DROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));"""
+# No `CASCADE` on MySQL, and a table another table's foreign key references cannot be dropped (3730). The
+# plan drops a table before the steps that drop its children's keys (`_ordered_entries` runs "Drop table"
+# early), and PostgreSQL's `CASCADE` removes those keys with it, so the drop runs with the session's
+# foreign-key checks off: a child's key then dangles until its own step in the same plan drops it. The
+# three statements run on one connection (`Migrations._execute_migration_lifecycle(::PormGMySQL)`), which
+# is renewed afterwards; a child model that kept a key to a dropped model would not load.
+drop_table(conn::PormGMySQL, table_name::Union{String, Symbol}) =
+  "SET FOREIGN_KEY_CHECKS = 0;\nDROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));\nSET FOREIGN_KEY_CHECKS = 1;"
 
 # The history table on MySQL: an AUTO_INCREMENT id, `DATETIME(3)` stamps, and `('')` for the TEXT
 # default (a literal is refused there).

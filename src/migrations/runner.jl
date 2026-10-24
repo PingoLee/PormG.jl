@@ -970,8 +970,70 @@ function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
     return ("SELECT COUNT(*) AS n FROM $table AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
             "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
             "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  elseif f.kind === :add_not_null
+    return ("SELECT COUNT(*) AS n FROM $table", Any[])
+  elseif f.kind === :add_check
+    throw(Dialect._mysql_not_yet("A declared CheckConstraint"))
+  elseif f.kind === :text_cast
+    pred, params = _mysql_text_cast_failure(col, parse_canonical_type(f.new_type, conn))
+    return ("SELECT COUNT(*) AS n FROM $table WHERE $col IS NOT NULL AND $pred", params)
   end
-  throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
+  pred, params = if f.kind === :set_not_null
+    "$col IS NULL", Any[]
+  elseif f.kind === :non_negative_check
+    _negative_value_predicate(conn, col), Any[]
+  elseif f.kind === :byte_length_check
+    _byte_length_predicate(conn, col, "?"), Any[f.bound]
+  elseif f.kind === :varchar_length
+    # Measured whole: MySQL refuses a value longer than the new length even when the excess is trailing
+    # spaces (1265, measured), where PostgreSQL cuts them.
+    "CHAR_LENGTH(CAST($col AS CHAR)) > ?", Any[f.bound]
+  elseif f.kind === :integer_range
+    lo, hi = f.bound == 8 ? (-128, 127) : _INT_RANGE[f.bound]   # 8: a TINYINT(1), MySQL's boolean
+    "ROUND(CAST($col AS DECIMAL(65, 30))) NOT BETWEEN ? AND ?", Any[Int(lo), Int(hi)]
+  elseif f.kind === :decimal_precision
+    # MySQL has no NaN. The power of ten is a DECIMAL built from its digits, exact at any width.
+    "ABS(ROUND(CAST($col AS DECIMAL(65, 30)), ?)) >= CAST(CONCAT('1', REPEAT('0', ?)) AS DECIMAL(65, 0))",
+      Any[f.scale, f.bound]
+  else
+    throw(InvalidMigrationError("No pre-check is defined for the lossy-ALTER kind `$(f.kind)`."))
+  end
+  return ("SELECT COUNT(*) AS n FROM $table WHERE $pred", params)
+end
+
+# The text values MySQL's `MODIFY` would refuse to convert into `target` (strict mode fails the row), as
+# a predicate over the old text column. A number or a boolean (a TINYINT) is matched by its grammar and
+# its range, a date or a time by whether MySQL's own `CAST` reads it (`NULL` when it does not), JSON by
+# `JSON_VALID`. A UUID column is a `CHAR(36)`, which takes any text, so the values that are not UUIDs are
+# counted: a UUIDField column holding one would not read back. The patterns are bound, not written.
+const _MYSQL_INT_TEXT = raw"^\s*[+-]?[0-9]+\s*$"
+const _MYSQL_NUMBER_TEXT = raw"^\s*[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?\s*$"
+const _MYSQL_UUID_TEXT = raw"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+function _mysql_text_cast_failure(col::AbstractString, target::CanonicalType)::Tuple{String, Vector{Any}}
+  if target isa Union{CInt16, CInt32, CInt64, CBool}
+    lo, hi = target isa CBool ? (-128, 127) : _INT_RANGE[_int_bits(target)]
+    return ("NOT (REGEXP_LIKE($col, ?) AND CAST(TRIM($col) AS DECIMAL(65, 0)) BETWEEN ? AND ?)",
+            Any[_MYSQL_INT_TEXT, Int(lo), Int(hi)])
+  elseif target isa CFloat64
+    return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_NUMBER_TEXT])
+  elseif target isa CDecimal
+    whole = _whole_digits(target)
+    whole === nothing && return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_NUMBER_TEXT])
+    return ("NOT (REGEXP_LIKE($col, ?) AND ABS(ROUND(CAST(TRIM($col) AS DECIMAL(65, 30)), ?)) < " *
+            "CAST(CONCAT('1', REPEAT('0', ?)) AS DECIMAL(65, 0)))",
+            Any[_MYSQL_NUMBER_TEXT, something(_decimal_scale(target), 0), whole])
+  elseif target isa CDate
+    return ("CAST($col AS DATE) IS NULL", Any[])
+  elseif target isa CTime
+    return ("CAST($col AS TIME(6)) IS NULL", Any[])
+  elseif target isa CDateTime
+    return ("CAST($col AS DATETIME(3)) IS NULL", Any[])
+  elseif target isa CJSON
+    return ("NOT JSON_VALID($col)", Any[])
+  elseif target isa CUUID
+    return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_UUID_TEXT])
+  end
+  throw(InvalidMigrationError("No MySQL pre-check is defined for text into $(target)."))
 end
 
 # Does the live table still have this column? A plan header can outlive what it describes — the plan
@@ -3432,6 +3494,7 @@ end
 function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool;
                               applied::Function = () -> false)::Nothing
   (atomic && length(statements) > 1) || return nothing
+  _plan_statement_count(connection, statements) > 1 || return nothing
   _supports(connection, :transactional_ddl) && return nothing
   applied() && return nothing
   _require_feature(connection, :transactional_ddl,
@@ -3442,14 +3505,73 @@ function _require_atomic_plan(connection::PormGBackend, statements::AbstractVect
                          "the steps still missing.")
 end
 
-# `lock_timeout` and `statement_timeout` are PostgreSQL's `SET LOCAL` settings on the migration
-# transaction (#737). On MySQL they are refused rather than ignored until phase 4b decides their MySQL
-# meaning (`lock_wait_timeout` bounds a DDL statement's wait for its table's metadata lock; a statement's
-# run time has no DDL bound).
-_require_migration_timeouts(::Union{PormGPostgres, PormGSQLite}, ::_MigrationTimeouts)::Nothing = nothing
-function _require_migration_timeouts(connection::PormGMySQL, timeouts::_MigrationTimeouts)::Nothing
-  (timeouts.lock_timeout_ms === nothing && timeouts.statement_timeout_ms === nothing) && return nothing
-  throw(Dialect._mysql_not_yet("migrate(…; lock_timeout, statement_timeout)", "4b"))
+# `statement_timeout` bounds how long one plan statement may run: PostgreSQL's `SET LOCAL
+# statement_timeout` (#737), and on SQLite accepted and ignored, as every timeout is there. MySQL has no
+# bound on a DDL statement's run time (`max_execution_time` stops a SELECT only), so it is refused through
+# the capability table rather than ignored. `lock_timeout` has a MySQL meaning, `lock_wait_timeout`.
+function _require_migration_timeouts(connection::PormGBackend, timeouts::_MigrationTimeouts)::Nothing
+  timeouts.statement_timeout_ms === nothing && return nothing
+  _require_feature(connection, :statement_timeouts, "migrate(…; statement_timeout)";
+                   why = "Leave it out, or bound the wait for a table's lock with `lock_timeout`.")
+end
+
+# The statements a plan runs, as `_require_atomic_plan` counts them: one per plan entry, except on MySQL,
+# where an entry can hold several (`Dialect.drop_table(::PormGMySQL)`, a hand-written data step) and
+# each commits on its own. A session `SET` is no change to the schema and is not counted.
+_plan_statement_count(::Union{PormGPostgres, PormGSQLite}, statements::AbstractVector{<:AbstractString})::Int =
+  length(statements)
+_plan_statement_count(::PormGMySQL, statements::AbstractVector{<:AbstractString})::Int =
+  count(s -> !occursin(r"^SET\s"i, s), (p for s in statements for p in _split_mysql_statements(s)))
+
+# One plan entry as the statements it holds, for MySQL, which takes one statement per call (two in one
+# are a syntax error, 1064). Split at a `;` outside a quoted string (`'…'`, `"…"`, with `\` and doubled
+# quotes), a backticked name, and a comment (`-- `, `#`, `/* … */`); empty pieces are dropped.
+function _split_mysql_statements(sql::AbstractString)::Vector{String}
+  out = String[]
+  buf = IOBuffer()
+  cs = collect(sql)
+  n = length(cs)
+  i = 1
+  flush!() = (s = strip(String(take!(buf))); isempty(s) || push!(out, s))
+  while i <= n
+    c = cs[i]
+    if c in ('\'', '"', '`')
+      print(buf, c)
+      i += 1
+      while i <= n
+        print(buf, cs[i])
+        if cs[i] == '\\' && c != '`' && i < n
+          i += 1
+          print(buf, cs[i])
+        elseif cs[i] == c
+          if i < n && cs[i + 1] == c
+            i += 1
+            print(buf, cs[i])
+          else
+            break
+          end
+        end
+        i += 1
+      end
+      i += 1
+    elseif c == '#' || (c == '-' && i + 2 <= n && cs[i + 1] == '-' && isspace(cs[i + 2]))
+      while i <= n && cs[i] != '\n'
+        print(buf, cs[i]); i += 1
+      end
+    elseif c == '/' && i < n && cs[i + 1] == '*'
+      print(buf, "/*"); i += 2
+      while i <= n && !(cs[i] == '*' && i < n && cs[i + 1] == '/')
+        print(buf, cs[i]); i += 1
+      end
+      i <= n && (print(buf, "*/"); i += 2)
+    elseif c == ';'
+      flush!(); i += 1
+    else
+      print(buf, c); i += 1
+    end
+  end
+  flush!()
+  return out
 end
 
 # Whether `checksum` is the latest applied migration's — the #81 guard's question, asked outside
@@ -3531,7 +3653,7 @@ function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSet
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool,
-                                      ::_MigrationTimeouts = _migration_timeouts();
+                                      timeouts::_MigrationTimeouts = _migration_timeouts();
                                       schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
   # The #81 guard, as on PostgreSQL: a plan already applied whose files were not archived.
@@ -3547,23 +3669,35 @@ function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSet
   end
   schema_tables === nothing || _check_schema_precondition(connection, settings, schema_tables)
 
+  # Every statement and the history row on ONE leased connection: the session settings a plan uses —
+  # `lock_wait_timeout`, the foreign-key checks a table drop turns off (`Dialect.drop_table`) — hold for
+  # the statements after them, and the connection is renewed at the end so none of it reaches the pool.
+  conn = acquire_connection(connection)
   applied = 0
   try
-    for statement in ordered_statements
-      @debug "Executing: $statement"
-      fetch(connection, statement)
-      applied += 1
+    if timeouts.lock_timeout_ms !== nothing
+      # Whole seconds, at least one (the server's minimum); an `Int` PormG computed, never caller text.
+      with_transaction(connection, "SET SESSION lock_wait_timeout = $(max(1, cld(timeouts.lock_timeout_ms, 1000)))"; conn = conn)
     end
-  catch e
     try
-      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
-    catch record_err
-      @error "Failed to record migration failure in history table" exception=record_err
+      for entry in ordered_statements, statement in _split_mysql_statements(entry)
+        @debug "Executing: $statement"
+        with_transaction(connection, statement; conn = conn)
+        applied += 1
+      end
+    catch e
+      try
+        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn = conn)
+      catch record_err
+        @error "Failed to record migration failure in history table" exception=record_err
+      end
+      @error "Error applying migrations: the statements before the failed one stay applied; run `makemigrations` again and `migrate` to apply the rest" applied = applied exception=e
+      rethrow(e)
     end
-    @error "Error applying migrations: the statements before the failed one stay applied; run `makemigrations` again and `migrate` to apply the rest" applied = applied total = length(ordered_statements) exception=e
-    rethrow(e)
+    _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn = conn)
+  finally
+    finalize_transaction_connection!(connection, conn; renew = true)
   end
-  _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive)
   @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
   try
     _archive_migration_files(settings, date_str)

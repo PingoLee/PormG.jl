@@ -47,9 +47,9 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
     write_models(src) = write(models_path, "module models\nimport PormG.Models\n" * src * "\nend\n")
     # Plan and apply; returns the plan's text. Every MySQL plan of more than one statement needs
     # `atomic = false` (#1268).
-    function apply!(src)
+    function apply!(src; renames = Pair{String, Union{String, Nothing}}[])
         write_models(src)
-        Mig.makemigrations(folder; interactive = false)
+        Mig.makemigrations(folder; interactive = false, renames = renames)
         plan = isfile(pending) ? read(pending, String) : ""
         isempty(plan) || Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
         return plan
@@ -82,6 +82,197 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test Mig.migrate(folder; interactive = false, atomic = false).outcome === :applied
             @test [(c.columns, c.unique) for c in live("m4b_driver").composites] == [(["forename", "code"], true)]
             @test converged()
+        end
+
+        # A plan the row pre-checks refuse, with the kind and count they report; nothing of it runs.
+        function refused_by_precheck(src)
+            write_models(src)
+            Mig.makemigrations(folder; interactive = false)
+            e = try; Mig.migrate(folder; interactive = false, atomic = false, destructive = true); nothing; catch err; err; end
+            e isa Mig.MigrationPrecheckError || return e
+            return sort!([(f.kind, f.rows) for f in e.findings if something(f.rows, 0) > 0])
+        end
+        circuit(fields) = "Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField(), $(fields))"
+
+        # What: columns added to a table that exists — nullable, with a default, and NOT NULL without one.
+        # SQL: `ALTER TABLE `m4b_circuit` ADD COLUMN `alt` INT NOT NULL DEFAULT 0;`, …
+        # Why: MySQL fills a NOT NULL column with no default with an implicit value (`0`, `''`) where
+        # PostgreSQL fails, so the row pre-check must refuse it over rows (`:add_not_null`), as it does
+        # on PostgreSQL; on an empty table it applies.
+        @testset "added columns" begin
+            apply!(circuit("name = Models.CharField(max_length = 100)"))
+            exec("INSERT INTO `m4b_circuit` (`name`) VALUES ('Interlagos'), ('Monza')")
+            @test refused_by_precheck(circuit("name = Models.CharField(max_length = 100), lat = Models.FloatField()")) ==
+                  [(:add_not_null, 2)]
+            apply!(circuit("name = Models.CharField(max_length = 100), lat = Models.FloatField(null = true), " *
+                           "alt = Models.IntegerField(default = 0), notes = Models.TextField(default = \"n/a\")"))
+            @test raw("SELECT `alt`, `notes`, `lat` IS NULL AS no_lat FROM `m4b_circuit` ORDER BY `circuitid`")[1, :] |>
+                  collect == [0, "n/a", 1]
+            @test converged()
+        end
+
+        # What: retypes and nullability over rows that fit and rows that do not.
+        # SQL: `ALTER TABLE `m4b_circuit` MODIFY COLUMN `name` VARCHAR(5) NOT NULL;`, …
+        # Why: under MySQL's strict mode a row that does not fit fails the ALTER part-way through a plan
+        # (#1268); each kind is counted first and refused with its count — a string too long (trailing
+        # spaces included, unlike PostgreSQL), an integer out of range, text that is not a number, a
+        # NULL under NOT NULL — and applies once the rows fit.
+        @testset "retypes and NOT NULL are pre-checked" begin
+            base = "name = Models.CharField(max_length = 100), lat = Models.FloatField(null = true), " *
+                   "alt = Models.IntegerField(default = 0), notes = Models.TextField(default = \"n/a\")"
+            exec("UPDATE `m4b_circuit` SET `alt` = 70000, `notes` = '12' WHERE `name` = 'Monza'")
+            @test refused_by_precheck(circuit(replace(base, "max_length = 100" => "max_length = 5"))) == [(:varchar_length, 1)]
+            @test refused_by_precheck(circuit(replace(base, "alt = Models.IntegerField(default = 0)" =>
+                                                            "alt = Models.PositiveSmallIntegerField(default = 0)"))) ==
+                  [(:integer_range, 1)]
+            @test refused_by_precheck(circuit(replace(base, "notes = Models.TextField(default = \"n/a\")" =>
+                                                            "notes = Models.IntegerField(default = 0)"))) == [(:text_cast, 1)]
+            @test refused_by_precheck(circuit(replace(base, "lat = Models.FloatField(null = true)" =>
+                                                            "lat = Models.FloatField(default = 0.0)"))) == [(:set_not_null, 2)]
+            exec("UPDATE `m4b_circuit` SET `name` = LEFT(`name`, 5), `alt` = 7, `notes` = '3', `lat` = 1.5")
+            apply!(circuit("name = Models.CharField(max_length = 5), lat = Models.FloatField(default = 0.0), " *
+                           "alt = Models.PositiveSmallIntegerField(default = 0), notes = Models.IntegerField(default = 0)"))
+            spec = live("m4b_circuit").columns
+            @test spec["name"].type == PormG.CVarChar(5) && spec["alt"].type == PormG.CInt16() &&
+                  spec["alt"].checks == [PormG.NonNegativeCheck()] && spec["notes"].type == PormG.CInt32() &&
+                  !spec["lat"].nullable
+            @test raw("SELECT `notes` FROM `m4b_circuit` ORDER BY `circuitid`")[!, :notes] == [3, 3]
+            @test converged()
+            # PormG's CHECK holds: a negative value is refused by it (3819), and dropped with the field kind.
+            e = try; exec("UPDATE `m4b_circuit` SET `alt` = -1"); nothing; catch err; err; end
+            @test e isa PormG.IntegrityError && occursin("3819", sprint(showerror, e.cause))
+            apply!(circuit("name = Models.CharField(max_length = 5), lat = Models.FloatField(default = 0.0), " *
+                           "alt = Models.IntegerField(default = 0), notes = Models.IntegerField(default = 0)"))
+            @test isempty(live("m4b_circuit").columns["alt"].checks)
+            @test converged()
+        end
+
+        # What: a column's own unique key added and dropped, and the column renamed with it and a CHECK.
+        # SQL: `ALTER TABLE … ADD UNIQUE INDEX `code` (`code`)`; `ALTER TABLE … DROP CHECK `m4b_team_chk_1`,
+        #      RENAME COLUMN `code` TO `abbr`, RENAME INDEX `code` TO `abbr`, ADD CHECK (`abbr` …)`.
+        # Why: MySQL refuses to rename a column a CHECK names (3959) and keeps the unique index's old
+        # name, which the reader would then take for a model-level index; the rename must converge.
+        @testset "unique keys and a renamed column" begin
+            team(code) = "Team = Models.Model(\"m4b_team\", teamid = Models.IDField(), $(code), " *
+                         "points = Models.PositiveIntegerField(default = 0))"
+            apply!(team("code = Models.CharField(max_length = 8)"))
+            exec("INSERT INTO `m4b_team` (`code`) VALUES ('MCL'), ('MCL')")
+            @test refused_by_precheck(team("code = Models.CharField(max_length = 8, unique = true)")) == [(:add_unique, 2)]
+            exec("UPDATE `m4b_team` SET `code` = 'FER' WHERE `teamid` = 2")
+            apply!(team("code = Models.CharField(max_length = 8, unique = true)"))
+            @test live("m4b_team").columns["code"].unique && converged()
+            plan = apply!(replace(team("abbr = Models.CharField(max_length = 8, unique = true)"), "points" => "pts");
+                          renames = Pair{String, Union{String, Nothing}}["m4b_team.code" => "m4b_team.abbr",
+                                                                         "m4b_team.points" => "m4b_team.pts"])
+            @test occursin("RENAME COLUMN `code` TO `abbr`", plan) && occursin("RENAME INDEX `code` TO `abbr`", plan)
+            t = live("m4b_team")
+            @test t.columns["abbr"].unique && t.columns["pts"].checks == [PormG.NonNegativeCheck()] &&
+                  isempty(t.composites) && !haskey(t.columns, "code")
+            @test converged()
+            apply!(replace(team("abbr = Models.CharField(max_length = 8)"), "points" => "pts"))
+            @test !live("m4b_team").columns["abbr"].unique && converged()
+        end
+
+        # What: a foreign key added to a table that exists, re-pointed, and dropped (its column kept).
+        # SQL: `ADD CONSTRAINT … FOREIGN KEY`; `DROP FOREIGN KEY …`, then `ADD CONSTRAINT` again; on a drop,
+        #      `ALTER TABLE … DROP FOREIGN KEY `<k>`, DROP INDEX `<k>``.
+        # Why: InnoDB keeps the index it made for a key after `DROP FOREIGN KEY`, and the reader would take
+        # it for an undeclared `db_index` (#1268); the plan drops it with the key, so the next plan is empty.
+        @testset "foreign keys added, re-pointed and dropped" begin
+            parents = "Team = Models.Model(\"m4b_team\", teamid = Models.IDField(), abbr = Models.CharField(max_length = 8), " *
+                      "pts = Models.PositiveIntegerField(default = 0))\n"
+            seat(fk) = parents * "Seat = Models.Model(\"m4b_seat\", seatid = Models.IDField(), $(fk))"
+            apply!(seat("teamid = Models.BigIntegerField(null = true)"))
+            exec("INSERT INTO `m4b_seat` (`teamid`) VALUES (1), (99)")
+            fk(on_delete) = "teamid = Models.ForeignKey(Team, pk_field = \"teamid\", null = true, on_delete = \"$(on_delete)\", db_index = false)"
+            @test refused_by_precheck(seat(fk("CASCADE"))) == [(:add_foreign_key, 1)]
+            exec("DELETE FROM `m4b_seat` WHERE `teamid` = 99")
+            apply!(seat(fk("CASCADE")))
+            @test live("m4b_seat").columns["teamid"].reference.on_delete == "CASCADE" && converged()
+            apply!(seat(fk("SET_NULL")))
+            @test live("m4b_seat").columns["teamid"].reference.on_delete == "SET NULL" && converged()
+            plan = apply!(seat("teamid = Models.BigIntegerField(null = true)"))
+            @test occursin(r"DROP FOREIGN KEY `[^`]+`, DROP INDEX `[^`]+`", plan)
+            t = live("m4b_seat")
+            @test t.columns["teamid"].reference === nothing && isempty(t.indexes)
+            @test raw("SELECT COUNT(*) AS n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() " *
+                      "AND TABLE_NAME = 'm4b_seat' AND INDEX_NAME <> 'PRIMARY'")[1, :n] == 0
+            @test converged()
+        end
+
+        # What: a `db_index` and model-level indexes added, renamed and dropped on a table that exists.
+        # SQL: `CREATE INDEX …`; `ALTER TABLE `m4b_team` RENAME INDEX `a` TO `b``; `DROP INDEX `b` ON `m4b_team``.
+        # Why: a MySQL index is named per table, so its drop and rename must name the table, and none of it
+        # existed before phase 4b.
+        @testset "indexes added, renamed and dropped" begin
+            team(tail) = "Team = Models.Model(\"m4b_team\", teamid = Models.IDField(), abbr = Models.CharField(max_length = 8, db_index = true), " *
+                         "pts = Models.PositiveIntegerField(default = 0)$(tail))"
+            ix(n) = "; indexes = [Models.Index(fields = (\"abbr\", \"-pts\"), name = \"$(n)\")]"
+            apply!(team(""))
+            @test haskey(live("m4b_team").indexes, "abbr") && converged()
+            apply!(team(ix("m4b_team_a_idx")))
+            @test [(c.name, c.marker) for c in live("m4b_team").composites] == [("m4b_team_a_idx", PormG.INDEX_MARKER)] &&
+                  converged()
+            apply!(team(ix("m4b_team_b_idx")))
+            @test [c.name for c in live("m4b_team").composites] == ["m4b_team_b_idx"] && converged()
+            apply!(replace(team(""), ", db_index = true" => ""))
+            t = live("m4b_team")
+            # The descending index was PormG's (its COMMENT carries the marker), so it is dropped too.
+            @test isempty(t.composites) && isempty(t.indexes) && converged()
+        end
+
+        # What: a table renamed (by a rename hint), and a parent and its child dropped together.
+        # SQL: `RENAME TABLE `m4b_team` TO `m4b_constructor``; `SET FOREIGN_KEY_CHECKS = 0; DROP TABLE …`.
+        # Why: MySQL has no `DROP TABLE … CASCADE` and refuses to drop a table another references (3730); the
+        # plan drops each with the session's key checks off, on the one connection the plan runs on.
+        @testset "tables renamed and dropped" begin
+            write_models("Constructor = Models.Model(\"m4b_constructor\", teamid = Models.IDField(), " *
+                         "abbr = Models.CharField(max_length = 8), pts = Models.PositiveIntegerField(default = 0))\n" *
+                         "Seat = Models.Model(\"m4b_seat\", seatid = Models.IDField(), teamid = Models.BigIntegerField(null = true))")
+            Mig.makemigrations(folder; interactive = false, renames = ["m4b_team" => "m4b_constructor"])
+            @test occursin("RENAME TABLE `m4b_team` TO `m4b_constructor`", read(pending, String))
+            Mig.migrate(folder; interactive = false, atomic = false)
+            @test "m4b_constructor" in scratch_tables() && !("m4b_team" in scratch_tables()) && converged()
+            apply!("Constructor = Models.Model(\"m4b_constructor\", teamid = Models.IDField(), " *
+                   "abbr = Models.CharField(max_length = 8), pts = Models.PositiveIntegerField(default = 0))\n" *
+                   "Seat = Models.Model(\"m4b_seat\", seatid = Models.IDField(), teamid = Models.ForeignKey(Constructor, " *
+                   "pk_field = \"teamid\", null = true))")
+            @test live("m4b_seat").columns["teamid"].reference !== nothing && converged()
+            # The parent and its child dropped together: the parent first, its child's key notwithstanding.
+            apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())")
+            @test !("m4b_seat" in scratch_tables()) && !("m4b_constructor" in scratch_tables()) && converged()
+            # The connection the plan ran on was renewed: no pooled connection has the key checks off.
+            @test raw("SELECT @@SESSION.FOREIGN_KEY_CHECKS AS c")[1, :c] == 1
+        end
+
+        # What: an alter plan stopped part-way — its `ADD CONSTRAINT` refused because another table holds the
+        # foreign key's name (MySQL names keys per database) — then finished by the next plan.
+        # SQL: `ADD COLUMN`, then `ALTER TABLE `m4b_seat` ADD CONSTRAINT `<k>` …` (1826, duplicate name); after
+        #      the planted table is dropped, a plan of what is missing.
+        # Why: #1268's promise on an engine whose DDL commits each statement: the history says `failed`, and
+        # the next `makemigrations` plans exactly what is missing, so the schema ends as a clean apply's.
+        @testset "a stopped alter plan is finished by the next plan (#1268)" begin
+            parent = "Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())\n"
+            apply!(parent * "Seat = Models.Model(\"m4b_seat2\", seatid = Models.IDField(), circuitid = Models.BigIntegerField(null = true))")
+            write_models(parent * "Seat = Models.Model(\"m4b_seat2\", seatid = Models.IDField(), " *
+                         "circuitid = Models.ForeignKey(Circuit, pk_field = \"circuitid\", null = true, db_index = false), " *
+                         "row = Models.IntegerField(null = true))")
+            Mig.makemigrations(folder; interactive = false)
+            plan = read(pending, String)
+            key = match(r"ADD CONSTRAINT `(m4b_seat2_circuitid_[0-9A-Za-z]+_fk)`", plan)[1]
+            exec("CREATE TABLE `m4b_planted` (`id` BIGINT NOT NULL PRIMARY KEY, `p` BIGINT NULL, " *
+                 "CONSTRAINT `$(key)` FOREIGN KEY (`p`) REFERENCES `m4b_planted` (`id`)) ENGINE=InnoDB")
+            e = try; Mig.migrate(folder; interactive = false, atomic = false); nothing; catch err; err; end
+            @test e isa PormG.PormGError
+            @test length(Mig.status(folder).failed) == 1
+            t = live("m4b_seat2")
+            @test haskey(t.columns, "row") && t.columns["circuitid"].reference === nothing   # the step before it ran
+            exec("DROP TABLE `m4b_planted`")
+            Mig.makemigrations(folder; interactive = false)
+            rest = read(pending, String)
+            @test occursin("ADD CONSTRAINT", rest) && !occursin("ADD COLUMN", rest)
+            @test Mig.migrate(folder; interactive = false).outcome === :applied   # one statement: no atomic needed
+            @test live("m4b_seat2").columns["circuitid"].reference !== nothing && converged()
         end
     finally
         drop_scratch!()

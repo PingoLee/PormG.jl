@@ -388,6 +388,7 @@ end
     e = _mm_err(() -> _mm_plan(_mm_my, "", src))
     msg = e isa PormG.BackendCapabilityError ? sprint(showerror, e) : ""
     @test (label, occursin("MySQL", msg) && occursin("CharField", msg)) == (label, true)
+    label == "a unique EmailField" && @test occursin("\"mail\"", msg) && occursin("(EmailField)", msg)
     @test (label, _mm_plan(MmMockPostgres(), "", src) isa AbstractDict) == (label, true)
   end
   # The same columns without a key or index build.

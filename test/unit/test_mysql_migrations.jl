@@ -174,8 +174,8 @@ end
 # Synthetic catalog rows for the tables above, as MySQL 8.4 reports them after `migrate`.
 _mm_col(tbl, col, ctype, nullable, dflt, extra, key) =
   (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key)
-_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing) =
-  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part)
+_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing) =
+  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr)
 
 # What: `_mysql_live_table` over the rows MySQL reports for the DDL above, against `column_spec`.
 # SQL: none.
@@ -281,8 +281,6 @@ end
   refused(f) = (e = _mm_err(f); e isa PormG.UnsupportedConnectionError ? sprint(showerror, e) : e)
   m = refused(() -> _MD.field_to_column("lowered", Models.CharField(db_default = (postgres = "lower('X')", sqlite = nothing)), _mm_my))
   @test m isa String && occursin("phase 4c", m) && occursin("lowered", m)
-  @test occursin("phase 4c", refused(() -> _MD.create_index(_mm_my, "`i`", "`driver`", String[];
-                                                            expressions = ["lower(`forename`)"])))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; condition = "dob IS NOT NULL"))
   @test e isa PormG.BackendCapabilityError && occursin("MySQL", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; method = "gin"))
@@ -547,6 +545,68 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) = name == "ta
   write(joinpath(dir, "q.jl"), replace(read(joinpath(dir, "p.jl"), String), "condition=code <> ''" => "condition=code <> '' OR true"))
   e = _mm_err(() -> _MM._plan_lossy_alters(joinpath(dir, "q.jl")))
   @test e isa PormG.InvalidMigrationError && occursin("names a condition no statement in the plan adds", sprint(showerror, e))
+end
+
+# What: a functional index and a functional UniqueConstraint on MySQL: the statement, the plan for each
+# change, and the reader.
+# SQL: `CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename)), (upper(code)) DESC) COMMENT
+#      'pormg:index:<hash>';` and `CREATE UNIQUE INDEX … ((lower(code))) COMMENT '…';`.
+# Why: MySQL takes a functional member only in parentheses of its own (1064 otherwise, measured), and
+# re-prints the expression (`lower(`forename`)`), so only the hashed marker of the declared text, kept as
+# the index's COMMENT, tells PormG's index from a hand-made one and a changed expression from the same one.
+# A marked index is the declaration's whatever its shape; an index mixing a column and an expression is
+# none PormG can declare, so it is not read.
+@testset "#1130: a functional index on MySQL is parenthesized and carries its hashed marker" begin
+  mk = PormG.index_text_marker(["lower(forename)", "upper(code) DESC"], nothing)
+  @test _MD.create_index(_mm_my, "`drv_lower_idx`", "`driver`", String[];
+                         expressions = ["lower(forename)", "upper(code) DESC"], marker = mk) ==
+        "CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename)), (upper(code)) DESC) COMMENT '$(mk)';"
+  umk = PormG.index_text_marker(["lower(code)"], nothing)
+  @test _MD.create_unique_index(_mm_my, "`drv_code_uniq`", "`driver`", String[]; expressions = ["lower(code)"], marker = umk) ==
+        "CREATE UNIQUE INDEX `drv_code_uniq` ON `driver` ((lower(code))) COMMENT '$(umk)';"
+  # A plain unique composite still carries no comment.
+  @test _MD.create_unique_index(_mm_my, "`drv_fc_uniq`", "`driver`", ["`forename`", "`code`"]) ==
+        "CREATE UNIQUE INDEX `drv_fc_uniq` ON `driver` (`forename`, `code`);"
+  @test _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", String[]; expressions = ["lower(a); DROP TABLE x"])) isa
+        PormG.InvalidValueError
+
+  idx(e) = _mm_driver("", "; indexes = [Models.Index(expressions = ($(join(("\"$(x)\"" for x in e), ", ")),), name = \"drv_lower_idx\")]")
+  uq = _mm_driver("", "; constraints = [Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"drv_code_uniq\")]")
+  @test _mm_plan(_mm_my, _mm_driver(), idx(["lower(forename)"]))[:driver]["Create index: drv_lower_idx"] ==
+        "CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename))) COMMENT '$(PormG.index_text_marker(["lower(forename)"], nothing))';"
+  @test _mm_plan(_mm_my, _mm_driver(), uq)[:driver]["Create unique constraint: drv_code_uniq"] ==
+        "CREATE UNIQUE INDEX `drv_code_uniq` ON `driver` ((lower(code))) COMMENT '$(umk)';"
+  @test isempty(_mm_plan(_mm_my, idx(["lower(forename)"]), idx(["lower(forename)"])))
+  changed = _mm_plan(_mm_my, idx(["lower(forename)"]), idx(["upper(forename)"]))[:driver]
+  @test changed["Remove composite index: drv_lower_idx"] == "DROP INDEX `drv_lower_idx` ON `driver`;" &&
+        haskey(changed, "Create index: drv_lower_idx")
+  # One made by hand under the declared name, as the reader reports it (MySQL's re-print, no marker): its
+  # name is taken, so the plan is refused before it runs.
+  live = [let t = _MM.live_table(e[:model], _mm_my)
+            _MM.LiveTable(t.name, t.columns, t.indexes,
+                          [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                             nothing, nothing; expressions = ["lower(`forename`)"]) for c in t.composites],
+                          t.checks)
+          end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
+  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  @test e isa PormG.InvalidMigrationError && occursin("drv_lower_idx", sprint(showerror, e))
+
+  # The reader: a functional index of expressions only, with its marker and directions; a column beside an
+  # expression is not read; a marked one-column index is the declaration's composite, not `db_index`'s.
+  dcols = [_mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI"),
+           _mm_col("driver", "forename", "varchar(100)", "NO", missing, "", ""),
+           _mm_col("driver", "code", "varchar(8)", "NO", missing, "", "")]
+  stats = [_mm_stat("driver", "drv_lower_idx", 1, missing; expr = "lower(`forename`)", comment = mk),
+           _mm_stat("driver", "drv_lower_idx", 1, missing, "D"; expr = "concat(`code`,_utf8mb4\\'x\\')", comment = mk),
+           _mm_stat("driver", "drv_mixed_idx", 1, missing; expr = "lower(`forename`)"),
+           _mm_stat("driver", "drv_mixed_idx", 1, "code"),
+           _mm_stat("driver", "drv_solo_idx", 1, "code"; comment = PormG.INDEX_MARKER)]
+  rd = _MM._mysql_live_table(_mm_my, "driver", dcols, stats, Any[], Any[])
+  @test isempty(rd.indexes)
+  @test sort!([(c.name, c.columns, c.expressions, c.marker) for c in rd.composites]) ==
+        [("drv_lower_idx", String[], ["lower(`forename`)", "concat(`code`,_utf8mb4'x') DESC"], mk),
+         ("drv_solo_idx", ["code"], String[], PormG.INDEX_MARKER)]
 end
 
 # What: the rows a column change would fail, counted in MySQL's own SQL, kind by kind.

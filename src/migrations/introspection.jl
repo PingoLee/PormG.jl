@@ -4945,9 +4945,6 @@ _mysql_unescape(s::AbstractString)::String =
     c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : c == '0' ? "\0" : c == 'Z' ? "\x1a" : string(c)
   end)
 
-# The bare `pormg:index` marker as a whole token of an index's COMMENT (not the hashed `pormg:index:<h>`).
-const _MYSQL_INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?![0-9A-Za-z_:])")
-
 # A declared CHECK as MySQL re-prints the clause `Dialect.add_check_constraint` writes: the condition,
 # then the marker's always-true term, both escaped as `information_schema` escapes a quote (`\'`). The
 # introducer is the charset of the connection that wrote it.
@@ -5000,7 +4997,7 @@ const _MYSQL_COLUMNS_SQL = """
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_STATISTICS_SQL = """
   SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, NON_UNIQUE AS non_unique, COLUMN_NAME AS col,
-         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment
+         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment, EXPRESSION AS expr
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
 const _MYSQL_FOREIGN_KEYS_SQL = """
@@ -5098,13 +5095,30 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
   composites = LiveComposite[]
   for (idx, members) in groups
     idx == "PRIMARY" && continue
-    # An expression member (a functional index, phase 4c) or a prefix length is a member PormG cannot
-    # re-emit, so the index is not read, as the other readers drop one whole.
-    any(r -> _mysql_str(r.col) === nothing || _mysql_str(r.sub_part) !== nothing, members) && continue
-    cols = String[_mysql_str(r.col) for r in members]
+    # A prefix length, or a column beside an expression, is a member PormG cannot re-emit, so the index is
+    # not read, as the other readers drop one whole. An index of expressions only is a functional index.
+    any(r -> _mysql_str(r.sub_part) !== nothing, members) && continue
+    functional = all(r -> _mysql_str(r.col) === nothing, members)
+    functional || all(r -> _mysql_str(r.col) !== nothing, members) || continue
+    cols = functional ? String[] : String[_mysql_str(r.col) for r in members]
     unique = parse(Int, _mysql_str(members[1].non_unique)) == 0
     desc = Bool[_mysql_str(r.coll) == "D" for r in members]
-    if length(cols) == 1 && !desc[1]
+    # PormG's marker, written as the index's COMMENT (`Dialect.create_index(::PormGMySQL)`): the bare one
+    # for a descending index, the hashed one for a functional index. A marked index is always a composite,
+    # whatever its shape — PormG wrote it from a model-level declaration.
+    comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
+    marker = comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment)
+    if functional
+      # MySQL's re-print (`lower(`a`)`), escaped as `information_schema` escapes a quote; the marker, not
+      # this text, is what a declaration matches. A descending member keeps its direction in `COLLATION`.
+      exprs = String[_mysql_unescape(something(_mysql_str(r.expr), "")) * (d ? " DESC" : "")
+                     for (r, d) in zip(members, desc)]
+      push!(composites, LiveComposite(idx, String[], unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                      marker, (comment === nothing || isempty(comment)) ? nothing : comment;
+                                      expressions = exprs))
+      continue
+    end
+    if length(cols) == 1 && !desc[1] && marker === nothing
       # An inline `UNIQUE` is an index named after its column; any other single-column unique index is
       # a model-level one. A non-unique one is `db_index`'s, except the index InnoDB created for a
       # foreign key, which carries the constraint's name and no declaration.
@@ -5116,9 +5130,6 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
         continue
       end
     end
-    # PormG's bare marker, written as the index's COMMENT (`Dialect.create_index(::PormGMySQL)`).
-    comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
-    marker = comment !== nothing && occursin(_MYSQL_INDEX_MARKER_RE, comment) ? INDEX_MARKER : nothing
     push!(composites, LiveComposite(idx, cols, unique, false, "btree", desc,
                                     Union{String, Nothing}[nothing for _ in cols], fill(true, length(cols)),
                                     marker, (comment === nothing || isempty(comment)) ? nothing : comment))

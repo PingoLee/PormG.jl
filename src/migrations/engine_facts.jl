@@ -23,8 +23,9 @@ _rebuilds_table(::PormGMySQL) = false
 # its comment (#29). SQLite has no comment on an index to stamp.
 _adopts_indexes(::PormGPostgres) = true
 _adopts_indexes(::PormGSQLite) = false
-# MySQL has an index COMMENT, and PormG writes its bare marker on an advanced index it creates (a
-# descending one); adopting an index it did not create is phase 4c's (#1130).
+# MySQL has an index COMMENT, and PormG writes its marker there on an advanced index it creates (#1130),
+# but cannot change it in place: stamping one would re-create the index. A hand-made index of an advanced
+# declaration's shape stays unowned, as on SQLite, and one whose text MySQL re-printed matches none.
 _adopts_indexes(::PormGMySQL) = false
 
 # A renamed model-level index is renamed in place. SQLite has no `ALTER INDEX … RENAME`, so the index

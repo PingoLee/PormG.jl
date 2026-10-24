@@ -4833,40 +4833,55 @@ function add_foreign_key(conn::PormGMySQL, table_name::Union{Symbol, String}, co
   return """ALTER TABLE $(_ddl_ident(conn, table_name)) ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause;"""
 end
 
-# The options an index takes on PostgreSQL that MySQL has no counterpart for, or that phase 4c owns.
-function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, include, expressions, condition)
+# The options an index takes on PostgreSQL that MySQL has no counterpart for.
+function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, include, condition)
   method == "btree" || throw(_capability_error(conn, :index_methods, "An index declaring method = \"$(method)\""))
   any(!isnothing, opclasses) && throw(_capability_error(conn, :index_methods, "An index declaring opclasses = $(Tuple(opclasses))"))
   isempty(include) || throw(_capability_error(conn, :index_methods, "An index declaring include = $(Tuple(include))"))
   condition === nothing || throw(_capability_error(conn, :partial_indexes, "An index declaring condition = $(repr(condition))"))  # refusal-value-ok: the model's own index condition (DDL)
-  isempty(expressions) || throw(_mysql_not_yet("A functional index (expressions = $(Tuple(expressions)))"))
   return nothing
 end
 
+# The member list of a MySQL index. A functional member (#1130 phase 4c) is written in parentheses of its
+# own — MySQL reads `(lower(a))` as a column list and refuses it (1064, measured) — with a trailing `ASC` /
+# `DESC` outside them, where MySQL takes a direction. The expressions are validated as on the other
+# engines (`_index_text_members`).
+function _mysql_index_members(columns::Vector{String}, descending::AbstractVector{Bool},
+                              expressions::AbstractVector)::String
+  isempty(expressions) && return join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
+  members = String[]
+  for e in _index_text_members(columns, Bool[], Union{String, Nothing}[], expressions)
+    m = match(r"^(.*?)\s+(ASC|DESC)$"is, strip(e))
+    push!(members, m === nothing ? "($(strip(e)))" : "($(m[1])) $(uppercase(m[2]))")
+  end
+  return join(members, ", ")
+end
+
 # No `IF NOT EXISTS`: MySQL has none for an index (measured). The planner emits a create only for an
-# index the live schema lacks. An advanced index (a descending member, #29) carries PormG's bare ownership
-# marker as its `COMMENT`, written with it — the marker is a constant, so unlike an expression's hashed
-# one it needs nothing the server computes — and the reader reads it back from `INDEX_COMMENT`: without
-# it, a descending index PormG created would read as hand-made, and never be dropped.
+# index the live schema lacks. An advanced index carries PormG's ownership marker as its `COMMENT`, written
+# with it, and the reader reads it back from `INDEX_COMMENT`: the bare `pormg:index` for a descending
+# member (#29), the hashed `pormg:index:<hash>` of the declared text for a functional index. Both are
+# computed from the declaration alone (unlike an expression default's, which needs the server's re-print),
+# and the hash is what tells a changed expression, since MySQL re-prints it (`lower(`a`)`). Without the
+# marker an index PormG created would read as hand-made, and never be dropped. The marker is `pormg:index`
+# and hex digits, so the literal needs no escaping.
 function create_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
-  _refuse_mysql_index_options(conn; method, opclasses, include, expressions, condition)
-  members = join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
-  comment = marker == INDEX_MARKER ? " COMMENT '$(INDEX_MARKER)'" : ""
-  return """CREATE INDEX $(index_name) ON $(table_name) ($(members))$(comment);"""
+  _refuse_mysql_index_options(conn; method, opclasses, include, condition)
+  comment = marker === nothing ? "" : " COMMENT '$(marker)'"
+  return """CREATE INDEX $(index_name) ON $(table_name) ($(_mysql_index_members(columns, descending, expressions)))$(comment);"""
 end
 
 function create_unique_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
                              if_not_exists::Bool = true, expressions::AbstractVector = String[],
                              condition::Union{AbstractString, Nothing} = nothing,
                              marker::Union{String, Nothing} = nothing)
-  _refuse_mysql_index_options(conn; method = "btree", opclasses = Union{String, Nothing}[], include = String[],
-                              expressions, condition)
-  members = join(_index_members(columns, Bool[], Union{String, Nothing}[]), ", ")
-  return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(members));"""
+  _refuse_mysql_index_options(conn; method = "btree", opclasses = Union{String, Nothing}[], include = String[], condition)
+  comment = marker === nothing ? "" : " COMMENT '$(marker)'"
+  return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(_mysql_index_members(columns, Bool[], expressions)))$(comment);"""
 end
 
 # A column change on MySQL (#1130 phase 4b): ONE `ALTER TABLE` whose clauses carry every slot of the delta,

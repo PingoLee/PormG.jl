@@ -455,6 +455,39 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test e isa PormG.InvalidMigrationError && occursin("already the name of a CHECK on table 'm4b_grid'", sprint(showerror, e))
         end
 
+        # What: a functional index and a functional UniqueConstraint (#1130 phase 4c): created, converged,
+        # re-created for a new expression, dropped; one made by hand under the declared name is refused.
+        # SQL: `CREATE INDEX `m4b_fn_idx` ON `m4b_fn` ((lower(name))) COMMENT 'pormg:index:<h>'`, then
+        #      `DROP INDEX `m4b_fn_idx` ON `m4b_fn`` and the new create.
+        # Why: MySQL re-prints the expression (`lower(`name`)`), so the hashed marker in the COMMENT is what
+        # makes the index converge, and what tells a changed expression or a hand-made index from PormG's.
+        @testset "a functional index" begin
+            fn(ix) = "Fn = Models.Model(\"m4b_fn\", fnid = Models.IDField(), name = Models.CharField(max_length = 40), " *
+                     "code = Models.CharField(max_length = 8)$(ix))"
+            index(e) = "; indexes = [Models.Index(expressions = (\"$(e)\",), name = \"m4b_fn_idx\")]"
+            apply!(fn(""))
+            exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'SEN'), ('Prost', 'PRO')")
+            apply!(fn(index("lower(name)")))
+            c = only(live("m4b_fn").composites)
+            @test (c.name, c.expressions, c.marker) == ("m4b_fn_idx", ["lower(`name`)"], PormG.index_text_marker(["lower(name)"], nothing))
+            @test converged()
+            plan = apply!(fn(index("upper(name) DESC")))
+            @test occursin("DROP INDEX `m4b_fn_idx` ON `m4b_fn`", plan) && occursin("((upper(name)) DESC)", plan)
+            @test only(live("m4b_fn").composites).expressions == ["upper(`name`) DESC"] && converged()
+            unique = "; constraints = [Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"m4b_fn_code_uniq\")]"
+            apply!(fn(unique))
+            c = only(live("m4b_fn").composites)
+            @test (c.name, c.unique) == ("m4b_fn_code_uniq", true) && converged()
+            @test (try; exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'sen')"); false; catch; true; end)
+            apply!(fn(""))
+            @test isempty(live("m4b_fn").composites) && converged()
+            exec("CREATE INDEX `m4b_fn_idx` ON `m4b_fn` ((lower(`name`)))")
+            write_models(fn(index("lower(name)")))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("m4b_fn_idx", sprint(showerror, e))
+            exec("DROP INDEX `m4b_fn_idx` ON `m4b_fn`")
+        end
+
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
         # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
         #      transaction; `ensure_table!`'s CREATE TABLE and key.

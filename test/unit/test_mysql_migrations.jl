@@ -554,6 +554,15 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
   out = OrderedDict{Symbol, OrderedDict{String, String}}()
   _MM._plan_check_adds!(_mm_my, out, :pilot, drv, ren; catalog_table = :driver)
   @test Base.startswith(out[:pilot]["Rename check constraint: driver_chk_1"], "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`, ADD CONSTRAINT `code_nonempty`")
+  # A rename frees its old name in its own statement, so a rename that takes a name another rename frees
+  # only later in the plan is refused (MySQL would still hold it, 3822), and one after it is not.
+  takes(n) = Models.CheckConstraint(condition = "code <> ''", name = n)
+  renames(pairs) = _MM._CheckPlan(String[], Models.CheckConstraint[], pairs, Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  late = renames([("other", takes("held_here")), ("held_here", takes("elsewhere"))])
+  @test _mm_err(() -> _MM._plan_check_adds!(_mm_my, OrderedDict{Symbol, OrderedDict{String, String}}(), :driver, drv, late)) isa
+        PormG.InvalidMigrationError
+  early = renames([("held_here", takes("elsewhere")), ("other", takes("held_here"))])
+  @test _MM._plan_check_adds!(_mm_my, OrderedDict{Symbol, OrderedDict{String, String}}(), :driver, drv, early) === nothing
 
   # The reader: a marked clause is the declared CHECK, its condition unescaped — even one of PormG's own
   # column shape — and an unmarked one of that shape is still the column's.

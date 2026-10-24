@@ -5117,9 +5117,6 @@ function rename_check_constraint(conn::PormGMySQL, table_name::String, old_name:
   return "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP CHECK $(_ddl_ident(conn, old_name)), " *
          "ADD CONSTRAINT $(_ddl_ident(conn, c.name)) CHECK ($(_mysql_check_clause(c)));"
 end
-comment_check_constraint(conn::PormGMySQL, table_name::String, c::CheckConstraint;
-                         keep::Union{String, Nothing} = nothing)::String =
-  rename_check_constraint(conn, table_name, c.name, c)
 
 # No `CASCADE` on MySQL, and a table another table's foreign key references cannot be dropped (3730). The
 # plan drops a table before the steps that drop its children's keys (`_ordered_entries` runs "Drop table"

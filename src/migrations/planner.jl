@@ -1184,8 +1184,12 @@ function _plan_check_adds!(conn::_SQLEngine,
   _rebuilds_table(conn) && return nothing
   table = string(model_name)
   at_run(name) = _check_name_at_run(conn, name, something(catalog_table, model_name), model_name)
-  freed = Set{String}(lowercase(n) for n in Iterators.flatten((plan.drops, (o for (o, _) in plan.renames))))
+  # The names gone by the time each statement runs: the drops ran before every add; a rename's statement
+  # drops its old name just before it adds the new one, so it frees that name and those of the renames
+  # before it, and the adds after every rename.
+  freed = Set{String}(lowercase(n) for n in plan.drops)
   for (old, c) in plan.renames
+    push!(freed, lowercase(old))
     _refuse_check_name_clash(conn, model, table, catalog_table, c.name; freed = freed)
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Rename", old),
                                          Dialect.rename_check_constraint(conn, table, at_run(old), c))

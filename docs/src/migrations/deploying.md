@@ -185,8 +185,12 @@ result = PormG.Migrations.migrate("my_db"; atomic = false)
 
 The statements then run in order. When one fails, the ones before it stay applied, the plan is
 recorded as `failed`, and the error is raised. Fix the cause, run `makemigrations()` again, which plans
-what is still missing, and `migrate()` once more. `lock_timeout` and `statement_timeout` are refused on
-MySQL until a later phase of #1130 decides what they mean there.
+what is still missing, and `migrate()` once more. A change to one column is a single `ALTER TABLE`, so it
+is applied whole or not at all even there.
+
+`lock_timeout` sets `lock_wait_timeout` on the connection the plan runs on, rounded up to whole seconds:
+how long each statement waits for its table's metadata lock. `statement_timeout` is refused on MySQL,
+which bounds no DDL statement's run time.
 
 A second instance that also calls `migrate(…; atomic = false)` while the first applies the plan waits
 on the lock, then finds the plan recorded and reports `:already_applied`, as on PostgreSQL. (With the

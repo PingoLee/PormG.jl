@@ -943,20 +943,35 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
   return ("true", Any[])
 end
 
-# MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
-# existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
-# kind comes from a column change, which is phase 4b's.
+# MySQL (#1130): each `:rows` finding counted in MySQL's own SQL — backtick names, `?` markers, `SIGNED`
+# for `BIGINT`. The kinds a key or index records (#1130 phase 4a finishes a stopped plan with them) are
+# counted here; the column kinds are phase 4b's.
 function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
-  f.kind === :add_foreign_key ||
-    throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
   q(name) = Dialect._ddl_ident(conn, name)
+  table = q(f.table)
   col = q(f.column)
-  parent, key = f.references
-  return ("SELECT COUNT(*) AS n FROM $(q(f.table)) AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
-          "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
-          "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  # The rows in duplicate groups, as one `SIGNED` (MySQL's `SUM` of a count is a `DECIMAL`). The key and
+  # the `GROUP BY` compare by the column's collation alike, so the groups are the ones the index refuses.
+  # MySQL has no partial index, so a composite carries no condition.
+  duplicates(cols) =
+    "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM $table WHERE " *
+    join(("$c IS NOT NULL" for c in cols), " AND ") *
+    " GROUP BY $(join(cols, ", ")) HAVING COUNT(*) > 1) AS pormg_duplicates"
+  if f.kind === :add_unique || (f.kind === :add_primary_key && !_pk_precheck_counts_nulls(conn))
+    return ("SELECT CAST(($(duplicates([col]))) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_primary_key
+    return ("SELECT CAST(($(duplicates([col]))) + (SELECT COUNT(*) FROM $table WHERE $col IS NULL) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_composite_unique
+    return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]))) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_foreign_key
+    parent, key = f.references
+    return ("SELECT COUNT(*) AS n FROM $table AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
+            "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
+            "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  end
+  throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
 end
 
 # Does the live table still have this column? A plan header can outlive what it describes — the plan

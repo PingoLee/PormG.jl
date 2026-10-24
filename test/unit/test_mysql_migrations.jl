@@ -394,3 +394,24 @@ end
   # The same columns without a key or index build.
   @test haskey(_mm_plan(_mm_my, "", "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(), raw = Models.BinaryField(null = true))"), :lap)
 end
+
+# What: the rows a key added to a table that exists would reject, counted in MySQL's own SQL.
+# SQL: `SELECT CAST((SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) … GROUP BY … HAVING COUNT(*) > 1)
+#      AS pormg_duplicates) AS SIGNED) AS n`, backtick names; a primary key also counts its NULLs.
+# Why: a plan that finishes a stopped one adds a `UniqueConstraint` to a table that exists (#1268), and its
+# pre-check must count on MySQL: the 4a counter refused every kind but a foreign key's, so `dry_run` and
+# `migrate` raised. `BIGINT` is no MySQL `CAST` target, and a double-quoted name is a string literal there.
+@testset "#1130: the rows a new key rejects are counted on MySQL" begin
+  sqlof(kind; kw...) = first(_MM._precheck_sql(_mm_my, _MM.LossyAlter(kind, "driver", "code", "varchar(8)", "varchar(8)"; kw...)))
+  dup(cols) = "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM `driver` WHERE " *
+              join(("$c IS NOT NULL" for c in cols), " AND ") * " GROUP BY $(join(cols, ", ")) HAVING COUNT(*) > 1) AS pormg_duplicates"
+  @test sqlof(:add_unique) == "SELECT CAST(($(dup(["`code`"]))) AS SIGNED) AS n"
+  @test sqlof(:add_composite_unique; columns = ("forename", "code")) ==
+        "SELECT CAST(($(dup(["`forename`", "`code`"]))) AS SIGNED) AS n"
+  # A MySQL primary key makes its column NOT NULL, so a NULL fails it too.
+  @test sqlof(:add_primary_key) ==
+        "SELECT CAST(($(dup(["`code`"]))) + (SELECT COUNT(*) FROM `driver` WHERE `code` IS NULL) AS SIGNED) AS n"
+  @test occursin("FROM `driver` AS pormg_child WHERE pormg_child.`code` IS NOT NULL AND NOT EXISTS (SELECT 1 FROM `circuit`",
+                 sqlof(:add_foreign_key; references = ("circuit", "circuitid")))
+  @test _MM._pk_precheck_counts_nulls(_mm_my)
+end

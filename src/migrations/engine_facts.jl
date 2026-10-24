@@ -85,6 +85,8 @@ _declares_naive_timestamp(::PormGSQLite) = false
 # fills one with a rowid, so there a NULL fails only through NOT NULL, `:set_not_null`'s finding.
 _pk_precheck_counts_nulls(::PormGPostgres) = true
 _pk_precheck_counts_nulls(::PormGSQLite) = false
+# MySQL makes a primary key's columns NOT NULL, as PostgreSQL does.
+_pk_precheck_counts_nulls(::PormGMySQL) = true
 
 # The pre-check predicate for a value that would violate a `>= 0` CHECK. SQLite's rebuild copies a
 # text `'-5'` into an INTEGER-affinity column as `-5`, so it compares the number the text becomes.

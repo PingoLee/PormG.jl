@@ -105,7 +105,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_rebuilds_table, :_adopts_indexes, :_composite_name_key,
                                :_builtin_ignore_tables, :_builtin_ignore_tables_name,
                                :_parenthesizes_db_default, :_expression_default_findings,
-                               :_invalid_index_findings, :_can_rename_index])
+                               :_invalid_index_findings, :_can_rename_index,
+                               # Phase 4b: what the row pre-checks count.
+                               :_pk_precheck_counts_nulls])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

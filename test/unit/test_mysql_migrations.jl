@@ -692,11 +692,12 @@ end
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
   (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
-   generated = false)
+   generated = false, generation = nothing)
 # A generated column made by hand, which the reader takes for a plain one.
 struct MmMockMySQLGen <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
-  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true)
+  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true,
+   generation = (expr = "(`a` * 2)", stored = false))
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
 # SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
@@ -723,12 +724,13 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
   @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
   @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
-  # A MODIFY would end a generated column's generation (STORED) or fail (VIRTUAL, 3106): refused.
+  # A MODIFY that left a generation out would end it (STORED) or fail (VIRTUAL, 3106), so a generated column
+  # made by hand is restated with it, and with no default.
   gen = MmMockMySQLGen()
-  e = _mm_err(() -> _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true),
-                                    _MM.column_delta(Models.IntegerField(null = true),
-                                                     _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")))
-  @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"c\"", sprint(showerror, e))
+  @test _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true),
+                        _MM.column_delta(Models.IntegerField(null = true),
+                                         _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` INT GENERATED ALWAYS AS ((`a` * 2)) VIRTUAL NULL;"
   # A column with nothing else, as before.
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==

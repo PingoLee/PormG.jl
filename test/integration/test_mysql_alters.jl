@@ -369,17 +369,25 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             r = column_row("m4b_car", "tag")
             @test ismissing(r.d) && (r.c, r.k) == ("set by hand", "utf8mb4_0900_ai_ci") && converged()
-            # A generated column made by hand reads as a plain one; changing it is refused, since a MODIFY
-            # would end its generation.
-            exec("ALTER TABLE `m4b_car` ADD COLUMN `twice` BIGINT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`)) STORED")
-            car2(twice) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), " *
-                          "tag = Models.CharField(max_length = 60, null = true), twice = $(twice))"
-            write_models(car2("Models.BigIntegerField(null = true)"))
+            # A generated column made by hand reads as a plain one; a MODIFY that changes it restates its
+            # generation, which a MODIFY that left it out would end (STORED) or fail on (VIRTUAL, 3106).
+            exec("UPDATE `m4b_car` SET `tag` = 'ab'")
+            exec("ALTER TABLE `m4b_car` ADD COLUMN `twice` BIGINT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`)) STORED, " *
+                 "ADD COLUMN `half` INT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`) DIV 2) VIRTUAL")
+            car2(twice, half) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), " *
+                                "tag = Models.CharField(max_length = 60, null = true), twice = $(twice), half = $(half))"
+            write_models(car2("Models.BigIntegerField(null = true)", "Models.IntegerField(null = true)"))
             @test converged()
-            write_models(car2("Models.BigIntegerField()"))
-            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"twice\"", sprint(showerror, e))
-            exec("ALTER TABLE `m4b_car` DROP COLUMN `twice`")
+            apply!(car2("Models.IntegerField(null = true)", "Models.BigIntegerField(null = true)"))
+            gen = raw("SELECT COLUMN_NAME AS c, COLUMN_TYPE AS t, EXTRA AS e FROM information_schema.COLUMNS " *
+                      "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'm4b_car' AND COLUMN_NAME IN ('twice', 'half') ORDER BY 1")
+            @test [(String(r.c), String(r.t), String(r.e)) for r in eachrow(gen)] ==
+                  [("half", "bigint", "VIRTUAL GENERATED"), ("twice", "int", "STORED GENERATED")]
+            exec("INSERT INTO `m4b_car` (`tag`) VALUES ('abcd')")
+            row = raw("SELECT `twice`, `half` FROM `m4b_car` WHERE `tag` = 'abcd'")[1, :]
+            @test (row.twice, row.half) == (4, 2)
+            @test converged()
+            exec("ALTER TABLE `m4b_car` DROP COLUMN `twice`, DROP COLUMN `half`")
         end
 
         # What: an alter plan stopped part-way — its `ADD CONSTRAINT` refused because another table holds the

@@ -1761,7 +1761,8 @@ function _generated_recreates(conn::PormGPostgres, model::PormGModel, live::Live
   return out
 end
 _generated_recreates(::PormGSQLite, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
-# MySQL: a generated column is refused before any DDL (`Dialect.field_to_column`) until phase 4c.
+# MySQL: a generated declaration is refused before any DDL (`Dialect.field_to_column`, the capability
+# table), and a generated column made by hand is restated by the MODIFY that changes it.
 _generated_recreates(::PormGMySQL, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
 
 # Does an index, CHECK or generation expression's SQL text name `col`? The same token scan the
@@ -2125,7 +2126,7 @@ function _release_generated_first!(conn::PormGPostgres,
   return nothing
 end
 _release_generated_first!(::PormGSQLite, args...) = nothing
-_release_generated_first!(::PormGMySQL, args...) = nothing   # no generated column until phase 4c
+_release_generated_first!(::PormGMySQL, args...) = nothing   # no generated declaration renders on MySQL
 
 function _readd_generated_fields!(conn::_SQLEngine,
                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},

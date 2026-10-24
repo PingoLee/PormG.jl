@@ -4746,11 +4746,20 @@ end
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
                             temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
-  generated_sql(field) === nothing || throw(_mysql_not_yet("The generated column \"$(col_name)\""))
+  # PormG's one generated field is a tsvector, refused above; a generated declaration is a feature MySQL's
+  # row in the capability table does not have.
+  generated_sql(field) === nothing ||
+    throw(_capability_error(conn, :generated_columns, "The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)
   parts = String[_ddl_ident(conn, col_name), base_type]
+  # A generation expression made by hand is restated where MySQL takes it, after the type; such a column
+  # holds no default.
+  generation = live === nothing ? nothing : live.generation
+  generation === nothing ||
+    push!(parts, "GENERATED ALWAYS AS ($(generation.expr)) " * (generation.stored ? "STORED" : "VIRTUAL"))
   push!(parts, (hasproperty(field, :null) && field.null) ? "NULL" : "NOT NULL")
-  default = _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default)
+  default = generation === nothing ?
+    _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default) : nothing
   default === nothing || push!(parts, default)
   if live !== nothing
     default === nothing && keep_default && live.default_expression !== nothing &&
@@ -4969,10 +4978,9 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
     # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
     keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
                    delta.new_spec.default isa NoDefault
+    # A generated column made by hand reads as a plain one; the MODIFY restates its generation
+    # (`_mysql_column_body`), which a MODIFY that left it out would end.
     live = _column_attributes(conn, catalog, live_column)
-    # A generated column made by hand reads as a plain one; a MODIFY would end its generation.
-    live !== nothing && live.generated &&
-      throw(_mysql_not_yet("A change to the generated column \"$(live_column)\""))
     push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn; live = live, keep_default = keep_default))
   end
   drops_key && push!(clauses, "DROP PRIMARY KEY")

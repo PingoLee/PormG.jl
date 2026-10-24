@@ -2141,6 +2141,19 @@ function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String};
   return found
 end
 
+# Whether `column` leads an index of `table` other than those named in `except` (MySQL): the index a foreign
+# key on it keeps once they are dropped. MySQL keeps every foreign key indexed (a primary key counts), and
+# the index InnoDB made for the key may be gone, dropped when another index could serve it. Bound by value.
+function _leads_another_index(conn::PormGMySQL, table::AbstractString, column::AbstractString,
+                              except::Vector{String})::Bool
+  rows = fetch(conn, """
+    SELECT INDEX_NAME AS name FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND SEQ_IN_INDEX = 1""",
+    [String(table), String(column)]) |> DataFrame
+  skip = Set{String}(lowercase(n) for n in except)
+  return any(r -> !(lowercase(_mysql_str(r.name)) in skip), eachrow(rows))
+end
+
 # What `MODIFY COLUMN` would reset on one column unless restated (measured on 8.4), as the catalog holds it
 # before the plan runs: its COMMENT, `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP`, a collation other than
 # the table's, and an expression default (as MySQL prints it, one level of escaping undone) — and whether

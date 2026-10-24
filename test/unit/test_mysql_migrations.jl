@@ -302,6 +302,10 @@ _MM.get_constraints_fk(::MmMockMySQL, table::Symbol, column::String) = "$(table)
 _MM._foreign_key_leaves_index(::MmMockMySQL, table, name::AbstractString) = true
 # A column with nothing beyond what the model states.
 PormG._column_attributes(::MmMockMySQL, table::AbstractString, column::AbstractString) = nothing
+# Whether a key column leads another index, as each test sets it.
+const _MM_OTHER_INDEX = Ref(false)
+_MM._leads_another_index(::MmMockMySQL, table::AbstractString, column::AbstractString, except::Vector{String}) =
+  _MM_OTHER_INDEX[]
 
 # A delta between two fields of the fixtures, as the planner builds it.
 _mm_delta(new, old; name = "c", old_name = name) =
@@ -642,6 +646,8 @@ end
     @test (typeof(old), typeof(new), kinds(new, old)) == (typeof(old), typeof(new), [:no_implicit_cast])
   end
   @test kinds(Models.DateTimeField(), Models.DateField()) == Symbol[]
+  @test !(:no_implicit_cast in kinds(Models.TextField(), Models.BinaryField()))
+  @test !(:no_implicit_cast in kinds(Models.BinaryField(), Models.CharField(max_length = 20)))
   @test kinds(Models.JSONField(), Models.IntegerField()) == Symbol[]
   @test kinds(Models.DateField(), Models.CharField(max_length = 20)) == [:text_cast]
   @test kinds(Models.DateField(), Models.DateTimeField()) == [:to_date]
@@ -665,15 +671,26 @@ end
                                                  "forename = Models.CharField(max_length = 100))")[:driver]))
   at(k) = findfirst(==(k), steps)
   @test at("Remove composite index: drv_fc_idx") < at("Remove field: legacyid") < at("Alter field: driverid")
-  # A non-unique index led by a foreign-key column that stays is left to MySQL's narrowing: it is the key's
-  # index (dropping it is 1553). A unique one is dropped.
-  lap(n, tail) = "Circuit = Models.Model(\"circuit\", circuitid = Models.IDField())\n" *
-                 "Lap = Models.Model(\"lap\", lapid = Models.IDField(), circuitid = Models.ForeignKey(Circuit, pk_field = \"circuitid\")$(n)$(tail))"
+  # MySQL keeps every foreign key indexed (1553): an index a key the table keeps would be left without
+  # refuses the plan; with another index on the key column it is dropped first; and a key the plan drops
+  # goes before the index it needs.
+  lap(key, n, tail) = "Circuit = Models.Model(\"circuit\", circuitid = Models.IDField())\n" *
+                      "Lap = Models.Model(\"lap\", lapid = Models.IDField(), circuitid = $(key)$(n)$(tail))"
+  fk = "Models.ForeignKey(Circuit, pk_field = \"circuitid\", db_index = false)"
   n = ", n = Models.IntegerField()"
-  keeps = _mm_plan(_mm_my, lap(n, "; indexes = [Models.Index(fields = (\"circuitid\", \"n\"), name = \"lap_cn_idx\")]"), lap("", ""))
-  @test haskey(keeps[:lap], "Remove field: n") && !haskey(keeps[:lap], "Remove composite index: lap_cn_idx")
-  drops = _mm_plan(_mm_my, lap(n, "; constraints = [Models.UniqueConstraint(fields = (\"circuitid\", \"n\"), name = \"lap_cn_uniq\")]"), lap("", ""))
-  @test haskey(drops[:lap], "Remove composite index: lap_cn_uniq")
+  ix = "; indexes = [Models.Index(fields = (\"circuitid\", \"n\"), name = \"lap_cn_idx\")]"
+  e = _mm_err(() -> _mm_plan(_mm_my, lap(fk, n, ix), lap(fk, "", "")))
+  @test e isa PormG.InvalidMigrationError && occursin("only index of the foreign key on 'circuitid'", sprint(showerror, e))
+  _MM_OTHER_INDEX[] = true
+  try
+    @test haskey(_mm_plan(_mm_my, lap(fk, n, ix), lap(fk, "", ""))[:lap], "Remove composite index: lap_cn_idx")
+  finally
+    _MM_OTHER_INDEX[] = false
+  end
+  uniq = "; constraints = [Models.UniqueConstraint(fields = (\"circuitid\", \"n\"), name = \"lap_cn_uniq\")]"
+  steps = collect(keys(_mm_plan(_mm_my, lap(fk, n, uniq), lap("Models.BigIntegerField()", "", ""))[:lap]))
+  at(k) = findfirst(==(k), steps)
+  @test at("Remove foreign key: circuitid") < at("Remove composite index: lap_cn_uniq") < at("Remove field: n")
 end
 
 # What: the refusal of a plan that cannot apply whole counts statements, not plan entries.

@@ -701,6 +701,14 @@ function _throw_dropped_table_dependents(found::Vector{Tuple{String, String}}, c
     "apply the rename as a migration of its own first.)"))
 end
 
+# The live columns of `live` whose foreign key `model` still declares (renamed columns mapped, live ⇒
+# declared), as `_plan_composite_actions!` reads them.
+function _kept_key_columns(model::PormGModel, live::LiveTable, renames::AbstractDict{String, String})::Set{String}
+  declared = Set{String}(Models.field_db_column(f, string(k)) for (k, f) in model.fields
+                         if f isa Models.sRelationalColumn && f.db_constraint)
+  return Set{String}(c for (c, s) in live.columns if s.reference !== nothing && get(renames, c, c) in declared)
+end
+
 """
     _plan_composite_actions!(conn, migration_plan, model_name, model, live; column_renames, catalog_table) -> Set{String}
 
@@ -777,8 +785,9 @@ function _plan_composite_actions!(conn::_SQLEngine,
                                   # `UniqueConstraint` records into. `nothing` for a table this plan
                                   # creates — it is empty, so nothing can fail.
                                   live_columns = nothing,
-                                  # The live columns that carry a foreign key (MySQL's narrowed index).
-                                  key_columns::Set{String} = Set{String}(),
+                                  # The live columns whose foreign key the declared model keeps (MySQL: an
+                                  # index over a dropped column may be the only one such a key has).
+                                  kept_key_columns::Set{String} = Set{String}(),
                                   lossy_alters::Vector{LossyAlter} = LossyAlter[],
                                   # #934: the live columns this plan retypes, which a partial
                                   # UniqueConstraint's condition cannot be counted over.
@@ -798,11 +807,7 @@ function _plan_composite_actions!(conn::_SQLEngine,
     inc = String[get(column_renames, c, c) for c in lc.include]
     if all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc)
       push!(live, (lc, cols, inc))
-    elseif !_drop_column_drops_its_indexes(conn) &&
-           !(!lc.unique && !isempty(cols) && first(lc.columns) in key_columns && first(cols) in declared_cols)
-      # A non-unique one led by a foreign-key column the table keeps is left to MySQL's narrowing: it is
-      # that key's index (MySQL keeps every foreign key indexed, so dropping it is error 1553), and a
-      # narrowed non-unique index rejects no row.
+    elseif !_drop_column_drops_its_indexes(conn)
       push!(vanishing, lc)
     end
   end
@@ -923,20 +928,38 @@ function _plan_composite_actions!(conn::_SQLEngine,
   end
   # MySQL narrows an index over a dropped column to the columns that remain, where PostgreSQL drops it with
   # the column: a `UNIQUE (a, b)` would become `UNIQUE (a)`, a stricter key, and the `DROP COLUMN` fails on
-  # the rows that break it (error 1062). So the index is dropped before the table's column drops. A unique
-  # one that is the only index a surviving foreign key has is MySQL's to refuse (error 1553).
+  # the rows that break it (error 1062). So the index is dropped before the table's column drops, and after
+  # its foreign-key drops: MySQL keeps every foreign key indexed, so an index a key still needs cannot go
+  # (error 1553). One that a key the table KEEPS would be left without refuses the plan, before anything
+  # runs: the key needs an index of its own first, made by an earlier migration.
   if !isempty(vanishing)
+    gone = String[lc.name for lc in vanishing]
+    for lc in vanishing
+      lead = isempty(lc.columns) ? nothing : first(lc.columns)
+      (lead !== nothing && lead in kept_key_columns &&
+       !_leads_another_index(conn, String(catalog_table), lead, gone)) || continue
+      dropped_cols = String[c for c in lc.columns if !(get(column_renames, c, c) in declared_cols)]
+      throw(InvalidMigrationError(
+        "Index '$(lc.name)' on table '$(table)' is the only index of the foreign key on '$(lead)', and this plan " *
+        "drops $(join(("'$(c)'" for c in dropped_cols), ", ")), which the index also covers. MySQL keeps every " *
+        "foreign key indexed: it would narrow the index rather than drop it with the column, and refuses to " *
+        "drop it while the key needs it (error 1553). Index '$(lead)' on its own first (`db_index = true` on " *
+        "its field, applied by a migration of its own), then drop the column."))
+    end
     steps = get!(OrderedDict{String, String}, migration_plan, model_name)
     before = collect(steps)
     foreach(drop!, vanishing)
     added = collect(steps)[length(before)+1:end]
-    # Placed just ahead of the first column drop, so every other step keeps its place (a primary key
-    # moved to a column that stays still waits for the old key's column to go).
+    # Just ahead of the first column drop, so the other steps keep their places (a primary key moved to a
+    # column that stays still waits for the old key's column to go), with the table's foreign-key drops
+    # moved ahead of them: a key's drop depends on no step before it.
     first_drop = findfirst(p -> Base.startswith(p.first, "Remove field: "), before)
     if first_drop !== nothing
+      tail = before[first_drop:end]
+      is_key_drop(p) = Base.startswith(p.first, "Remove foreign key: ")
       empty!(steps)
-      for (i, p) in enumerate(before)
-        i == first_drop && foreach(a -> steps[a.first] = a.second, added)
+      for p in Iterators.flatten((before[1:first_drop-1], filter(is_key_drop, tail), added,
+                                  filter(!is_key_drop, tail)))
         steps[p.first] = p.second
       end
     end
@@ -1986,7 +2009,8 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
                                                 catalog_table = catalog_table,
                                                 targets = composite_targets,
                                                 live_columns = Set{String}(keys(live.columns)),
-                                                key_columns = Set{String}(c for (c, s) in live.columns if s.reference !== nothing),
+                                                kept_key_columns = _kept_key_columns(current_schema[model_name][:model],
+                                                                                     live, sqlite_rename_map),
                                                 lossy_alters = lossy_alters, retyped = retyped)
 
   # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on

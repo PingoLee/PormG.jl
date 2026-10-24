@@ -253,6 +253,29 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test haskey(live("m4b_team").columns, "pts") && converged()
         end
 
+        # What: a column dropped from under a composite key that a foreign key needs (its only index).
+        # SQL: none while the key stays (`makemigrations` refuses); when the key goes too, `DROP FOREIGN KEY`
+        #      before `DROP INDEX `m4b_turn_trackid_n_uniq``, before `DROP COLUMN `n``.
+        # Why: MySQL keeps every foreign key indexed (1553): the index cannot go before the key does, and a key
+        # that stays would be left without one, which only an earlier migration indexing it can avoid.
+        @testset "a composite a foreign key needs" begin
+            team = "Team = Models.Model(\"m4b_team\", teamid = Models.IDField(), abbr = Models.CharField(max_length = 8), " *
+                   "pts = Models.PositiveIntegerField(default = 0))\n"
+            turn(key, n, tail) = team * "Track = Models.Model(\"m4b_track\", trackid = Models.IDField())\n" *
+                                 "Turn = Models.Model(\"m4b_turn\", turnid = Models.IDField(), trackid = $(key)$(n)$(tail))"
+            fk = "Models.ForeignKey(Track, pk_field = \"trackid\", null = true, db_index = false)"
+            n = ", n = Models.IntegerField(default = 0)"
+            apply!(turn(fk, n, "; constraints = [Models.UniqueConstraint(fields = (\"trackid\", \"n\"))]"))
+            write_models(turn(fk, "", ""))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError &&
+                  occursin("only index of the foreign key on 'trackid'", sprint(showerror, e)) && !isfile(pending)
+            plan = apply!(turn("Models.BigIntegerField(null = true)", "", ""))
+            @test occursin(r"DROP FOREIGN KEY[\s\S]*DROP INDEX `m4b_turn_trackid_n_uniq`[\s\S]*DROP COLUMN `n`", plan)
+            t = live("m4b_turn")
+            @test t.columns["trackid"].reference === nothing && isempty(t.composites) && converged()
+        end
+
         # What: a table renamed (by a rename hint) with a CHECKed column renamed in the same plan, and a parent
         # and its child dropped together.
         # SQL: `RENAME TABLE `m4b_team` TO `m4b_constructor``, then `ALTER TABLE `m4b_constructor` DROP CHECK

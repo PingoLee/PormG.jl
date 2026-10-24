@@ -933,7 +933,8 @@ function _plan_composite_actions!(conn::_SQLEngine,
   # (error 1553). One that a key the table KEEPS would be left without refuses the plan, before anything
   # runs: the key needs an index of its own first, made by an earlier migration.
   if !isempty(vanishing)
-    gone = String[lc.name for lc in vanishing]
+    # Every index this pass drops: an undeclared one going too is no index the key keeps.
+    gone = String[lc.name for lc in Iterators.flatten((vanishing, drops))]
     for lc in vanishing
       lead = isempty(lc.columns) ? nothing : first(lc.columns)
       (lead !== nothing && lead in kept_key_columns &&

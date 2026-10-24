@@ -302,10 +302,10 @@ _MM.get_constraints_fk(::MmMockMySQL, table::Symbol, column::String) = "$(table)
 _MM._foreign_key_leaves_index(::MmMockMySQL, table, name::AbstractString) = true
 # A column with nothing beyond what the model states.
 PormG._column_attributes(::MmMockMySQL, table::AbstractString, column::AbstractString) = nothing
-# Whether a key column leads another index, as each test sets it.
-const _MM_OTHER_INDEX = Ref(false)
+# The other indexes a key column leads, as each test sets them; those the plan drops do not count.
+const _MM_OTHER_INDEXES = Ref(String[])
 _MM._leads_another_index(::MmMockMySQL, table::AbstractString, column::AbstractString, except::Vector{String}) =
-  _MM_OTHER_INDEX[]
+  any(n -> !(n in except), _MM_OTHER_INDEXES[])
 
 # A delta between two fields of the fixtures, as the planner builds it.
 _mm_delta(new, old; name = "c", old_name = name) =
@@ -681,11 +681,18 @@ end
   ix = "; indexes = [Models.Index(fields = (\"circuitid\", \"n\"), name = \"lap_cn_idx\")]"
   e = _mm_err(() -> _mm_plan(_mm_my, lap(fk, n, ix), lap(fk, "", "")))
   @test e isa PormG.InvalidMigrationError && occursin("only index of the foreign key on 'circuitid'", sprint(showerror, e))
-  _MM_OTHER_INDEX[] = true
+  _MM_OTHER_INDEXES[] = ["lap_circuitid_idx"]
   try
     @test haskey(_mm_plan(_mm_my, lap(fk, n, ix), lap(fk, "", ""))[:lap], "Remove composite index: lap_cn_idx")
+    # An index the plan drops as well is no index the key keeps.
+    c = ", c = Models.IntegerField()"
+    two = "; indexes = [Models.Index(fields = (\"circuitid\", \"n\"), name = \"lap_cn_idx\"), " *
+          "Models.Index(fields = (\"circuitid\", \"c\"), name = \"lap_cc_idx\")]"
+    _MM_OTHER_INDEXES[] = ["lap_cc_idx"]
+    e = _mm_err(() -> _mm_plan(_mm_my, lap(fk, n * c, two), lap(fk, c, "")))
+    @test e isa PormG.InvalidMigrationError && occursin("only index of the foreign key on 'circuitid'", sprint(showerror, e))
   finally
-    _MM_OTHER_INDEX[] = false
+    _MM_OTHER_INDEXES[] = String[]
   end
   uniq = "; constraints = [Models.UniqueConstraint(fields = (\"circuitid\", \"n\"), name = \"lap_cn_uniq\")]"
   steps = collect(keys(_mm_plan(_mm_my, lap(fk, n, uniq), lap("Models.BigIntegerField()", "", ""))[:lap]))

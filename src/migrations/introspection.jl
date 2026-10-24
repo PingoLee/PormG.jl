@@ -2142,13 +2142,15 @@ function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String};
 end
 
 # Whether `column` leads an index of `table` other than those named in `except` (MySQL): the index a foreign
-# key on it keeps once they are dropped. MySQL keeps every foreign key indexed (a primary key counts), and
-# the index InnoDB made for the key may be gone, dropped when another index could serve it. Bound by value.
+# key on it keeps once they are dropped. MySQL keeps every foreign key indexed (a primary key counts; a
+# prefix index cannot serve a key), and the index InnoDB made for the key may be gone, dropped when another
+# index could serve it. Bound by value.
 function _leads_another_index(conn::PormGMySQL, table::AbstractString, column::AbstractString,
                               except::Vector{String})::Bool
   rows = fetch(conn, """
     SELECT INDEX_NAME AS name FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND SEQ_IN_INDEX = 1""",
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND SEQ_IN_INDEX = 1
+       AND SUB_PART IS NULL""",
     [String(table), String(column)]) |> DataFrame
   skip = Set{String}(lowercase(n) for n in except)
   return any(r -> !(lowercase(_mysql_str(r.name)) in skip), eachrow(rows))

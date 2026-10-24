@@ -274,6 +274,15 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test occursin(r"DROP FOREIGN KEY[\s\S]*DROP INDEX `m4b_turn_trackid_n_uniq`[\s\S]*DROP COLUMN `n`", plan)
             t = live("m4b_turn")
             @test t.columns["trackid"].reference === nothing && isempty(t.composites) && converged()
+            # With the key column indexed on its own (the default `db_index = true`), the catalog says the key
+            # keeps an index, and the composite goes first.
+            keyed = "Models.ForeignKey(Track, pk_field = \"trackid\", null = true)"
+            apply!(turn(keyed, n, "; constraints = [Models.UniqueConstraint(fields = (\"trackid\", \"n\"))]"))
+            plan = apply!(turn(keyed, "", ""))
+            @test occursin(r"DROP INDEX `m4b_turn_trackid_n_uniq`[\s\S]*DROP COLUMN `n`", plan)
+            t = live("m4b_turn")
+            @test t.columns["trackid"].reference !== nothing && haskey(t.indexes, "trackid") && isempty(t.composites) &&
+                  converged()
         end
 
         # What: a table renamed (by a rename hint) with a CHECKed column renamed in the same plan, and a parent

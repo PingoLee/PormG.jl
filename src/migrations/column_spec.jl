@@ -253,6 +253,31 @@ function parse_canonical_type(raw::AbstractString, ::PormGSQLite)::CanonicalType
   return CUnsupported(lowercase(strip(String(raw))))
 end
 
+# MySQL (#1130 phase 4a). Each collapse is forced by `Dialect._get_column_type(::PormGMySQL)`, which writes
+# one spelling per canonical type: `BIGINT` for a key, a relation, a `BigIntegerField` and a
+# `DurationField` (its microseconds) alike, `INT` for both integer fields, `LONGTEXT` for every text
+# field without a length. A spelling it never writes — `tinyint(4)`, `datetime(6)`, `char(10)`, `text`,
+# an `unsigned` integer — stays `CUnsupported`, so a column PormG did not create never equals a
+# declaration.
+function parse_canonical_type(raw::AbstractString, ::PormGMySQL)::CanonicalType
+  base, args = _split_rendered_type(raw)
+  base == "smallint" && isempty(args)     && return CInt16()
+  base == "int" && isempty(args)          && return CInt32()
+  base == "bigint" && isempty(args)       && return CInt64()
+  base == "tinyint" && args == [1]        && return CBool()
+  base == "double" && isempty(args)       && return CFloat64()
+  base == "decimal"                       && return CDecimal(_arg(args, 1), _arg(args, 2))
+  base == "varchar"                       && return CVarChar(_arg(args, 1))
+  base == "longtext"                      && return CText()
+  base == "date"                          && return CDate()
+  base == "datetime" && args == [3]       && return CDateTime(false)
+  base == "time" && args == [6]           && return CTime()
+  base == "char" && args == [36]          && return CUUID()
+  base == "json"                          && return CJSON()
+  base == "longblob"                      && return CBytes()
+  return CUnsupported(lowercase(strip(String(raw))))
+end
+
 # ── The compiler ─────────────────────────────────────────────────────────────────────────────────
 
 # Render through the SAME function the DDL path uses. That identity is the whole mechanism: it is why
@@ -264,7 +289,7 @@ end
 # newly abort a `makemigrations` that used to survive. Degrading to the raw `.type` keeps such a
 # column comparable with itself, which is exactly the "degrades instead of aborting" the #507
 # decision asks of `CUnsupported`.
-function _render_column_type(field::PormGField, conn::Union{PormGPostgres, PormGSQLite})::String
+function _render_column_type(field::PormGField, conn::_SQLEngine)::String
   try
     return Dialect._get_column_type(field, conn)
   catch e
@@ -283,7 +308,7 @@ end
 _slot(field::PormGField, name::Symbol, fallback) =
   hasfield(typeof(field), name) ? getfield(field, name) : fallback
 
-function _column_default(field::PormGField, conn::Union{PormGPostgres, PormGSQLite})::ColumnDefault
+function _column_default(field::PormGField, conn::_SQLEngine)::ColumnDefault
   # #496: a `db_default` wins, and it is asked FIRST for two reasons. It is mutually exclusive with
   # `default` at construction, so there is no precedence question to get wrong; and
   # `Dialect.db_default_sql` is where an expression pinned to the other engine raises, so routing
@@ -360,6 +385,13 @@ function _column_identity(field::PormGField, ::PormGSQLite)::Union{Nothing, Colu
   return ColumnIdentity(false, false, true)
 end
 
+# MySQL (#1130 phase 4a): `field_to_column(::PormGMySQL)` writes `AUTO_INCREMENT` on an `IDField` key and
+# nowhere else — SQLite's condition — and the reader reads the token back from `EXTRA`.
+function _column_identity(field::PormGField, ::PormGMySQL)::Union{Nothing, ColumnIdentity}
+  (field isa Models.sIDField && _slot(field, :primary_key, false)::Bool) || return nothing
+  return ColumnIdentity(false, false, true)
+end
+
 # THE LIVE SIDE'S HALF of the same rule (#522), stated here so the two cannot drift. The SQLite
 # reader (`_sqlite_live_table`) compiles `ColumnIdentity(false, false, true)` for a column on the
 # `IDField` arm whose type is an integer — `_integer_key_arm` — and for nothing else. It deliberately
@@ -398,7 +430,7 @@ render the same column compile to the same spec.
 Throws `InvalidMigrationError` for a `ManyToManyField`, which is a join table rather than a column on
 this model.
 """
-function column_spec(field::PormGField, conn::Union{PormGPostgres, PormGSQLite};
+function column_spec(field::PormGField, conn::_SQLEngine;
                      name::AbstractString = "")::ColumnSpec
   Models.is_many_to_many_field(field) &&
     throw(InvalidMigrationError("a ManyToManyField declares a join table, not a column, so it has " *
@@ -447,7 +479,7 @@ re-issued rather than assumed intact. `sRelationalColumn`, never a bare `isa sFo
 FK/O2O pair is spelled once in `src/models/fields.jl` (#408/#409/#418/#437) — and `sManyToManyField`
 is outside that union, which is what keeps a join table from being reported as a column reference.
 """
-function _degraded_spec(field::PormGField, conn::Union{PormGPostgres, PormGSQLite}, marker::String;
+function _degraded_spec(field::PormGField, conn::_SQLEngine, marker::String;
                         name::AbstractString = "")::ColumnSpec
   reference = (field isa Models.sRelationalColumn && field.db_constraint) ?
               ForeignKeyRef(nothing, nothing, "<unresolved>", nothing) : nothing
@@ -495,7 +527,7 @@ end
 # early-return). It is also strictly safer than what it replaced — `sManyToManyField` has no
 # `db_constraint` slot at all, so the pre-phase-2 `_fk_constraint_action` would have raised a
 # `FieldError` on the same input.
-function _spec_or_degraded(field::PormGField, conn::Union{PormGPostgres, PormGSQLite},
+function _spec_or_degraded(field::PormGField, conn::_SQLEngine,
                            marker::String; name::AbstractString = "")::ColumnSpec
   try
     return column_spec(field, conn; name = name)
@@ -546,7 +578,7 @@ degrades to [`_degraded_spec`](@ref) — which reports `:type` against anything 
 pre-phase-2 answer — rather than aborting or comparing equal.
 """
 function column_delta(new_field::PormGField, old_field::PormGField,
-                      conn::Union{PormGPostgres, PormGSQLite};
+                      conn::_SQLEngine;
                       name::AbstractString = "",
                       old_name::AbstractString = name)::ColumnDelta
   new_spec = _spec_or_degraded(new_field, conn, "<uncompilable:new>"; name = name)
@@ -920,7 +952,7 @@ them from `cache["composite_indexes"]` alone — field keys where the catalog ho
 no `UniqueConstraint`, and `String(ix.name)`, which throws on the `name = nothing` every derived
 declaration carries.
 """
-function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite})::LiveTable
+function live_table(model::PormGModel, conn::_SQLEngine)::LiveTable
   columns = OrderedDict{String, ColumnSpec}()
   indexes = Dict{String, Union{String, Nothing}}()
   live_index_names = get(model.cache, "index", Dict{String, Any}())
@@ -967,7 +999,7 @@ spec's own `name` is the catalog column — on a rename, the PRE-rename one — 
 there is no `old_name` to thread any more.
 """
 function column_delta(new_field::PormGField, old_spec::ColumnSpec,
-                      conn::Union{PormGPostgres, PormGSQLite};
+                      conn::_SQLEngine;
                       name::AbstractString = "")::ColumnDelta
   new_spec = _spec_or_degraded(new_field, conn, "<uncompilable:new>"; name = name)
   return ColumnDelta(new_spec, old_spec, column_delta(new_spec, old_spec))
@@ -1241,7 +1273,7 @@ float becoming an integer both rounds (`:to_integer`) and can overflow (`:intege
 the compiler could not read (`CUnsupported`, or a degraded spec) is never classified — PormG cannot
 say what it holds.
 """
-function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLite};
+function _lossy_alters(delta::ColumnDelta, conn::_SQLEngine;
                        table::AbstractString, column::AbstractString)::Vector{LossyAlter}
   old_spec, new_spec = delta.old_spec, delta.new_spec
   finding(kind; kw...) = LossyAlter(kind, table, column, old_spec.raw, new_spec.raw; kw...)

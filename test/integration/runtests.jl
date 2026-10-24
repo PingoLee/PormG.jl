@@ -2,14 +2,17 @@
 # julia -t auto --project=test/integration test/integration/runtests.jl
 include("common_setup.jl")
 
-# MySQL (#1130) is in progress: phases 1 to 3 deliver the connection, the reads and the writes, not
-# migrations (phase 4), so this suite's bootstrap cannot run there yet. Its four files run on their own.
+# MySQL (#1130) is in progress: phases 1 to 3 deliver the connection, the reads and the writes, and phase
+# 4a migrations of a schema created from nothing. This suite's bootstrap resets and re-migrates a schema
+# that exists, which is phase 4b's, so it cannot run there yet. Its five files run on their own.
 by_engine(postgres = true, sqlite = true, mysql = false) || error(
-    "the full integration suite does not run on MySQL yet (#1130: no migrations); run " *
+    "the full integration suite does not run on MySQL yet (#1130: migrations of an existing schema are " *
+    "phase 4b's); run " *
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl`, " *
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl` and " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_bulk.jl`")
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl`, " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_bulk.jl` and " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl`")
 
 # 1b. Load delete scratch modules at top level (module expressions are forbidden
 #     inside @testset / macro-wrapped bodies in Julia).

@@ -276,7 +276,7 @@ end
 _fk_constraint_action(delta::ColumnDelta)::Symbol =
   _fk_constraint_action(delta.new_spec, delta.old_spec)
 
-function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec; catalog_table::Symbol = model_name)::Nothing
+function _drop_fk_constraint_in_alteration(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec; catalog_table::Symbol = model_name)::Nothing
   # #498: the precondition is `_fk_constraint_action`, not a locally-spelled XOR. Both `:drop` (the
   # constraint is going away) and `:repoint` (it stays, but must be re-issued against a new
   # definition) need the live one dropped first. Deriving it rather than accepting it as an argument
@@ -308,11 +308,11 @@ function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLit
   end
   return nothing
 end
-function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec; catalog_table::Symbol = model_name)
+function _drop_fk_constraint_in_alteration(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec; catalog_table::Symbol = model_name)
   _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name |> string, new_spec, old_spec; catalog_table = catalog_table)
 end
 
-function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing, catalog_table::Symbol = model_name)::Nothing
+function _drop_index(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing, catalog_table::Symbol = model_name)::Nothing
   if index_name === nothing
     # By `catalog_table`, the table's name as the catalog holds it at plan time (#615).
     index_name = get_constraints_index(conn, catalog_table, field_name)
@@ -350,7 +350,7 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
   Dialect.drop_index(conn, index_name))
   return nothing
 end
-function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing, catalog_table::Symbol = model_name)
+function _drop_index(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing, catalog_table::Symbol = model_name)
   _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name, catalog_table=catalog_table)
 end
 
@@ -358,7 +358,7 @@ end
 # only on the rename path (the drop looks the live constraint up by the PRE-rename name, while the
 # ADD must name the column as it will exist once the RENAME above it has run). Defaulting it to
 # `field_name` keeps every other call site reading as it did.
-function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, delta::ColumnDelta, name::String; drop_key_column::String = field_name)::Nothing
+function _add_fk_constraint_in_alteration(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, delta::ColumnDelta, name::String; drop_key_column::String = field_name)::Nothing
   # to alterations
   # #498: the mirror of the drop above, and derived from the same single decision. `:add` is a
   # constraint that did not exist; `:repoint` is one that did and has just been dropped a few lines
@@ -432,7 +432,7 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
     # `_quote_table_ddl` on the referenced table (#388): `add_foreign_key` interpolates
     # `ref_table_name` verbatim — every identifier it receives is pre-quoted HERE — so an embedded
     # `"` in a parent's `db_table` would close the identifier early and corrupt the ALTER.
-    Dialect.add_foreign_key(conn, model_name, "\"$(Dialect._quote_table_ddl(constraint_name))\"", "\"$(Dialect._quote_table_ddl(local_col))\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(new_field; column = field_name, model = model_name)))\"", "\"$(Dialect._quote_table_ddl(resolved_pk))\"", on_delete=on_delete_sql))
+    Dialect.add_foreign_key(conn, model_name, Dialect._ddl_ident(conn, constraint_name), Dialect._ddl_ident(conn, local_col),  Dialect._ddl_ident(conn, fk_target_table(new_field; column = field_name, model = model_name)), Dialect._ddl_ident(conn, resolved_pk), on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -453,7 +453,7 @@ end
 # column with a live constraint — #504 is unrepresentable by construction rather than declined by a
 # guard. Every remaining caller is creating the column in this same migration, which is exactly why
 # the key is added unconditionally here.
-function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+function _add_constrains(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
   Models.is_many_to_many_field(field) && return nothing
 
   # to new fields
@@ -473,7 +473,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
       on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
       # Referenced table escaped as in `_add_fk_constraint_in_alteration` above (#388).
-      Dialect.add_foreign_key(conn, model_table_name(model), "\"$(Dialect._quote_table_ddl(constraint_name))\"", "\"$(Dialect._quote_table_ddl(local_col))\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"", "\"$(Dialect._quote_table_ddl(resolved_pk))\"", on_delete=on_delete_sql))
+      Dialect.add_foreign_key(conn, model_table_name(model), Dialect._ddl_ident(conn, constraint_name), Dialect._ddl_ident(conn, local_col),  Dialect._ddl_ident(conn, fk_target_table(field; column = field_name, model = model)), Dialect._ddl_ident(conn, resolved_pk), on_delete=on_delete_sql))
     # No `else`, and that is now correct rather than a gap. SQLite has no `ALTER TABLE ADD
     # CONSTRAINT`, so it cannot express this statement at all — its foreign key is declared with the
     # column. #514 put both spellings where the column is written: `Dialect.add_field` renders an
@@ -489,7 +489,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
     index_name = name * "_idx" |> lowercase
     index_col = Models.field_db_column(field, string(field_name))
     _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name",
-    Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(index_col))\""]))
+    Dialect.create_index(conn, Dialect._ddl_ident(conn, index_name), Dialect._ddl_ident(conn, model_table_name(model)), [Dialect._ddl_ident(conn, index_col)]))
   end
   nothing
 end
@@ -512,6 +512,8 @@ written. Every comparison between a declared name and a live one goes through he
 explicit name would read as renamed on every run and be re-planned forever.
 """
 _catalog_index_name(::PormGSQLite, name::String)::String = name
+# MySQL refuses a name over 64 characters (error 1059) rather than truncating it.
+_catalog_index_name(::PormGMySQL, name::String)::String = name
 function _catalog_index_name(::PormGPostgres, name::String)::String
   ncodeunits(name) <= 63 && return name
   out = IOBuffer()
@@ -546,7 +548,7 @@ which SQLite reserves and refuses to create. Warns on a PostgreSQL name longer t
 stored truncated, and every comparison already accounts for that — except for the synthesized
 join-table index, which has no `name=` to shorten.
 """
-function _claim_composite_target!(conn::Union{PormGPostgres, PormGSQLite},
+function _claim_composite_target!(conn::_SQLEngine,
                                   targets::Dict{String, Tuple{String, String}},
                                   name::String, table::String; auto::Bool = false)::Nothing
   if conn isa PormGSQLite && startswith(lowercase(name), "sqlite_")
@@ -559,8 +561,8 @@ function _claim_composite_target!(conn::Union{PormGPostgres, PormGSQLite},
   key = _composite_name_key(conn, name)
   if haskey(targets, key)
     throw(InvalidMigrationError(
-      "Duplicate index name '$(stored)' (tables '$(targets[key][2])' and '$(table)'); index names are " *
-      "unique per schema on PostgreSQL and per database on SQLite, so give each UniqueConstraint and " *
+      "Duplicate index name '$(stored)' (tables '$(targets[key][2])' and '$(table)'); PormG keeps index " *
+      "names unique across a database's tables, so that a models file means the same on every backend: give each UniqueConstraint and " *
       "Index a distinct name"))
   end
   targets[key] = (stored, table)
@@ -581,7 +583,7 @@ then claim it — and this says so instead of failing mid-migration on some orde
 A table the plan drops entirely is exempt: `Drop table` runs before every index statement. The same
 table is exempt too: its own pass orders the drop before the create.
 """
-function _check_composite_targets_free(conn::Union{PormGPostgres, PormGSQLite},
+function _check_composite_targets_free(conn::_SQLEngine,
                                        targets::Dict{String, Tuple{String, String}},
                                        live::Vector{LiveTable}, gone::Set{String},
                                        table_renames::Dict{String, String})::Nothing
@@ -596,7 +598,7 @@ function _check_composite_targets_free(conn::Union{PormGPostgres, PormGSQLite},
       target_table == table && continue
       throw(InvalidMigrationError(
         "Index name '$(stored)' for table '$(target_table)' is already held by an index on table " *
-        "'$(table)'. Index names are unique per schema on PostgreSQL and per database on SQLite: give " *
+        "'$(table)'. PormG keeps index names unique across a database's tables, so that a models file means the same on every backend: give " *
         "the UniqueConstraint or Index another name, or free the name in a separate migration first"))
     end
   end
@@ -627,6 +629,13 @@ function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::S
   isempty(found) && return nothing
   _throw_dropped_table_dependents(found,
     "PostgreSQL drops a table with CASCADE, which would remove them too without the plan saying so")
+end
+
+# MySQL (#1130 phase 4a): a plan that drops a table is phase 4b's, refused here, before its dependents
+# would need reading.
+function _refuse_dropped_table_dependents(::PormGMySQL, dropped_tables::Set{String})::Nothing
+  isempty(dropped_tables) && return nothing
+  throw(Dialect._mysql_not_yet("A migration plan that drops a table ($(join(sort!(collect(dropped_tables)), ", ")))", "4b"))
 end
 
 function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String})::Nothing
@@ -730,7 +739,7 @@ losing the declared one. Registering it here makes this the FIFTH producer of th
 `"Alter table: <model>"` key. Like the others it registers the bare rebuild, and
 [`_finalize_sqlite_rebuilds!`](@ref) renders the snapshot around it once the plan is complete (#729).
 """
-function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
+function _plan_composite_actions!(conn::_SQLEngine,
                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                                   model_name::Symbol, model::PormGModel,
                                   live_composites::Vector{LiveComposite};
@@ -897,7 +906,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     end
   end
 
-  quoted(x) = "\"$(Dialect._quote_table_ddl(x))\""
+  quoted(x) = Dialect._ddl_ident(conn, x)
   for d in creates
     _claim_composite_target!(conn, targets, d.name, table; auto = d.auto)
     cols = String[quoted(c) for c in d.columns]
@@ -1049,7 +1058,7 @@ _check_step_label(verb::AbstractString, name::AbstractString)::String =
   "$(verb) check constraint: $(replace(name, "Rename field" => "Rename_field"))"
 
 # First half — see the section note. SQLite: register the rebuild. PostgreSQL: the drops.
-function _plan_check_drops!(conn::Union{PormGPostgres, PormGSQLite},
+function _plan_check_drops!(conn::_SQLEngine,
                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                             model_name::Symbol, model::PormGModel, plan::_CheckPlan)::Nothing
   _check_plan_isempty(plan) && return nothing
@@ -1069,7 +1078,7 @@ end
 # Second half, PostgreSQL only — SQLite's rebuild already carries every declared CHECK. Renames, the
 # adoption stamps, then adds; a name the table already holds for another constraint is refused before
 # the plan is written.
-function _plan_check_adds!(conn::Union{PormGPostgres, PormGSQLite},
+function _plan_check_adds!(conn::_SQLEngine,
                            migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                            model_name::Symbol, model::PormGModel, plan::_CheckPlan;
                            catalog_table::Union{Symbol, Nothing} = model_name)::Nothing
@@ -1102,6 +1111,12 @@ end
 # carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
 # holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
 # this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
+# MySQL: a declared CheckConstraint is phase 4c's (`Dialect.create_table(::PormGMySQL, model)` refuses it on
+# a new table); this is the same refusal for one added to a table that exists.
+_refuse_check_name_clash(::PormGMySQL, model::PormGModel, table::AbstractString,
+                         catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing =
+  throw(Dialect._mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
+
 function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table::AbstractString,
                                   catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
   own = Set{String}(["$(table)_pkey"])
@@ -1267,7 +1282,7 @@ function _sql_text_countable(text::AbstractString, model::PormGModel, live_cols,
   return true
 end
 
-function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
+function _add_new_table(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
                         composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
   for (field_name, field) in model.fields
@@ -1290,11 +1305,12 @@ end
 # One of the four producers of the shared SQLite "Alter table: <model>" key. It registers the BARE
 # rebuild; the indexes, triggers and views around it are rendered once the whole plan is known, by
 # `_finalize_sqlite_rebuilds!` (#729). Until then the table's rename map is still growing (#556).
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing,
+function _add_new_field(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing,
                         # #829: the table as the catalog knows it at plan time (`model_name` except on
                         # a table rename, #615), and the lossy-ALTER sink the finding goes into.
                         catalog_table::Union{Symbol, Nothing} = nothing,
                         lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
+  _require_column_alters(conn, model_name, field_name; added = true)
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
@@ -1439,7 +1455,7 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   end
   return nothing
 end
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; kwargs...)::Nothing
+function _add_new_field(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; kwargs...)::Nothing
   _add_new_field(conn, migration_plan, model_name, model, field_name |> string; kwargs...)
 end
 
@@ -1503,7 +1519,7 @@ must follow every `RENAME COLUMN` and every `ADD COLUMN`.
 because on SQLite a non-empty delta means a rebuild that re-emits every live index, and a
 `CREATE INDEX` beside it would duplicate what the rebuild just made (#82/#325).
 """
-function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
+function _plan_column_change!(conn::_SQLEngine,
                               migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                               model_name::Symbol,
                               declared_model::PormGModel,
@@ -1515,6 +1531,7 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
                               catalog_table::Symbol = model_name,
                               lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   isempty(delta) && old_column === nothing && return nothing
+  _require_column_alters(conn, catalog_table, field_name; delta = delta, renamed = old_column !== nothing)
   # #1032: a generated column is re-created, never altered, and only under its own name
   # (`_generated_recreates`). Reached here, it is a renamed column that is also made generated or given
   # another expression — two steps PormG will not guess an order for.
@@ -1650,6 +1667,8 @@ function _generated_recreates(conn::PormGPostgres, model::PormGModel, live::Live
   return out
 end
 _generated_recreates(::PormGSQLite, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
+# MySQL: a generated column is refused before any DDL (`Dialect.field_to_column`) until phase 4c.
+_generated_recreates(::PormGMySQL, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
 
 # Does an index, CHECK or generation expression's SQL text name `col`? The same token scan the
 # CHECK-countability pass uses — a quoted token compares exactly, a bare one case-insensitively — on
@@ -1676,7 +1695,7 @@ function _prune_recreated(live::LiveTable, cols)::LiveTable
   return LiveTable(live.name, live.columns, indexes, composites, checks)
 end
 
-function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
+function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
                              composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
                              sqlite_rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}} =
                                Dict{Symbol, Tuple{Symbol, Dict{String, String}}}(),
@@ -1943,7 +1962,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         index_name = "$(hashed)_idx"
         # `model_name`, not `live.name`: this is DDL, and it runs after a table rename (#615).
         _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
-        Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(string(model_name)))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
+        Dialect.create_index(conn, Dialect._ddl_ident(conn, index_name), Dialect._ddl_ident(conn, string(model_name)), [Dialect._ddl_ident(conn, col)]))
       end
     else
       _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name, catalog_table=catalog_table)
@@ -2010,8 +2029,9 @@ function _release_generated_first!(conn::PormGPostgres,
   return nothing
 end
 _release_generated_first!(::PormGSQLite, args...) = nothing
+_release_generated_first!(::PormGMySQL, args...) = nothing   # no generated column until phase 4c
 
-function _readd_generated_fields!(conn::Union{PormGPostgres, PormGSQLite},
+function _readd_generated_fields!(conn::_SQLEngine,
                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                                   model_name::Symbol, model::PormGModel, regenerated::AbstractDict{String, String})::Nothing
   for (col, key) in regenerated
@@ -2032,7 +2052,7 @@ function _readd_generated_fields!(conn::Union{PormGPostgres, PormGSQLite},
 end
 
 function _resolve_table_fields(
-                                conn::Union{PormGPostgres, PormGSQLite}, 
+                                conn::_SQLEngine, 
                                 model_name::Symbol, 
                                 live::LiveTable, 
                                 current_model::PormGModel, 
@@ -2940,6 +2960,39 @@ function _refuse_unsupported_indexes(current_schema::Dict{Symbol, Dict{Symbol, U
   return nothing
 end
 
+# #1130: a key or an index over a column of unbounded text, bytes or JSON — every field the backend
+# writes without a length, `TextField`, `EmailField` and `ImageField` among them, a `BinaryField`, a
+# `JSONField` — on a backend that indexes such a column only by a prefix (MySQL's `LONGTEXT`, `LONGBLOB`
+# and `JSON`, errors 1170 and 3152). Refused for every managed model before the diff: left to the
+# server, the `CREATE INDEX` fails after the `CREATE TABLE` committed, and the fix (a `CharField`) is
+# then a retype of a table that exists. A `unique`, a `db_index`, a primary key and a member of a declared
+# `Index` or `UniqueConstraint` all count. A key past InnoDB's 3072 bytes over bounded columns (a
+# `CharField(max_length = 1000)` is 4000 bytes in utf8mb4) is left to the server (error 1071).
+function _refuse_unbounded_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                   conn)::Nothing
+  (conn isa PormGBackend && !_supports(conn, :unbounded_text_indexes)) || return nothing
+  for table in sort!(collect(keys(current_schema)))
+    model = current_schema[table][:model]
+    by_column = Dict{String, Tuple{String, PormGField}}()
+    for (key, field) in model.fields
+      Models.is_many_to_many_field(field) && continue
+      by_column[Models.field_db_column(field, string(key))] = (string(key), field)
+    end
+    unbounded(col) = haskey(by_column, col) &&
+      parse_canonical_type(_render_column_type(last(by_column[col]), conn), conn) isa Union{CText, CBytes, CJSON}
+    keyed = String[col for (col, (_, f)) in by_column if
+                   _slot(f, :primary_key, false) || _slot(f, :unique, false) || _slot(f, :db_index, false)]
+    members = String[c for d in declared_composites(model) for c in d.columns]
+    for col in sort!(unique!(vcat(keyed, members)))
+      unbounded(col) || continue
+      throw(_capability_error(conn, :unbounded_text_indexes,
+        "A key or index over column \"$(col)\" of model '$(model.name)' ($(string(nameof(typeof(last(by_column[col]))))[2:end]))";
+        why = "Declare it as a CharField with a max_length, or drop the key or index."))
+    end
+  end
+  return nothing
+end
+
 """
     get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true, renames = [])
     get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true, renames = [])
@@ -3039,6 +3092,7 @@ _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 _refuse_unsupported_fields(current_schema, conn)
 _refuse_unsupported_indexes(current_schema, conn)
+_refuse_unbounded_indexes(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables
@@ -3359,6 +3413,67 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   return nothing
 end
 
+# MySQL (#1130 phase 4a): the SQLite method's shape, with the plan floor PostgreSQL checks. Phase 4a plans
+# tables created from nothing; a plan that would change or drop a table that exists is phase 4b's, and is
+# refused before it is written (`_refuse_mysql_alter_plan`).
+function makemigrations(connection::PormGMySQL, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
+                        renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
+  Configuration._require_folder_backed(settings, "makemigrations")
+  if !settings.change_db
+    @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
+    return
+  end
+  _require_plan_floor(connection)
+  ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
+  live_schema = read_live_schema(connection; ignore_table = ignore)   # #1018: raises, see above
+  current_models = _load_current_models(path)
+  lossy_alters = LossyAlter[]
+  schema_scope = Set{String}()
+  live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
+  migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
+                                      lossy_alters = lossy_alters, schema_scope = schema_scope, renames = renames)
+  _refuse_mysql_alter_plan(migration_plan, live_schema)
+  _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters,
+                      schema_tables = _scoped_fingerprints(live_fingerprints, schema_scope))
+  return nothing
+end
+
+# Phase 4a plans a schema created from nothing, and the steps that complete a table that exists without
+# them: a foreign key and an index. That is what a re-run plans after a MySQL `migrate` stopped part-way
+# (#1268), each DDL statement having committed on its own. Any other step on an existing table — a column
+# added, altered, dropped or renamed, a table dropped or renamed, an index or key removed — is phase 4b's,
+# and is refused before the plan is written. The column steps are refused earlier still, where the
+# planner reaches them (`_require_column_alters`).
+const _MYSQL_ADDITIVE_STEPS = ("New model", "New foreign key: ", "Create index on ", "Create index: ",
+                               "Create unique constraint: ", "Create many-to-many unique index")
+
+function _refuse_mysql_alter_plan(migration_plan::AbstractDict, live_schema::AbstractVector{LiveTable})::Nothing
+  live_names = Set{String}(t.name for t in live_schema)
+  steps = String[]
+  for (table, entries) in migration_plan, label in keys(entries)
+    # A new table's "New model" step is a `CREATE TABLE`; on a table that exists it is not planned.
+    any(p -> startswith(label, p), _MYSQL_ADDITIVE_STEPS) && !(label == "New model" && String(table) in live_names) &&
+      continue
+    push!(steps, "$(table): $(label)")
+  end
+  isempty(steps) || throw(Dialect._mysql_not_yet(
+    "A migration plan that changes an existing table ($(join(sort!(steps), "; ")))", "4b"))
+  return nothing
+end
+
+# A planned column change or a column added to an existing table, refused on MySQL until phase 4b —
+# except a foreign key added to a column that has none, the one column step a stopped plan leaves to
+# finish (the column exists, its constraint does not). It renders as on PostgreSQL: no `ALTER` of the
+# column (`Dialect.alter_field` answers nothing for it) and an `ADD CONSTRAINT` after.
+_require_column_alters(::Union{PormGPostgres, PormGSQLite}, table, column; kwargs...)::Nothing = nothing
+function _require_column_alters(::PormGMySQL, table, column; delta::Union{ColumnDelta, Nothing} = nothing,
+                                renamed::Bool = false, added::Bool = false)::Nothing
+  !added && !renamed && delta !== nothing && delta.changed == [:reference] &&
+    delta.old_spec.reference === nothing && return nothing
+  throw(Dialect._mysql_not_yet("A migration plan that adds or changes a column of an existing table " *
+                               "($(table).$(column))", "4b"))
+end
+
 # The tail both `makemigrations` methods end with (#727): afterwards the pending file describes the
 # current diff and nothing else. A non-empty plan overwrites it. An EMPTY plan used to only log "No
 # migrations are pending" and leave any earlier plan on disk, so `status().pending` stayed true and
@@ -3372,7 +3487,7 @@ end
 # checksum and archives it without re-applying — under the advisory lock, which `makemigrations`
 # does not take. So it is left where it is, and the message says what to do; discarding it would
 # lose its `applied_migrations/` archive and models snapshot.
-function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function _write_pending_plan(connection::_SQLEngine, settings::PormGSettings,
                              migration_plan::OrderedDict{Symbol, OrderedDict{String, String}};
                              models_path::Union{String, Nothing} = nothing,
                              lossy_alters::Vector{LossyAlter} = LossyAlter[],
@@ -3459,7 +3574,7 @@ end
 # failed to archive (#81). Compared exactly the way `migrate` compares it: the checksum of the ordered
 # SQL against `_latest_applied_checksum`. A plan that does not parse (#710's `InvalidMigrationError`)
 # is not that file, so it answers `false` and is discarded with a backup; a database error propagates.
-function _pending_plan_already_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::Bool
+function _pending_plan_already_applied(connection::_SQLEngine, settings::PormGSettings)::Bool
   _migrations_table_exists(connection) || return false
   latest = _latest_applied_checksum(connection)
   latest === nothing && return false

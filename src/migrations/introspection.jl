@@ -345,7 +345,7 @@ true)`) reads its default like any column; and a relation reports through `_fk_d
 foreign-key wording.
 """
 function _default_or_drop(table_name, probe::ColumnSpec, raw,
-                          conn::Union{PormGPostgres, PormGSQLite})::ColumnDefault
+                          conn::_SQLEngine)::ColumnDefault
   arm = _inspectdb_key_arm(probe)
   _integer_key_arm(arm, probe.type) && return NoDefault()
   cleaned = _clean_default(raw, probe.type, conn)
@@ -422,7 +422,7 @@ end
 # Both readers end a column here: its facts minus the default are a probe spec, the default is read
 # under that spec's arm, and the final spec carries it.
 function _finish_column_spec(table_name, probe::ColumnSpec, raw_default,
-                             conn::Union{PormGPostgres, PormGSQLite})::ColumnSpec
+                             conn::_SQLEngine)::ColumnSpec
   default = _default_or_drop(table_name, probe, raw_default, conn)
   return ColumnSpec(probe.name, probe.type, probe.nullable, probe.primary_key, probe.unique, default,
                     probe.reference, probe.checks, probe.identity, probe.raw)
@@ -2058,6 +2058,13 @@ end
 # Parameterized, per this file's own rule: the unparameterized siblings predate it and are left
 # alone, but an edited query does not inherit the exemption. That was cosmetic while this ran only
 # for a `db_constraint` flip; #498 puts it on the ordinary re-point path.
+# MySQL (#1130): the catalog lookups of a change to an existing table — a key or an index dropped — are
+# phase 4b's.
+get_constraints_fk(::PormGMySQL, table_name::Symbol, field_name::String) =
+  throw(Dialect._mysql_not_yet("Dropping or re-pointing a foreign key", "4b"))
+get_constraints_index(::PormGMySQL, table_name::Symbol, field_name::String) =
+  throw(Dialect._mysql_not_yet("Dropping an index", "4b"))
+
 function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT tc.constraint_name
@@ -4791,3 +4798,207 @@ from a caller's own frame; `conn` only picks the engine's struct choices and tou
 convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index};
                   conn::Union{PormGPostgres, PormGSQLite} = _PostgresEngine())::PormGModel =
   model_from_live(_pg_live_table(row), conn)
+
+# ---
+# MySQL Introspection (#1130 phase 4a)
+# ---
+#
+# Five `information_schema` reads, each scoped to the connection's database (`DATABASE()`), so the
+# server's other schemas — `mysql`, `sys`, another application's — never appear. They build the same
+# `LiveTable`s the other readers do, and read back exactly what `Dialect`'s MySQL DDL writes (measured on
+# 8.4): a `COLUMN_TYPE` the type map spells, `auto_increment` in `EXTRA`, an expression default flagged
+# `DEFAULT_GENERATED`, a single-column `UNIQUE` as an index named after its column, PormG's two column
+# CHECKs as (`c` >= 0) and (length(`c`) <= n), and the index InnoDB creates for a foreign key that has
+# none, named after the constraint.
+
+# A column default as `information_schema.COLUMNS` reports it: the text, and whether `EXTRA` flags it as
+# an expression (`DEFAULT_GENERATED`). A literal is reported unquoted (`0`, `x`); an expression as MySQL
+# re-prints it (`CURRENT_TIMESTAMP(3)`, `curdate()`, `_utf8mb4\'x\'`).
+struct _MySQLColumnDefault
+  text::String
+  generated::Bool
+end
+
+# The default reduced to what the declared side compiles (`_column_default`): the portable vocabulary
+# back to its word, the `('…')` a literal on a TEXT, BLOB or JSON column is written as back to the
+# literal, a boolean folded from `1`/`0`. Any other expression is carried as MySQL printed it, which no
+# declaration renders (a non-portable `db_default` is refused until phase 4c).
+_clean_default(::Nothing, ::CanonicalType, ::PormGMySQL) = nothing
+function _clean_default(raw::_MySQLColumnDefault, ctype::CanonicalType, ::PormGMySQL)
+  s = raw.text
+  if raw.generated
+    occursin(r"^current_timestamp(\(\d\))?$"i, s) && return _ExpressionDefault("CURRENT_TIMESTAMP")
+    lowercase(s) in ("curdate()", "current_date", "current_date()") && return _ExpressionDefault("CURRENT_DATE")
+    # Two levels of escaping: `information_schema` backslash-escapes the printed expression's quotes and
+    # backslashes, and the expression is itself a backslash-escaped literal (`_utf8mb4'it\'s'`).
+    m = match(r"^_utf8mb4'(.*)'$"s, _mysql_unescape(s))
+    m === nothing && return _ExpressionDefault(s)
+    return _mysql_unescape(m[1])
+  end
+  ctype isa CBool && s in ("0", "1") && return s == "1"
+  ctype isa CBytes && return nothing      # PormG declares no default on a binary column here
+  return s
+end
+
+# One level of MySQL's backslash escapes undone: `\n`, `\t`, `\r`, `\0` and `\Z` are their control
+# characters, and any other escaped character is itself (`\'`, `\\`).
+_mysql_unescape(s::AbstractString)::String =
+  replace(String(s), r"\\."s => function (escape)
+    c = last(escape)   # the matched text is the backslash and the character it escapes
+    c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : c == '0' ? "\0" : c == 'Z' ? "\x1a" : string(c)
+  end)
+
+const _MYSQL_NON_NEGATIVE_CHECK_RE = r"^\(`((?:[^`]|``)+)` >= 0\)$"
+const _MYSQL_BYTE_LENGTH_CHECK_RE = r"^\(length\(`((?:[^`]|``)+)`\) <= (\d+)\)$"i
+
+# A catalog value as text: `information_schema` columns can arrive as bytes, and an absent one as
+# `missing`.
+_mysql_str(x) = (x === nothing || ismissing(x)) ? nothing :
+  x isa AbstractVector{UInt8} ? String(copy(x)) : string(x)
+
+# The rows of one `information_schema` read, grouped by table name.
+function _mysql_rows_by_table(db::PormGMySQL, sql::AbstractString)::Dict{String, Vector{Any}}
+  out = Dict{String, Vector{Any}}()
+  for r in eachrow(fetch(db, sql) |> DataFrame)
+    push!(get!(out, _mysql_str(r.tbl), Any[]), r)
+  end
+  return out
+end
+
+function read_live_schema(db::PormGMySQL; ignore_table::Vector{String} = mysql_ignore_table,
+                          include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  tables = String[_mysql_str(r.tbl) for r in eachrow(fetch(db, _MYSQL_TABLES_SQL) |> DataFrame)]
+  columns = _mysql_rows_by_table(db, _MYSQL_COLUMNS_SQL)
+  stats = _mysql_rows_by_table(db, _MYSQL_STATISTICS_SQL)
+  fks = _mysql_rows_by_table(db, _MYSQL_FOREIGN_KEYS_SQL)
+  checks = _mysql_rows_by_table(db, _MYSQL_CHECKS_SQL)
+  out = LiveTable[]
+  for table_name in tables
+    include_table !== nothing && !any(included -> table_name == included, include_table) && continue
+    _is_ignored_table(table_name, ignore_table) && continue
+    push!(out, _mysql_live_table(db, table_name, get(columns, table_name, Any[]), get(stats, table_name, Any[]),
+                                 get(fks, table_name, Any[]), get(checks, table_name, Any[])))
+  end
+  return out
+end
+
+# Constants, so a mock connection keys on each statement exactly.
+const _MYSQL_TABLES_SQL = """
+  SELECT TABLE_NAME AS tbl FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"""
+const _MYSQL_COLUMNS_SQL = """
+  SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS ctype, IS_NULLABLE AS nullable,
+         COLUMN_DEFAULT AS dflt, EXTRA AS extra, COLUMN_KEY AS ckey
+    FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+   ORDER BY TABLE_NAME, ORDINAL_POSITION"""
+const _MYSQL_STATISTICS_SQL = """
+  SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, NON_UNIQUE AS non_unique, COLUMN_NAME AS col,
+         COLLATION AS coll, SUB_PART AS sub_part
+    FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
+   ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
+const _MYSQL_FOREIGN_KEYS_SQL = """
+  SELECT k.TABLE_NAME AS tbl, k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col,
+         k.REFERENCED_TABLE_NAME AS parent, k.REFERENCED_COLUMN_NAME AS parent_col, r.DELETE_RULE AS on_delete
+    FROM information_schema.KEY_COLUMN_USAGE k
+    JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+      ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+     AND r.TABLE_NAME = k.TABLE_NAME
+   WHERE k.TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME IS NOT NULL"""
+const _MYSQL_CHECKS_SQL = """
+  SELECT tc.TABLE_NAME AS tbl, cc.CONSTRAINT_NAME AS name, cc.CHECK_CLAUSE AS clause
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    JOIN information_schema.CHECK_CONSTRAINTS cc
+      ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+   WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.CONSTRAINT_TYPE = 'CHECK'"""
+
+function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_rows, fk_rows, check_rows)::LiveTable
+  # Single-column foreign keys by child column; a multi-column one is skipped, as on the other engines
+  # (#415).
+  per_fk = Dict{String, Int}()
+  for r in fk_rows
+    per_fk[_mysql_str(r.name)] = get(per_fk, _mysql_str(r.name), 0) + 1
+  end
+  fk_map = Dict{String, Any}(_mysql_str(r.col) => r for r in fk_rows if per_fk[_mysql_str(r.name)] == 1)
+  fk_names = Set{String}(lowercase(_mysql_str(r.name)) for r in fk_rows)
+
+  # PormG's own column CHECKs by column; every other CHECK is the table's.
+  col_checks = Dict{String, Vector{CheckKind}}()
+  table_checks = LiveCheck[]
+  for r in check_rows
+    clause = String(strip(_mysql_str(r.clause)))
+    m = match(_MYSQL_NON_NEGATIVE_CHECK_RE, clause)
+    if m !== nothing
+      push!(get!(col_checks, lowercase(replace(m[1], "``" => "`")), CheckKind[]), NonNegativeCheck())
+      continue
+    end
+    m = match(_MYSQL_BYTE_LENGTH_CHECK_RE, clause)
+    if m !== nothing
+      push!(get!(col_checks, lowercase(replace(m[1], "``" => "`")), CheckKind[]), ByteLengthCheck(parse(Int, m[2])))
+      continue
+    end
+    push!(table_checks, LiveCheck(_mysql_str(r.name), clause, nothing))
+  end
+
+  # Indexes grouped by name, in member order.
+  groups = OrderedDict{String, Vector{Any}}()
+  for r in stat_rows
+    push!(get!(groups, _mysql_str(r.idx), Any[]), r)
+  end
+  unique_cols = Set{String}()
+  indexes = Dict{String, Union{String, Nothing}}()
+  composites = LiveComposite[]
+  for (idx, members) in groups
+    idx == "PRIMARY" && continue
+    # An expression member (a functional index, phase 4c) or a prefix length is a member PormG cannot
+    # re-emit, so the index is not read, as the other readers drop one whole.
+    any(r -> _mysql_str(r.col) === nothing || _mysql_str(r.sub_part) !== nothing, members) && continue
+    cols = String[_mysql_str(r.col) for r in members]
+    unique = parse(Int, _mysql_str(members[1].non_unique)) == 0
+    desc = Bool[_mysql_str(r.coll) == "D" for r in members]
+    if length(cols) == 1 && !desc[1]
+      # An inline `UNIQUE` is an index named after its column; any other single-column unique index is
+      # a model-level one. A non-unique one is `db_index`'s, except the index InnoDB created for a
+      # foreign key, which carries the constraint's name and no declaration.
+      if unique && idx == cols[1]
+        push!(unique_cols, cols[1])
+        continue
+      elseif !unique
+        lowercase(idx) in fk_names || (indexes[cols[1]] = idx)
+        continue
+      end
+    end
+    push!(composites, LiveComposite(idx, cols, unique, false, "btree", desc,
+                                    Union{String, Nothing}[nothing for _ in cols], fill(true, length(cols)),
+                                    nothing, nothing))
+  end
+
+  columns = OrderedDict{String, ColumnSpec}()
+  for r in col_rows
+    col_name = _mysql_str(r.col)
+    raw_type = _mysql_str(r.ctype)
+    ctype = parse_canonical_type(raw_type, db)
+    is_pk = _mysql_str(r.ckey) == "PRI"
+    nullable = _mysql_str(r.nullable) == "YES"
+    extra = lowercase(something(_mysql_str(r.extra), ""))
+    reference = nothing
+    if haskey(fk_map, col_name)
+      fk = fk_map[col_name]
+      parent = _mysql_str(fk.parent)
+      reference = ForeignKeyRef(parent, format_model_name(Models._model_binding_name(parent)), _mysql_str(fk.parent_col),
+                                Models._foreign_key_on_delete_sql(_normalize_introspected_on_delete(_mysql_str(fk.on_delete))))
+    end
+    arm = _key_arm(is_pk, ctype, reference !== nothing)
+    # As the PostgreSQL reader: an `IDField` key and a key that is also a relation are unique by
+    # construction; every other column takes the index fact.
+    spec_unique = (arm === :id_pk || (arm === :reference && is_pk)) ? true : col_name in unique_cols
+    # The renderer writes `AUTO_INCREMENT` on an `IDField` key and nowhere else, and MySQL reports it.
+    identity = (is_pk && occursin("auto_increment", extra)) ? ColumnIdentity(false, false, true) : nothing
+    probe = ColumnSpec(col_name, ctype, is_pk ? false : nullable, is_pk, spec_unique, NoDefault(), reference,
+                       _reader_checks(get(col_checks, lowercase(col_name), CheckKind[]), ctype), identity, raw_type)
+    dflt = _mysql_str(r.dflt)
+    raw_default = dflt === nothing ? nothing : _MySQLColumnDefault(dflt, occursin("default_generated", extra))
+    columns[col_name] = _finish_column_spec(table_name, probe, raw_default, db)
+  end
+  return LiveTable(table_name, columns, indexes, composites, table_checks)
+end

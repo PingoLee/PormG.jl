@@ -333,14 +333,14 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not do yet stays loud, never another engine's SQL.
-        # SQL: none — a migration plan (phase 4, #1268) is refused before a statement is sent.
+        # SQL: none — a plan step that changes a column of an existing table (phase 4b, #1268) is refused
+        # where the planner reaches it, before a plan is written.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not supported yet fails before any SQL is sent" begin
-            # The gate makemigrations and migrate pass first names the feature and MySQL.
             pool = PormG.config[PORMG_DB_FOLDER].connections
-            e = try; PormG.Migrations._require_plan_floor(pool); nothing; catch err; err; end
-            @test e isa PormG.BackendCapabilityError && occursin("migration plan", sprint(showerror, e)) &&
-                  occursin("MySQL", sprint(showerror, e))
+            e = try; PormG.Migrations._require_column_alters(pool, :driver, "surname"; added = true); nothing; catch err; err; end
+            @test e isa PormG.UnsupportedConnectionError && occursin("driver.surname", sprint(showerror, e)) &&
+                  occursin("phase 4b", sprint(showerror, e))
             @test M.New_join_position.objects.count() == 3
         end
 

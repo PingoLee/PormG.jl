@@ -169,6 +169,31 @@ What that does not give you:
 - **Not over a network filesystem.** SQLite's locking is unreliable on NFS and similar, and the
   guarantee above depends on it.
 
+### MySQL: a named lock, and no transactional DDL
+
+On MySQL ([in progress](../backends.md)), `migrate()` serializes on a named lock (`GET_LOCK`) under the
+same key, waited on for up to `lock_wait`. A MySQL named lock is server-wide, so two databases on one
+server also migrate one at a time.
+
+MySQL has no transactional DDL: each statement commits on its own, so a plan cannot be applied whole.
+`migrate()` refuses a plan of more than one statement with `BackendCapabilityError` unless you accept
+that with `atomic = false`:
+
+```julia
+result = PormG.Migrations.migrate("my_db"; atomic = false)
+```
+
+The statements then run in order. When one fails, the ones before it stay applied, the plan is
+recorded as `failed`, and the error is raised. Fix the cause, run `makemigrations()` again, which plans
+what is still missing, and `migrate()` once more. `lock_timeout` and `statement_timeout` are refused on
+MySQL until a later phase of #1130 decides what they mean there.
+
+A second instance that also calls `migrate(…; atomic = false)` while the first applies the plan waits
+on the lock, then finds the plan recorded and reports `:already_applied`, as on PostgreSQL. (With the
+default `atomic = true` it raises the refusal above at once.) Its schema check runs inside the lock
+only: before it, the first instance's half-applied plan would read as a changed schema, so on MySQL a
+stale plan reaches the row pre-check and the confirmation before the lock refuses it.
+
 ## Gating a release on drift
 
 Before an instance boots against a database, you may want to know whether that database matches

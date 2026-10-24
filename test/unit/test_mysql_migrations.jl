@@ -779,12 +779,19 @@ end
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
   (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
-   generated = false, generation = nothing)
+   generated = false, generation = nothing, column_type = nothing)
 # A generated column made by hand, which the reader takes for a plain one.
 struct MmMockMySQLGen <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
   (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true,
-   generation = (expr = "(`a` * 2)", stored = false))
+   generation = (expr = "(`a` * 2)", stored = false), column_type = nothing)
+# A column PormG did not write, of a type that holds a field's values in another spelling: `T` is its
+# `COLUMN_TYPE`; a `datetime(6)` also updates itself (`ON UPDATE`), and a `text` has its own collation.
+struct MmMockMySQLLive{T} <: PormG.PormGMySQL end
+PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::AbstractString) where {T} =
+  (comment = "", invisible = false, on_update = T === Symbol("datetime(6)"),
+   collation = T === :text ? "utf8mb4_0900_ai_ci" : nothing, default_expression = nothing, generated = false,
+   generation = nothing, column_type = String(T))
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
 # SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
@@ -827,6 +834,26 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(8) NULL;"
+  # A type the planner calls equal to the field's, in another spelling, is restated as the column holds it:
+  # `DATETIME(3)` over a `datetime(6)` would round every stored value to milliseconds. Its ON UPDATE and its
+  # `CURRENT_TIMESTAMP` default take its precision, and a `text` keeps its collation and takes a literal
+  # default only as an expression. A retype writes the declared type, as before.
+  live(t, new, old) = (conn = MmMockMySQLLive{t}(); _MD.alter_field(conn, _MmDriver, "c", new,
+                       _MM.column_delta(new, _MM.column_spec(old, conn; name = "c"), conn; name = "c")))
+  dt6 = Symbol("datetime(6)")
+  @test live(dt6, Models.DateTimeField(), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(6) NOT NULL ON UPDATE CURRENT_TIMESTAMP(6);"
+  @test occursin("MODIFY COLUMN `c` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);",
+                 live(dt6, Models.DateTimeField(db_default = "CURRENT_TIMESTAMP"), Models.DateTimeField()))
+  @test live(:timestamp, Models.DateTimeField(null = true), Models.DateTimeField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` TIMESTAMP NULL;"
+  @test live(:text, Models.TextField(default = "x"), Models.TextField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` TEXT NOT NULL DEFAULT ('x') COLLATE utf8mb4_0900_ai_ci;"
+  @test live(dt6, Models.DateField(null = true), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATE NULL;"
+  # PormG's own spelling is restated as PormG writes it.
+  @test live(Symbol("datetime(3)"), Models.DateTimeField(), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NOT NULL;"
 end
 
 # What: a CHECK dropped in the plan that also renames the table.

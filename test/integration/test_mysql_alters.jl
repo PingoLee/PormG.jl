@@ -558,9 +558,11 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
 
         # What: columns PormG did not write, under the fields whose values they hold (#1130 phase 4c): a
         # `datetime(6)`, a `timestamp`, a `time`, a `text`, an `int` — and an `int unsigned`, which holds others.
-        # SQL: none for the first five once declared; `MODIFY COLUMN `u` INT NULL` for the unsigned one.
+        # SQL: none for the first five once declared; `MODIFY COLUMN `u` INT NULL` for the unsigned one; then,
+        #      for `NOT NULL`, `MODIFY COLUMN `at` DATETIME(6) NOT NULL` (the column's own type, not PormG's).
         # Why: `inspectdb` reads such a schema as those fields, so the planner must call them equal rather
-        # than retype each to PormG's own spelling, and must still retype what holds other values.
+        # than retype each to PormG's own spelling, and must still retype what holds other values; and a
+        # MODIFY for another change must not write PormG's spelling either, which rounds a `datetime(6)`.
         @testset "columns PormG did not write, under the fields that hold their values" begin
             exec("CREATE TABLE `m4b_legacy` (`legacyid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, " *
                  "`at` DATETIME(6) NULL, `stamp` TIMESTAMP NULL, `lap` TIME NULL, `note` TEXT NULL, `n` INT NULL, " *
@@ -575,6 +577,24 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test occursin("MODIFY COLUMN `u` INT NULL", plan) && !occursin(r"MODIFY COLUMN `(at|stamp|lap|note|n)`", plan)
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             @test converged()
+            # A MODIFY that changes no type restates the column's own: `NOT NULL` keeps a `datetime(6)`'s
+            # microseconds (`DATETIME(3)` would round them, here into the next day) and a `timestamp`.
+            exec("INSERT INTO `m4b_legacy` (`at`, `stamp`, `note`) VALUES ('2026-01-01 23:59:59.999600', '2026-01-01 10:00:00', 'x')")
+            write_models(replace(legacy("Models.IntegerField(null = true)"),
+                                 "at = Models.DateTimeField(null = true), stamp = Models.DateTimeField(null = true)" =>
+                                 "at = Models.DateTimeField(), stamp = Models.DateTimeField()",
+                                 "note = Models.TextField(null = true)" => "note = Models.TextField()"))
+            Mig.makemigrations(folder; interactive = false)
+            plan = read(pending, String)
+            @test occursin("MODIFY COLUMN `at` DATETIME(6) NOT NULL", plan) && occursin("MODIFY COLUMN `stamp` TIMESTAMP NOT NULL", plan) &&
+                  occursin("MODIFY COLUMN `note` TEXT NOT NULL", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test converged()
+            @test String.(raw("SELECT COLUMN_TYPE AS ctype FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+                              "AND TABLE_NAME = 'm4b_legacy' AND COLUMN_NAME IN ('at', 'stamp', 'note') ORDER BY COLUMN_NAME").ctype) ==
+                  ["datetime(6)", "text", "timestamp"]
+            row = raw("SELECT MICROSECOND(`at`) AS us, DATE(`at`) = '2026-01-01' AS same_day FROM `m4b_legacy`")[1, :]
+            @test (Int(row.us), Int(row.same_day)) == (999600, 1)
             exec("DROP TABLE `m4b_legacy`")
         end
 

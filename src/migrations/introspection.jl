@@ -2163,7 +2163,8 @@ end
 function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
   rows = fetch(conn, """
     SELECT c.COLUMN_COMMENT AS comment, c.EXTRA AS extra, c.COLLATION_NAME AS coll,
-           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt, c.GENERATION_EXPRESSION AS gen
+           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt, c.GENERATION_EXPRESSION AS gen,
+           c.COLUMN_TYPE AS ctype
       FROM information_schema.COLUMNS c
       JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
      WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = ? AND c.COLUMN_NAME = ?""",
@@ -2171,7 +2172,7 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
   nrow(rows) == 0 && return nothing
   r = rows[1, :]
   extra = lowercase(something(_mysql_str(r.extra), ""))
-  coll, dflt = _mysql_str(r.coll), _mysql_str(r.dflt)
+  coll, dflt, ctype = _mysql_str(r.coll), _mysql_str(r.dflt), _mysql_str(r.ctype)
   # A collation name is an identifier the server printed; anything else is not restated.
   keep_coll = coll !== nothing && coll != _mysql_str(r.table_coll) && occursin(r"^[A-Za-z0-9_]+$", coll)
   generated = occursin(r"(stored|virtual) generated", extra)
@@ -2186,7 +2187,10 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
           # one (3106, measured).
           generation = (generated && gen !== nothing && !isempty(gen)) ?
                        (expr = _mysql_unescape(gen), stored = occursin("stored generated", extra)) : nothing,
-          default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing)
+          default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing,
+          # The type as the column holds it, which a MODIFY that changes no type restates when it spells the
+          # same values otherwise (`datetime(6)` under a `DateTimeField`): a type and its size, nothing else.
+          column_type = (ctype !== nothing && occursin(r"^[a-z]+(\([0-9]+(,[0-9]+)?\))?$", ctype)) ? ctype : nothing)
 end
 
 """

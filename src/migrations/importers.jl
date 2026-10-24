@@ -204,7 +204,8 @@ function import_models_from_sqlite(db::String = "db";
   Configuration._require_folder_backed(settings, "import_models_from_sqlite")
   conn = settings.connections
   conn isa PormGSQLite || throw(BackendCapabilityError(
-    "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for PostgreSQL."))
+    "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for " *
+    "PostgreSQL, import_models_from_mysql for MySQL."))
   model_path = settings.db_def_folder
 
   # check if file already exists

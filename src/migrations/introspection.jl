@@ -4981,6 +4981,22 @@ const _MYSQL_RESERVED_WORDS = Set{String}(split("""
   USAGE USE USING UTC_DATE UTC_TIME UTC_TIMESTAMP VALUES VARBINARY VARCHAR VARCHARACTER VARYING VIRTUAL WHEN
   WHERE WHILE WINDOW WITH WRITE XOR YEAR_MONTH ZEROFILL"""))
 
+# PostgreSQL's reserved key words, both kinds (PostgreSQL 16's `pg_get_keywords()`, `catcode` `R` and `T`;
+# the documentation's appendix C). A column so named, written bare, is either syntax or something else:
+# `user` is `current_user`, which a CHECK would compare instead of the column.
+const _POSTGRES_RESERVED_WORDS = Set{String}(split("""
+  ALL ANALYSE ANALYZE AND ANY ARRAY AS ASC ASYMMETRIC AUTHORIZATION BINARY BOTH CASE CAST CHECK COLLATE
+  COLLATION COLUMN CONCURRENTLY CONSTRAINT CREATE CROSS CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE
+  CURRENT_SCHEMA CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER DEFAULT DEFERRABLE DESC DISTINCT DO ELSE END
+  EXCEPT FALSE FETCH FOR FOREIGN FREEZE FROM FULL GRANT GROUP HAVING ILIKE IN INITIALLY INNER INTERSECT INTO
+  IS ISNULL JOIN LATERAL LEADING LEFT LIKE LIMIT LOCALTIME LOCALTIMESTAMP NATURAL NOT NOTNULL NULL OFFSET ON
+  ONLY OR ORDER OUTER OVERLAPS PLACING PRIMARY REFERENCES RETURNING RIGHT SELECT SESSION_USER SIMILAR SOME
+  SYMMETRIC SYSTEM_USER TABLE TABLESAMPLE THEN TO TRAILING TRUE UNION UNIQUE USER USING VARIADIC VERBOSE
+  WHEN WHERE WINDOW WITH"""))
+
+# The names a declaration cannot hold bare: a word any engine reserves. A declaration is every engine's.
+const _UNDECLARABLE_WORDS = union(_MYSQL_RESERVED_WORDS, _POSTGRES_RESERVED_WORDS, _SQLITE_RESERVED_WORDS)
+
 """
     _mysql_declarable_sql(sql) -> Union{String, Nothing}
 
@@ -4990,8 +5006,10 @@ unescaped once from `information_schema`) as text a declaration can hold, or `no
 engines a backtick means nothing), and puts its charset introducer before every string literal
 (`_utf8mb4'x'`). So:
 
-- a backtick-quoted identifier loses its backticks when it is a plain name (`[A-Za-z_][A-Za-z0-9_]*`) that
-  is not reserved; any other keeps them, and the text is not declarable;
+- a backtick-quoted identifier loses its backticks when it is a plain name (`[A-Za-z][A-Za-z0-9_]*`) that
+  no engine reserves (`_UNDECLARABLE_WORDS`: a CHECK on PostgreSQL would read a bare `user` as
+  `current_user`); any other keeps them, and the text is not declarable. That includes a name that starts
+  with `_`, which MySQL reads bare as a charset introducer when it names one (`_latin1`);
 - an introducer before a literal is dropped (the literal keeps the connection's charset, PormG's `utf8mb4`),
   except `_binary`, which makes the literal a byte string: that text is not declarable;
 - inside a literal, MySQL's escaped quote `\\'` becomes the standard `''`. Any other backslash escape is
@@ -5016,7 +5034,7 @@ function _mysql_declarable_sql(sql::AbstractString)::Union{String, Nothing}
       j === nothing && return nothing
       j < n && chars[j+1] == '`' && return nothing            # an escaped backtick: not a plain name
       name = String(chars[i+1:j-1])
-      (occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", name) && !(uppercase(name) in _MYSQL_RESERVED_WORDS)) || return nothing
+      (occursin(r"^[A-Za-z][A-Za-z0-9_]*$", name) && !(uppercase(name) in _UNDECLARABLE_WORDS)) || return nothing
       print(out, name)
       i = j + 1
     elseif c == '_' && (i == 1 || !ident(chars[i-1]))
@@ -5025,10 +5043,14 @@ function _mysql_declarable_sql(sql::AbstractString)::Union{String, Nothing}
       while j <= n && (isletter(chars[j]) || isdigit(chars[j]))
         j += 1
       end
-      if j > i + 1 && j <= n && chars[j] == '\''
+      k = j                                                    # MySQL takes a space before the literal too
+      while k <= n && isspace(chars[k])
+        k += 1
+      end
+      if j > i + 1 && k <= n && chars[k] == '\''
         # `_binary` makes the literal a byte string: without it, it is text.
         lowercase(String(chars[i+1:j-1])) == "binary" && return nothing
-        i = j                                                  # the literal itself is read next
+        i = k                                                  # the literal itself is read next
       else
         print(out, c)
         i += 1
@@ -5178,7 +5200,7 @@ const _MYSQL_VIEWS_SQL = """
 const _MYSQL_GENERATED_SQL = """
   SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, GENERATION_EXPRESSION AS gen
     FROM information_schema.COLUMNS
-   WHERE TABLE_SCHEMA = DATABASE() AND EXTRA IN ('VIRTUAL GENERATED', 'STORED GENERATED')
+   WHERE TABLE_SCHEMA = DATABASE() AND (EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%')
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_TABLES_SQL = """
   SELECT TABLE_NAME AS tbl FROM information_schema.TABLES

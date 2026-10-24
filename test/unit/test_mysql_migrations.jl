@@ -618,11 +618,16 @@ end
                           "(cast(`grid` as char(3) charset utf8mb4) <> _utf8mb4'x')" => "(cast(grid as char(3) charset utf8mb4) <> 'x')",
                           "(`Mixed` > 0)" => "(Mixed > 0)", "concat(`name`,_utf8mb4'x')" => "concat(name,'x')",
                           "lower(_utf8mb4'O''Neil')" => "lower('O''Neil')", "uuid()" => "uuid()",
-                          "_utf8mb4'_x' = `_y`" => "'_x' = _y")
+                          "_utf8mb4'_x' = `y`" => "'_x' = y", "(`c` <> _utf8mb4 'x')" => "(c <> 'x')",
+                          "(`c` <> _utf8mb4 0x41)" => "(c <> _utf8mb4 0x41)")
     @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, want)
   end
-  for printed in ("(`order` > 0)", "(`a b` > 0)", "(`x``y` > 0)", "concat(_utf8mb4'a\\\\b')", "(_utf8mb4'a\\nb' <> `c`)",
-                  "(`c` = _binary'ab')", "(`c` <> \"x\")", "(`c` <> _utf8mb4'open)")
+  # A name an engine reserves (`order` on all three; `user`, which PostgreSQL reads bare as `current_user`;
+  # `nothing` on SQLite), a name MySQL would read bare as a charset introducer, and anything not a plain
+  # ASCII name keep their backticks: no declaration holds them.
+  for printed in ("(`order` > 0)", "(`user` <> _utf8mb4'')", "(`nothing` > 0)", "(`_latin1` > 0)", "(`_y` > 0)",
+                  "(`a b` > 0)", "(`x``y` > 0)", "(`pé` > 0)", "concat(_utf8mb4'a\\\\b')", "(_utf8mb4'a\\nb' <> `c`)",
+                  "(`c` = _binary'ab')", "(`c` = _binary 'ab')", "(`c` <> \"x\")", "(`c` <> _utf8mb4'open)")
     @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, nothing)
   end
   # From `information_schema`, escaped once more; text with no declarable form stays as MySQL printed it.

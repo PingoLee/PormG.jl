@@ -102,15 +102,30 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
         @testset "a schema made by hand imports as far as its values allow, and says what it cannot" begin
             exec("CREATE TABLE `m4c_legacy` (`legacyid` INT NOT NULL AUTO_INCREMENT PRIMARY KEY, `u` INT UNSIGNED NULL, " *
                  "`e` ENUM('a','b') NULL, `at` DATETIME(6) NULL, `stamp` TIMESTAMP NULL, `note` TEXT NULL, " *
-                 "`twice` INT GENERATED ALWAYS AS (`u` * 2) VIRTUAL, `order` INT NULL, " *
+                 "`twice` INT GENERATED ALWAYS AS (`u` * 2) VIRTUAL, `hid` INT GENERATED ALWAYS AS (`u` + 1) VIRTUAL INVISIBLE, " *
+                 "`order` INT NULL, " *
                  "`odd` VARCHAR(9) NULL DEFAULT (concat('a\\\\b')), " *
                  "CONSTRAINT `m4c_legacy_order_pos` CHECK (`order` > 0), CONSTRAINT `m4c_legacy_note` CHECK (`note` <> 'x')) " *
                  "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
             exec("CREATE TABLE `m4c_gone` (`goneid` BIGINT NOT NULL PRIMARY KEY)")
             exec("CREATE VIEW `m4c_gone_view` AS SELECT `goneid` FROM `m4c_gone`")
             exec("DROP TABLE `m4c_gone`")
-            @test_logs (:warn, r"IDField is BIGINT AUTO_INCREMENT") (:warn, r"no PormG field type") (:warn, r"no PormG field type") (:warn, r"generated column made by hand") (:warn, r"CHECK whose condition MySQL prints") (:warn, r"view could not be read") match_mode = :any import!(["m4c_legacy", "m4c_gone_view"]; views = true)
+            logs, _ = Test.collect_test_logs() do
+                import!(["m4c_legacy", "m4c_gone_view"]; views = true)
+            end
+            # Each warning names its column: the key PormG would not write, the two types whose values differ,
+            # both generated columns (one INVISIBLE), the reserved-word CHECK, the default with a backslash in
+            # its literal, and the view.
+            named(l) = (d = Dict(l.kwargs); string(something(get(d, :column, nothing), get(d, :check, nothing), get(d, :view, ""))))
+            warned(re) = sort!([named(l) for l in logs if l.level == Base.CoreLogging.Warn && occursin(re, string(l.message))])
+            @test warned(r"IDField is BIGINT AUTO_INCREMENT") == ["legacyid"]
+            @test warned(r"no PormG field type") == ["e", "u"]
+            @test warned(r"generated column made by hand") == ["hid", "twice"]
+            @test warned(r"CHECK whose condition MySQL prints") == ["m4c_legacy_order_pos"]
+            @test any(l -> get(Dict(l.kwargs), :column, nothing) == "odd" && l.level == Base.CoreLogging.Warn, logs)
+            @test warned(r"view could not be read") == ["m4c_gone_view"]
             text = read(models_path, String)
+            @test !occursin("concat", text)
             @test occursin("at = Models.DateTimeField", text) && occursin("stamp = Models.DateTimeField", text) &&
                   occursin("note = Models.TextField", text) && occursin("u = Models.TextField", text) && occursin("e = Models.TextField", text)
             @test occursin("Models.CheckConstraint(condition = \"(note <> 'x')\", name = \"m4c_legacy_note\")", text)
@@ -121,6 +136,12 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
             @test occursin("MODIFY COLUMN `u` LONGTEXT", plan) && occursin("MODIFY COLUMN `e` LONGTEXT", plan) &&
                   occursin("MODIFY COLUMN `legacyid` BIGINT", plan)
             @test !occursin(r"MODIFY COLUMN `(at|stamp|note|order)`", plan) && !occursin("m4c_legacy_order_pos", plan)
+            # The hand-made CHECK the model now declares is adopted: MySQL renames no CHECK, so its marker is
+            # written by re-creating it, in one statement; after that the plan is empty.
+            @test occursin("DROP CHECK `m4c_legacy_note`, ADD CONSTRAINT `m4c_legacy_note` CHECK (", plan) &&
+                  occursin("pormg:check:", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test converged()
         end
     finally
         drop_scratch!()

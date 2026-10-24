@@ -29,6 +29,7 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
         # One statement drops them all, whatever references what (MySQL has no CASCADE).
         isempty(tables) || exec("DROP TABLE " * join(("`$t`" for t in tables), ", "))
         exec("DROP TABLE IF EXISTS `pormg_migrations`")
+        exec("DROP TABLE IF EXISTS `pormg_migrations_data`")
     end
     drop_scratch!()
     others = String[String(r.t) for r in eachrow(raw(
@@ -273,6 +274,47 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test occursin("ADD CONSTRAINT", rest) && !occursin("ADD COLUMN", rest)
             @test Mig.migrate(folder; interactive = false).outcome === :applied   # one statement: no atomic needed
             @test live("m4b_seat2").columns["circuitid"].reference !== nothing && converged()
+        end
+
+        # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
+        # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
+        #      transaction; `ensure_table!`'s CREATE TABLE and key.
+        # Why: both were refused before phase 4b; a transactional step that throws must leave neither its
+        # writes nor its record, and `ensure_table!` must not leave a table half-made when a statement after
+        # its CREATE TABLE fails (each MySQL DDL statement commits on its own).
+        @testset "run_once and ensure_table!" begin
+            apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField(), name = Models.CharField(max_length = 50, null = true))")
+            exec("INSERT INTO `m4b_circuit` (`name`) VALUES ('monza')")
+            upper!(_) = exec("UPDATE `m4b_circuit` SET `name` = UPPER(`name`)")
+            @test Mig.run_once(upper!, pool, settings, "m4b_upper") === :applied
+            @test Mig.run_once(upper!, pool, settings, "m4b_upper") === :already_applied
+            @test raw("SELECT `name` FROM `m4b_circuit`")[1, :name] == "MONZA"
+            e = try
+                Mig.run_once(pool, settings, "m4b_broken") do _
+                    PormG.ConnectionPool.fetch(pool, "UPDATE `m4b_circuit` SET `name` = 'lost'")
+                    error("the step fails")
+                end
+                nothing
+            catch err
+                err
+            end
+            @test e isa ErrorException && raw("SELECT `name` FROM `m4b_circuit`")[1, :name] == "MONZA"
+            @test !Mig._data_step_recorded(pool, "m4b_broken")
+            @test Mig.run_once(_ -> nothing, pool, settings, "m4b_plain"; transaction = false) === :applied
+            @test [s.name for s in Mig.status(folder).data_steps] == ["m4b_upper", "m4b_plain"]
+
+            target = PormG.Models.Model("m4b_circuit", circuitid = PormG.Models.IDField())
+            lap = PormG.Models.Model("m4b_lap", lapid = PormG.Models.IDField(), lap = PormG.Models.IntegerField(),
+                                     circuitid = PormG.Models.ForeignKey(target, pk_field = "circuitid", null = true))
+            @test Mig.ensure_table!(lap, folder) === :created
+            @test Mig.ensure_table!(lap, folder) === :exists
+            @test live("m4b_lap").columns["circuitid"].reference !== nothing
+            # A key to a table that does not exist fails after the CREATE TABLE: the table goes again.
+            nowhere = PormG.Models.Model("m4b_nowhere", nid = PormG.Models.IDField())
+            ghost = PormG.Models.Model("m4b_lap2", lapid = PormG.Models.IDField(),
+                                       circuitid = PormG.Models.ForeignKey(nowhere, pk_field = "nid", null = true))
+            e = try; Mig.ensure_table!(ghost, folder); nothing; catch err; err; end
+            @test e isa PormG.PormGError && !("m4b_lap2" in scratch_tables())
         end
     finally
         drop_scratch!()

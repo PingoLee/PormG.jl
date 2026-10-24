@@ -4968,6 +4968,9 @@ end
 # foreign-key checks off: a child's key then dangles until its own step in the same plan drops it. The
 # three statements run on one connection (`Migrations._execute_migration_lifecycle(::PormGMySQL)`), which
 # is renewed afterwards; a child model that kept a key to a dropped model would not load.
+# One table, the key checks left as they are: `ensure_table!` drops the table it has just begun (#1230).
+drop_table_only(conn::PormGMySQL, table_name::Union{String, Symbol})::String =
+  "DROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));"
 drop_table(conn::PormGMySQL, table_name::Union{String, Symbol}) =
   "SET FOREIGN_KEY_CHECKS = 0;\nDROP TABLE IF EXISTS $(_ddl_ident(conn, table_name));\nSET FOREIGN_KEY_CHECKS = 1;"
 

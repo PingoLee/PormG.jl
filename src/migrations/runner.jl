@@ -37,8 +37,9 @@ const _DESTRUCTIVE_PATTERNS = [
 # not data, and `Dialect.alter_field` emits the first three for ordinary nullability, default and
 # identity changes. Anchored on the `ALTER [COLUMN] <col>` that owns the clause, so
 # `ALTER TABLE t DROP identity` — dropping a column NAMED identity — still reads as a drop.
+# A name is double-quoted (PostgreSQL, SQLite), backticked (MySQL, #1130) or bare.
 const _PROPERTY_DROP_CLAUSE =
-  r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"|\w+)\s+DROP\s+(?:NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b"i
+  r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"|`(?:[^`]|``)*`|\w+)\s+DROP\s+(?:NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b"i
 
 # ==============================================================================
 # Reading a migration plan file as DATA (#710)
@@ -3472,7 +3473,7 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
     # refused for another finding does not first claim these are taken care of.
     for f in _handled_alters(lossy_alters)
       something(f.rows, 0) > 0 &&
-        @info("A change is marked handled=pre, so its rows are left to the plan's `Data (pre)` step; if any remain after it, the migration fails and rolls back.",
+        @info("A change is marked handled=pre, so its rows are left to the plan's `Data (pre)` step; if any remain after it, the migration fails (and rolls back where the engine's DDL is transactional).",
               finding = _lossy_alter_summary(f))
     end
     _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive,
@@ -4196,13 +4197,15 @@ beside it.
 - **Recorded in `pormg_migrations_data`**, one row per name, created on first use. The row is the
   whole of "applied": a step is never re-run, whatever its code says now, so give a changed step a
   new name. There is no down step.
-- **The migration lock.** On PostgreSQL it holds the advisory lock `migrate` holds
-  (`pormg::migrations`), waiting up to `lock_wait` seconds (`OperationalError` naming the holder
-  after that), so a data step and a schema migration never run at once and two instances cannot both
-  run one step. SQLite has no such lock; there the transactional step checks its record inside its
-  `BEGIN IMMEDIATE` transaction, which no other process can share.
+- **The migration lock.** On PostgreSQL and MySQL it holds the lock `migrate` holds
+  (`pormg::migrations`: an advisory lock, `GET_LOCK` on MySQL), waiting up to `lock_wait` seconds
+  (`OperationalError` naming the holder after that), so a data step and a schema migration never run
+  at once and two instances cannot both run one step. SQLite has no such lock; there the transactional
+  step checks its record inside its `BEGIN IMMEDIATE` transaction, which no other process can share.
 - **`transaction = true`** (default): the step and its record commit together. If `f` throws, both
-  roll back, nothing is recorded, the error propagates, and the next call runs the step again.
+  roll back, nothing is recorded, the error propagates, and the next call runs the step again. On
+  MySQL a DDL statement inside `f` commits the transaction implicitly, so the writes before it stay
+  and the step is no longer one unit: keep a MySQL data step to writes.
 - **`transaction = false`**: for what cannot run inside a transaction — PostgreSQL's
   `CREATE INDEX CONCURRENTLY` — or a backfill too large for one. The record is written after `f`
   returns, so a throw records nothing and keeps whatever `f` already did: write such a step to be
@@ -4218,7 +4221,7 @@ characters. It reads no files, so a `register_connection` database works too.
 Expand → backfill → contract is two plans with a `run_once` between them: see *Data Migrations* in
 the advanced migrations guide.
 """
-function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function run_once(f::Function, connection::_SQLEngine, settings::PormGSettings,
                   name::AbstractString; transaction::Bool = true, lock_wait::Real = 30)::Symbol
   step = String(name)
   isempty(strip(step)) && throw(InvalidValueError("run_once needs a step name; got $(repr(step))."))  # refusal-value-ok: a run_once step name the developer wrote
@@ -4238,18 +4241,15 @@ function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, se
   return _run_once_locked(f, connection, settings, step, transaction, timeouts)
 end
 
-# MySQL (#1130): a data step is phase 4b's. Refused before `f` runs or the step table is touched.
-run_once(f::Function, connection::PormGMySQL, settings::PormGSettings, name::AbstractString; kwargs...)::Symbol =
-  throw(Dialect._mysql_not_yet("run_once", "4b"))
-
 function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,PormGSettings} = config,
                   transaction::Bool = true, lock_wait::Real = 30)::Symbol
   settings = config[db]
   return run_once(f, settings.connections, settings, name; transaction = transaction, lock_wait = lock_wait)
 end
 
-# PostgreSQL: everything under the migration lock — the table, the record check, the step.
-function _run_once_locked(f::Function, connection::PormGPostgres, settings::PormGSettings, step::String,
+# PostgreSQL and MySQL (`GET_LOCK`, #1130): everything under the migration lock — the table, the record
+# check, the step. InnoDB's writes are transactional, so the step and its record commit together there too.
+function _run_once_locked(f::Function, connection::Union{PormGPostgres, PormGMySQL}, settings::PormGSettings, step::String,
                           transaction::Bool, timeouts::_MigrationTimeouts)::Symbol
   return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
                                          wait = true, timeout_ms = timeouts.lock_wait_ms) do
@@ -4301,10 +4301,10 @@ function _run_once_locked(f::Function, connection::PormGSQLite, settings::PormGS
 end
 
 # `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection.
-_data_step_recorded(connection::Union{PormGPostgres, PormGSQLite}, step::String)::Bool =
+_data_step_recorded(connection::_SQLEngine, step::String)::Bool =
   nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
 
-_record_data_step(connection::Union{PormGPostgres, PormGSQLite}, step::String, transactional::Bool) =
+_record_data_step(connection::_SQLEngine, step::String, transactional::Bool) =
   fetch(connection, Dialect.insert_data_step_sql(connection); params = Any[step, transactional])
 
 # The recorded data steps for `status()`: empty when the table does not exist yet, which `status`
@@ -4325,7 +4325,7 @@ end
 # CHECKs — so a table made here and one `migrate` would make are one rendering. `indexes = false`
 # drops only the plain indexes ("Create index…" entries); unique constraints are kept, since they
 # are part of what the rows mean.
-function _ensure_table_statements(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel;
+function _ensure_table_statements(connection::_SQLEngine, model::PormGModel;
                                   indexes::Bool = true)::Vector{String}
   plan = OrderedDict{Symbol, OrderedDict{String, String}}()
   _add_new_table(connection, plan, Symbol(model_table_name(model)), model)
@@ -4391,6 +4391,31 @@ function _ensure_table_locked(connection::PormGPostgres, settings::PormGSettings
       for statement in statements, part in _split_pg_statements(statement)
         fetch(connection, part)
       end
+    end
+    return :created
+  end
+end
+
+# MySQL (#1130): under `GET_LOCK`, as on PostgreSQL, but with no transaction to put the DDL in (each
+# statement commits). The table is the call's own until it returns, so when a statement after the `CREATE
+# TABLE` fails the table is dropped again: `:exists` then never reports a table this call left half-made.
+function _ensure_table_locked(connection::PormGMySQL, settings::PormGSettings, table::String,
+                              statements::Vector{String})::Symbol
+  _live_table_exists(connection, table) && return :exists
+  return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
+                                         wait = true, timeout_ms = _migration_timeouts().lock_wait_ms) do
+    _live_table_exists(connection, table) && return :exists
+    try
+      for statement in statements, part in _split_mysql_statements(statement)
+        fetch(connection, part)
+      end
+    catch
+      try
+        fetch(connection, Dialect.drop_table_only(connection, table))
+      catch cleanup_err
+        @error "ensure_table!: could not drop the table it had begun to create" table = table exception = cleanup_err
+      end
+      rethrow()
     end
     return :created
   end

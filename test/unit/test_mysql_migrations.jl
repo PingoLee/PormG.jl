@@ -290,8 +290,6 @@ end
   @test e isa PormG.BackendCapabilityError && occursin("MySQL", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; method = "gin"))
   @test e isa PormG.BackendCapabilityError
-  @test occursin("phase 4b", refused(() -> PormG.Migrations.run_once(() -> nothing, _mm_my,
-                                                                     PormG.Configuration.Settings(connections = _mm_my), "step")))
 end
 
 # The catalog lookups a plan on a table that exists asks, answered for the mock as MySQL would for the
@@ -514,4 +512,24 @@ end
   @test found("decimal(10,3)", "DECIMAL(10,1)") == [:decimal_scale]
   @test found("datetime(3)", "DATE") == [:to_date]
   @test found("int", "BIGINT") == Symbol[]
+end
+
+# What: the destructive guard over MySQL's statements, and the statements `ensure_table!` runs there.
+# SQL: ``ALTER TABLE `t` ALTER COLUMN `c` DROP DEFAULT`` is not destructive; a `DROP COLUMN`, `DROP CHECK`,
+#      `DROP INDEX` or `DROP FOREIGN KEY` is. `ensure_table!` runs the CREATE TABLE and the keys a migration
+#      would, in MySQL's spelling.
+# Why: the guard recognised a property drop only on a double-quoted or bare name, so a backticked one read
+# as a destructive `DROP`; and `ensure_table!` had no MySQL statements.
+@testset "#1130: the destructive guard and ensure_table! on MySQL" begin
+  @test !_MM.is_destructive("ALTER TABLE `driver` ALTER COLUMN `code` DROP DEFAULT;")
+  @test !_MM.is_destructive("ALTER TABLE `driver` ALTER COLUMN `co``de` DROP NOT NULL;")
+  for sql in ("ALTER TABLE `driver` DROP COLUMN `code`;", "ALTER TABLE `driver` DROP CHECK `driver_chk_1`;",
+              "DROP INDEX `a_idx` ON `driver`;", "ALTER TABLE `result` DROP FOREIGN KEY `k`, DROP INDEX `k`;")
+    @test (sql, _MM.is_destructive(sql)) == (sql, true)
+  end
+  stmts = _MM._ensure_table_statements(_mm_my, _MmResult)
+  @test startswith(first(stmts), "CREATE TABLE IF NOT EXISTS `result`")
+  @test count(st -> occursin("ADD CONSTRAINT", st), stmts) == 2 && !any(st -> occursin('"', st), stmts)
+  @test !any(st -> startswith(st, "CREATE INDEX"), _MM._ensure_table_statements(_mm_my, _MmResult; indexes = false))
+  @test _MD.drop_table_only(_mm_my, "result") == "DROP TABLE IF EXISTS `result`;"
 end

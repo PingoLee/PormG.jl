@@ -125,8 +125,10 @@ end
 # What: `parse_canonical_type` over every type the MySQL map writes, as `COLUMN_TYPE` reports it.
 # SQL: none.
 # Why: the diff compares the two sides by canonical type; a reported spelling that parsed to another
-# type than its rendering would re-plan the column forever, and a spelling PormG never writes
-# (`tinyint(4)`, `datetime(6)`, an unsigned integer) must not equal a declaration.
+# type than its rendering would re-plan the column forever. A spelling PormG never writes reads as the
+# type whose values it holds (an integer's display width, any `datetime(n)`/`time(n)`, a `timestamp`,
+# `text`; #1130 phase 4c, for `inspectdb`), and one whose values differ (`tinyint(4)`, an unsigned
+# integer, `char(10)`, `enum`) must not equal a declaration.
 @testset "#1268: a reported MySQL type parses as its rendering does" begin
   for model in (_MmCircuit, _MmDriver, _MmResult), (name, field) in model.fields
     rendered = _MD._get_column_type(field, _mm_my)
@@ -134,9 +136,17 @@ end
           (name, _MM.parse_canonical_type(rendered, _mm_my))
     @test (name, _MM.parse_canonical_type(rendered, _mm_my) isa PormG.CUnsupported) == (name, false)
   end
-  for foreign in ("tinyint(4)", "tinyint", "datetime(6)", "datetime", "time", "char(10)", "text", "mediumtext",
-                  "int unsigned", "bigint unsigned", "float", "blob", "timestamp")
+  for foreign in ("tinyint(4)", "tinyint", "mediumint", "char(10)", "int unsigned", "bigint unsigned",
+                  "int(10) unsigned", "decimal(6,2) unsigned", "float", "double(8,2)", "blob", "varbinary(16)",
+                  "enum('a','b')", "set('a')", "year", "bit(1)", "text(5)")
     @test (foreign, _MM.parse_canonical_type(foreign, _mm_my)) == (foreign, PormG.CUnsupported(foreign))
+  end
+  for (spelling, want) in ("int(11)" => PormG.CInt32(), "bigint(20)" => PormG.CInt64(), "smallint(6)" => PormG.CInt16(),
+                           "datetime" => PormG.CDateTime(false), "datetime(6)" => PormG.CDateTime(false),
+                           "timestamp" => PormG.CDateTime(false), "timestamp(3)" => PormG.CDateTime(false),
+                           "time" => PormG.CTime(), "time(0)" => PormG.CTime(), "text" => PormG.CText(),
+                           "mediumtext" => PormG.CText(), "tinytext" => PormG.CText())
+    @test (spelling, _MM.parse_canonical_type(spelling, _mm_my)) == (spelling, want)
   end
   # Each spelling the map writes, against the type it means: a deleted arm reads both sides of the law
   # above as the same `CUnsupported`, which only this table catches.

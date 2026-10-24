@@ -552,6 +552,28 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test marked(column_row("m4b_tag", "code").c) && converged()
         end
 
+        # What: columns PormG did not write, under the fields whose values they hold (#1130 phase 4c): a
+        # `datetime(6)`, a `timestamp`, a `time`, a `text`, an `int` — and an `int unsigned`, which holds others.
+        # SQL: none for the first five once declared; `MODIFY COLUMN `u` INT NULL` for the unsigned one.
+        # Why: `inspectdb` reads such a schema as those fields, so the planner must call them equal rather
+        # than retype each to PormG's own spelling, and must still retype what holds other values.
+        @testset "columns PormG did not write, under the fields that hold their values" begin
+            exec("CREATE TABLE `m4b_legacy` (`legacyid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, " *
+                 "`at` DATETIME(6) NULL, `stamp` TIMESTAMP NULL, `lap` TIME NULL, `note` TEXT NULL, `n` INT NULL, " *
+                 "`u` INT UNSIGNED NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
+            legacy(u) = "Legacy = Models.Model(\"m4b_legacy\", legacyid = Models.IDField(), " *
+                        "at = Models.DateTimeField(null = true), stamp = Models.DateTimeField(null = true), " *
+                        "lap = Models.TimeField(null = true), note = Models.TextField(null = true), " *
+                        "n = Models.IntegerField(null = true), u = $(u))"
+            write_models(legacy("Models.IntegerField(null = true)"))
+            Mig.makemigrations(folder; interactive = false)
+            plan = read(pending, String)
+            @test occursin("MODIFY COLUMN `u` INT NULL", plan) && !occursin(r"MODIFY COLUMN `(at|stamp|lap|note|n)`", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test converged()
+            exec("DROP TABLE `m4b_legacy`")
+        end
+
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
         # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
         #      transaction; `ensure_table!`'s CREATE TABLE and key.

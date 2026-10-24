@@ -256,22 +256,30 @@ end
 # MySQL (#1130 phase 4a). Each collapse is forced by `Dialect._get_column_type(::PormGMySQL)`, which writes
 # one spelling per canonical type: `BIGINT` for a key, a relation, a `BigIntegerField` and a
 # `DurationField` (its microseconds) alike, `INT` for both integer fields, `LONGTEXT` for every text
-# field without a length. A spelling it never writes — `tinyint(4)`, `datetime(6)`, `char(10)`, `text`,
-# an `unsigned` integer — stays `CUnsupported`, so a column PormG did not create never equals a
-# declaration.
+# field without a length.
+#
+# Phase 4c (`inspectdb`) adds the spellings PormG does not write that hold the same values, so a schema
+# PormG did not create reads as the fields it means: an integer's display width (`int(11)`, which MySQL
+# before 8.0.19 printed, and which changes nothing stored); any `datetime(n)` and `time(n)`, the precision
+# ignored as PostgreSQL's `timestamp(3)` is; a `timestamp`, which holds the UTC instant PormG's session
+# (pinned to UTC) reads and writes as a `datetime`; and `text`, `mediumtext`, `tinytext` as text, a value
+# past their bound failing loudly under strict mode. A spelling whose values differ stays `CUnsupported`,
+# so it never equals a declaration: an `unsigned` integer (its range), `tinyint(4)`, `mediumint`, `char(10)`
+# (it strips trailing spaces), `enum`, `set`, `float` (32 bits), `year`, `bit`, a binary type but `longblob`.
 function parse_canonical_type(raw::AbstractString, ::PormGMySQL)::CanonicalType
   base, args = _split_rendered_type(raw)
-  base == "smallint" && isempty(args)     && return CInt16()
-  base == "int" && isempty(args)          && return CInt32()
-  base == "bigint" && isempty(args)       && return CInt64()
+  width = length(args) <= 1                # a display width, or none
+  base == "smallint" && width             && return CInt16()
+  base == "int" && width                  && return CInt32()
+  base == "bigint" && width               && return CInt64()
   base == "tinyint" && args == [1]        && return CBool()
   base == "double" && isempty(args)       && return CFloat64()
   base == "decimal"                       && return CDecimal(_arg(args, 1), _arg(args, 2))
   base == "varchar"                       && return CVarChar(_arg(args, 1))
-  base == "longtext"                      && return CText()
+  base in ("longtext", "mediumtext", "text", "tinytext") && isempty(args) && return CText()
   base == "date"                          && return CDate()
-  base == "datetime" && args == [3]       && return CDateTime(false)
-  base == "time" && args == [6]           && return CTime()
+  base in ("datetime", "timestamp") && width && return CDateTime(false)
+  base == "time" && width                 && return CTime()
   base == "char" && args == [36]          && return CUUID()
   base == "json"                          && return CJSON()
   base == "longblob"                      && return CBytes()

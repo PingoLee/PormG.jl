@@ -2543,7 +2543,7 @@ end
     # PostgreSQL-only signal (SQLite validates FK targets lazily at create time), so
     # introspect the migrated FK and confirm it points at the parent's db_column
     # ("parent_code"), not the "id" fallback an unresolved target would have produced.
-    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+    begin
       strchild_intro = nothing
       for m in PormG.Migrations.convert_schema_to_models(pool)
         lowercase(string(m.name)) == "dbcolstrchild" && (strchild_intro = m)
@@ -2722,7 +2722,7 @@ end
     @test ok_both      # …and independently, not as a composite
 
     # (b) INTROSPECTION reads them back — the unit of the fix, against a live database.
-    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+    begin
       intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
       @test intro["uniq318"].fields["slug"].unique
       @test intro["uniq318"].fields["token"].unique    # mutation gate for the PG per-table-array bug
@@ -2823,7 +2823,7 @@ end
     @test dup_slug
 
     # (b) INTROSPECTION reads the schema-visible attributes back — the unit of the fix, live.
-    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+    begin
       intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
       live = intro["rt325"]
 
@@ -2903,7 +2903,7 @@ end
 
     # …and applying it converges: the widened column and the dropped index both land, and the
     # NEXT diff is empty again.
-    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+    begin
       intro2 = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
       @test intro2["rt325"].fields["canonical_url"].max_length == 900
       @test !intro2["rt325"].fields["code"].db_index
@@ -2953,7 +2953,7 @@ end
     @test dup_ok
 
     # (b) INTROSPECTION reads it back — the unit of the fix, against a live database.
-    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+    begin
       intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
       live = intro["idx347"]
       @test haskey(live.cache, "composite_indexes")

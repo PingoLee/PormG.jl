@@ -462,7 +462,8 @@ end
 end
 
 # The tables of the schema holding a CHECK name, as each test describes them.
-_MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) = name == "taken" ? ["circuit"] : String[]
+_MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
+  lowercase(name) == "taken" ? ["circuit"] : name == "held_here" ? ["driver"] : String[]
 
 # What: a declared CheckConstraint on MySQL, from its statements to the plan for each change to it, and
 # the reader that tells it from PormG's own column CHECK.
@@ -512,13 +513,22 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) = name == "ta
                                    PormG.Configuration.Settings(connections = _mm_my); interactive = false)[:driver]
   @test adopted == Dict("Adopt check constraint: code_nonempty" =>
                         "ALTER TABLE `driver` DROP CHECK `code_nonempty`, ADD CONSTRAINT `code_nonempty` $(clause("code <> ''"));")
-  # A name another table holds, or the one MySQL gives PormG's own column CHECK, is refused before the plan.
-  for (name, why) in ("taken" => "already the name of a CHECK on table 'circuit'", "driver_chk_3" => "the name MySQL gives")
+  # A name another table holds (in any case), one this table holds that the plan does not drop, or one of
+  # the `<table>_chk_` prefix MySQL names and renames with the table, is refused before the plan.
+  for (name, why) in ("Taken" => "already the name of a CHECK on table 'circuit'",
+                      "held_here" => "which this plan does not drop first",
+                      "driver_chk_3" => "starts with 'driver_chk_'", "Driver_Chk_pos" => "starts with 'driver_chk_'")
     e = _mm_err(() -> _mm_plan(_mm_my, _mm_driver(), checked("code <> ''", name)))
     @test e isa PormG.InvalidMigrationError && occursin(why, sprint(showerror, e)) &&
-          occursin("unique per schema on MySQL", sprint(showerror, e))
+          occursin("unique per database on MySQL", sprint(showerror, e))
   end
-  @test haskey(_mm_plan(_mm_my, _mm_driver(), checked("code <> ''", "driver_chk_x"))[:driver], "Create check constraint: driver_chk_x")
+  @test haskey(_mm_plan(_mm_my, _mm_driver(), checked("code <> ''", "drv_chk_x"))[:driver], "Create check constraint: drv_chk_x")
+  # Two models declaring one name: neither table holds it yet, so only the models can tell.
+  two = checked("code <> ''", "code_set") * "\nCircuit = Models.Model(\"circuit\", circuitid = Models.IDField(), " *
+        "name = Models.CharField(max_length = 9); constraints = [Models.CheckConstraint(condition = \"name <> ''\", name = \"Code_Set\")])"
+  e = _mm_err(() -> _mm_plan(_mm_my, _mm_driver(), two))
+  @test e isa PormG.InvalidMigrationError && occursin("declared on models", sprint(showerror, e))
+  @test _MM._refuse_shared_check_names(MmMockPostgres(), _mm_schema(two)) === nothing
 
   # The reader: a marked clause is the declared CHECK, its condition unescaped — even one of PormG's own
   # column shape — and an unmarked one of that shape is still the column's.
@@ -731,6 +741,11 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
                         _MM.column_delta(Models.IntegerField(null = true),
                                          _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` INT GENERATED ALWAYS AS ((`a` * 2)) VIRTUAL NULL;"
+  # It holds no default, so a declared one is refused: the MODIFY could not apply it, and every plan would ask again.
+  e = _mm_err(() -> _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true, default = 0),
+                                    _MM.column_delta(Models.IntegerField(null = true, default = 0),
+                                                     _MM.column_spec(Models.IntegerField(null = true), gen; name = "c"), gen; name = "c")))
+  @test e isa PormG.InvalidMigrationError && occursin("generated column made by hand, which holds no default", sprint(showerror, e))
   # A column with nothing else, as before.
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==

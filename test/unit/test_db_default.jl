@@ -304,6 +304,7 @@ end
     # A string literal reads back from MySQL as the value it is (#1033), so it is refused there too.
     @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "'x'",))
     @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "_utf8mb4'x'",))
+    @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "'a\\\\b'",))
     @test Models.IntegerField(db_default = (mysql = "1 + 1",)).db_default == (mysql = "1 + 1",)
     # A number is stored as an expression there (`DEFAULT (0)` reads back `DEFAULT_GENERATED`), unlike SQLite.
     @test Models.IntegerField(db_default = (mysql = "0",)).db_default == (mysql = "0",)

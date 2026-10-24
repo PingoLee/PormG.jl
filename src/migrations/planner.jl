@@ -1193,21 +1193,51 @@ end
 # carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
 # holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
 # this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
-# MySQL (#1130 phase 4c): a CHECK name is unique per SCHEMA (error 3822, measured), not per table, and
-# is not shared with foreign-key names. So the name is taken when any table of the schema holds a CHECK
-# of that name — a CHECK of this table the plan drops first never reaches here (`_plan_check_adds!`
-# skips the names in `plan.drops`) — or when it has the shape MySQL gives PormG's own column CHECKs on
-# this table, `<table>_chk_<n>`, which the next column CHECK MySQL names could take.
+# MySQL (#1130 phase 4c): a CHECK name is unique per SCHEMA (error 3822, measured; compared without
+# case), not per table, and is not shared with foreign-key names. So the name is taken when any table of
+# the schema holds a CHECK of that name — a CHECK of this table the plan drops first never reaches here
+# (`_plan_check_adds!` skips the names in `plan.drops`; one the column pass drops, a hand-written CHECK of
+# PormG's own column shape, still holds it, and the message says so). A CHECK the plan drops from another
+# table still holds it too, so moving a name between tables takes two migrations. A name starting with
+# `<table>_chk_` is refused whatever its holder: MySQL names PormG's own column CHECKs so, and renames every
+# CHECK of that prefix with the table (measured), which would leave the declaration under its old name.
 function _refuse_check_name_clash(conn::PormGMySQL, model::PormGModel, table::AbstractString,
                                   catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
-  suffix = chopprefix(String(name), "$(table)_chk_")
-  own = suffix != name && !isempty(suffix) && all(isdigit, suffix)
+  lname = lowercase(String(name))
+  prefixed(t) = Base.startswith(lname, lowercase("$(t)_chk_"))
+  own = prefixed(table) || (catalog_table !== nothing && prefixed(catalog_table))
   holders = own ? String[] : _mysql_check_name_holders(conn, name)
-  (own || !isempty(holders)) && throw(InvalidMigrationError(
-    "CheckConstraint name '$(name)' on table '$(table)' is " *
-    (own ? "the name MySQL gives the CHECKs PormG writes for a positive-integer or bounded binary column of that table"
-         : "already the name of a CHECK on table '$(first(holders))'") *
-    ". CHECK names are unique per schema on MySQL; give the CheckConstraint another name."))
+  (own || !isempty(holders)) || return nothing
+  here = catalog_table !== nothing && any(h -> lowercase(h) == lowercase(string(catalog_table)), holders)
+  why = own ? "starts with '$(table)_chk_', the prefix MySQL names the CHECKs of that table with, and renames with it" :
+        here ? "already the name of a CHECK on that table which this plan does not drop first: one written " *
+               "by hand in the shape of the CHECK PormG writes for a positive-integer or bounded binary column, " *
+               "which PormG reads as the column's. Drop it by hand, or" :
+        "already the name of a CHECK on table '$(first(holders))'"
+  throw(InvalidMigrationError(
+    "CheckConstraint name '$(name)' on table '$(table)' $(why)" * (here ? "" : ";") *
+    " give the CheckConstraint another name. CHECK names are unique per database on MySQL."))
+end
+
+"""
+    _refuse_shared_check_names(conn, current_schema) -> Nothing
+
+MySQL (#1130 phase 4c): two models declaring one CHECK name. A name is unique per database there, so the
+second `ADD CONSTRAINT` would fail at `migrate` (3822), after the statements before it committed; the
+catalog lookup in `_refuse_check_name_clash` cannot see it, since neither table holds the name yet.
+PostgreSQL and SQLite name a CHECK per table.
+"""
+_refuse_shared_check_names(::Union{PormGPostgres, PormGSQLite}, current_schema)::Nothing = nothing
+function _refuse_shared_check_names(::PormGMySQL, current_schema)::Nothing
+  seen = Dict{String, Symbol}()
+  for (model_name, entry) in current_schema
+    for c in Models.declared_check_constraints(entry[:model])
+      other = get!(seen, lowercase(c.name), model_name)
+      other == model_name || throw(InvalidMigrationError(
+        "CheckConstraint name '$(c.name)' is declared on models '$(other)' and '$(model_name)'. CHECK names " *
+        "are unique per database on MySQL; give one of them another name."))
+    end
+  end
   return nothing
 end
 
@@ -3371,6 +3401,9 @@ _refuse_dropped_table_dependents(conn, dropped_tables; read_tables = Set{String}
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, all_live, dropped_tables, table_renames)
+
+# MySQL: nor a CHECK name another model declares (unique per database there).
+_refuse_shared_check_names(conn, current_schema)
 
 # #729: every rename and drop is known now, so each SQLite rebuild can be rendered with its indexes,
 # triggers and views — and refused here, before a plan is written, where one of them would go stale.

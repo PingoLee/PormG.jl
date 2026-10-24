@@ -4903,9 +4903,9 @@ function _mysql_index_members(columns::Vector{String}, descending::AbstractVecto
                               expressions::AbstractVector)::String
   isempty(expressions) && return join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
   members = String[]
-  for e in _index_text_members(columns, Bool[], Union{String, Nothing}[], expressions)
-    m = match(r"^(.*?)\s+(ASC|DESC)$"is, strip(e))
-    push!(members, m === nothing ? "($(strip(e)))" : "($(m[1])) $(uppercase(m[2]))")
+  for member in _index_text_members(columns, Bool[], Union{String, Nothing}[], expressions)
+    direction = match(r"^(.*?)\s+(ASC|DESC)$"is, strip(member))
+    push!(members, direction === nothing ? "($(strip(member)))" : "($(direction[1])) $(uppercase(direction[2]))")
   end
   return join(members, ", ")
 end
@@ -4979,8 +4979,13 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
     keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
                    delta.new_spec.default isa NoDefault
     # A generated column made by hand reads as a plain one; the MODIFY restates its generation
-    # (`_mysql_column_body`), which a MODIFY that left it out would end.
+    # (`_mysql_column_body`), which a MODIFY that left it out would end. Such a column holds no default,
+    # so a declared one could never be applied, and every plan would ask for it again.
     live = _column_attributes(conn, catalog, live_column)
+    live !== nothing && live.generation !== nothing && !(delta.new_spec.default isa NoDefault) &&
+      throw(InvalidMigrationError(
+        "Column \"$(live_column)\" of table \"$(catalog)\" is a generated column made by hand, which holds no " *
+        "default: remove the default from its declaration, or drop the column's generation by hand."))
     push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn; live = live, keep_default = keep_default))
   end
   drops_key && push!(clauses, "DROP PRIMARY KEY")

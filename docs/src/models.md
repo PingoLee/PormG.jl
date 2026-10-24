@@ -583,8 +583,9 @@ A new table gets its CHECKs with its `CREATE TABLE` on SQLite, and right after i
 MySQL. MySQL keeps no comment on a constraint and strips an SQL comment from its clause, so the
 marker there is a term of the condition that is always true: a row the condition rejects is still
 rejected, and one it leaves `NULL` still passes. A CHECK name is unique per database on MySQL, so
-`makemigrations` refuses one another table holds, or one of the `<table>_chk_<n>` shape MySQL gives
-PormG's own column CHECKs.
+`makemigrations` refuses one another table holds or another model declares, and one starting with
+`<table>_chk_`, the prefix MySQL names PormG's own column CHECKs with and renames with the table.
+Moving a name from one table to another takes two migrations there.
 
 - **Removing or replacing a CHECK is destructive**, like any `DROP` — and on SQLite so is every
   change, because it is a table rebuild. Pass `migrate(destructive = true)` after reviewing `dry_run()`.

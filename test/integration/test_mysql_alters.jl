@@ -369,17 +369,25 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             r = column_row("m4b_car", "tag")
             @test ismissing(r.d) && (r.c, r.k) == ("set by hand", "utf8mb4_0900_ai_ci") && converged()
-            # A generated column made by hand reads as a plain one; changing it is refused, since a MODIFY
-            # would end its generation.
-            exec("ALTER TABLE `m4b_car` ADD COLUMN `twice` BIGINT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`)) STORED")
-            car2(twice) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), " *
-                          "tag = Models.CharField(max_length = 60, null = true), twice = $(twice))"
-            write_models(car2("Models.BigIntegerField(null = true)"))
+            # A generated column made by hand reads as a plain one; a MODIFY that changes it restates its
+            # generation, which a MODIFY that left it out would end (STORED) or fail on (VIRTUAL, 3106).
+            exec("UPDATE `m4b_car` SET `tag` = 'ab'")
+            exec("ALTER TABLE `m4b_car` ADD COLUMN `twice` BIGINT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`)) STORED, " *
+                 "ADD COLUMN `half` INT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`) DIV 2) VIRTUAL")
+            car2(twice, half) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), " *
+                                "tag = Models.CharField(max_length = 60, null = true), twice = $(twice), half = $(half))"
+            write_models(car2("Models.BigIntegerField(null = true)", "Models.IntegerField(null = true)"))
             @test converged()
-            write_models(car2("Models.BigIntegerField()"))
-            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"twice\"", sprint(showerror, e))
-            exec("ALTER TABLE `m4b_car` DROP COLUMN `twice`")
+            apply!(car2("Models.IntegerField(null = true)", "Models.BigIntegerField(null = true)"))
+            gen = raw("SELECT COLUMN_NAME AS c, COLUMN_TYPE AS t, EXTRA AS e FROM information_schema.COLUMNS " *
+                      "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'm4b_car' AND COLUMN_NAME IN ('twice', 'half') ORDER BY 1")
+            @test [(String(r.c), String(r.t), String(r.e)) for r in eachrow(gen)] ==
+                  [("half", "bigint", "VIRTUAL GENERATED"), ("twice", "int", "STORED GENERATED")]
+            exec("INSERT INTO `m4b_car` (`tag`) VALUES ('abcd')")
+            row = raw("SELECT `twice`, `half` FROM `m4b_car` WHERE `tag` = 'abcd'")[1, :]
+            @test (row.twice, row.half) == (4, 2)
+            @test converged()
+            exec("ALTER TABLE `m4b_car` DROP COLUMN `twice`, DROP COLUMN `half`")
         end
 
         # What: an alter plan stopped part-way — its `ADD CONSTRAINT` refused because another table holds the
@@ -410,6 +418,138 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test occursin("ADD CONSTRAINT", rest) && !occursin("ADD COLUMN", rest)
             @test Mig.migrate(folder; interactive = false).outcome === :applied   # one statement: no atomic needed
             @test live("m4b_seat2").columns["circuitid"].reference !== nothing && converged()
+        end
+
+        # What: a declared CheckConstraint on a table that exists (#1130 phase 4c): added over rows it rejects
+        # and over rows it accepts, read back as declared, renamed, given a new condition, adopted from one
+        # written by hand, dropped with its declaration; a CHECK name another table holds is refused.
+        # SQL: the pre-check `SELECT COUNT(*) AS n FROM `m4b_grid` WHERE NOT (grid >= 0)`, then
+        #      `ADD CONSTRAINT `m4b_grid_nonneg` CHECK ((grid >= 0) AND 'pormg:check:<h>' IS NOT NULL)`; a rename
+        #      `DROP CHECK `m4b_grid_nonneg`, ADD CONSTRAINT `m4b_grid_min` …`; `DROP CHECK `m4b_grid_min``.
+        # Why: MySQL keeps no comment on a CHECK and strips one from its clause, so PormG's marker rides in the
+        # clause. Read back, the CHECK must be the declared one (not the positive-integer column CHECK its
+        # condition looks like), converge, follow a rename, and go when its declaration goes.
+        @testset "a declared CheckConstraint" begin
+            grid(cs = "") = "Grid = Models.Model(\"m4b_grid\", gridid = Models.IDField(), grid = Models.IntegerField(null = true)" *
+                            (isempty(cs) ? ")" : "; constraints = [$(cs)])")
+            ck(name, cond = "grid >= 0") = "Models.CheckConstraint(condition = \"$(cond)\", name = \"$(name)\")"
+            apply!(grid())
+            exec("INSERT INTO `m4b_grid` (`grid`) VALUES (-1), (3), (NULL)")
+            @test refused_by_precheck(grid(ck("m4b_grid_nonneg"))) == [(:add_check, 1)]
+            @test isempty(live("m4b_grid").checks)
+            exec("DELETE FROM `m4b_grid` WHERE `grid` < 0")
+            apply!(grid(ck("m4b_grid_nonneg")))
+            t = live("m4b_grid")
+            @test [(c.name, c.marker) for c in t.checks] == [("m4b_grid_nonneg", PormG.check_marker("grid >= 0"))]
+            @test isempty(t.columns["grid"].checks) && converged()
+            @test (try; exec("INSERT INTO `m4b_grid` (`grid`) VALUES (-5)"); false; catch; true; end)
+            plan = apply!(grid(ck("m4b_grid_min")))
+            @test occursin("DROP CHECK `m4b_grid_nonneg`, ADD CONSTRAINT `m4b_grid_min`", plan)
+            @test [c.name for c in live("m4b_grid").checks] == ["m4b_grid_min"] && converged()
+            apply!(grid(ck("m4b_grid_min", "grid >= 1")))
+            @test only(live("m4b_grid").checks).marker == PormG.check_marker("grid >= 1") && converged()
+            # Written by hand under the declared name: no marker, so it is re-created with one. (A condition
+            # of its own, or the plan would repeat the last one's text, which `migrate` takes as applied.)
+            exec("ALTER TABLE `m4b_grid` DROP CHECK `m4b_grid_min`, ADD CONSTRAINT `m4b_grid_min` CHECK (grid >= 2)")
+            @test only(live("m4b_grid").checks).marker === nothing
+            apply!(grid(ck("m4b_grid_min", "grid >= 2")))
+            @test only(live("m4b_grid").checks).marker == PormG.check_marker("grid >= 2") && converged()
+            plan = apply!(grid())
+            @test occursin("DROP CHECK `m4b_grid_min`", plan) && isempty(live("m4b_grid").checks) && converged()
+            apply!(grid(ck("m4b_grid_min")))
+            lap3 = "\nLap = Models.Model(\"m4b_lap3\", lapid = Models.IDField(), " *
+                   "lap = Models.IntegerField(); constraints = [$(ck("m4b_grid_min", "lap >= 0"))])"
+            # Two models declaring it; and a name moved to a new table in the plan that drops it from its own,
+            # which MySQL still holds when the new table's CHECK is added (two migrations, then).
+            for (src, why) in (grid(ck("m4b_grid_min")) * lap3 => "declared on models",
+                               grid() * lap3 => "already the name of a CHECK on table 'm4b_grid'")
+                write_models(src)
+                e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+                @test e isa PormG.InvalidMigrationError && occursin(why, sprint(showerror, e))
+            end
+            # A CHECK MySQL named itself (`<table>_chk_1`, the name `inspectdb` declares it under), adopted,
+            # then dropped by the plan that renames its table: the RENAME TABLE runs first and renames the
+            # CHECK with it, so the drop names it as it is then.
+            exec("CREATE TABLE `m4b_tr` (`trid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, `lap` INT NULL, " *
+                 "CHECK (`lap` < 100)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
+            tr(name, cs) = "Tr = Models.Model(\"$(name)\", trid = Models.IDField(), lap = Models.IntegerField(null = true)$(cs))"
+            apply!(tr("m4b_tr", "; constraints = [$(ck("m4b_tr_chk_1", "lap < 100"))]"))
+            @test only(live("m4b_tr").checks).marker == PormG.check_marker("lap < 100") && converged()
+            plan = apply!(tr("m4b_tr2", ""); renames = ["m4b_tr" => "m4b_tr2"])
+            @test occursin("RENAME TABLE `m4b_tr` TO `m4b_tr2`", plan) && occursin("DROP CHECK `m4b_tr2_chk_1`", plan)
+            @test isempty(live("m4b_tr2").checks) && converged()
+        end
+
+        # What: a functional index and a functional UniqueConstraint (#1130 phase 4c): created, converged,
+        # re-created for a new expression, dropped; one made by hand under the declared name is refused.
+        # SQL: `CREATE INDEX `m4b_fn_idx` ON `m4b_fn` ((lower(name))) COMMENT 'pormg:index:<h>'`, then
+        #      `DROP INDEX `m4b_fn_idx` ON `m4b_fn`` and the new create.
+        # Why: MySQL re-prints the expression (`lower(`name`)`), so the hashed marker in the COMMENT is what
+        # makes the index converge, and what tells a changed expression or a hand-made index from PormG's.
+        @testset "a functional index" begin
+            fn(ix) = "Fn = Models.Model(\"m4b_fn\", fnid = Models.IDField(), name = Models.CharField(max_length = 40), " *
+                     "code = Models.CharField(max_length = 8)$(ix))"
+            index(e) = "; indexes = [Models.Index(expressions = (\"$(e)\",), name = \"m4b_fn_idx\")]"
+            apply!(fn(""))
+            exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'SEN'), ('Prost', 'PRO')")
+            apply!(fn(index("lower(name)")))
+            c = only(live("m4b_fn").composites)
+            @test (c.name, c.expressions, c.marker) == ("m4b_fn_idx", ["lower(`name`)"], PormG.index_text_marker(["lower(name)"], nothing))
+            @test converged()
+            plan = apply!(fn(index("upper(name) DESC")))
+            @test occursin("DROP INDEX `m4b_fn_idx` ON `m4b_fn`", plan) && occursin("((upper(name)) DESC)", plan)
+            @test only(live("m4b_fn").composites).expressions == ["upper(`name`) DESC"] && converged()
+            unique = "; constraints = [Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"m4b_fn_code_uniq\")]"
+            apply!(fn(unique))
+            c = only(live("m4b_fn").composites)
+            @test (c.name, c.unique) == ("m4b_fn_code_uniq", true) && converged()
+            @test (try; exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'sen')"); false; catch; true; end)
+            apply!(fn(""))
+            @test isempty(live("m4b_fn").composites) && converged()
+            exec("CREATE INDEX `m4b_fn_idx` ON `m4b_fn` ((lower(`name`)))")
+            write_models(fn(index("lower(name)")))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("m4b_fn_idx", sprint(showerror, e))
+            exec("DROP INDEX `m4b_fn_idx` ON `m4b_fn`")
+        end
+
+        # What: a per-engine db_default on MySQL (#1130 phase 4c): created with its stamp, converged, changed
+        # (a DBA's comment kept), changed by hand and seen, added with a new column, non-ASCII text included.
+        # SQL: `CREATE TABLE … `label` VARCHAR(40) NOT NULL DEFAULT (lower('AbC'))`, then the stamp:
+        #      `SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `m4b_tag` MODIFY COLUMN …', QUOTE(…)) …);
+        #      PREPARE pormg_stamp FROM @pormg_stamp; EXECUTE pormg_stamp; DEALLOCATE PREPARE pormg_stamp;`.
+        # Why: MySQL re-prints the expression, so only the marker's second hash, computed by the server from
+        # the text it printed, makes the column converge, and tells a hand-made SET DEFAULT (which keeps the
+        # comment) from PormG's own.
+        @testset "a per-engine db_default" begin
+            tag(d, extra = "") = "Tag = Models.Model(\"m4b_tag\", tagid = Models.IDField(), " *
+                                 "label = Models.CharField(max_length = 40$(d))$(extra))"
+            ex(e) = ", db_default = (postgres = \"$(e)\", mysql = \"$(e)\")"
+            marked(c) = occursin(r"pormg:default:[0-9a-f]{16}:[0-9a-f]{16}$", c)
+            plan = apply!(tag(ex("lower('AbC')")))
+            @test occursin("PREPARE pormg_stamp FROM @pormg_stamp;", plan)
+            r = column_row("m4b_tag", "label")
+            @test r.d == "lower(_utf8mb4\\'AbC\\')" && marked(r.c) && converged()
+            exec("INSERT INTO `m4b_tag` () VALUES ()")
+            @test raw("SELECT `label` FROM `m4b_tag`")[1, :label] == "abc"
+            # A note a DBA adds beside the marker is kept through a changed default.
+            exec("ALTER TABLE `m4b_tag` MODIFY COLUMN `label` VARCHAR(40) NOT NULL DEFAULT (lower('AbC')) COMMENT 'note $(r.c)'")
+            @test converged()
+            apply!(tag(ex("upper('ção')")))
+            r = column_row("m4b_tag", "label")
+            @test occursin("upper(", r.d) && Base.startswith(r.c, "note pormg:default:") && marked(r.c) && converged()
+            # Changed by hand: the comment stays, the second hash no longer matches, and the plan re-applies it.
+            exec("ALTER TABLE `m4b_tag` ALTER COLUMN `label` SET DEFAULT (concat('a', 'b'))")
+            @test !converged()
+            Mig.migrate(folder; interactive = false, atomic = false)
+            @test occursin("upper(", column_row("m4b_tag", "label").d) && converged()
+            # A new column with one: ADD COLUMN, then its stamp. (Deterministic: a server logging statements
+            # refuses a `uuid()` default added over rows, 1674.)
+            code = ", code = Models.CharField(max_length = 36, db_default = (mysql = \"concat('M', 'Y')\",))"
+            plan = apply!(tag(ex("upper('ção')"), code))
+            @test occursin("ADD COLUMN `code` VARCHAR(36) NOT NULL DEFAULT (concat('M', 'Y'))", plan)
+            @test raw("SELECT `code` FROM `m4b_tag`")[1, :code] == "MY"
+            @test marked(column_row("m4b_tag", "code").c) && converged()
         end
 
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
@@ -445,6 +585,12 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test Mig.ensure_table!(lap, folder) === :created
             @test Mig.ensure_table!(lap, folder) === :exists
             @test live("m4b_lap").columns["circuitid"].reference !== nothing
+            # An expression default's stamp keeps a session variable between its statements: they run on
+            # one connection.
+            stamped = PormG.Models.Model("m4b_lap4", lapid = PormG.Models.IDField(),
+                                         label = PormG.Models.CharField(max_length = 9, db_default = (mysql = "lower('X')",)))
+            @test Mig.ensure_table!(stamped, folder) === :created
+            @test occursin(r"^pormg:default:[0-9a-f]{16}:[0-9a-f]{16}$", column_row("m4b_lap4", "label").c)
             # A key to a table that does not exist fails after the CREATE TABLE: the table goes again.
             nowhere = PormG.Models.Model("m4b_nowhere", nid = PormG.Models.IDField())
             ghost = PormG.Models.Model("m4b_lap2", lapid = PormG.Models.IDField(),

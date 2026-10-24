@@ -1139,10 +1139,19 @@ end
 _check_step_label(verb::AbstractString, name::AbstractString)::String =
   "$(verb) check constraint: $(replace(name, "Rename field" => "Rename_field"))"
 
+# A live table CHECK's name when the plan's statement over it runs. A `RENAME TABLE` runs first
+# (`_order_statements`), and MySQL renames every CHECK named `<old>_chk_…` with the table — the name it
+# gives an unnamed one, which `inspectdb` declares (`Dialect._mysql_check_after_rename`, measured).
+# PostgreSQL and SQLite keep it.
+_check_name_at_run(::Union{PormGPostgres, PormGSQLite}, name::AbstractString, catalog, table)::String = String(name)
+_check_name_at_run(::PormGMySQL, name::AbstractString, catalog, table)::String =
+  Dialect._mysql_check_after_rename(name, string(catalog), string(table))
+
 # First half — see the section note. SQLite: register the rebuild. PostgreSQL: the drops.
 function _plan_check_drops!(conn::_SQLEngine,
                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
-                            model_name::Symbol, model::PormGModel, plan::_CheckPlan)::Nothing
+                            model_name::Symbol, model::PormGModel, plan::_CheckPlan;
+                            catalog_table::Symbol = model_name)::Nothing
   _check_plan_isempty(plan) && return nothing
   if _rebuilds_table(conn)
     key = "Alter table: $model_name"
@@ -1151,11 +1160,19 @@ function _plan_check_drops!(conn::_SQLEngine,
   else
     for name in plan.drops
       _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Remove", name),
-                                           Dialect.drop_check_constraint(conn, string(model_name), name))
+        Dialect.drop_check_constraint(conn, string(model_name), _check_name_at_run(conn, name, catalog_table, model_name)))
     end
   end
   return nothing
 end
+
+# The statement that adopts a hand-written CHECK of the declared name and condition (`plan.stamps`): its
+# marker as a comment on PostgreSQL; MySQL has none on a constraint, so it is re-created, marked, from the
+# name it has when the statement runs.
+_check_adoption_sql(conn::PormGPostgres, table::AbstractString, live_name::AbstractString, c, existing)::String =
+  Dialect.comment_check_constraint(conn, String(table), c; keep = existing)
+_check_adoption_sql(conn::PormGMySQL, table::AbstractString, live_name::AbstractString, c, existing)::String =
+  Dialect.rename_check_constraint(conn, String(table), String(live_name), c)
 
 # Second half, PostgreSQL only — SQLite's rebuild already carries every declared CHECK. Renames, the
 # adoption stamps, then adds; a name the table already holds for another constraint is refused before
@@ -1166,17 +1183,23 @@ function _plan_check_adds!(conn::_SQLEngine,
                            catalog_table::Union{Symbol, Nothing} = model_name)::Nothing
   _rebuilds_table(conn) && return nothing
   table = string(model_name)
+  at_run(name) = _check_name_at_run(conn, name, something(catalog_table, model_name), model_name)
+  # The names gone by the time each statement runs: the drops ran before every add; a rename's statement
+  # drops its old name just before it adds the new one, so it frees that name and those of the renames
+  # before it, and the adds after every rename.
+  freed = Set{String}(lowercase(n) for n in plan.drops)
   for (old, c) in plan.renames
-    _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
+    push!(freed, lowercase(old))
+    _refuse_check_name_clash(conn, model, table, catalog_table, c.name; freed = freed)
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Rename", old),
-                                         Dialect.rename_constraint(conn, table, old, c.name))
+                                         Dialect.rename_check_constraint(conn, table, at_run(old), c))
   end
   for (c, existing) in plan.stamps
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Adopt", c.name),
-                                         Dialect.comment_check_constraint(conn, table, c; keep = existing))
+                                         _check_adoption_sql(conn, table, at_run(c.name), c, existing))
   end
   for c in plan.adds
-    c.name in plan.drops || _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
+    c.name in plan.drops || _refuse_check_name_clash(conn, model, table, catalog_table, c.name; freed = freed)
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Create", c.name),
                                          Dialect.add_check_constraint(conn, table, c))
   end
@@ -1193,14 +1216,64 @@ end
 # carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
 # holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
 # this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
-# MySQL: a declared CheckConstraint is phase 4c's (`Dialect.create_table(::PormGMySQL, model)` refuses it on
-# a new table); this is the same refusal for one added to a table that exists.
-_refuse_check_name_clash(::PormGMySQL, model::PormGModel, table::AbstractString,
-                         catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing =
-  throw(Dialect._mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
+# MySQL (#1130 phase 4c): a CHECK name is unique per SCHEMA (error 3822, measured; compared without
+# case), not per table, and is not shared with foreign-key names. So the name is taken when any table of
+# the schema holds a CHECK of that name — a CHECK of this table the plan drops first never reaches here
+# (`_plan_check_adds!` skips the names in `plan.drops`; one the column pass drops, a hand-written CHECK of
+# PormG's own column shape, still holds it, and the message says so). A CHECK the plan drops from another
+# table still holds it too, so moving a name between tables takes two migrations. A name starting with
+# `<table>_chk_` is refused whatever its holder: MySQL names PormG's own column CHECKs so, and renames every
+# CHECK of that prefix with the table (measured), which would leave the declaration under its old name.
+#
+# `freed` is the names this plan drops or renames away from this table, lower-cased: MySQL compares names
+# without case, so a declaration renamed only in case (`code_set` → `Code_Set`) still finds its own CHECK
+# holding the name, which the same plan takes away first.
+function _refuse_check_name_clash(conn::PormGMySQL, model::PormGModel, table::AbstractString,
+                                  catalog_table::Union{Symbol, Nothing}, name::AbstractString;
+                                  freed::Set{String} = Set{String}())::Nothing
+  lname = lowercase(String(name))
+  prefixed(t) = Base.startswith(lname, lowercase("$(t)_chk_"))
+  prefix = prefixed(table) ? table : (catalog_table !== nothing && prefixed(catalog_table)) ? string(catalog_table) : nothing
+  own = prefix !== nothing
+  holders = own ? String[] : _mysql_check_name_holders(conn, name)
+  here = catalog_table !== nothing && any(h -> lowercase(h) == lowercase(string(catalog_table)), holders)
+  here && lname in freed && length(holders) == 1 && return nothing
+  (own || !isempty(holders)) || return nothing
+  why = own ? "starts with '$(prefix)_chk_', the prefix MySQL names the CHECKs of that table with, and renames with it" :
+        here ? "already the name of a CHECK on that table which this plan does not drop first: one written " *
+               "by hand in the shape of the CHECK PormG writes for a positive-integer or bounded binary column, " *
+               "which PormG reads as the column's. Drop it by hand, or" :
+        "already the name of a CHECK on table '$(first(holders))'"
+  throw(InvalidMigrationError(
+    "CheckConstraint name '$(name)' on table '$(table)' $(why)" * (here ? "" : ";") *
+    " give the CheckConstraint another name. CHECK names are unique per database on MySQL."))
+end
+
+"""
+    _refuse_shared_check_names(conn, current_schema) -> Nothing
+
+MySQL (#1130 phase 4c): two models declaring one CHECK name. A name is unique per database there, so the
+second `ADD CONSTRAINT` would fail at `migrate` (3822), after the statements before it committed; the
+catalog lookup in `_refuse_check_name_clash` cannot see it, since neither table holds the name yet.
+PostgreSQL and SQLite name a CHECK per table.
+"""
+_refuse_shared_check_names(::Union{PormGPostgres, PormGSQLite}, current_schema)::Nothing = nothing
+function _refuse_shared_check_names(::PormGMySQL, current_schema)::Nothing
+  seen = Dict{String, Symbol}()
+  for (model_name, entry) in current_schema
+    for c in Models.declared_check_constraints(entry[:model])
+      other = get!(seen, lowercase(c.name), model_name)
+      other == model_name || throw(InvalidMigrationError(
+        "CheckConstraint name '$(c.name)' is declared on models '$(other)' and '$(model_name)'. CHECK names " *
+        "are unique per database on MySQL; give one of them another name."))
+    end
+  end
+  return nothing
+end
 
 function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table::AbstractString,
-                                  catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
+                                  catalog_table::Union{Symbol, Nothing}, name::AbstractString;
+                                  freed::Set{String} = Set{String}())::Nothing   # `freed`: MySQL's
   own = Set{String}(["$(table)_pkey"])
   for (key, field) in model.fields
     Models.is_many_to_many_field(field) && continue
@@ -1749,7 +1822,8 @@ function _generated_recreates(conn::PormGPostgres, model::PormGModel, live::Live
   return out
 end
 _generated_recreates(::PormGSQLite, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
-# MySQL: a generated column is refused before any DDL (`Dialect.field_to_column`) until phase 4c.
+# MySQL: a generated declaration is refused before any DDL (`Dialect.field_to_column`, the capability
+# table), and a generated column made by hand is restated by the MODIFY that changes it.
 _generated_recreates(::PormGMySQL, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
 
 # Does an index, CHECK or generation expression's SQL text name `col`? The same token scan the
@@ -1879,7 +1953,8 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
 
   # #742: the table CHECKs, first half — BEFORE the column pass. See the note above `_CheckPlan`.
   check_plan = _diff_checks(current_schema[model_name][:model], live.checks)
-  _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
+  _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan;
+                     catalog_table = catalog_table)
 
   # #830: the columns this plan retypes. A CHECK over one cannot be counted before the plan runs —
   # its condition would be evaluated against the OLD type.
@@ -2113,7 +2188,7 @@ function _release_generated_first!(conn::PormGPostgres,
   return nothing
 end
 _release_generated_first!(::PormGSQLite, args...) = nothing
-_release_generated_first!(::PormGMySQL, args...) = nothing   # no generated column until phase 4c
+_release_generated_first!(::PormGMySQL, args...) = nothing   # no generated declaration renders on MySQL
 
 function _readd_generated_fields!(conn::_SQLEngine,
                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
@@ -3190,6 +3265,11 @@ schema_scope === nothing ||
 # the database enforces. See `_claim_composite_target!`.
 composite_targets = Dict{String, Tuple{String, String}}()
 
+# MySQL: no CHECK name two models declare (unique per database there). Before the empty-database return
+# below: a first plan is where two new tables are most likely to share one, and the catalog lookup of
+# `_refuse_check_name_clash` cannot see it.
+_refuse_shared_check_names(conn, current_schema)
+
 # an empty live side: every declared model is a new table. `all_live`, not `live`: a database holding
 # only unmanaged tables is not empty, and takes the full path below so the whole-plan checks run.
 if isempty(all_live)
@@ -3498,7 +3578,7 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
 end
 
 # MySQL (#1130): the SQLite method's shape, with the plan floor PostgreSQL checks. What MySQL cannot plan
-# yet (a declared CheckConstraint, a functional index, phase 4c) is refused where the planner reaches it.
+# (a partial index, an index method) is refused where the planner reaches it.
 function makemigrations(connection::PormGMySQL, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
                         renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
   Configuration._require_folder_backed(settings, "makemigrations")

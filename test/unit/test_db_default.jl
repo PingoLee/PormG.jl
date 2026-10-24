@@ -297,8 +297,18 @@ end
     # BOTH rendered into the column definition and filled in Julia on the insert path, so a field
     # carrying both would have its `db_default` exercised by no PormG-written INSERT.
     @test_throws PormG.FieldValidationError Models.IntegerField(default = 5, db_default = "CURRENT_DATE")
-    # An engine PormG does not have.
-    @test_throws PormG.FieldValidationError Models.TextField(db_default = (mysql = "now()",))
+    # An engine PormG does not have; `mysql` is one it has (#1130), appended to the canonical order.
+    @test_throws PormG.FieldValidationError Models.TextField(db_default = (oracle = "now()",))
+    @test Models.TextField(db_default = (mysql = "uuid()", postgres = "gen_random_uuid()")).db_default ==
+          (postgres = "gen_random_uuid()", mysql = "uuid()")
+    # A string literal reads back from MySQL as the value it is (#1033), so it is refused there too.
+    @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "'x'",))
+    @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "_utf8mb4'x'",))
+    @test_throws PormG.FieldValidationError Models.CharField(max_length = 9, db_default = (mysql = "'a\\\\b'",))
+    @test Models.IntegerField(db_default = (mysql = "1 + 1",)).db_default == (mysql = "1 + 1",)
+    # A number is stored as an expression there (`DEFAULT (0)` reads back `DEFAULT_GENERATED`), unlike SQLite.
+    @test Models.IntegerField(db_default = (mysql = "0",)).db_default == (mysql = "0",)
+    @test_throws PormG.FieldValidationError Models.IntegerField(db_default = (sqlite = "0",))
     # Statement-breaking text, through the guard above.
     @test_throws PormG.FieldValidationError Models.TextField(db_default = (postgres = "1; DROP TABLE t",))
     # Degenerate NamedTuples: empty, and all-nothing. The second is the interesting one — it is

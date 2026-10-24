@@ -172,10 +172,10 @@ end
 end
 
 # Synthetic catalog rows for the tables above, as MySQL 8.4 reports them after `migrate`.
-_mm_col(tbl, col, ctype, nullable, dflt, extra, key) =
-  (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key)
-_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing) =
-  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part)
+_mm_col(tbl, col, ctype, nullable, dflt, extra, key; comment = "") =
+  (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key, comment = comment)
+_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing) =
+  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr)
 
 # What: `_mysql_live_table` over the rows MySQL reports for the DDL above, against `column_spec`.
 # SQL: none.
@@ -273,19 +273,13 @@ end
   @test _MM._split_mysql_statements("SELECT 'it\\'s; ok', 'a''b;'") == ["SELECT 'it\\'s; ok', 'a''b;'"]
 end
 
-# What: the declarations phase 4a cannot render for MySQL, each refused before any DDL.
+# What: the declarations MySQL cannot take, each refused before any DDL.
 # SQL: none.
-# Why: each one would otherwise be written as another engine's DDL, or re-planned forever, because
-# MySQL re-prints an expression and has nowhere to keep the marker that says PormG owns it (phase 4c).
-@testset "#1268: what phase 4a does not render is refused, naming its phase" begin
-  refused(f) = (e = _mm_err(f); e isa PormG.UnsupportedConnectionError ? sprint(showerror, e) : e)
-  m = refused(() -> _MD.field_to_column("lowered", Models.CharField(db_default = (postgres = "lower('X')", sqlite = nothing)), _mm_my))
-  @test m isa String && occursin("phase 4c", m) && occursin("lowered", m)
-  @test occursin("phase 4c", refused(() -> _MD.create_index(_mm_my, "`i`", "`driver`", String[];
-                                                            expressions = ["lower(`forename`)"])))
-  checked = Models.Model("checked_driver", id = Models.IDField(), grid = Models.IntegerField();
-                         constraints = [Models.CheckConstraint(condition = "grid >= 0", name = "grid_nonneg")])
-  @test occursin("CheckConstraint", refused(() -> _MD.create_table(_mm_my, checked)))
+# Why: each one would otherwise be written as another engine's DDL: a per-engine `db_default` with no
+# MySQL entry (PormG never guesses a translation), a partial index, an index method.
+@testset "#1130: what MySQL cannot take is refused before any DDL" begin
+  e = _mm_err(() -> _MD.field_to_column("lowered", Models.CharField(db_default = (postgres = "lower('X')", sqlite = nothing)), _mm_my))
+  @test e isa PormG.BackendCapabilityError && occursin("this migration targets mysql", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; condition = "dob IS NOT NULL"))
   @test e isa PormG.BackendCapabilityError && occursin("MySQL", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; method = "gin"))
@@ -398,8 +392,7 @@ _mm_driver(extra = "", tail = "") =
 # What: the planner, run on a MySQL table that exists, for each kind of change to it.
 # SQL: each step's MySQL statement, as asserted per case.
 # Why: until phase 4b every one of these was refused (#1268); each must now reach MySQL's own renderer —
-# a dropped index naming its table, a removed column its `DROP COLUMN`, a renamed index `RENAME INDEX` —
-# and a declared CheckConstraint, phase 4c's, is still refused.
+# a dropped index naming its table, a removed column its `DROP COLUMN`, a renamed index `RENAME INDEX`.
 @testset "#1130: a change to an existing MySQL table plans MySQL's DDL" begin
   base = _mm_driver()
   indexed(n) = _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"$(n)\")]")
@@ -419,18 +412,6 @@ _mm_driver(extra = "", tail = "") =
     plan = _mm_plan(_mm_my, live_src, declared_src)
     @test (label, get(plan[:driver], step, nothing)) == (label, sql)
   end
-  e = _mm_err(() -> _mm_plan(_mm_my, base, _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]")))
-  @test e isa PormG.UnsupportedConnectionError && occursin("phase 4c", sprint(showerror, e))
-  # A declared CHECK the table already holds, as the MySQL reader reports it: with no ownership marker, so
-  # the planner would stamp one (`comment_check_constraint`), which is phase 4c's too.
-  checked = _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]")
-  live = [let t = _MM.live_table(e[:model], _mm_my)
-            _MM.LiveTable(t.name, t.columns, t.indexes, t.composites,
-                          [_MM.LiveCheck(c.name, c.sql, nothing) for c in t.checks])
-          end for (_, e) in _mm_schema(checked)]
-  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(checked), _mm_my,
-                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
-  @test e isa PormG.UnsupportedConnectionError && occursin("phase 4c", sprint(showerror, e))
   # A table that lost its index and its composite (a stopped plan) is completed, not refused.
   plan = _mm_plan(_mm_my, replace(base, ", db_index = true" => ""),
                   _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]"))
@@ -476,6 +457,199 @@ end
   @test occursin("FROM `driver` AS pormg_child WHERE pormg_child.`code` IS NOT NULL AND NOT EXISTS (SELECT 1 FROM `circuit`",
                  sqlof(:add_foreign_key; references = ("circuit", "circuitid")))
   @test _MM._pk_precheck_counts_nulls(_mm_my)
+  # A declared CHECK added to a table that exists: the rows its condition rejects (a NULL one passes).
+  @test sqlof(:add_check; condition = "code <> ''") == "SELECT COUNT(*) AS n FROM `driver` WHERE NOT (code <> '')"
+end
+
+# The tables of the schema holding a CHECK name, as each test describes them.
+_MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
+  lowercase(name) == "taken" ? ["circuit"] : name == "held_here" ? ["driver"] : String[]
+
+# What: a declared CheckConstraint on MySQL, from its statements to the plan for each change to it, and
+# the reader that tells it from PormG's own column CHECK.
+# SQL: `ALTER TABLE `driver` ADD CONSTRAINT `code_nonempty` CHECK ((code <> '') AND '<marker>' IS NOT NULL);`,
+# `ALTER TABLE `driver` DROP CHECK `code_nonempty`;`, and a rename or an adoption as one
+# `ALTER TABLE `driver` DROP CHECK `<old>`, ADD CONSTRAINT `<new>` CHECK (…);`.
+# Why: a MySQL constraint takes no comment and MySQL strips a comment from a stored clause, so the marker
+# that says PormG owns a CHECK rides in the clause as an always-true term. Without it a CHECK whose
+# declaration is removed would stay, rejecting rows, and a declared `grid >= 0` would read as a
+# positive-integer column. MySQL can neither rename nor comment a constraint, so a rename or an adoption
+# re-creates it in one statement, which applies whole. A CHECK name is unique per schema on MySQL.
+@testset "#1130: a declared CheckConstraint on MySQL carries its marker in the clause" begin
+  c = Models.CheckConstraint(condition = "code <> ''", name = "code_nonempty")
+  clause(cond) = "CHECK (($(cond)) AND '$(PormG.check_marker(cond))' IS NOT NULL)"
+  add = "ALTER TABLE `driver` ADD CONSTRAINT `code_nonempty` $(clause("code <> ''"));"
+  @test _MD.add_check_constraint(_mm_my, "driver", c) == add
+  @test _MD.drop_check_constraint(_mm_my, "driver", "code_nonempty") == "ALTER TABLE `driver` DROP CHECK `code_nonempty`;"
+  @test _MD.rename_check_constraint(_mm_my, "driver", "old_nonempty", c) ==
+        "ALTER TABLE `driver` DROP CHECK `old_nonempty`, ADD CONSTRAINT `code_nonempty` $(clause("code <> ''"));"
+  @test _MD.rename_check_constraint(MmMockPostgres(), "driver", "old_nonempty", c) ==
+        "ALTER TABLE \"driver\" RENAME CONSTRAINT \"old_nonempty\" TO \"code_nonempty\";"
+
+  checked(cond = "code <> ''", name = "code_nonempty") =
+    _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"$(cond)\", name = \"$(name)\")]")
+  # A new table: created without it, then the CHECK.
+  fresh = _MM.get_migration_plan(_MM.LiveTable[], _mm_schema(checked()), _mm_my,
+                                 PormG.Configuration.Settings(connections = _mm_my); interactive = false)[:driver]
+  @test fresh["Create check constraint: code_nonempty"] == add
+  @test !any(sql -> occursin("CHECK ((code", sql), (v for (k, v) in fresh if k != "Create check constraint: code_nonempty"))
+  # A table that exists: added, dropped, re-created for a new condition, renamed.
+  @test _mm_plan(_mm_my, _mm_driver(), checked())[:driver]["Create check constraint: code_nonempty"] == add
+  @test _mm_plan(_mm_my, checked(), _mm_driver())[:driver]["Remove check constraint: code_nonempty"] ==
+        "ALTER TABLE `driver` DROP CHECK `code_nonempty`;"
+  changed = _mm_plan(_mm_my, checked(), checked("code <> 'x'"))[:driver]
+  @test changed["Remove check constraint: code_nonempty"] == "ALTER TABLE `driver` DROP CHECK `code_nonempty`;" &&
+        changed["Create check constraint: code_nonempty"] == "ALTER TABLE `driver` ADD CONSTRAINT `code_nonempty` $(clause("code <> 'x'"));"
+  @test _mm_plan(_mm_my, checked("code <> ''", "a_nonempty"), checked("code <> ''", "b_nonempty"))[:driver] ==
+        Dict("Rename check constraint: a_nonempty" =>
+             "ALTER TABLE `driver` DROP CHECK `a_nonempty`, ADD CONSTRAINT `b_nonempty` $(clause("code <> ''"));")
+  # A hand-written CHECK of the declared name and condition, as the reader reports one: no marker, so it
+  # is adopted, re-created with it.
+  live = [let t = _MM.live_table(e[:model], _mm_my)
+            _MM.LiveTable(t.name, t.columns, t.indexes, t.composites,
+                          [_MM.LiveCheck(k.name, k.sql, nothing) for k in t.checks])
+          end for (_, e) in _mm_schema(checked())]
+  adopted = _MM.get_migration_plan(live, _mm_schema(checked()), _mm_my,
+                                   PormG.Configuration.Settings(connections = _mm_my); interactive = false)[:driver]
+  @test adopted == Dict("Adopt check constraint: code_nonempty" =>
+                        "ALTER TABLE `driver` DROP CHECK `code_nonempty`, ADD CONSTRAINT `code_nonempty` $(clause("code <> ''"));")
+  # A name another table holds (in any case), one this table holds that the plan does not drop, or one of
+  # the `<table>_chk_` prefix MySQL names and renames with the table, is refused before the plan.
+  for (name, why) in ("Taken" => "already the name of a CHECK on table 'circuit'",
+                      "held_here" => "which this plan does not drop first",
+                      "driver_chk_3" => "starts with 'driver_chk_'", "Driver_Chk_pos" => "starts with 'driver_chk_'")
+    e = _mm_err(() -> _mm_plan(_mm_my, _mm_driver(), checked("code <> ''", name)))
+    @test e isa PormG.InvalidMigrationError && occursin(why, sprint(showerror, e)) &&
+          occursin("unique per database on MySQL", sprint(showerror, e))
+  end
+  @test haskey(_mm_plan(_mm_my, _mm_driver(), checked("code <> ''", "drv_chk_x"))[:driver], "Create check constraint: drv_chk_x")
+  # Two models declaring one name: neither table holds it yet, so only the models can tell.
+  two = checked("code <> ''", "code_set") * "\nCircuit = Models.Model(\"circuit\", circuitid = Models.IDField(), " *
+        "name = Models.CharField(max_length = 9); constraints = [Models.CheckConstraint(condition = \"name <> ''\", name = \"Code_Set\")])"
+  e = _mm_err(() -> _mm_plan(_mm_my, _mm_driver(), two))
+  @test e isa PormG.InvalidMigrationError && occursin("declared on models", sprint(showerror, e))
+  # On an empty database too, where every table is new.
+  e = _mm_err(() -> _MM.get_migration_plan(_MM.LiveTable[], _mm_schema(two), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  @test e isa PormG.InvalidMigrationError && occursin("declared on models", sprint(showerror, e))
+  @test _MM._refuse_shared_check_names(MmMockPostgres(), _mm_schema(two)) === nothing
+  # Under a table rename, the old name's prefix is MySQL's too; and a CHECK this plan drops or renames away
+  # (a rename only in case) no longer holds its name.
+  drv = first(values(_mm_schema(_mm_driver())))[:model]
+  e = _mm_err(() -> _MM._refuse_check_name_clash(_mm_my, drv, "pilot", :driver, "driver_chk_pos"))
+  @test e isa PormG.InvalidMigrationError && occursin("starts with 'driver_chk_'", sprint(showerror, e))
+  @test _MM._refuse_check_name_clash(_mm_my, drv, "driver", :driver, "held_here"; freed = Set(["held_here"])) === nothing
+  @test _mm_err(() -> _MM._refuse_check_name_clash(_mm_my, drv, "driver", :driver, "held_here")) isa PormG.InvalidMigrationError
+
+  # After a `RENAME TABLE` earlier in the plan, a CHECK MySQL named after the old table has the new name.
+  @test _MM._check_name_at_run(_mm_my, "driver_chk_1", :driver, :pilot) == "pilot_chk_1"
+  @test _MM._check_name_at_run(_mm_my, "code_set", :driver, :pilot) == "code_set"
+  @test _MM._check_name_at_run(MmMockPostgres(), "driver_chk_1", :driver, :pilot) == "driver_chk_1"
+  cp = _MM._CheckPlan(["driver_chk_1"], Models.CheckConstraint[], Tuple{String, Models.CheckConstraint}[],
+                      Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  out = OrderedDict{Symbol, OrderedDict{String, String}}()
+  _MM._plan_check_drops!(_mm_my, out, :pilot, drv, cp; catalog_table = :driver)
+  @test out[:pilot]["Remove check constraint: driver_chk_1"] == "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`;"
+  ren = _MM._CheckPlan(String[], Models.CheckConstraint[], [("driver_chk_1", c)], Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  out = OrderedDict{Symbol, OrderedDict{String, String}}()
+  _MM._plan_check_adds!(_mm_my, out, :pilot, drv, ren; catalog_table = :driver)
+  @test Base.startswith(out[:pilot]["Rename check constraint: driver_chk_1"], "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`, ADD CONSTRAINT `code_nonempty`")
+  # A rename frees its old name in its own statement, so a rename that takes a name another rename frees
+  # only later in the plan is refused (MySQL would still hold it, 3822), and one after it is not.
+  takes(n) = Models.CheckConstraint(condition = "code <> ''", name = n)
+  renames(pairs) = _MM._CheckPlan(String[], Models.CheckConstraint[], pairs, Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  late = renames([("other", takes("held_here")), ("held_here", takes("elsewhere"))])
+  @test _mm_err(() -> _MM._plan_check_adds!(_mm_my, OrderedDict{Symbol, OrderedDict{String, String}}(), :driver, drv, late)) isa
+        PormG.InvalidMigrationError
+  early = renames([("held_here", takes("elsewhere")), ("other", takes("held_here"))])
+  @test _MM._plan_check_adds!(_mm_my, OrderedDict{Symbol, OrderedDict{String, String}}(), :driver, drv, early) === nothing
+
+  # The reader: a marked clause is the declared CHECK, its condition unescaped — even one of PormG's own
+  # column shape — and an unmarked one of that shape is still the column's.
+  dcols = [_mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI"),
+           _mm_col("driver", "grid", "int", "YES", missing, "", "")]
+  marked(cond, h) = "($(cond) and (_utf8mb4\\'$(PormG.check_marker(h))\\' is not null))"
+  rd = _MM._mysql_live_table(_mm_my, "driver", dcols, Any[], Any[],
+                               [(tbl = "driver", name = "grid_nonneg", clause = marked("(`grid` >= 0)", "grid >= 0")),
+                                (tbl = "driver", name = "code_nonempty", clause = marked("(`code` <> _utf8mb4\\'\\')", "code <> ''")),
+                                (tbl = "driver", name = "driver_chk_1", clause = "(`grid` >= 0)")])
+  @test sort!([(k.name, k.sql, k.marker) for k in rd.checks]) ==
+        [("code_nonempty", "(`code` <> _utf8mb4'')", PormG.check_marker("code <> ''")),
+         ("grid_nonneg", "(`grid` >= 0)", PormG.check_marker("grid >= 0"))]
+  @test rd.columns["grid"].checks == [PormG.NonNegativeCheck()]
+
+  # The pre-check's condition is taken from the plan's header only when a statement of the plan carries
+  # that CHECK, in MySQL's spelling too (#830).
+  dir = mktempdir()
+  plan = OrderedDict{Symbol, OrderedDict{String, String}}(:driver => OrderedDict("Create check constraint: code_nonempty" => add))
+  finding = _MM.LossyAlter(:add_check, "driver", "code_nonempty", "", ""; condition = "code <> ''")
+  PormG.Generator.generate_migration_plan("p.jl", plan, dir; lossy_alters = [finding])
+  @test _MM._plan_lossy_alters(joinpath(dir, "p.jl")) == [finding]
+  write(joinpath(dir, "q.jl"), replace(read(joinpath(dir, "p.jl"), String), "condition=code <> ''" => "condition=code <> '' OR true"))
+  e = _mm_err(() -> _MM._plan_lossy_alters(joinpath(dir, "q.jl")))
+  @test e isa PormG.InvalidMigrationError && occursin("names a condition no statement in the plan adds", sprint(showerror, e))
+end
+
+# What: a functional index and a functional UniqueConstraint on MySQL: the statement, the plan for each
+# change, and the reader.
+# SQL: `CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename)), (upper(code)) DESC) COMMENT
+#      'pormg:index:<hash>';` and `CREATE UNIQUE INDEX … ((lower(code))) COMMENT '…';`.
+# Why: MySQL takes a functional member only in parentheses of its own (1064 otherwise, measured), and
+# re-prints the expression (`lower(`forename`)`), so only the hashed marker of the declared text, kept as
+# the index's COMMENT, tells PormG's index from a hand-made one and a changed expression from the same one.
+# A marked index is the declaration's whatever its shape; an index mixing a column and an expression is
+# none PormG can declare, so it is not read.
+@testset "#1130: a functional index on MySQL is parenthesized and carries its hashed marker" begin
+  mk = PormG.index_text_marker(["lower(forename)", "upper(code) DESC"], nothing)
+  @test _MD.create_index(_mm_my, "`drv_lower_idx`", "`driver`", String[];
+                         expressions = ["lower(forename)", "upper(code) DESC"], marker = mk) ==
+        "CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename)), (upper(code)) DESC) COMMENT '$(mk)';"
+  umk = PormG.index_text_marker(["lower(code)"], nothing)
+  @test _MD.create_unique_index(_mm_my, "`drv_code_uniq`", "`driver`", String[]; expressions = ["lower(code)"], marker = umk) ==
+        "CREATE UNIQUE INDEX `drv_code_uniq` ON `driver` ((lower(code))) COMMENT '$(umk)';"
+  # A plain unique composite still carries no comment.
+  @test _MD.create_unique_index(_mm_my, "`drv_fc_uniq`", "`driver`", ["`forename`", "`code`"]) ==
+        "CREATE UNIQUE INDEX `drv_fc_uniq` ON `driver` (`forename`, `code`);"
+  @test _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", String[]; expressions = ["lower(a); DROP TABLE x"])) isa
+        PormG.InvalidValueError
+
+  idx(e) = _mm_driver("", "; indexes = [Models.Index(expressions = ($(join(("\"$(x)\"" for x in e), ", ")),), name = \"drv_lower_idx\")]")
+  uq = _mm_driver("", "; constraints = [Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"drv_code_uniq\")]")
+  @test _mm_plan(_mm_my, _mm_driver(), idx(["lower(forename)"]))[:driver]["Create index: drv_lower_idx"] ==
+        "CREATE INDEX `drv_lower_idx` ON `driver` ((lower(forename))) COMMENT '$(PormG.index_text_marker(["lower(forename)"], nothing))';"
+  @test _mm_plan(_mm_my, _mm_driver(), uq)[:driver]["Create unique constraint: drv_code_uniq"] ==
+        "CREATE UNIQUE INDEX `drv_code_uniq` ON `driver` ((lower(code))) COMMENT '$(umk)';"
+  @test isempty(_mm_plan(_mm_my, idx(["lower(forename)"]), idx(["lower(forename)"])))
+  changed = _mm_plan(_mm_my, idx(["lower(forename)"]), idx(["upper(forename)"]))[:driver]
+  @test changed["Remove composite index: drv_lower_idx"] == "DROP INDEX `drv_lower_idx` ON `driver`;" &&
+        haskey(changed, "Create index: drv_lower_idx")
+  # One made by hand under the declared name, as the reader reports it (MySQL's re-print, no marker): its
+  # name is taken, so the plan is refused before it runs.
+  live = [let t = _MM.live_table(e[:model], _mm_my)
+            _MM.LiveTable(t.name, t.columns, t.indexes,
+                          [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                             nothing, nothing; expressions = ["lower(`forename`)"]) for c in t.composites],
+                          t.checks)
+          end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
+  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  @test e isa PormG.InvalidMigrationError && occursin("drv_lower_idx", sprint(showerror, e))
+
+  # The reader: a functional index of expressions only, with its marker and directions; a column beside an
+  # expression is not read; a marked one-column index is the declaration's composite, not `db_index`'s.
+  dcols = [_mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI"),
+           _mm_col("driver", "forename", "varchar(100)", "NO", missing, "", ""),
+           _mm_col("driver", "code", "varchar(8)", "NO", missing, "", "")]
+  stats = [_mm_stat("driver", "drv_lower_idx", 1, missing; expr = "lower(`forename`)", comment = mk),
+           _mm_stat("driver", "drv_lower_idx", 1, missing, "D"; expr = "concat(`code`,_utf8mb4\\'x\\')", comment = mk),
+           _mm_stat("driver", "drv_mixed_idx", 1, missing; expr = "lower(`forename`)"),
+           _mm_stat("driver", "drv_mixed_idx", 1, "code"),
+           _mm_stat("driver", "drv_solo_idx", 1, "code"; comment = PormG.INDEX_MARKER)]
+  rd = _MM._mysql_live_table(_mm_my, "driver", dcols, stats, Any[], Any[])
+  @test isempty(rd.indexes)
+  @test sort!([(c.name, c.columns, c.expressions, c.marker) for c in rd.composites]) ==
+        [("drv_lower_idx", String[], ["lower(`forename`)", "concat(`code`,_utf8mb4'x') DESC"], mk),
+         ("drv_solo_idx", ["code"], String[], PormG.INDEX_MARKER)]
 end
 
 # What: the rows a column change would fail, counted in MySQL's own SQL, kind by kind.
@@ -562,11 +736,12 @@ end
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
   (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
-   generated = false)
+   generated = false, generation = nothing)
 # A generated column made by hand, which the reader takes for a plain one.
 struct MmMockMySQLGen <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
-  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true)
+  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true,
+   generation = (expr = "(`a` * 2)", stored = false))
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
 # SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
@@ -593,12 +768,18 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
   @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
   @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
-  # A MODIFY would end a generated column's generation (STORED) or fail (VIRTUAL, 3106): refused.
+  # A MODIFY that left a generation out would end it (STORED) or fail (VIRTUAL, 3106), so a generated column
+  # made by hand is restated with it, and with no default.
   gen = MmMockMySQLGen()
-  e = _mm_err(() -> _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true),
-                                    _MM.column_delta(Models.IntegerField(null = true),
-                                                     _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")))
-  @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"c\"", sprint(showerror, e))
+  @test _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true),
+                        _MM.column_delta(Models.IntegerField(null = true),
+                                         _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` INT GENERATED ALWAYS AS ((`a` * 2)) VIRTUAL NULL;"
+  # It holds no default, so a declared one is refused: the MODIFY could not apply it, and every plan would ask again.
+  e = _mm_err(() -> _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true, default = 0),
+                                    _MM.column_delta(Models.IntegerField(null = true, default = 0),
+                                                     _MM.column_spec(Models.IntegerField(null = true), gen; name = "c"), gen; name = "c")))
+  @test e isa PormG.InvalidMigrationError && occursin("generated column made by hand, which holds no default", sprint(showerror, e))
   # A column with nothing else, as before.
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==
@@ -708,4 +889,54 @@ end
   @test e isa PormG.BackendCapabilityError && occursin("2 statements", sprint(showerror, e))
   @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1"], true) === nothing
   @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1; UPDATE b SET y = 2"], false) === nothing
+end
+
+# What: a per-engine `db_default` on MySQL: its DEFAULT clause, the stamp of PormG's marker after every
+# statement that writes one (CREATE TABLE, ADD COLUMN, a MODIFY changing the default), and the reader
+# taking an owned default by its marker.
+# SQL: `DEFAULT (lower('X'))`, then `SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `driver` MODIFY COLUMN
+#      <body> COMMENT ', QUOTE(…)) FROM information_schema.COLUMNS …); PREPARE …; EXECUTE …; DEALLOCATE …`.
+# Why: MySQL re-prints the expression (`lower(_utf8mb4\'X\')`), so without the marker's two hashes a
+# declared default would be re-planned on every run, and a hand-made SET DEFAULT (which keeps the comment)
+# would go unseen. The body sits inside a string literal, so its quotes and backslashes are escaped.
+@testset "#1130: a per-engine db_default on MySQL carries PormG's stamped marker" begin
+  f = Models.CharField(max_length = 20, db_default = (postgres = "lower('X')", mysql = "lower('X')"))
+  body = "`tag` VARCHAR(20) NOT NULL DEFAULT (lower('X'))"
+  @test _MD.field_to_column("tag", f, _mm_my) == body
+  h1 = PormG.db_default_hash("lower('X')")
+  stamp(t, b) = "SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `$(t)` MODIFY COLUMN $(replace(replace(b, "\\" => "\\\\"), "'" => "''")) COMMENT ', " *
+                "QUOTE(CONCAT_WS(' ', NULLIF(TRIM(REGEXP_REPLACE(COLUMN_COMMENT, '[[:space:]]*$(PormG.DB_DEFAULT_MARKER_RE.pattern)', '')), ''), " *
+                "CONCAT('pormg:default:$(h1):', LEFT(SHA2(COLUMN_DEFAULT, 256), 16))))) FROM information_schema.COLUMNS " *
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$(t)' AND COLUMN_NAME = 'tag');\n" *
+                "PREPARE pormg_stamp FROM @pormg_stamp;\nEXECUTE pormg_stamp;\nDEALLOCATE PREPARE pormg_stamp;"
+  @test _MD.stamp_db_default(_mm_my, "driver", "tag", "(lower('X'))"; body = body) == stamp("driver", body)
+  # A backslash in the body is doubled with the quotes, or MySQL would read it as an escape.
+  @test occursin("DEFAULT (''a\\\\b'')", _MD.stamp_db_default(_mm_my, "driver", "tag", "(lower('X'))"; body = "`tag` DEFAULT ('a\\b')"))
+  @test _MD.add_field(_mm_my, "driver", "tag", f) == "ALTER TABLE `driver` ADD COLUMN $(body);\n" * stamp("driver", body)
+  created = _MD.create_table(_mm_my, Models.Model("driver", driverid = Models.IDField(), tag = f))
+  @test Base.startswith(created, "CREATE TABLE IF NOT EXISTS `driver`") && Base.endswith(created, "\n" * stamp("driver", body))
+  # The portable vocabulary reads back as its word, so it takes no stamp.
+  @test !occursin("PREPARE", _MD.add_field(_mm_my, "driver", "at", Models.DateTimeField(db_default = "CURRENT_TIMESTAMP")))
+  # A changed default: the MODIFY restates the column's comment (an old marker with it), and the stamp's
+  # body restates everything else, without the comment, which the stamp computes.
+  tagged(d) = "Driver = Models.Model(\"driver\", driverid = Models.IDField(), tag = Models.CharField(max_length = 20$(d)))"
+  plan = _mm_plan(MmMockMySQLAttr(), tagged(""), tagged(", db_default = (mysql = \"lower('X')\",)"))[:driver]
+  alter = plan["Alter field: tag"]
+  @test Base.startswith(alter, "ALTER TABLE `driver` MODIFY COLUMN `tag` VARCHAR(20) NOT NULL DEFAULT (lower('X')) INVISIBLE COMMENT 'it''s' ")
+  @test occursin("MODIFY COLUMN `tag` VARCHAR(20) NOT NULL DEFAULT (lower(''X'')) INVISIBLE COLLATE utf8mb4_0900_ai_ci COMMENT ', QUOTE(", alter)
+  @test isempty(_mm_plan(_mm_my, tagged(", db_default = (mysql = \"lower('X')\",)"), tagged(", db_default = (mysql = \"lower('X')\",)")))
+
+  # The reader: an owned default by its marker (re-print and all); one changed by hand fails the second
+  # hash, so it is compared as text, which the declaration validator refuses, and the plan re-applies it.
+  raw = "lower(_utf8mb4\\'X\\')"
+  marker = "pormg:default:$(h1):$(PormG.live_default_hash(raw))"
+  pk = _mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI")
+  owned = _MM._mysql_live_table(_mm_my, "driver", [pk, _mm_col("driver", "tag", "varchar(20)", "NO", raw, "DEFAULT_GENERATED", "";
+                                                                  comment = "kept $(marker)")], Any[], Any[], Any[])
+  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower(_utf8mb4'X')", h1)
+  @test owned.columns["tag"] == _MM.column_spec(f, _mm_my; name = "tag")
+  hand = "upper(_utf8mb4\\'X\\')"
+  changed = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+    [pk, _mm_col("driver", "tag", "varchar(20)", "NO", hand, "DEFAULT_GENERATED", ""; comment = marker)], Any[], Any[], Any[])
+  @test changed.columns["tag"].default isa PormG.NoDefault && changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
 end

@@ -329,6 +329,9 @@ _inspectdb_field_name(probe::ColumnSpec, table_name, conn)::String =
   Logging.with_logger(Logging.NullLogger()) do
     string(nameof(typeof(_inspectdb_field(probe, table_name, conn, false, nothing))))[2:end]
   end
+# MySQL has no `inspectdb` compiler yet (#1130 phase 4c-2), so the warning names the column's type as the
+# catalog reports it.
+_inspectdb_field_name(probe::ColumnSpec, table_name, ::PormGMySQL)::String = something(probe.raw, string(probe.type))
 
 """
     _default_or_drop(table_name, probe::ColumnSpec, raw, conn) -> ColumnDefault
@@ -2164,7 +2167,7 @@ end
 function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
   rows = fetch(conn, """
     SELECT c.COLUMN_COMMENT AS comment, c.EXTRA AS extra, c.COLLATION_NAME AS coll,
-           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt
+           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt, c.GENERATION_EXPRESSION AS gen
       FROM information_schema.COLUMNS c
       JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
      WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = ? AND c.COLUMN_NAME = ?""",
@@ -2175,11 +2178,18 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
   coll, dflt = _mysql_str(r.coll), _mysql_str(r.dflt)
   # A collation name is an identifier the server printed; anything else is not restated.
   keep_coll = coll !== nothing && coll != _mysql_str(r.table_coll) && occursin(r"^[A-Za-z0-9_]+$", coll)
+  generated = occursin(r"(stored|virtual) generated", extra)
+  gen = _mysql_str(r.gen)
   return (comment = something(_mysql_str(r.comment), ""),
           invisible = occursin("invisible", extra),
           on_update = occursin("on update current_timestamp", extra),
           collation = keep_coll ? coll : nothing,
-          generated = occursin(r"(stored|virtual) generated", extra),
+          generated = generated,
+          # A generation expression made by hand, restated by a MODIFY (as MySQL printed it, unescaped), and
+          # its kind: a MODIFY that leaves it out ends a STORED column's generation and fails on a VIRTUAL
+          # one (3106, measured).
+          generation = (generated && gen !== nothing && !isempty(gen)) ?
+                       (expr = _mysql_unescape(gen), stored = occursin("stored generated", extra)) : nothing,
           default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing)
 end
 
@@ -4918,8 +4928,8 @@ end
 
 # The default reduced to what the declared side compiles (`_column_default`): the portable vocabulary
 # back to its word, the `('…')` a literal on a TEXT, BLOB or JSON column is written as back to the
-# literal, a boolean folded from `1`/`0`. Any other expression is carried as MySQL printed it, which no
-# declaration renders (a non-portable `db_default` is refused until phase 4c).
+# literal, a boolean folded from `1`/`0`. Any other expression is carried as MySQL printed it; one PormG
+# stamped is read with its marker instead (`_mysql_live_table`), and one it did not is compared as text.
 _clean_default(::Nothing, ::CanonicalType, ::PormGMySQL) = nothing
 function _clean_default(raw::_MySQLColumnDefault, ctype::CanonicalType, ::PormGMySQL)
   s = raw.text
@@ -4945,8 +4955,11 @@ _mysql_unescape(s::AbstractString)::String =
     c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : c == '0' ? "\0" : c == 'Z' ? "\x1a" : string(c)
   end)
 
-# The bare `pormg:index` marker as a whole token of an index's COMMENT (not the hashed `pormg:index:<h>`).
-const _MYSQL_INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?![0-9A-Za-z_:])")
+# A declared CHECK as MySQL re-prints the clause `Dialect.add_check_constraint` writes: the condition,
+# then the marker's always-true term, both escaped as `information_schema` escapes a quote (`\'`). The
+# introducer is the charset of the connection that wrote it.
+const _MYSQL_MARKED_CHECK_RE =
+  Regex("^\\((.*) and \\((?:_[0-9a-z]+)?\\\\'(" * CHECK_MARKER_PREFIX * "[0-9a-f]{16})\\\\' is not null\\)\\)\$", "s")
 
 const _MYSQL_NON_NEGATIVE_CHECK_RE = r"^\(`((?:[^`]|``)+)` >= 0\)$"
 const _MYSQL_BYTE_LENGTH_CHECK_RE = r"^\(length\(`((?:[^`]|``)+)`\) <= (\d+)\)$"i
@@ -4989,12 +5002,12 @@ const _MYSQL_TABLES_SQL = """
    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"""
 const _MYSQL_COLUMNS_SQL = """
   SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS ctype, IS_NULLABLE AS nullable,
-         COLUMN_DEFAULT AS dflt, EXTRA AS extra, COLUMN_KEY AS ckey
+         COLUMN_DEFAULT AS dflt, EXTRA AS extra, COLUMN_KEY AS ckey, COLUMN_COMMENT AS comment
     FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_STATISTICS_SQL = """
   SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, NON_UNIQUE AS non_unique, COLUMN_NAME AS col,
-         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment
+         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment, EXPRESSION AS expr
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
 const _MYSQL_FOREIGN_KEYS_SQL = """
@@ -5031,6 +5044,17 @@ function _mysql_column_checks(conn::PormGMySQL, table_name::AbstractString, colu
   end
   return out
 end
+# The tables of the schema holding a CHECK of this name (MySQL compares constraint names without case).
+# A CHECK name is unique per schema on MySQL, so a declared one must not take a name any table holds.
+# Bound by value.
+function _mysql_check_name_holders(conn::PormGMySQL, name::AbstractString)::Vector{String}
+  rows = fetch(conn, """
+    SELECT TABLE_NAME AS tbl FROM information_schema.TABLE_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'CHECK' AND CONSTRAINT_NAME = ?
+     ORDER BY TABLE_NAME""", [String(name)]) |> DataFrame
+  return String[_mysql_str(t) for t in rows.tbl]
+end
+
 get_constraints_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
   _mysql_column_checks(conn, table_name, field_name, _MYSQL_NON_NEGATIVE_CHECK_RE)
 get_constraints_byte_length_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
@@ -5046,11 +5070,18 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
   fk_map = Dict{String, Any}(_mysql_str(r.col) => r for r in fk_rows if per_fk[_mysql_str(r.name)] == 1)
   fk_names = Set{String}(lowercase(_mysql_str(r.name)) for r in fk_rows)
 
-  # PormG's own column CHECKs by column; every other CHECK is the table's.
+  # A declared CHECK carries PormG's marker, and is read first: a declared `grid >= 0` re-prints as PormG's
+  # own column CHECK would, but for the marker. PormG's own column CHECKs by column; every other CHECK is
+  # the table's.
   col_checks = Dict{String, Vector{CheckKind}}()
   table_checks = LiveCheck[]
   for r in check_rows
     clause = String(strip(_mysql_str(r.clause)))
+    m = match(_MYSQL_MARKED_CHECK_RE, clause)
+    if m !== nothing
+      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_unescape(m[1]), m[2]))
+      continue
+    end
     m = match(_MYSQL_NON_NEGATIVE_CHECK_RE, clause)
     if m !== nothing
       push!(get!(col_checks, lowercase(replace(m[1], "``" => "`")), CheckKind[]), NonNegativeCheck())
@@ -5074,13 +5105,30 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
   composites = LiveComposite[]
   for (idx, members) in groups
     idx == "PRIMARY" && continue
-    # An expression member (a functional index, phase 4c) or a prefix length is a member PormG cannot
-    # re-emit, so the index is not read, as the other readers drop one whole.
-    any(r -> _mysql_str(r.col) === nothing || _mysql_str(r.sub_part) !== nothing, members) && continue
-    cols = String[_mysql_str(r.col) for r in members]
+    # A prefix length, or a column beside an expression, is a member PormG cannot re-emit, so the index is
+    # not read, as the other readers drop one whole. An index of expressions only is a functional index.
+    any(r -> _mysql_str(r.sub_part) !== nothing, members) && continue
+    functional = all(r -> _mysql_str(r.col) === nothing, members)
+    functional || all(r -> _mysql_str(r.col) !== nothing, members) || continue
+    cols = functional ? String[] : String[_mysql_str(r.col) for r in members]
     unique = parse(Int, _mysql_str(members[1].non_unique)) == 0
     desc = Bool[_mysql_str(r.coll) == "D" for r in members]
-    if length(cols) == 1 && !desc[1]
+    # PormG's marker, written as the index's COMMENT (`Dialect.create_index(::PormGMySQL)`): the bare one
+    # for a descending index, the hashed one for a functional index. A marked index is always a composite,
+    # whatever its shape — PormG wrote it from a model-level declaration.
+    comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
+    marker = comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment)
+    if functional
+      # MySQL's re-print (`lower(`a`)`), escaped as `information_schema` escapes a quote; the marker, not
+      # this text, is what a declaration matches. A descending member keeps its direction in `COLLATION`.
+      exprs = String[_mysql_unescape(something(_mysql_str(r.expr), "")) * (d ? " DESC" : "")
+                     for (r, d) in zip(members, desc)]
+      push!(composites, LiveComposite(idx, String[], unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                      marker, (comment === nothing || isempty(comment)) ? nothing : comment;
+                                      expressions = exprs))
+      continue
+    end
+    if length(cols) == 1 && !desc[1] && marker === nothing
       # An inline `UNIQUE` is an index named after its column; any other single-column unique index is
       # a model-level one. A non-unique one is `db_index`'s, except the index InnoDB created for a
       # foreign key, which carries the constraint's name and no declaration.
@@ -5092,9 +5140,6 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
         continue
       end
     end
-    # PormG's bare marker, written as the index's COMMENT (`Dialect.create_index(::PormGMySQL)`).
-    comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
-    marker = comment !== nothing && occursin(_MYSQL_INDEX_MARKER_RE, comment) ? INDEX_MARKER : nothing
     push!(composites, LiveComposite(idx, cols, unique, false, "btree", desc,
                                     Union{String, Nothing}[nothing for _ in cols], fill(true, length(cols)),
                                     marker, (comment === nothing || isempty(comment)) ? nothing : comment))
@@ -5125,7 +5170,15 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
                        _reader_checks(get(col_checks, lowercase(col_name), CheckKind[]), ctype), identity, raw_type)
     dflt = _mysql_str(r.dflt)
     raw_default = dflt === nothing ? nothing : _MySQLColumnDefault(dflt, occursin("default_generated", extra))
-    columns[col_name] = _finish_column_spec(table_name, probe, raw_default, db)
+    # An expression default PormG stamped (`Dialect.stamp_db_default(::PormGMySQL)`) carries the declared
+    # hash its marker vouches for, checked against the RAW `COLUMN_DEFAULT`, the text the server hashed.
+    # Its text is MySQL's re-print, unescaped: catalog text, not a declaration, so it is not put through
+    # the declaration validator, which refuses the backticks and escapes MySQL prints.
+    owner = (raw_default !== nothing && raw_default.generated && hasproperty(r, :comment)) ?
+            db_default_owner(_mysql_str(r.comment), dflt) : nothing
+    columns[col_name] = owner !== nothing ?
+      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_unescape(dflt)), owner)) :
+      _finish_column_spec(table_name, probe, raw_default, db)
   end
   return LiveTable(table_name, columns, indexes, composites, table_checks)
 end

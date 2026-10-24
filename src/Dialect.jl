@@ -3553,6 +3553,11 @@ function rename_constraint(conn::PormGPostgres, table_name::String, old_name::St
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME CONSTRAINT "$(_quote_table_ddl(old_name))" TO "$(_quote_table_ddl(new_name))";"""
 end
 
+# A declared CHECK renamed (#742): in place on PostgreSQL. SQLite renames none — its rebuild re-creates
+# every CHECK — and MySQL re-creates it (its method beside the other MySQL renderers).
+rename_check_constraint(conn::PormGPostgres, table_name::String, old_name::String, c::CheckConstraint)::String =
+  rename_constraint(conn, table_name, old_name, c.name)
+
 function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)
   return """ALTER TABLE "$(_quote_table_ddl(old_table_name))" RENAME TO "$(_quote_table_ddl(new_table_name))";"""
 end
@@ -4662,9 +4667,9 @@ _ddl_ident(::PormGMySQL, name::Union{AbstractString, Symbol})::String = "`$(repl
 # (#1265).
 const MYSQL_TABLE_OPTIONS = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"
 
-# A `db_default` outside the portable vocabulary is refused until phase 4c: MySQL re-prints an expression
-# (`'x'` as `_utf8mb4\'x\'`, `CURRENT_TIMESTAMP(3)` as itself), and the ownership marker that lets
-# PostgreSQL tell its own default from a changed one cannot be written by a MySQL statement.
+# MySQL takes an expression default only in parentheses (`DEFAULT (uuid())`), and re-prints it
+# (`lower('X')` as `lower(_utf8mb4\'X\')`), so PormG stamps its ownership marker after it, as on
+# PostgreSQL (`stamp_db_default(::PormGMySQL)`).
 _parenthesizes_db_default(::PormGMySQL) = true
 
 _mysql_not_yet(what::AbstractString, phase::AbstractString = "4c") = UnsupportedConnectionError(
@@ -4709,22 +4714,17 @@ _mysql_expression_only(base_type::AbstractString)::Bool =
   occursin(r"^(LONGTEXT|LONGBLOB|JSON)$", base_type)
 
 # The `DEFAULT` clause, or `nothing`. The portable vocabulary is spelled the way MySQL requires it on
-# this column; any other expression is refused (`_mysql_not_yet`).
+# this column; any other expression is the `mysql` entry of a per-engine `db_default`, in the
+# parentheses `db_default_sql` gives it (a tuple without one has already raised there).
 function _mysql_default_clause(field::PormGField, col_name::AbstractString, base_type::AbstractString,
                                conn::PormGMySQL; temporary_default = nothing)::Union{String, Nothing}
-  # A per-engine pin names `postgres` and `sqlite` only (the constructor takes no `mysql` key), so its
-  # refusal's advice — add the MySQL spelling — could not be followed yet.
-  hasfield(typeof(field), :db_default) && getfield(field, :db_default) isa NamedTuple &&
-    throw(_mysql_not_yet("The per-engine db_default on column \"$(col_name)\" (MySQL takes " *
-                         "$(join(PORTABLE_DB_DEFAULTS, " and ")) until then)"))
   db_expr = db_default_sql(field, conn)
   if db_expr !== nothing
     word = uppercase(db_expr)
     word == "CURRENT_TIMESTAMP" && return "DEFAULT " *
       (Base.startswith(base_type, "DATETIME(") ? "CURRENT_TIMESTAMP$(base_type[9:end])" : "CURRENT_TIMESTAMP")
     word == "CURRENT_DATE" && return "DEFAULT (CURRENT_DATE)"
-    throw(_mysql_not_yet("The db_default $(db_expr) on column \"$(col_name)\" (an expression other than " *
-                         "$(join(PORTABLE_DB_DEFAULTS, ", ")))"))
+    return "DEFAULT $(db_expr)"
   end
   value = field.default !== nothing ? field.default : temporary_default
   value === nothing && return nothing
@@ -4746,11 +4746,20 @@ end
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
                             temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
-  generated_sql(field) === nothing || throw(_mysql_not_yet("The generated column \"$(col_name)\""))
+  # PormG's one generated field is a tsvector, refused above; a generated declaration is a feature MySQL's
+  # row in the capability table does not have.
+  generated_sql(field) === nothing ||
+    throw(_capability_error(conn, :generated_columns, "The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)
   parts = String[_ddl_ident(conn, col_name), base_type]
+  # A generation expression made by hand is restated where MySQL takes it, after the type; such a column
+  # holds no default.
+  generation = live === nothing ? nothing : live.generation
+  generation === nothing ||
+    push!(parts, "GENERATED ALWAYS AS ($(generation.expr)) " * (generation.stored ? "STORED" : "VIRTUAL"))
   push!(parts, (hasproperty(field, :null) && field.null) ? "NULL" : "NOT NULL")
-  default = _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default)
+  default = generation === nothing ?
+    _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default) : nothing
   default === nothing || push!(parts, default)
   if live !== nothing
     default === nothing && keep_default && live.default_expression !== nothing &&
@@ -4774,6 +4783,50 @@ end
 # MySQL requires.
 _mysql_restated_default(text::AbstractString)::String =
   occursin(r"^current_timestamp(\(\d\))?$"i, text) ? "DEFAULT $(text)" : "DEFAULT ($(text))"
+
+"""
+    stamp_db_default(conn::PormGMySQL, table_name, column, declared_sql; body) -> String
+
+The statements that stamp an expression column default's ownership marker on MySQL (#1130 phase 4c),
+rendered right after every statement that gives a column one — `CREATE TABLE`, `ADD COLUMN` and
+`alter_field`'s `MODIFY` — in the same plan entry. The marker is PostgreSQL's,
+`pormg:default:<declared hash>:<live hash>` in the column's comment, and so is the reason for its second
+half: MySQL re-prints the expression (`lower('X')` as `lower(_utf8mb4\\'X\\')`), and a hand-made
+`SET DEFAULT` keeps the comment, so only the hash of the text the server printed tells PormG's default
+from a changed one.
+
+MySQL has no anonymous block to compute that hash in, so the statement is built and run server-side,
+as static SQL the migration file holds: one `SET` reads the column's `COLUMN_DEFAULT` and comment and
+builds the `MODIFY` that restates the column (`body`, the definition without a comment) with the comment
+— the one already there, an old marker stripped, then the new marker, its second hash `SHA2` of that
+very text (Julia's SHA-256 of the same bytes, measured) — and `PREPARE` / `EXECUTE` run it. MySQL can
+change a column's comment only by restating the whole column. `body` sits inside a string literal, so
+its quotes and backslashes are escaped as one (`_format_default_sql_value`); the column's own comment is
+quoted by the server (`QUOTE`).
+"""
+function stamp_db_default(conn::PormGMySQL, table_name::String, column::String, declared_sql::String;
+                          body::String)::String
+  lit(s) = _format_default_sql_value(String(s), conn)
+  head = "ALTER TABLE $(_ddl_ident(conn, table_name)) MODIFY COLUMN $(body) COMMENT "
+  strip_re = "[[:space:]]*" * DB_DEFAULT_MARKER_RE.pattern
+  build = "SET @pormg_stamp = (SELECT CONCAT($(lit(head)), QUOTE(CONCAT_WS(' ', " *
+          "NULLIF(TRIM(REGEXP_REPLACE(COLUMN_COMMENT, $(lit(strip_re)), '')), ''), " *
+          "CONCAT($(lit(DB_DEFAULT_MARKER_PREFIX * db_default_hash(declared_sql) * ":")), LEFT(SHA2(COLUMN_DEFAULT, 256), 16))))) " *
+          "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+          "AND TABLE_NAME = $(lit(table_name)) AND COLUMN_NAME = $(lit(column)));"
+  return join((build, "PREPARE pormg_stamp FROM @pormg_stamp;", "EXECUTE pormg_stamp;", "DEALLOCATE PREPARE pormg_stamp;"), "\n")
+end
+
+# The stamp for one column whose `db_default` is an expression outside the portable vocabulary (which
+# reads back as its word), or `nothing`. `live` is the column's catalog attributes when it exists: the
+# stamp's MODIFY restates them as `alter_field`'s does, all but the comment, which the stamp computes.
+function _mysql_default_stamp(conn::PormGMySQL, table_name::AbstractString, col::AbstractString, field::PormGField;
+                              live = nothing)::Union{String, Nothing}
+  sql = db_default_sql(field, conn)
+  (sql === nothing || uppercase(sql) in PORTABLE_DB_DEFAULTS) && return nothing
+  body = _mysql_column_body(col, field, conn; live = live === nothing ? nothing : merge(live, (comment = "",)))
+  return stamp_db_default(conn, String(table_name), String(col), sql; body = body)
+end
 
 # A CHECK's name as it is after the plan's `RENAME TABLE`: MySQL renames every CHECK named
 # `<table>_chk_…` with the table — the ones it named itself and one given such a name — and keeps any
@@ -4808,18 +4861,21 @@ function create_table(conn::PormGMySQL, table_name::String, columns::Vector{Stri
     ) $(MYSQL_TABLE_OPTIONS);"""
 end
 
-# As on PostgreSQL, the table carries no foreign key: the planner adds each with `add_foreign_key` once
-# every table exists. A declared `CheckConstraint` is refused until phase 4c: a MySQL constraint takes no
-# comment, so there is nowhere to keep the marker that says PormG owns it.
+# As on PostgreSQL, the table carries no foreign key and no declared `CheckConstraint`: the planner adds
+# each foreign key with `add_foreign_key` once every table exists, and each CHECK with
+# `add_check_constraint` after the table. An expression default's marker is stamped after the table, in
+# the same entry.
 function create_table(conn::PormGMySQL, model::PormGModel)
-  isempty(Models.declared_check_constraints(model)) ||
-    throw(_mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
   columns = String[]
+  stamps = String[]
+  table = model_table_name(model)
   for (field_name, field) in model.fields
     field isa sManyToManyField && continue
     push!(columns, field_to_column(string(field_name), field, conn))
+    stamp = _mysql_default_stamp(conn, table, field_db_column(field, string(field_name)), field)
+    stamp === nothing || push!(stamps, stamp)
   end
-  return create_table(conn, model_table_name(model), columns)
+  return join([create_table(conn, table, columns); stamps], "\n")
 end
 
 # `table_name` arrives quoted by the planner (`_ddl_ident`), as every argument below but the table.
@@ -4830,40 +4886,55 @@ function add_foreign_key(conn::PormGMySQL, table_name::Union{Symbol, String}, co
   return """ALTER TABLE $(_ddl_ident(conn, table_name)) ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause;"""
 end
 
-# The options an index takes on PostgreSQL that MySQL has no counterpart for, or that phase 4c owns.
-function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, include, expressions, condition)
+# The options an index takes on PostgreSQL that MySQL has no counterpart for.
+function _refuse_mysql_index_options(conn::PormGMySQL; method, opclasses, include, condition)
   method == "btree" || throw(_capability_error(conn, :index_methods, "An index declaring method = \"$(method)\""))
   any(!isnothing, opclasses) && throw(_capability_error(conn, :index_methods, "An index declaring opclasses = $(Tuple(opclasses))"))
   isempty(include) || throw(_capability_error(conn, :index_methods, "An index declaring include = $(Tuple(include))"))
   condition === nothing || throw(_capability_error(conn, :partial_indexes, "An index declaring condition = $(repr(condition))"))  # refusal-value-ok: the model's own index condition (DDL)
-  isempty(expressions) || throw(_mysql_not_yet("A functional index (expressions = $(Tuple(expressions)))"))
   return nothing
 end
 
+# The member list of a MySQL index. A functional member (#1130 phase 4c) is written in parentheses of its
+# own — MySQL reads `(lower(a))` as a column list and refuses it (1064, measured) — with a trailing `ASC` /
+# `DESC` outside them, where MySQL takes a direction. The expressions are validated as on the other
+# engines (`_index_text_members`).
+function _mysql_index_members(columns::Vector{String}, descending::AbstractVector{Bool},
+                              expressions::AbstractVector)::String
+  isempty(expressions) && return join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
+  members = String[]
+  for member in _index_text_members(columns, Bool[], Union{String, Nothing}[], expressions)
+    direction = match(r"^(.*?)\s+(ASC|DESC)$"is, strip(member))
+    push!(members, direction === nothing ? "($(strip(member)))" : "($(direction[1])) $(uppercase(direction[2]))")
+  end
+  return join(members, ", ")
+end
+
 # No `IF NOT EXISTS`: MySQL has none for an index (measured). The planner emits a create only for an
-# index the live schema lacks. An advanced index (a descending member, #29) carries PormG's bare ownership
-# marker as its `COMMENT`, written with it — the marker is a constant, so unlike an expression's hashed
-# one it needs nothing the server computes — and the reader reads it back from `INDEX_COMMENT`: without
-# it, a descending index PormG created would read as hand-made, and never be dropped.
+# index the live schema lacks. An advanced index carries PormG's ownership marker as its `COMMENT`, written
+# with it, and the reader reads it back from `INDEX_COMMENT`: the bare `pormg:index` for a descending
+# member (#29), the hashed `pormg:index:<hash>` of the declared text for a functional index. Both are
+# computed from the declaration alone (unlike an expression default's, which needs the server's re-print),
+# and the hash is what tells a changed expression, since MySQL re-prints it (`lower(`a`)`). Without the
+# marker an index PormG created would read as hand-made, and never be dropped. The marker is `pormg:index`
+# and hex digits, so the literal needs no escaping.
 function create_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
-  _refuse_mysql_index_options(conn; method, opclasses, include, expressions, condition)
-  members = join(_index_members(columns, descending, Union{String, Nothing}[]), ", ")
-  comment = marker == INDEX_MARKER ? " COMMENT '$(INDEX_MARKER)'" : ""
-  return """CREATE INDEX $(index_name) ON $(table_name) ($(members))$(comment);"""
+  _refuse_mysql_index_options(conn; method, opclasses, include, condition)
+  comment = marker === nothing ? "" : " COMMENT '$(marker)'"
+  return """CREATE INDEX $(index_name) ON $(table_name) ($(_mysql_index_members(columns, descending, expressions)))$(comment);"""
 end
 
 function create_unique_index(conn::PormGMySQL, index_name::String, table_name::String, columns::Vector{String};
                              if_not_exists::Bool = true, expressions::AbstractVector = String[],
                              condition::Union{AbstractString, Nothing} = nothing,
                              marker::Union{String, Nothing} = nothing)
-  _refuse_mysql_index_options(conn; method = "btree", opclasses = Union{String, Nothing}[], include = String[],
-                              expressions, condition)
-  members = join(_index_members(columns, Bool[], Union{String, Nothing}[]), ", ")
-  return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(members));"""
+  _refuse_mysql_index_options(conn; method = "btree", opclasses = Union{String, Nothing}[], include = String[], condition)
+  comment = marker === nothing ? "" : " COMMENT '$(marker)'"
+  return """CREATE UNIQUE INDEX $(index_name) ON $(table_name) ($(_mysql_index_members(columns, Bool[], expressions)))$(comment);"""
 end
 
 # A column change on MySQL (#1130 phase 4b): ONE `ALTER TABLE` whose clauses carry every slot of the delta,
@@ -4902,14 +4973,19 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
   adds_key = :primary_key in delta && delta.new_spec.primary_key
   drops_key = :primary_key in delta && delta.old_spec.primary_key
   adds_key && push!(clauses, "ADD PRIMARY KEY ($(ident))")
+  live = nothing
   if any(s -> s in delta, (:type, :nullable, :default, :identity))
     # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
     keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
                    delta.new_spec.default isa NoDefault
+    # A generated column made by hand reads as a plain one; the MODIFY restates its generation
+    # (`_mysql_column_body`), which a MODIFY that left it out would end. Such a column holds no default,
+    # so a declared one could never be applied, and every plan would ask for it again.
     live = _column_attributes(conn, catalog, live_column)
-    # A generated column made by hand reads as a plain one; a MODIFY would end its generation.
-    live !== nothing && live.generated &&
-      throw(_mysql_not_yet("A change to the generated column \"$(live_column)\""))
+    live !== nothing && live.generation !== nothing && !(delta.new_spec.default isa NoDefault) &&
+      throw(InvalidMigrationError(
+        "Column \"$(live_column)\" of table \"$(catalog)\" is a generated column made by hand, which holds no " *
+        "default: remove the default from its declaration, or drop the column's generation by hand."))
     push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn; live = live, keep_default = keep_default))
   end
   drops_key && push!(clauses, "DROP PRIMARY KEY")
@@ -4926,14 +5002,22 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
       push!(clauses, "DROP INDEX $(ident)")
   end
   isempty(clauses) && return ""
-  return "ALTER TABLE $(_ddl_ident(conn, model_table_name(model))) $(join(clauses, ", "));"
+  alter = "ALTER TABLE $(_ddl_ident(conn, table)) $(join(clauses, ", "));"
+  # A new expression default is stamped after the MODIFY that wrote it, as PostgreSQL stamps its
+  # `SET DEFAULT` (#1037); an unchanged one keeps its marker, which the MODIFY restated with the comment.
+  stamp = (:default in delta && delta.new_spec.default isa ExpressionDefault) ?
+          _mysql_default_stamp(conn, table, col, new_field; live = live) : nothing
+  return stamp === nothing ? alter : alter * "\n" * stamp
 end
 
 # A column added to a table that exists: its whole definition, keys and CHECKs inline as `CREATE TABLE`
-# writes them. The foreign key is the planner's (`_add_constrains`).
-add_field(conn::PormGMySQL, table_name::Union{String,Symbol}, field_name::String, field::PormGField;
-          temporary_default::Any = nothing, model::Union{PormGModel,Nothing} = nothing)::String =
-  "ALTER TABLE $(_ddl_ident(conn, table_name)) ADD COLUMN $(field_to_column(field_name, field, conn; temporary_default = temporary_default));"
+# writes them, then an expression default's marker. The foreign key is the planner's (`_add_constrains`).
+function add_field(conn::PormGMySQL, table_name::Union{String,Symbol}, field_name::String, field::PormGField;
+                   temporary_default::Any = nothing, model::Union{PormGModel,Nothing} = nothing)::String
+  add = "ALTER TABLE $(_ddl_ident(conn, table_name)) ADD COLUMN $(field_to_column(field_name, field, conn; temporary_default = temporary_default));"
+  stamp = _mysql_default_stamp(conn, string(table_name), field_db_column(field, field_name), field)
+  return stamp === nothing ? add : add * "\n" * stamp
+end
 
 # A CHECK that names only this column goes with it (measured); its foreign key is dropped first by the
 # planner (`_drop_fk_constraint_in_alteration`).
@@ -4999,14 +5083,39 @@ rename_index(conn::PormGMySQL, old_name::String, new_name::String; table::Union{
 rename_table(conn::PormGMySQL, old_table_name::String, new_table_name::String)::String =
   "RENAME TABLE $(_ddl_ident(conn, old_table_name)) TO $(_ddl_ident(conn, new_table_name));"
 
-# PormG's MySQL reader takes no unique index as a constraint (a MySQL UNIQUE is an index), so the planner
-# never asks for these; a declared CHECK is phase 4c's.
-for (f, what, phase) in ((:drop_unique_constraint, "Dropping a constraint-backed unique key", "4c"),
-                         (:rename_constraint, "Renaming a constraint", "4c"),
-                         (:drop_check_constraint, "Dropping a declared CheckConstraint", "4c"),
-                         (:add_check_constraint, "A declared CheckConstraint", "4c"),
-                         (:comment_check_constraint, "A declared CheckConstraint", "4c"))
-  @eval $f(::PormGMySQL, args...; kwargs...) = throw(_mysql_not_yet($what, $phase))
+# PormG's MySQL reader takes no unique index as a constraint (a MySQL UNIQUE is an index, dropped with
+# `DROP INDEX`), and a CHECK is renamed by `rename_check_constraint`, so the planner never asks for these.
+for (f, what) in ((:drop_unique_constraint, "Dropping a constraint-backed unique key"),
+                  (:rename_constraint, "Renaming a constraint"))
+  @eval $f(::PormGMySQL, args...; kwargs...) = throw(UnsupportedConnectionError(
+    $what * " has no MySQL counterpart: a MySQL UNIQUE is an index, and a CHECK is re-created under its new name."))
+end
+
+# A declared `CheckConstraint` on MySQL (#1130 phase 4c). A MySQL constraint takes no comment, and MySQL
+# drops a SQL comment from the clause it stores (measured on 8.4), so PormG's ownership marker rides in
+# the clause as a term that is always true: `(<condition>) AND '<marker>' IS NOT NULL`. A row the
+# condition rejects is still rejected, and one it leaves NULL still passes. MySQL keeps the term as it is
+# (it is not folded away) and re-prints the clause as
+# `(<condition> and (_utf8mb4\'<marker>\' is not null))`, which is how the reader finds the marker. The
+# marker is `pormg:check:` and hex digits, so the literal needs no escaping.
+_mysql_check_clause(c::CheckConstraint)::String = "($(c.condition)) AND '$(check_marker(c.condition))' IS NOT NULL"
+
+function add_check_constraint(conn::PormGMySQL, table_name::String, c::CheckConstraint)::String
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) ADD CONSTRAINT $(_ddl_ident(conn, c.name)) " *
+         "CHECK ($(_mysql_check_clause(c)));"
+end
+
+# No `IF EXISTS` on MySQL. The planner drops a table's CHECKs before its column pass, so a column the
+# plan drops still holds them.
+drop_check_constraint(conn::PormGMySQL, table_name::String, constraint_name::String)::String =
+  "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP CHECK $(_ddl_ident(conn, constraint_name));"
+
+# A CHECK renamed, or adopted (a hand-written one of the declared name, given PormG's marker): MySQL can
+# neither rename nor comment a constraint, so both re-create it in ONE `ALTER TABLE`, which applies whole —
+# when the rows fail the condition, the old CHECK is still there (measured).
+function rename_check_constraint(conn::PormGMySQL, table_name::String, old_name::String, c::CheckConstraint)::String
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP CHECK $(_ddl_ident(conn, old_name)), " *
+         "ADD CONSTRAINT $(_ddl_ident(conn, c.name)) CHECK ($(_mysql_check_clause(c)));"
 end
 
 # No `CASCADE` on MySQL, and a table another table's foreign key references cannot be dropped (3730). The

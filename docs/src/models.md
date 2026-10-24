@@ -324,6 +324,8 @@ The comment is PormG's **ownership marker**, the one a [`CheckConstraint`](#Chec
 for the same reason: it is how `makemigrations` tells an index it created from one written by hand
 (next section). On SQLite, which has no comments on indexes, the marker is an SQL comment closing
 the column list — `("raceid", "points" DESC /* pormg:index */)` — which SQLite stores with the index.
+On MySQL it is the index's `COMMENT`, written with it (`… COMMENT 'pormg:index'`; an index of
+expressions writes each in parentheses of its own, `((lower(surname)))`, which MySQL requires).
 Plain indexes carry no marker and render exactly as above.
 
 !!! note "A GIN or BRIN build holds a lock"
@@ -480,12 +482,14 @@ matches a live index built with that default.
     | The live index | Declared | Not declared |
     |---|---|---|
     | carries PormG's `pormg:index` marker | kept | dropped — **destructive** |
-    | has no marker (written by hand, or by Django) | **adopted** — on PostgreSQL a `COMMENT ON INDEX` adds the marker after any comment already there; on SQLite nothing is planned | **never planned away** |
+    | has no marker (written by hand, or by Django) | **adopted** — on PostgreSQL a `COMMENT ON INDEX` adds the marker after any comment already there; on SQLite and MySQL nothing is planned (MySQL cannot change an index's comment in place) | **never planned away** |
 
     A hand-made expression or partial index is adopted only by a declaration of **its own text**, as
     the database spells it — `inspectdb`'s text, which PostgreSQL rewrites (`lower(surname::text)`).
     When a declaration asks for such an index's name with other text, the refusal prints the
-    declaration that would adopt it instead, ready to paste.
+    declaration that would adopt it instead, ready to paste. MySQL re-prints an expression with
+    backtick-quoted names (``lower(`surname`)``), which a declaration cannot hold, so a hand-made
+    expression index there matches no declaration, and one asking for its name is refused.
 
     An index adopted on SQLite stays unmarked, so removing its declaration later leaves it in place;
     an explicit `name=` that renames it re-creates it, marked. A declaration cannot take the *name*
@@ -567,19 +571,27 @@ declaration. Instead PormG stores a short hash of the declared condition beside 
 creates — as the constraint's `COMMENT` on PostgreSQL, as an SQL comment inside the constraint on
 SQLite — and `makemigrations` reads it back:
 
-| Change | PostgreSQL | SQLite |
-|---|---|---|
-| add a `CheckConstraint` | `ALTER TABLE … ADD CONSTRAINT … CHECK (…)` + `COMMENT ON CONSTRAINT` | table rebuild |
-| change its `condition` | drop, then add | table rebuild |
-| change only its `name` | `ALTER TABLE … RENAME CONSTRAINT` | table rebuild |
-| remove it from the model | `ALTER TABLE … DROP CONSTRAINT` | table rebuild |
-| declare a hand-written CHECK under its own name and condition | `COMMENT ON CONSTRAINT` only (adopts it; an existing comment is kept, the marker appended) | nothing — the next rebuild of the table writes the marker |
+| Change | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|
+| add a `CheckConstraint` | `ALTER TABLE … ADD CONSTRAINT … CHECK (…)` + `COMMENT ON CONSTRAINT` | table rebuild | `ALTER TABLE … ADD CONSTRAINT … CHECK ((…) AND 'pormg:check:<hash>' IS NOT NULL)` |
+| change its `condition` | drop, then add | table rebuild | drop, then add |
+| change only its `name` | `ALTER TABLE … RENAME CONSTRAINT` | table rebuild | `ALTER TABLE … DROP CHECK …, ADD CONSTRAINT …`, one statement |
+| remove it from the model | `ALTER TABLE … DROP CONSTRAINT` | table rebuild | `ALTER TABLE … DROP CHECK` |
+| declare a hand-written CHECK under its own name and condition | `COMMENT ON CONSTRAINT` only (adopts it; an existing comment is kept, the marker appended) | nothing — the next rebuild of the table writes the marker | drop, then add, with the marker (MySQL re-prints the condition, so its text matches no declaration) |
 
-A new table gets its CHECKs with its `CREATE TABLE` on SQLite, and right after it on PostgreSQL.
+A new table gets its CHECKs with its `CREATE TABLE` on SQLite, and right after it on PostgreSQL and
+MySQL. MySQL keeps no comment on a constraint and strips an SQL comment from its clause, so the
+marker there is a term of the condition that is always true: a row the condition rejects is still
+rejected, and one it leaves `NULL` still passes. A CHECK name is unique per database on MySQL, so
+`makemigrations` refuses one another table holds or another model declares, and one starting with
+`<table>_chk_`, the prefix MySQL names PormG's own column CHECKs with and renames with the table.
+Moving a name from one table to another takes two migrations there.
 
 - **Removing or replacing a CHECK is destructive**, like any `DROP` — and on SQLite so is every
   change, because it is a table rebuild. Pass `migrate(destructive = true)` after reviewing `dry_run()`.
-- **Rows that break a new condition fail the migration** on both engines, inside its transaction.
+- **Rows that break a new condition fail the migration** on PostgreSQL and SQLite, inside its
+  transaction. On MySQL, whose DDL commits each statement, `migrate` counts them before the plan runs
+  and refuses it with `MigrationPrecheckError`.
 - **A CHECK written by hand is never planned away.** It carries no marker, so `makemigrations` does
   not treat it as PormG's. On SQLite, though, any table rebuild — including one for a declared CHECK —
   re-creates the table from your model and drops it, with a warning that quotes it; see

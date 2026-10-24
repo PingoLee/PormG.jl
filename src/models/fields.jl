@@ -238,7 +238,8 @@ const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, 
 # NOT `==` in Julia, so without a canonical order two identical declarations would compare unequal
 # in `_model_to_str_general`'s struct diff (emitting a spurious kwarg) and in the column IR
 # (planning a migration that changes nothing).
-const _DB_DEFAULT_ENGINES = (:postgres, :sqlite)
+# `:mysql` is appended (#1130 phase 4c), so a tuple over the first two normalises as it always did.
+const _DB_DEFAULT_ENGINES = (:postgres, :sqlite, :mysql)
 
 """
     DbDefault
@@ -384,11 +385,11 @@ function _db_default_kwarg(field_type::AbstractString, value; probe_kwargs::Name
     is_valid_db_default_sql(value) || return _one(:both, value)   # reuse the message
     db_default_is_portable(value) || throw(_fielderr(
       "$field_type: db_default = $(repr(String(value))) is not one of the expressions PormG can " *
-      "render on both engines ($(join(PORTABLE_DB_DEFAULTS, ", "))), so PormG cannot know which " *
+      "render on every engine ($(join(PORTABLE_DB_DEFAULTS, ", "))), so PormG cannot know which " *
       "engine it is valid on. Name the engine: " *
       "db_default = (postgres = $(repr(String(value))),). A pinned expression renders on that " *
-      "engine and raises on the other, so a models file can never emit DDL the database will " *
-      "reject. Add a `sqlite = …` entry (or `sqlite = nothing`) to cover both."))
+      "engine and raises on the others, so a models file can never emit DDL the database will " *
+      "reject. Add an entry for each other engine (`sqlite = …`, `mysql = …`, or `= nothing`) to cover them."))
     return canonical_db_default(value)
   end
 
@@ -400,7 +401,7 @@ function _db_default_kwarg(field_type::AbstractString, value; probe_kwargs::Name
     for k in ks
       k in _DB_DEFAULT_ENGINES || throw(_fielderr(
         "$field_type: 'db_default' has no engine named `$k`. The engines are " *
-        "$(join(("`$e`" for e in _DB_DEFAULT_ENGINES), " and ")); a bare String is the portable " *
+        "$(join(("`$e`" for e in _DB_DEFAULT_ENGINES), ", ")); a bare String is the portable " *
         "form."))
     end
     # Normalised in `_DB_DEFAULT_ENGINES` order, and only over the keys actually given — see the
@@ -713,7 +714,7 @@ The `ForeignKey` field represents a relationship where many records in the curre
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (recommended for performance)
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (ID of the referenced record)
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
@@ -1060,7 +1061,7 @@ The `OneToOneField` represents a strict one-to-one relationship where each recor
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (recommended for performance)
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (ID of the referenced record)
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
@@ -1376,7 +1377,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `db_column::Union{String, Nothing} = nothing`: Map this field to a differently-named physical column (Django `db_column`). Authoritative across DDL, queries, and migrations (#50); defaults to the field name
 - `default::Union{String, Nothing} = nothing`: Default value for the field
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} = nothing`: Restricted set of valid values
 - `editable::Bool = true`: Whether the field should be editable in forms
 
@@ -1579,7 +1580,7 @@ The `IntegerField` stores whole numbers within the 32-bit signed integer range (
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Examples
@@ -1680,7 +1681,7 @@ re-derived whenever the table is recreated during an alter.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..32767)
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1765,7 +1766,7 @@ engine adds or drops when a column's type transitions into or out of this field.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..2147483647)
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1838,7 +1839,7 @@ The `BigIntegerField` stores large whole numbers within the 64-bit signed intege
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1950,7 +1951,7 @@ The `BooleanField` stores binary true/false values and is ideal for flags, switc
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Bool, Nothing} = nothing`: Default value for the field (true or false)
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Examples
@@ -2028,7 +2029,7 @@ The `DateField` stores calendar dates in YYYY-MM-DD format and is ideal for birt
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Date, Nothing} = nothing`: Default value for the field. The four accepted input spellings are listed under *Date Input Formats* below; all of them are stored as a `Date`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `auto_now::Bool = false`: Whether to automatically set to current date on every save
 - `auto_now_add::Bool = false`: Whether to automatically set to current date on creation only
@@ -2152,7 +2153,7 @@ A field for storing date and time values with timezone information.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{DateTime, Nothing, String}`: Default value for the field. Can be a DateTime object, ISO string, or `nothing`. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 - `auto_now::Bool`: If `true`, automatically updates to current datetime on every save. Default: `false`
 - `auto_now_add::Bool`: If `true`, automatically sets to current datetime when record is created. Default: `false`
@@ -2348,7 +2349,7 @@ A field for storing decimal numbers with fixed precision and scale.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{Float64, Nothing}`: Default value for the field. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 - `max_digits::Int`: Maximum number of digits allowed (including decimal places). Default: `10`.
   **At most `15` on SQLite**, which has no exact decimal type: its NUMERIC affinity keeps only 15
@@ -2454,7 +2455,7 @@ A field for storing and validating email addresses.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default email address. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2638,7 +2639,7 @@ A field for storing floating-point numbers with double precision.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{Float64, String, Int64, Nothing}`: Default value for the field. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2711,7 +2712,7 @@ A field for storing image file references and metadata.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default image path or URL. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2814,7 +2815,7 @@ A field for storing large amounts of text without length restrictions.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default text content. Default: `nothing`
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples  
@@ -2978,7 +2979,7 @@ bytes of an encoded string, decode it yourself: `hex2bytes(s)`, `base64decode(s)
   `1073741824` (1 GiB, PostgreSQL's limit for one `bytea` value); a larger bound raises
   `FieldValidationError`, because it would constrain nothing.
 - `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
   (`'\\x…'::bytea` / `X'…'`). Must be a `Vector{UInt8}`; a `String` raises
   `FieldValidationError` rather than guessing whether you meant its code units or a decoded
   encoding. Keep it small — it is written verbatim into generated model files.
@@ -3174,7 +3175,7 @@ Values are validated against the standard UUID format (8-4-4-4-12 hex digits).
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default UUID value as a string
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 - `auto_add::Bool = false`: If true, automatically generates a UUID (`uuid4()`) when creating a new record without a provided value.
 
@@ -3707,7 +3708,7 @@ with `http://`, `https://`, or `ftp://`.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default URL value
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3788,7 +3789,7 @@ human-readable URL fragments derived from titles or names.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (true by default for slugs)
 - `default::Union{String, Nothing} = nothing`: Default slug value
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3868,7 +3869,7 @@ being sent to the database.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default JSON value as a string
-- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on every engine; any other expression must name its engine — `(postgres = "now()",)`, with `sqlite` and `mysql` keys beside it — and raises `BackendCapabilityError` on an engine it does not name rather than emitting DDL that engine would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping

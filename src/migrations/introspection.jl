@@ -4997,8 +4997,15 @@ const _POSTGRES_RESERVED_WORDS = Set{String}(split("""
 # The names a declaration cannot hold bare: a word any engine reserves. A declaration is every engine's.
 const _UNDECLARABLE_WORDS = union(_MYSQL_RESERVED_WORDS, _POSTGRES_RESERVED_WORDS, _SQLITE_RESERVED_WORDS)
 
+# MySQL 8.4's character sets (`information_schema.CHARACTER_SETS`) and the `utf8` alias: `_` and one of
+# them, bare, is an introducer, so a column so named is syntax (1064, measured) where `_rank` is a name.
+const _MYSQL_CHARSETS = Set{String}(split("""
+  armscii8 ascii big5 binary cp1250 cp1251 cp1256 cp1257 cp850 cp852 cp866 cp932 dec8 eucjpms euckr gb18030
+  gb2312 gbk geostd8 greek hebrew hp8 keybcs2 koi8r koi8u latin1 latin2 latin5 latin7 macce macroman sjis swe7
+  tis620 ucs2 ujis utf16 utf16le utf32 utf8 utf8mb3 utf8mb4"""))
+
 """
-    _mysql_declarable_sql(sql) -> Union{String, Nothing}
+    _mysql_declarable_sql(sql; reserved = _UNDECLARABLE_WORDS) -> Union{String, Nothing}
 
 MySQL's re-print of a SQL expression (a CHECK's condition, a functional index member, a column default,
 unescaped once from `information_schema`) as text a declaration can hold, or `nothing` when it has none
@@ -5006,10 +5013,12 @@ unescaped once from `information_schema`) as text a declaration can hold, or `no
 engines a backtick means nothing), and puts its charset introducer before every string literal
 (`_utf8mb4'x'`). So:
 
-- a backtick-quoted identifier loses its backticks when it is a plain name (`[A-Za-z][A-Za-z0-9_]*`) that
-  no engine reserves (`_UNDECLARABLE_WORDS`: a CHECK on PostgreSQL would read a bare `user` as
-  `current_user`); any other keeps them, and the text is not declarable. That includes a name that starts
-  with `_`, which MySQL reads bare as a charset introducer when it names one (`_latin1`);
+- a backtick-quoted identifier loses its backticks when it is a plain name (`[A-Za-z_][A-Za-z0-9_]*`) that
+  is not in `reserved` and is not `_` and a charset's name, which MySQL reads bare as an introducer
+  (`_latin1`); any other keeps them, and the text is not declarable. `reserved` is every engine's reserved
+  words (`_UNDECLARABLE_WORDS`: a CHECK on PostgreSQL would read a bare `user` as `current_user`), since a
+  declaration made from the text is every engine's; for an object PormG made (it carries the marker), it
+  is MySQL's alone, since the declaration it came from was already this bare text, which MySQL took;
 - an introducer before a literal is dropped (the literal keeps the connection's charset, PormG's `utf8mb4`),
   except `_binary`, which makes the literal a byte string: that text is not declarable;
 - inside a literal, MySQL's escaped quote `\\'` becomes the standard `''`. Any other backslash escape is
@@ -5021,7 +5030,7 @@ Everything else is kept as MySQL printed it. The planner compares the two sides 
 marker first), and `inspectdb` writes it, which is what makes an imported model converge, as on PostgreSQL
 where `inspectdb` writes the catalog's own spelling.
 """
-function _mysql_declarable_sql(sql::AbstractString)::Union{String, Nothing}
+function _mysql_declarable_sql(sql::AbstractString; reserved::Set{String} = _UNDECLARABLE_WORDS)::Union{String, Nothing}
   chars = collect(String(sql))
   n = length(chars)
   out = IOBuffer()
@@ -5034,7 +5043,8 @@ function _mysql_declarable_sql(sql::AbstractString)::Union{String, Nothing}
       j === nothing && return nothing
       j < n && chars[j+1] == '`' && return nothing            # an escaped backtick: not a plain name
       name = String(chars[i+1:j-1])
-      (occursin(r"^[A-Za-z][A-Za-z0-9_]*$", name) && !(uppercase(name) in _UNDECLARABLE_WORDS)) || return nothing
+      (occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", name) && !(uppercase(name) in reserved) &&
+       !(Base.startswith(name, "_") && lowercase(name[2:end]) in _MYSQL_CHARSETS)) || return nothing
       print(out, name)
       i = j + 1
     elseif c == '_' && (i == 1 || !ident(chars[i-1]))
@@ -5090,8 +5100,9 @@ function _mysql_declarable_sql(sql::AbstractString)::Union{String, Nothing}
 end
 
 # Catalog text in declarable form, or as MySQL printed it (unescaped) when it has none: the planner still
-# compares that, and `inspectdb` leaves out, with a warning, what holds it.
-_mysql_catalog_sql(raw::AbstractString)::String = something(_mysql_declarable_sql(_mysql_unescape(raw)), _mysql_unescape(raw))
+# compares that, and `inspectdb` leaves out, with a warning, what holds it. `reserved` as above.
+_mysql_catalog_sql(raw::AbstractString; reserved::Set{String} = _UNDECLARABLE_WORDS)::String =
+  something(_mysql_declarable_sql(_mysql_unescape(raw); reserved = reserved), _mysql_unescape(raw))
 
 # A declared CHECK as MySQL re-prints the clause `Dialect.add_check_constraint` writes: the condition,
 # then the marker's always-true term, both escaped as `information_schema` escapes a quote (`\'`). The
@@ -5284,7 +5295,7 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     clause = String(strip(_mysql_str(r.clause)))
     m = match(_MYSQL_MARKED_CHECK_RE, clause)
     if m !== nothing
-      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_catalog_sql(m[1]), m[2]))
+      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_catalog_sql(m[1]; reserved = _MYSQL_RESERVED_WORDS), m[2]))
       continue
     end
     m = match(_MYSQL_NON_NEGATIVE_CHECK_RE, clause)
@@ -5327,7 +5338,8 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
       # MySQL's re-print (``lower(`a`)``), escaped as `information_schema` escapes a quote, in declarable
       # form (`_mysql_catalog_sql`); a declaration matches it by the marker or by this text. A descending
       # member keeps its direction in `COLLATION`.
-      exprs = String[_mysql_catalog_sql(something(_mysql_str(r.expr), "")) * (d ? " DESC" : "")
+      reserved = marker === nothing ? _UNDECLARABLE_WORDS : _MYSQL_RESERVED_WORDS
+      exprs = String[_mysql_catalog_sql(something(_mysql_str(r.expr), ""); reserved = reserved) * (d ? " DESC" : "")
                      for (r, d) in zip(members, desc)]
       push!(composites, LiveComposite(idx, String[], unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
                                       marker, (comment === nothing || isempty(comment)) ? nothing : comment;
@@ -5383,7 +5395,7 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     owner = (raw_default !== nothing && raw_default.generated && hasproperty(r, :comment)) ?
             db_default_owner(_mysql_str(r.comment), dflt) : nothing
     columns[col_name] = owner !== nothing ?
-      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_catalog_sql(dflt)), owner)) :
+      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_catalog_sql(dflt; reserved = _MYSQL_RESERVED_WORDS)), owner)) :
       _finish_column_spec(table_name, probe, raw_default, db)
   end
   return LiveTable(table_name, columns, indexes, composites, table_checks)

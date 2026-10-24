@@ -68,9 +68,12 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
                 Driver = Models.Model("m4c_driver", driverid = Models.IDField(), forename = Models.CharField(max_length = 100, db_index = true),
                     code = Models.CharField(max_length = 8, db_default = (postgres = "lower('X')", mysql = "lower('X')")),
                     number = Models.PositiveSmallIntegerField(null = true), dob = Models.DateField(null = true),
-                    uid = Models.UUIDField(null = true), meta = Models.JSONField(null = true), fastest = Models.DurationField(null = true);
-                    constraints = [Models.CheckConstraint(condition = "number <= 99", name = "m4c_driver_number_cap")],
-                    indexes = [Models.Index(expressions = ("lower(forename)",), name = "m4c_driver_fn_idx")])
+                    uid = Models.UUIDField(null = true), meta = Models.JSONField(null = true), fastest = Models.DurationField(null = true),
+                    user = Models.IntegerField(null = true);
+                    constraints = [Models.CheckConstraint(condition = "number <= 99", name = "m4c_driver_number_cap"),
+                                   Models.CheckConstraint(condition = "user <> 0", name = "m4c_driver_user_set")],
+                    indexes = [Models.Index(expressions = ("lower(forename)",), name = "m4c_driver_fn_idx"),
+                               Models.Index(expressions = ("(user + 1)",), name = "m4c_driver_user_idx")])
                 Result = Models.Model("m4c_result", resultid = Models.IDField(),
                     driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"),
                     circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", null = true),
@@ -82,6 +85,9 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
             text = read(models_path, String)
             @test occursin("db_default=(mysql = \"lower('X')\",)", text) && occursin("db_default=\"CURRENT_TIMESTAMP\"", text)
             @test occursin("Models.CheckConstraint(condition = \"(number <= 99)\", name = \"m4c_driver_number_cap\")", text)
+            # PormG's own, over a name PostgreSQL reserves and MySQL does not: its declaration was this bare text.
+            @test occursin("Models.CheckConstraint(condition = \"(user <> 0)\", name = \"m4c_driver_user_set\")", text) &&
+                  occursin("expressions = (\"(user + 1)\",)", text)
             @test occursin("expressions = (\"lower(forename)\",)", text) && occursin("Models.UUIDField", text)
             @test occursin("fastest = Models.BigIntegerField", text) && occursin("number = Models.PositiveSmallIntegerField", text)
             @test occursin("Models.Model(\"m4c_driver_codes\", managed = false", text)

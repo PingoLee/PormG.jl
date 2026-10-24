@@ -4775,12 +4775,11 @@ end
 _mysql_restated_default(text::AbstractString)::String =
   occursin(r"^current_timestamp(\(\d\))?$"i, text) ? "DEFAULT $(text)" : "DEFAULT ($(text))"
 
-# A CHECK's name as it is after the plan's `RENAME TABLE`: MySQL renames the CHECKs it named itself
-# (`<table>_chk_<n>`) with the table and keeps a name a constraint was given (measured on 8.4). The
-# catalog is read before the plan runs, under the old name.
+# A CHECK's name as it is after the plan's `RENAME TABLE`: MySQL renames every CHECK named
+# `<table>_chk_…` with the table — the ones it named itself and one given such a name — and keeps any
+# other name (measured on 8.4). The catalog is read before the plan runs, under the old name.
 _mysql_check_after_rename(name::AbstractString, catalog::AbstractString, table::AbstractString)::String =
-  (catalog != table && Base.startswith(name, catalog * "_chk_") &&
-   occursin(r"^\d+$", chopprefix(name, catalog * "_chk_"))) ? table * chopprefix(name, catalog) : String(name)
+  (catalog != table && Base.startswith(name, catalog * "_chk_")) ? table * chopprefix(name, catalog) : String(name)
 
 # `AUTO_INCREMENT` is written on an `IDField` key and nowhere else (`_column_identity(::PormGMySQL)`).
 _mysql_auto_increments(field::PormGField)::Bool =
@@ -4907,9 +4906,11 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
     # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
     keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
                    delta.new_spec.default isa NoDefault
-    push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn;
-                                                        live = _column_attributes(conn, catalog, live_column),
-                                                        keep_default = keep_default))
+    live = _column_attributes(conn, catalog, live_column)
+    # A generated column made by hand reads as a plain one; a MODIFY would end its generation.
+    live !== nothing && live.generated &&
+      throw(_mysql_not_yet("A change to the generated column \"$(live_column)\""))
+    push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn; live = live, keep_default = keep_default))
   end
   drops_key && push!(clauses, "DROP PRIMARY KEY")
   if :checks in delta && !renamed

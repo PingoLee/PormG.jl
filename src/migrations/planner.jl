@@ -648,9 +648,10 @@ function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::S
 end
 
 # MySQL (#1130): a view that reads a dropped table (`VIEW_TABLE_USAGE`), and a foreign key to one from a
-# table the plan neither drops nor reads (`read_tables`: an ignored table, one outside the schema read).
-# The drop runs with the key checks off, so that key would be left pointing at a missing table, where
-# PostgreSQL's `CASCADE` removes it; a table the plan reads has its keys planned. A trigger is the table's
+# table the plan neither drops nor manages (`read_tables`, the managed tables it reads: not an ignored
+# table, an unmanaged model's, or one in another database). The drop runs with the key checks off, so
+# that key would be left pointing at a missing table, where PostgreSQL's `CASCADE` removes it; a table
+# the plan manages has its keys planned. A trigger is the table's
 # own and goes with it.
 function _refuse_dropped_table_dependents(conn::PormGMySQL, dropped_tables::Set{String};
                                           read_tables::Set{String} = Set{String}())::Nothing
@@ -776,6 +777,8 @@ function _plan_composite_actions!(conn::_SQLEngine,
                                   # `UniqueConstraint` records into. `nothing` for a table this plan
                                   # creates — it is empty, so nothing can fail.
                                   live_columns = nothing,
+                                  # The live columns that carry a foreign key (MySQL's narrowed index).
+                                  key_columns::Set{String} = Set{String}(),
                                   lossy_alters::Vector{LossyAlter} = LossyAlter[],
                                   # #934: the live columns this plan retypes, which a partial
                                   # UniqueConstraint's condition cannot be counted over.
@@ -795,7 +798,11 @@ function _plan_composite_actions!(conn::_SQLEngine,
     inc = String[get(column_renames, c, c) for c in lc.include]
     if all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc)
       push!(live, (lc, cols, inc))
-    elseif !_drop_column_drops_its_indexes(conn)
+    elseif !_drop_column_drops_its_indexes(conn) &&
+           !(!lc.unique && !isempty(cols) && first(lc.columns) in key_columns && first(cols) in declared_cols)
+      # A non-unique one led by a foreign-key column the table keeps is left to MySQL's narrowing: it is
+      # that key's index (MySQL keeps every foreign key indexed, so dropping it is error 1553), and a
+      # narrowed non-unique index rejects no row.
       push!(vanishing, lc)
     end
   end
@@ -916,13 +923,22 @@ function _plan_composite_actions!(conn::_SQLEngine,
   end
   # MySQL narrows an index over a dropped column to the columns that remain, where PostgreSQL drops it with
   # the column: a `UNIQUE (a, b)` would become `UNIQUE (a)`, a stricter key, and the `DROP COLUMN` fails on
-  # the rows that break it (error 1062). So the index is dropped first, and the table's column drops move
-  # after it. One that is the only index a surviving foreign key has is MySQL's to refuse (error 1553).
+  # the rows that break it (error 1062). So the index is dropped before the table's column drops. A unique
+  # one that is the only index a surviving foreign key has is MySQL's to refuse (error 1553).
   if !isempty(vanishing)
+    steps = get!(OrderedDict{String, String}, migration_plan, model_name)
+    before = collect(steps)
     foreach(drop!, vanishing)
-    steps = migration_plan[model_name]
-    for key in [k for k in keys(steps) if Base.startswith(k, "Remove field: ")]
-      steps[key] = pop!(steps, key)
+    added = collect(steps)[length(before)+1:end]
+    # Placed just ahead of the first column drop, so every other step keeps its place (a primary key
+    # moved to a column that stays still waits for the old key's column to go).
+    first_drop = findfirst(p -> Base.startswith(p.first, "Remove field: "), before)
+    if first_drop !== nothing
+      empty!(steps)
+      for (i, p) in enumerate(before)
+        i == first_drop && foreach(a -> steps[a.first] = a.second, added)
+        steps[p.first] = p.second
+      end
     end
   end
   foreach(drop!, drops)
@@ -1970,6 +1986,7 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
                                                 catalog_table = catalog_table,
                                                 targets = composite_targets,
                                                 live_columns = Set{String}(keys(live.columns)),
+                                                key_columns = Set{String}(c for (c, s) in live.columns if s.reference !== nothing),
                                                 lossy_alters = lossy_alters, retyped = retyped)
 
   # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on
@@ -3312,7 +3329,7 @@ end
 
 # #754: a table the plan drops must not still be read by a view or a trigger. First of the whole-plan
 # refusals, so a rebuild whose carried view names the dropped table is reported by its cause.
-_refuse_dropped_table_dependents(conn, dropped_tables; read_tables = Set{String}(t.name for t in all_live))
+_refuse_dropped_table_dependents(conn, dropped_tables; read_tables = Set{String}(t.name for t in live))
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, all_live, dropped_tables, table_renames)

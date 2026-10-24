@@ -557,7 +557,12 @@ end
 # an expression default. Its CHECK lookups answer as `MmMockMySQL`'s do.
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
-  (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()")
+  (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
+   generated = false)
+# A generated column made by hand, which the reader takes for a plain one.
+struct MmMockMySQLGen <: PormG.PormGMySQL end
+PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
+  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true)
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
 # SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
@@ -584,6 +589,12 @@ PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::Abstr
   @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
   @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
+  # A MODIFY would end a generated column's generation (STORED) or fail (VIRTUAL, 3106): refused.
+  gen = MmMockMySQLGen()
+  e = _mm_err(() -> _MD.alter_field(gen, _MmDriver, "c", Models.IntegerField(null = true),
+                                    _MM.column_delta(Models.IntegerField(null = true),
+                                                     _MM.column_spec(Models.IntegerField(), gen; name = "c"), gen; name = "c")))
+  @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"c\"", sprint(showerror, e))
   # A column with nothing else, as before.
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==
@@ -605,9 +616,10 @@ end
   @test _MD.rename_field(_mm_my, "pilot", "number", "num"; old_spec = old_spec, new_spec = new_spec,
                          catalog_table = "driver") ==
         "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`, RENAME COLUMN `number` TO `num`, ADD CHECK (`num` >= 0);"
-  # A name the constraint was given, and one under the same table, are kept.
+  # Every `<table>_chk_` name follows the table, one a constraint was given included; another name, and
+  # one under a table the plan does not rename, are kept.
   @test _MD._mysql_check_after_rename("mine", "driver", "pilot") == "mine"
-  @test _MD._mysql_check_after_rename("driver_chk_x", "driver", "pilot") == "driver_chk_x"
+  @test _MD._mysql_check_after_rename("driver_chk_x", "driver", "pilot") == "pilot_chk_x"
   @test _MD._mysql_check_after_rename("driver_chk_2", "driver", "driver") == "driver_chk_2"
 end
 
@@ -624,7 +636,9 @@ end
                      (Models.DateTimeField(), Models.BigIntegerField()), (Models.IntegerField(), Models.DateField()),
                      (Models.BooleanField(), Models.DateField()), (Models.IntegerField(), Models.UUIDField()),
                      (Models.JSONField(), Models.IntegerField()), (Models.UUIDField(), Models.JSONField()),
-                     (Models.DateField(), Models.JSONField()))
+                     (Models.DateField(), Models.JSONField()), (Models.BooleanField(), Models.JSONField()),
+                     (Models.BinaryField(), Models.IntegerField()), (Models.IntegerField(), Models.BinaryField()),
+                     (Models.DateField(), Models.BinaryField()), (Models.BinaryField(), Models.JSONField()))
     @test (typeof(old), typeof(new), kinds(new, old)) == (typeof(old), typeof(new), [:no_implicit_cast])
   end
   @test kinds(Models.DateTimeField(), Models.DateField()) == Symbol[]
@@ -643,6 +657,23 @@ end
   steps = collect(keys(_mm_plan(_mm_my, live, declared)[:driver]))
   index_at, field_at = findfirst(==("Remove composite index: drv_fc_idx"), steps), findfirst(==("Remove field: code"), steps)
   @test index_at !== nothing && field_at !== nothing && index_at < field_at
+  # Every other step keeps its place: the old key's column still goes before the key moves (1068 otherwise).
+  moved = "Driver = Models.Model(\"driver\", legacyid = Models.IDField(), driverid = Models.BigIntegerField(), " *
+          "forename = Models.CharField(max_length = 100), code = Models.CharField(max_length = 8); " *
+          "indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")])"
+  steps = collect(keys(_mm_plan(_mm_my, moved, "Driver = Models.Model(\"driver\", driverid = Models.IDField(), " *
+                                                 "forename = Models.CharField(max_length = 100))")[:driver]))
+  at(k) = findfirst(==(k), steps)
+  @test at("Remove composite index: drv_fc_idx") < at("Remove field: legacyid") < at("Alter field: driverid")
+  # A non-unique index led by a foreign-key column that stays is left to MySQL's narrowing: it is the key's
+  # index (dropping it is 1553). A unique one is dropped.
+  lap(n, tail) = "Circuit = Models.Model(\"circuit\", circuitid = Models.IDField())\n" *
+                 "Lap = Models.Model(\"lap\", lapid = Models.IDField(), circuitid = Models.ForeignKey(Circuit, pk_field = \"circuitid\")$(n)$(tail))"
+  n = ", n = Models.IntegerField()"
+  keeps = _mm_plan(_mm_my, lap(n, "; indexes = [Models.Index(fields = (\"circuitid\", \"n\"), name = \"lap_cn_idx\")]"), lap("", ""))
+  @test haskey(keeps[:lap], "Remove field: n") && !haskey(keeps[:lap], "Remove composite index: lap_cn_idx")
+  drops = _mm_plan(_mm_my, lap(n, "; constraints = [Models.UniqueConstraint(fields = (\"circuitid\", \"n\"), name = \"lap_cn_uniq\")]"), lap("", ""))
+  @test haskey(drops[:lap], "Remove composite index: lap_cn_uniq")
 end
 
 # What: the refusal of a plan that cannot apply whole counts statements, not plan entries.

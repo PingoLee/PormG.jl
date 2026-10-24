@@ -2125,23 +2125,27 @@ function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String};
      WHERE TABLE_SCHEMA = DATABASE() AND VIEW_SCHEMA = DATABASE() AND TABLE_NAME IN ($(marks))
      ORDER BY VIEW_NAME, TABLE_NAME""", Any[tables...]) |> DataFrame
   found = Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in eachrow(rows)]
+  # Every key to a dropped table of this database, a child in another database's included.
   fks = fetch(conn, """
-    SELECT REFERENCED_TABLE_NAME AS tbl, TABLE_NAME AS child, CONSTRAINT_NAME AS name
+    SELECT REFERENCED_TABLE_NAME AS tbl, TABLE_NAME AS child, CONSTRAINT_NAME AS name,
+           CONSTRAINT_SCHEMA AS sch, CONSTRAINT_SCHEMA = DATABASE() AS here
       FROM information_schema.REFERENTIAL_CONSTRAINTS
-     WHERE CONSTRAINT_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IN ($(marks))
-     ORDER BY TABLE_NAME, CONSTRAINT_NAME""", Any[tables...]) |> DataFrame
+     WHERE UNIQUE_CONSTRAINT_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IN ($(marks))
+     ORDER BY CONSTRAINT_SCHEMA, TABLE_NAME, CONSTRAINT_NAME""", Any[tables...]) |> DataFrame
   for r in eachrow(fks)
-    child = _mysql_str(r.child)
-    child in keep && continue
-    push!(found, (_mysql_str(r.tbl), "foreign key `$(_mysql_str(r.name))` on `$(child)`"))
+    child, here = _mysql_str(r.child), r.here == 1
+    here && child in keep && continue
+    on = here ? "`$(child)`" : "`$(_mysql_str(r.sch))`.`$(child)`"
+    push!(found, (_mysql_str(r.tbl), "foreign key `$(_mysql_str(r.name))` on $(on)"))
   end
   return found
 end
 
 # What `MODIFY COLUMN` would reset on one column unless restated (measured on 8.4), as the catalog holds it
 # before the plan runs: its COMMENT, `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP`, a collation other than
-# the table's, and an expression default (as MySQL prints it, one level of escaping undone). Bound by
-# value; `nothing` for a column the catalog does not hold.
+# the table's, and an expression default (as MySQL prints it, one level of escaping undone) — and whether
+# it is a generated column, which a MODIFY makes a plain one (`STORED`) or fails on (`VIRTUAL`, 3106).
+# Bound by value; `nothing` for a column the catalog does not hold.
 function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
   rows = fetch(conn, """
     SELECT c.COLUMN_COMMENT AS comment, c.EXTRA AS extra, c.COLLATION_NAME AS coll,
@@ -2160,6 +2164,7 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
           invisible = occursin("invisible", extra),
           on_update = occursin("on update current_timestamp", extra),
           collation = keep_coll ? coll : nothing,
+          generated = occursin(r"(stored|virtual) generated", extra),
           default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing)
 end
 

@@ -1132,7 +1132,7 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:host_bits` | PostgreSQL | `:rows` | an IP address (`inet`) becomes a network (`cidr`), and some values have bits set right of their mask (`10.0.0.1/24`) |
 | `:to_boolean` | PostgreSQL, MySQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
 | `:drop_default` | PostgreSQL, MySQL | `:silent` | a `USING` retype (on MySQL, any retype) must drop a database default the model does not declare, and nothing puts it back |
-| `:no_implicit_cast` | PostgreSQL, MySQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` — since #28, an array becoming a scalar other than text, or a scalar other than text becoming an array; on MySQL, a pair PostgreSQL has no cast for that MySQL converts by a rule changing every value (a date into a time or a number, a time into a date, a number into a date or a UUID) or only as text (JSON, a UUID) |
+| `:no_implicit_cast` | PostgreSQL, MySQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` — since #28, an array becoming a scalar other than text, or a scalar other than text becoming an array; on MySQL, a pair PostgreSQL has no cast for that MySQL converts by a rule changing every value (a date into a time or a number, a time into a date, a number into a date or a UUID, a boolean into JSON) or only as text (binary, JSON, a UUID) |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
 `:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
@@ -1473,15 +1473,19 @@ end
 # The MySQL retypes refused as castless (measured on 8.4): pairs PostgreSQL has no cast for, which MySQL
 # converts by a rule that gives every value another meaning — a DATE into a TIME is midnight, a TIME into a
 # DATE or DATETIME takes today's date, a date into a number is its digits (`20240506`), a number into a date
-# is read back from such digits, a number into a UUID's `CHAR(36)` is text no UUID reads — or fails part-way
-# through the plan on rows nothing counted (a date into JSON; JSON and a UUID convert only to text). Text
-# into any of them is counted instead (`:text_cast`), and a number into JSON keeps the number.
+# is read back from such digits, a number into a UUID's `CHAR(36)` is text no UUID reads, a boolean into JSON
+# is `1`, a value into binary is its text's bytes — or fails part-way through the plan on rows nothing
+# counted (a date into JSON; binary, JSON and a UUID convert only to and from text). Text into any of them
+# is counted instead (`:text_cast`), and a number into JSON keeps the number.
 function _mysql_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
   temporal, scalar = Union{CDate, CTime, CDateTime}, Union{_NumericType, CBool}
   old isa temporal && new isa Union{scalar, CJSON} && return true
   old isa scalar && new isa temporal && return true
   old isa CDate && new isa CTime && return true
   old isa CTime && new isa Union{CDate, CDateTime} && return true
+  old isa CBool && new isa CJSON && return true                     # `1`, not `true`
+  old isa CBytes && new isa CBytes && return false
+  (old isa CBytes || new isa CBytes) && return !(old isa _TextType || new isa _TextType)
   old isa Union{CJSON, CUUID} && return !(new isa _TextType)
   new isa CUUID && return !(old isa _TextType)
   return false

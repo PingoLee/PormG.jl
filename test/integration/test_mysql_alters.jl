@@ -301,6 +301,15 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test e isa PormG.InvalidMigrationError &&
                   occursin("foreign key `m4b_ext_venue_fk` on `m4b_ext`", sprint(showerror, e)) && !isfile(pending)
             exec("DROP TABLE `m4b_ext`")
+            # An unmanaged model's table is read but never migrated: its key is not the plan's either.
+            exec("CREATE TABLE `m4b_view_src` (`id` BIGINT NOT NULL PRIMARY KEY, `venueid` BIGINT NULL, " *
+                 "CONSTRAINT `m4b_view_src_fk` FOREIGN KEY (`venueid`) REFERENCES `m4b_venue` (`venueid`)) ENGINE=InnoDB")
+            unmanaged = "\nSource = Models.Model(\"m4b_view_src\"; managed = false, id = Models.IDField(), " *
+                        "venueid = Models.BigIntegerField(null = true))"
+            write_models("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())" * unmanaged)
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("foreign key `m4b_view_src_fk` on `m4b_view_src`", sprint(showerror, e))
+            exec("DROP TABLE `m4b_view_src`")
             apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())")
             @test !("m4b_venue" in scratch_tables()) && converged()
         end
@@ -328,6 +337,17 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             r = column_row("m4b_car", "tag")
             @test ismissing(r.d) && (r.c, r.k) == ("set by hand", "utf8mb4_0900_ai_ci") && converged()
+            # A generated column made by hand reads as a plain one; changing it is refused, since a MODIFY
+            # would end its generation.
+            exec("ALTER TABLE `m4b_car` ADD COLUMN `twice` BIGINT GENERATED ALWAYS AS (CHAR_LENGTH(`tag`)) STORED")
+            car2(twice) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), " *
+                          "tag = Models.CharField(max_length = 60, null = true), twice = $(twice))"
+            write_models(car2("Models.BigIntegerField(null = true)"))
+            @test converged()
+            write_models(car2("Models.BigIntegerField()"))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.UnsupportedConnectionError && occursin("generated column \"twice\"", sprint(showerror, e))
+            exec("ALTER TABLE `m4b_car` DROP COLUMN `twice`")
         end
 
         # What: an alter plan stopped part-way — its `ADD CONSTRAINT` refused because another table holds the

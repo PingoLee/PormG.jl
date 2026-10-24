@@ -173,7 +173,9 @@ end
   # As measured on 8.4 for `DEFAULT ('it''s a \\ b')`: the value is `it's a \ b`.
   @test clean("_utf8mb4\\'it\\\\\\'s a \\\\\\\\ b\\'", true) == "it's a \\ b"
   @test clean("_utf8mb4\\'{\"k\": 1}\\'", true) == "{\"k\": 1}"
-  @test clean("lower(`x`)", true) == PormG._ExpressionDefault("lower(`x`)")
+  # Any other expression in declarable form (#1130 phase 4c); one with none as MySQL printed it.
+  @test clean("lower(`x`)", true) == PormG._ExpressionDefault("lower(x)")
+  @test clean("lower(`order`)", true) == PormG._ExpressionDefault("lower(`order`)")
   @test clean("1", false, PormG.CBool()) === true && clean("0", false, PormG.CBool()) === false
   @test clean("a\\b'c", false, PormG.CVarChar(8)) == "a\\b'c"   # a literal is reported unescaped
   @test _MM._clean_default(nothing, PormG.CText(), _mm_my) === nothing
@@ -239,7 +241,8 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
   # A CHECK that is not one of PormG's two column shapes is the table's.
   other = _MM._mysql_live_table(_mm_my, "driver", dcols, Any[], Any[],
                                 [(tbl = "driver", name = "driver_chk_1", clause = "(`dob` > _utf8mb4'1950-01-01')")])
-  @test [(c.name, c.sql) for c in other.checks] == [("driver_chk_1", "(`dob` > _utf8mb4'1950-01-01')")]
+  # Its text in declarable form: MySQL's backticks and introducer off (#1130 phase 4c).
+  @test [(c.name, c.sql) for c in other.checks] == [("driver_chk_1", "(dob > '1950-01-01')")]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -584,8 +587,8 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
                                 (tbl = "driver", name = "code_nonempty", clause = marked("(`code` <> _utf8mb4\\'\\')", "code <> ''")),
                                 (tbl = "driver", name = "driver_chk_1", clause = "(`grid` >= 0)")])
   @test sort!([(k.name, k.sql, k.marker) for k in rd.checks]) ==
-        [("code_nonempty", "(`code` <> _utf8mb4'')", PormG.check_marker("code <> ''")),
-         ("grid_nonneg", "(`grid` >= 0)", PormG.check_marker("grid >= 0"))]
+        [("code_nonempty", "(code <> '')", PormG.check_marker("code <> ''")),
+         ("grid_nonneg", "(grid >= 0)", PormG.check_marker("grid >= 0"))]
   @test rd.columns["grid"].checks == [PormG.NonNegativeCheck()]
 
   # The pre-check's condition is taken from the plan's header only when a statement of the plan carries
@@ -598,6 +601,33 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
   write(joinpath(dir, "q.jl"), replace(read(joinpath(dir, "p.jl"), String), "condition=code <> ''" => "condition=code <> '' OR true"))
   e = _mm_err(() -> _MM._plan_lossy_alters(joinpath(dir, "q.jl")))
   @test e isa PormG.InvalidMigrationError && occursin("names a condition no statement in the plan adds", sprint(showerror, e))
+end
+
+# What: MySQL's re-print of a SQL expression, as the MySQL reader hands it to the planner and `inspectdb`.
+# SQL: none.
+# Why: MySQL quotes every identifier in backticks and puts its charset introducer before every literal
+# (measured on 8.4), which a declaration cannot hold, so without this an imported CHECK, functional index or
+# default is left out and the next plan drops PormG's own (#1130 phase 4c). What cannot be written for every
+# engine — a reserved-word name, a backslash escape other than a quote's, a `_binary` literal — is no text.
+@testset "#1130: MySQL's re-printed SQL in declarable form" begin
+  for (printed, want) in ("(`grid` >= 0)" => "(grid >= 0)",
+                          "(`grid` in (1,2,3))" => "(grid in (1,2,3))",
+                          "(`name` like _utf8mb4'a%')" => "(name like 'a%')",
+                          "(`name` <> _utf8mb4'it\\'s')" => "(name <> 'it''s')",
+                          "((case when (`grid` > 0) then 1 else 0 end) = 1)" => "((case when (grid > 0) then 1 else 0 end) = 1)",
+                          "(cast(`grid` as char(3) charset utf8mb4) <> _utf8mb4'x')" => "(cast(grid as char(3) charset utf8mb4) <> 'x')",
+                          "(`Mixed` > 0)" => "(Mixed > 0)", "concat(`name`,_utf8mb4'x')" => "concat(name,'x')",
+                          "lower(_utf8mb4'O''Neil')" => "lower('O''Neil')", "uuid()" => "uuid()",
+                          "_utf8mb4'_x' = `_y`" => "'_x' = _y")
+    @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, want)
+  end
+  for printed in ("(`order` > 0)", "(`a b` > 0)", "(`x``y` > 0)", "concat(_utf8mb4'a\\\\b')", "(_utf8mb4'a\\nb' <> `c`)",
+                  "(`c` = _binary'ab')", "(`c` <> \"x\")", "(`c` <> _utf8mb4'open)")
+    @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, nothing)
+  end
+  # From `information_schema`, escaped once more; text with no declarable form stays as MySQL printed it.
+  @test _MM._mysql_catalog_sql("(`name` <> _utf8mb4\\'it\\\\\\'s\\')") == "(name <> 'it''s')"
+  @test _MM._mysql_catalog_sql("(`order` > 0)") == "(`order` > 0)"
 end
 
 # What: a functional index and a functional UniqueConstraint on MySQL: the statement, the plan for each
@@ -633,16 +663,19 @@ end
   changed = _mm_plan(_mm_my, idx(["lower(forename)"]), idx(["upper(forename)"]))[:driver]
   @test changed["Remove composite index: drv_lower_idx"] == "DROP INDEX `drv_lower_idx` ON `driver`;" &&
         haskey(changed, "Create index: drv_lower_idx")
-  # One made by hand under the declared name, as the reader reports it (MySQL's re-print, no marker): its
-  # name is taken, so the plan is refused before it runs.
-  live = [let t = _MM.live_table(e[:model], _mm_my)
-            _MM.LiveTable(t.name, t.columns, t.indexes,
-                          [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
-                                             nothing, nothing; expressions = ["lower(`forename`)"]) for c in t.composites],
-                          t.checks)
-          end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
-  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
-                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  # One made by hand under the declared name, as the reader reports it (no marker, its text in declarable
+  # form): of the declared text, it is the declaration's, left unowned as on SQLite (MySQL cannot change an
+  # index's comment in place); of another, its name is taken, so the plan is refused before it runs.
+  hand(text) = [let t = _MM.live_table(e[:model], _mm_my)
+                  _MM.LiveTable(t.name, t.columns, t.indexes,
+                                [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                                   nothing, nothing; expressions = [text]) for c in t.composites],
+                                t.checks)
+                end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
+  plan_over(live) = _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false)
+  @test isempty(plan_over(hand("lower(forename)")))
+  e = _mm_err(() -> plan_over(hand("upper(forename)")))
   @test e isa PormG.InvalidMigrationError && occursin("drv_lower_idx", sprint(showerror, e))
 
   # The reader: a functional index of expressions only, with its marker and directions; a column beside an
@@ -658,7 +691,7 @@ end
   rd = _MM._mysql_live_table(_mm_my, "driver", dcols, stats, Any[], Any[])
   @test isempty(rd.indexes)
   @test sort!([(c.name, c.columns, c.expressions, c.marker) for c in rd.composites]) ==
-        [("drv_lower_idx", String[], ["lower(`forename`)", "concat(`code`,_utf8mb4'x') DESC"], mk),
+        [("drv_lower_idx", String[], ["lower(forename)", "concat(code,'x') DESC"], mk),
          ("drv_solo_idx", ["code"], String[], PormG.INDEX_MARKER)]
 end
 
@@ -943,10 +976,17 @@ end
   pk = _mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI")
   owned = _MM._mysql_live_table(_mm_my, "driver", [pk, _mm_col("driver", "tag", "varchar(20)", "NO", raw, "DEFAULT_GENERATED", "";
                                                                   comment = "kept $(marker)")], Any[], Any[], Any[])
-  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower(_utf8mb4'X')", h1)
+  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower('X')", h1)
   @test owned.columns["tag"] == _MM.column_spec(f, _mm_my; name = "tag")
   hand = "upper(_utf8mb4\\'X\\')"
-  changed = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+  changed = _MM._mysql_live_table(_mm_my, "driver",
     [pk, _mm_col("driver", "tag", "varchar(20)", "NO", hand, "DEFAULT_GENERATED", ""; comment = marker)], Any[], Any[], Any[])
-  @test changed.columns["tag"].default isa PormG.NoDefault && changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
+  @test changed.columns["tag"].default == PormG.ExpressionDefault("upper('X')") &&
+        changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
+  # A default whose text has no declarable form (a backslash in a literal reads per engine) keeps MySQL's,
+  # which the declaration validator refuses: the column reads with no default, and a warning.
+  odd = "concat(_utf8mb4\\'a\\\\\\\\b\\')"
+  dropped = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+    [pk, _mm_col("driver", "tag", "varchar(20)", "NO", odd, "DEFAULT_GENERATED", "")], Any[], Any[], Any[])
+  @test dropped.columns["tag"].default isa PormG.NoDefault
 end

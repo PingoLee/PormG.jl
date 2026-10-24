@@ -4990,9 +4990,11 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
     live !== nothing && :type in delta && (live = merge(live, (column_type = nothing,)))
     # An undeclared expression default is kept unless the type changes (`_retype_drops_default`): one the
     # reader reads, and one it reads as none because no declaration can hold its text, which the catalog
-    # still holds (`live.default_expression`).
+    # still holds (`live.default_expression`). Not a literal the model drops: on a TEXT or JSON column MySQL
+    # holds one as an expression (`DEFAULT ('x')`), which the reader reads back as the literal.
     keep_default = !(:type in delta) && delta.new_spec.default isa NoDefault &&
-                   (delta.old_spec.default isa ExpressionDefault || (live !== nothing && live.default_expression !== nothing))
+                   (delta.old_spec.default isa ExpressionDefault ||
+                    (delta.old_spec.default isa NoDefault && live !== nothing && live.default_expression !== nothing))
     live !== nothing && live.generation !== nothing && !(delta.new_spec.default isa NoDefault) &&
       throw(InvalidMigrationError(
         "Column \"$(live_column)\" of table \"$(catalog)\" is a generated column made by hand, which holds no " *

@@ -827,6 +827,10 @@ PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::Ab
   unread = delta(Models.CharField(max_length = 8, null = true), _MM.column_spec(Models.CharField(max_length = 8), at; name = "c"))
   @test occursin("VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE",
                  _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 8, null = true), unread))
+  # A literal the model drops is dropped, though MySQL holds one on a TEXT column as an expression.
+  dropped = delta(Models.TextField(), _MM.column_spec(Models.TextField(default = "x"), at; name = "c"))
+  @test _MD.alter_field(at, _MmDriver, "c", Models.TextField(), dropped) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` LONGTEXT NOT NULL INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci;"
   # ON UPDATE at the column's own precision on a timestamp, and no collation on a column that is not text;
   # the catalog's expression default is restated, as by any MODIFY that changes no type.
   stamp = _mm_delta(Models.DateTimeField(null = true), Models.DateTimeField())

@@ -188,9 +188,11 @@ recorded as `failed`, and the error is raised. Fix the cause, run `makemigration
 what is still missing, and `migrate()` once more. `lock_timeout` and `statement_timeout` are refused on
 MySQL until a later phase of #1130 decides what they mean there.
 
-A second instance booting while the first applies a plan waits on the lock, then finds the plan
-recorded and reports `:already_applied`, as on PostgreSQL. Its schema check runs inside the lock only:
-before it, the first instance's half-applied plan would read as a changed schema.
+A second instance that also calls `migrate(…; atomic = false)` while the first applies the plan waits
+on the lock, then finds the plan recorded and reports `:already_applied`, as on PostgreSQL. (With the
+default `atomic = true` it raises the refusal above at once.) Its schema check runs inside the lock
+only: before it, the first instance's half-applied plan would read as a changed schema, so on MySQL a
+stale plan reaches the row pre-check and the confirmation before the lock refuses it.
 
 ## Gating a release on drift
 

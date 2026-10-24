@@ -4831,7 +4831,8 @@ for (f, what, phase) in ((:add_field, "Adding a column to an existing table", "4
                          (:drop_unique_constraint, "Dropping a unique key", "4b"),
                          (:rename_constraint, "Renaming a constraint", "4b"),
                          (:drop_check_constraint, "Dropping a CHECK constraint", "4b"),
-                         (:add_check_constraint, "A declared CheckConstraint", "4c"))
+                         (:add_check_constraint, "A declared CheckConstraint", "4c"),
+                         (:comment_check_constraint, "A declared CheckConstraint", "4c"))
   @eval $f(::PormGMySQL, args...; kwargs...) = throw(_mysql_not_yet($what, $phase))
 end
 

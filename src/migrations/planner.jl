@@ -2960,12 +2960,14 @@ function _refuse_unsupported_indexes(current_schema::Dict{Symbol, Dict{Symbol, U
   return nothing
 end
 
-# #1130: a key or an index over a column of unbounded text, bytes or JSON — a `TextField`, a
-# `BinaryField`, a `JSONField` — on a backend that indexes such a column only by a prefix (MySQL's
-# `LONGTEXT`, `LONGBLOB` and `JSON`, errors 1170 and 3152). Refused for every managed model before the
-# diff: left to the server, the `CREATE INDEX` fails after the `CREATE TABLE` committed, and the fix (a
-# `CharField`) is then a retype of a table that exists. A primary key, a `unique`, a `db_index` and a
-# member of a declared `Index` or `UniqueConstraint` all count.
+# #1130: a key or an index over a column of unbounded text, bytes or JSON — every field the backend
+# writes without a length, `TextField`, `EmailField` and `ImageField` among them, a `BinaryField`, a
+# `JSONField` — on a backend that indexes such a column only by a prefix (MySQL's `LONGTEXT`, `LONGBLOB`
+# and `JSON`, errors 1170 and 3152). Refused for every managed model before the diff: left to the
+# server, the `CREATE INDEX` fails after the `CREATE TABLE` committed, and the fix (a `CharField`) is
+# then a retype of a table that exists. A `unique`, a `db_index`, a primary key and a member of a declared
+# `Index` or `UniqueConstraint` all count. A key past InnoDB's 3072 bytes over bounded columns (a
+# `CharField(max_length = 1000)` is 4000 bytes in utf8mb4) is left to the server (error 1071).
 function _refuse_unbounded_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
                                    conn)::Nothing
   (conn isa PormGBackend && !_supports(conn, :unbounded_text_indexes)) || return nothing
@@ -2984,7 +2986,7 @@ function _refuse_unbounded_indexes(current_schema::Dict{Symbol, Dict{Symbol, Uni
     for col in sort!(unique!(vcat(keyed, members)))
       unbounded(col) || continue
       throw(_capability_error(conn, :unbounded_text_indexes,
-        "A key or index over column \"$(col)\" of model '$(model.name)', a $(string(nameof(typeof(last(by_column[col]))))[2:end]),";
+        "A key or index over column \"$(col)\" of model '$(model.name)' ($(string(nameof(typeof(last(by_column[col]))))[2:end]))";
         why = "Declare it as a CharField with a max_length, or drop the key or index."))
     end
   end

@@ -943,9 +943,6 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
   return ("true", Any[])
 end
 
-# Does the live table still have this column? A plan header can outlive what it describes — the plan
-# was edited by hand, or the #81 path re-archives a plan whose ALTER already ran — and a finding
-# about a column that is gone is stale, not a reason to refuse.
 # MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
 # existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
 # kind comes from a column change, which is phase 4b's.
@@ -962,6 +959,9 @@ function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
           "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
 end
 
+# Does the live table still have this column? A plan header can outlive what it describes — the plan
+# was edited by hand, or the #81 path re-archives a plan whose ALTER already ran — and a finding
+# about a column that is gone is stale, not a reason to refuse.
 function _live_column_exists(conn::PormGPostgres, table::AbstractString, column::AbstractString)::Bool
   rows = fetch(conn, """
     SELECT count(*) AS n FROM pg_attribute

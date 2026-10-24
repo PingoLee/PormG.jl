@@ -78,8 +78,14 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             e = try; Mig.migrate(folder; interactive = false); nothing; catch err; err; end
             @test e isa PormG.BackendCapabilityError && occursin("atomic = false", sprint(showerror, e))
             @test !Mig._live_table_exists(pool, "m4a_driver") && !Mig._migrations_table_exists(pool)
+            saved = read(pending, String)
             r = Mig.migrate(folder; interactive = false, atomic = false)
             @test r.outcome === :applied && r.n_statements == n_steps
+            # The #81 case: the applied plan back as pending (an archive that failed). Recognized as the
+            # latest applied, it is archived without the atomic refusal and runs nothing.
+            write(pending, saved)
+            @test Mig.migrate(folder; interactive = false).outcome === :already_applied
+            @test !isfile(pending)
             st = Mig.status(folder)
             @test length(st.applied) == 1 && isempty(st.failed) && !st.pending
         end

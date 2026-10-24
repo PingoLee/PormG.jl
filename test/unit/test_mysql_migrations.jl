@@ -250,9 +250,12 @@ end
   @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], false) === nothing
   @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)"], true) === nothing
   @test _MM._require_atomic_plan(MmMockPostgres(), ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], true) === nothing
-  # The latest applied plan (the #81 re-archive) runs no statement again, so it is not refused.
+  # The latest applied plan (the #81 re-archive) runs no statement again, so it is not refused; where DDL
+  # is transactional the history is never asked.
   @test _MM._require_atomic_plan(_mm_my, ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], true;
                                  applied = () -> true) === nothing
+  @test _MM._require_atomic_plan(MmMockPostgres(), ["CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"], true;
+                                 applied = () -> error("the history was asked")) === nothing
   @test !PormG._supports(_mm_my, :transactional_ddl) && PormG._supports(MmMockPostgres(), :transactional_ddl)
   # The PostgreSQL timeouts have no MySQL counterpart for DDL: refused, not ignored.
   e = _mm_err(() -> _MM._require_migration_timeouts(_mm_my, _MM._migration_timeouts(30, 5, nothing)))
@@ -349,11 +352,23 @@ _mm_driver(extra = "", tail = "") =
            "a retyped field" => (base, replace(base, "max_length = 8" => "max_length = 9"), "4b"),
            "a dropped db_index" => (base, replace(base, ", db_index = true" => ""), "4b"),
            "a dropped Index" => (_mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]"), base, "4b"),
-           "an added CheckConstraint" => (base, _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]"), "4c")]
+           "an added CheckConstraint" => (base, _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]"), "4c"),
+           "a renamed Index" => (_mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"a_idx\")]"),
+                                 _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"b_idx\")]"), "4b")]
   for (label, (live_src, declared_src, phase)) in cases
     e = _mm_err(() -> _mm_plan(_mm_my, live_src, declared_src))
     @test (label, e isa PormG.UnsupportedConnectionError && occursin("phase $(phase)", sprint(showerror, e))) == (label, true)
   end
+  # A declared CHECK the table already holds, as the MySQL reader reports it: with no ownership marker, so
+  # the planner would stamp one (`comment_check_constraint`), which is phase 4c's too.
+  checked = _mm_driver("", "; constraints = [Models.CheckConstraint(condition = \"code <> ''\", name = \"code_nonempty\")]")
+  live = [let t = _MM.live_table(e[:model], _mm_my)
+            _MM.LiveTable(t.name, t.columns, t.indexes, t.composites,
+                          [_MM.LiveCheck(c.name, c.sql, nothing) for c in t.checks])
+          end for (_, e) in _mm_schema(checked)]
+  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(checked), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  @test e isa PormG.UnsupportedConnectionError && occursin("phase 4c", sprint(showerror, e))
   # A table that lost its index and its composite (a stopped plan) is completed, not refused.
   plan = _mm_plan(_mm_my, replace(base, ", db_index = true" => ""),
                   _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]"))
@@ -368,6 +383,7 @@ end
 @testset "#1130: a key over unbounded text is refused on MySQL, before the plan" begin
   for (label, src) in ("a unique TextField" => "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(unique = true))",
                        "an indexed BinaryField" => "Lap = Models.Model(\"lap\", id = Models.IDField(), raw = Models.BinaryField(db_index = true))",
+                       "a unique EmailField" => "Lap = Models.Model(\"lap\", id = Models.IDField(), mail = Models.EmailField(unique = true))",
                        "a JSONField in an Index" => "Lap = Models.Model(\"lap\", id = Models.IDField(), meta = Models.JSONField(), n = Models.IntegerField(); indexes = [Models.Index(fields = (\"meta\", \"n\"))])")
     e = _mm_err(() -> _mm_plan(_mm_my, "", src))
     msg = e isa PormG.BackendCapabilityError ? sprint(showerror, e) : ""

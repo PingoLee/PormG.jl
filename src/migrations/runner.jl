@@ -2812,11 +2812,38 @@ _invalid_index_findings(connection::PormGPostgres; ignore_table, include_table) 
   _pg_invalid_index_findings(connection; ignore_table = ignore_table, include_table = include_table)
 _invalid_index_findings(::PormGSQLite; ignore_table, include_table) = SchemaCheckFinding[]
 # MySQL (#1130 phase 4a): no index is left invalid — PostgreSQL's comes from a failed `CREATE INDEX
-# CONCURRENTLY`, and an InnoDB index build either completes or is rolled back. The expression-default
-# finding advises declaring the expression as a `db_default`, which MySQL refuses outside the portable
-# vocabulary until phase 4c, so there is no advice to give yet.
+# CONCURRENTLY`, and an InnoDB index build either completes or is rolled back.
 _invalid_index_findings(::PormGMySQL; ignore_table, include_table) = SchemaCheckFinding[]
-_expression_default_findings(::PormGMySQL; ignore_table, include_table) = SchemaCheckFinding[]
+# The MySQL arm (#1130 phase 4c), over the reader's own catalog rows, so `check` cannot disagree with
+# `makemigrations` about a column: its type, its key, its single-column foreign key, and the default as
+# `_clean_default` reads it, in declarable form. A generated column's expression is no default.
+function _expression_default_findings(connection::PormGMySQL; ignore_table, include_table)
+  findings = SchemaCheckFinding[]
+  tables = String[_mysql_str(r.tbl) for r in eachrow(fetch(connection, _MYSQL_TABLES_SQL) |> DataFrame)]
+  columns = _mysql_rows_by_table(connection, _MYSQL_COLUMNS_SQL)
+  fks = _mysql_rows_by_table(connection, _MYSQL_FOREIGN_KEYS_SQL)
+  for table_name in tables
+    include_table !== nothing && !any(included -> table_name == included, include_table) && continue
+    _is_ignored_table(table_name, ignore_table) && continue
+    per_fk = Dict{String, Int}()
+    for r in get(fks, table_name, Any[])
+      per_fk[_mysql_str(r.name)] = get(per_fk, _mysql_str(r.name), 0) + 1
+    end
+    fk_cols = Set{String}(_mysql_str(r.col) for r in get(fks, table_name, Any[]) if per_fk[_mysql_str(r.name)] == 1)
+    for r in get(columns, table_name, Any[])
+      extra = lowercase(something(_mysql_str(r.extra), ""))
+      occursin(r"(stored|virtual) generated", extra) && continue
+      dflt = _mysql_str(r.dflt)
+      dflt === nothing && continue
+      col_name = _mysql_str(r.col)
+      finding = _expression_default_finding(table_name, col_name, _MySQLColumnDefault(dflt, occursin("default_generated", extra)),
+                                            parse_canonical_type(_mysql_str(r.ctype), connection),
+                                            _mysql_str(r.ckey) == "PRI", col_name in fk_cols, connection)
+      finding === nothing || push!(findings, finding)
+    end
+  end
+  return findings
+end
 
 function check(settings::PormGSettings; kwargs...)::SchemaCheckResult
   check(settings.connections, settings; kwargs...)

@@ -347,7 +347,65 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   
   @info(_emsg("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m"))
   @info("The models have been saved to '$(joinpath(model_path, file))'.")
-  
+
+  return nothing
+end
+
+"""
+    import_models_from_mysql(db::String = "db"; force_replace::Bool = false, ignore_table = nothing, include_table = nothing, include_views::Bool = false, file::String = "automatic_models.jl")
+
+`inspectdb` for MySQL (#1130 phase 4c): read the tables of the connection `db` names, a MySQL one, and write
+a models file for them, as `import_models_from_postgres` and `import_models_from_sqlite` do for theirs.
+
+# Keyword Arguments
+- `force_replace`: overwrite an existing models file. Without it an existing file is kept, with a warning.
+- `ignore_table`: tables to leave out; `nothing` is the connection's default list (MySQL's own tables, and the
+  connection's `ignore_tables:`).
+- `include_table`: read only these tables.
+- `include_views`: also write each view, as an unmanaged model with no key.
+- `file`: the file name, in the connection's folder.
+
+A column reads as the field whose values it holds: a type MySQL has that PormG does not write as itself (an
+integer's display width, any `datetime(n)` or `time(n)`, a `timestamp`, `text`) reads as that field, and one
+whose values differ (an `unsigned` integer, `enum`, `char(n)`, `float`) is emitted as a `TextField` with a
+warning, which the next `makemigrations` retypes. MySQL's re-printed SQL — a CHECK's condition, a functional
+index's expressions, an expression default — is written without its backticks and introducers; what it
+cannot be written as (a reserved-word column, a backslash in a literal) is left out, with a warning.
+
+# Examples
+```julia
+PormG.Configuration.load("db_my")
+PormG.Migrations.import_models_from_mysql("db_my"; include_views = true)
+```
+"""
+function import_models_from_mysql(db::String = "db";
+                                  force_replace::Bool = false,
+                                  ignore_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_views::Bool = false,
+                                  file::String = "automatic_models.jl")
+  settings = Configuration.get_settings(db)
+  Configuration._require_folder_backed(settings, "import_models_from_mysql")
+  conn = settings.connections
+  conn isa PormGMySQL || throw(BackendCapabilityError(
+    "Connection '$(db)' is not a MySQL connection (got $(typeof(conn))). Use import_models_from_postgres for " *
+    "PostgreSQL, import_models_from_sqlite for SQLite."))
+  model_path = settings.db_def_folder
+  if isfile(joinpath(model_path, file)) && !force_replace
+    @warn("The file '$(joinpath(model_path, file))' already exists, use force_replace=true to replace it")
+    return nothing
+  elseif !ispath(model_path)
+    mkpath(model_path)
+  end
+  base = something(ignore_table, _backend_ignore_tables(conn, settings))
+  models_array, views = _live_import_models(conn, _with_connection_ignores(base, settings), include_table, include_views)
+  if isempty(models_array)
+    @warn("No tables found in the database to import.")
+    return nothing
+  end
+  generate_models_from_db(file, _render_live_models(models_array, views), settings; path = model_path)
+  @info(_emsg("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m"))
+  @info("The models have been saved to '$(joinpath(model_path, file))'.")
   return nothing
 end
 

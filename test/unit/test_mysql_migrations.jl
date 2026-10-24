@@ -990,3 +990,75 @@ end
     [pk, _mm_col("driver", "tag", "varchar(20)", "NO", odd, "DEFAULT_GENERATED", "")], Any[], Any[], Any[])
   @test dropped.columns["tag"].default isa PormG.NoDefault
 end
+
+# What: `inspectdb` on MySQL (#1130 phase 4c) over the catalog rows MySQL reports for tables PormG created:
+# each column it reads compiles to a field whose column is that column again, the field each type means, a
+# declared CHECK and a functional index in declarable text, and the importer refusing another engine.
+# SQL: none.
+# Why: this is the `inspectdb` law the PostgreSQL and SQLite readers keep (`test_live_schema_reader.jl`): a
+# models file written from a database must converge with it, or the first `makemigrations` after an import
+# plans changes nobody asked for. On MySQL the choices are its own: `BIGINT` is a `BigIntegerField` (a
+# `DurationField` cannot be told from one), `CHAR(36)` a `UUIDField`, `DATETIME(3)` the default `DateTimeField`.
+@testset "#1130: inspectdb on MySQL compiles each column back to itself" begin
+  cols = [_mm_col("result", "resultid", "bigint", "NO", missing, "auto_increment", "PRI"),
+          _mm_col("result", "driverid", "bigint", "NO", missing, "", "MUL"),
+          _mm_col("result", "laptime", "time(6)", "YES", missing, "", ""),
+          _mm_col("result", "fastest", "bigint", "YES", missing, "", ""),
+          _mm_col("result", "uid", "char(36)", "YES", missing, "", ""),
+          _mm_col("result", "meta", "json", "YES", missing, "", ""),
+          _mm_col("result", "notes", "longtext", "NO", "_utf8mb4\\'it\\\\\\'s\\'", "DEFAULT_GENERATED", ""),
+          _mm_col("result", "points", "double", "NO", "0", "", ""),
+          _mm_col("result", "laps", "int", "NO", "0", "", ""),
+          _mm_col("result", "grid", "int", "NO", "0", "", ""),
+          _mm_col("result", "at", "datetime(3)", "YES", missing, "", ""),
+          _mm_col("result", "code", "varchar(8)", "NO", "lower(_utf8mb4\\'X\\')", "DEFAULT_GENERATED", "")]
+  fks = [(tbl = "result", name = "result_driverid_ab_fk", col = "driverid", parent = "driver", parent_col = "driverid", on_delete = "CASCADE")]
+  mk = PormG.index_text_marker(["lower(code)"], nothing)
+  stats = [_mm_stat("result", "PRIMARY", 0, "resultid"), _mm_stat("result", "result_driverid_ab_fk", 1, "driverid"),
+           _mm_stat("result", "result_code_idx", 1, missing; expr = "lower(`code`)", comment = mk)]
+  marked = "((`laps` <= 100) and (_utf8mb4\\'$(PormG.check_marker("laps <= 100"))\\' is not null))"
+  checks = [(tbl = "result", name = "result_chk_1", clause = "(`grid` >= 0)"), (tbl = "result", name = "laps_cap", clause = marked)]
+  live = _MM._mysql_live_table(_mm_my, "result", cols, stats, fks, checks)
+  for (col, spec) in live.columns
+    field = _MM.field_from_spec(spec, live, _mm_my)
+    @test (col, _MM.column_spec(field, _mm_my; name = col) == spec) == (col, true)
+  end
+  m = _MM.model_from_live(live, _mm_my)
+  kinds = Dict(String(k) => typeof(f) for (k, f) in m.fields)
+  @test (kinds["resultid"], kinds["driverid"], kinds["fastest"], kinds["laps"], kinds["grid"]) ==
+        (Models.sIDField, Models.sForeignKey, Models.sBigIntegerField, Models.sIntegerField, Models.sPositiveIntegerField)
+  @test (kinds["uid"], kinds["at"], kinds["laptime"], kinds["notes"]) ==
+        (Models.sUUIDField, Models.sDateTimeField, Models.sTimeField, Models.sTextField)
+  # The default DateTimeField (MySQL writes `DATETIME(3)` whatever its `type`), not `type = "TIMESTAMP"`.
+  @test m.fields["at"].type == Models.DateTimeField().type
+  # A text key takes no `db_default` on MySQL: a uuid key is `CHAR(36)` (its own arm), and a `LONGTEXT` key
+  # takes no index without a prefix, so no declaration renders one.
+  @test !_MM._arm_carries_db_default(:id_pk, PormG.CText(), _mm_my) && _MM._arm_carries_db_default(:id_pk, PormG.CText(), _MM._SQLiteEngine())
+  @test m.fields["code"].db_default == (mysql = "lower('X')",)
+  @test [(c.name, c.condition) for c in Models.declared_check_constraints(m)] == [("laps_cap", "(laps <= 100)")]
+  @test [(d.name, d.expressions) for d in _MM.declared_composites(m)] == [("result_code_idx", ["lower(code)"])]
+
+  # A key PormG would not write (an `INT`, no `AUTO_INCREMENT`) is an IDField, said out loud.
+  key = _MM._mysql_live_table(_mm_my, "lap", [_mm_col("lap", "lapid", "int", "NO", missing, "", "PRI")], Any[], Any[], Any[])
+  @test (@test_logs (:warn, r"IDField is BIGINT AUTO_INCREMENT") _MM.field_from_spec(key.columns["lapid"], key, _mm_my)) isa Models.sIDField
+
+  # A stamped default whose re-print has no declarable form is left out, said out loud, not raised.
+  raw = "lower(`order`)"
+  odd = _MM._mysql_live_table(_mm_my, "lap", [_mm_col("lap", "lapid", "bigint", "NO", missing, "auto_increment", "PRI"),
+                                              _mm_col("lap", "tag", "varchar(9)", "NO", raw, "DEFAULT_GENERATED", "";
+                                                      comment = "pormg:default:$(PormG.db_default_hash("lower(x)")):$(PormG.live_default_hash(raw))")],
+                              Any[], Any[], Any[])
+  @test odd.columns["tag"].default isa PormG.ExpressionDefault
+  tag = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM.field_from_spec(odd.columns["tag"], odd, _mm_my)
+  @test tag isa Models.sCharField && tag.db_default === nothing
+
+  # The importer reads a MySQL connection only.
+  key = "importer_wrong_dialect_mysql"
+  PormG.config[key] = PormG.Configuration.Settings(connections = MmMockPostgres(), db_def_folder = mktempdir())
+  try
+    e = _mm_err(() -> _MM.import_models_from_mysql(key))
+    @test e isa PormG.BackendCapabilityError && occursin("is not a MySQL connection", sprint(showerror, e))
+  finally
+    delete!(PormG.config, key)
+  end
+end

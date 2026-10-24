@@ -329,10 +329,6 @@ _inspectdb_field_name(probe::ColumnSpec, table_name, conn)::String =
   Logging.with_logger(Logging.NullLogger()) do
     string(nameof(typeof(_inspectdb_field(probe, table_name, conn, false, nothing))))[2:end]
   end
-# MySQL has no `inspectdb` compiler yet (#1130 phase 4c-2), so the warning names the column's type as the
-# catalog reports it.
-_inspectdb_field_name(probe::ColumnSpec, table_name, ::PormGMySQL)::String = something(probe.raw, string(probe.type))
-
 """
     _default_or_drop(table_name, probe::ColumnSpec, raw, conn) -> ColumnDefault
 
@@ -5112,7 +5108,74 @@ function read_live_schema(db::PormGMySQL; ignore_table::Vector{String} = mysql_i
   return out
 end
 
+# `inspectdb` on MySQL (#1130 phase 4c). Before the models are compiled, what a model cannot say about
+# this schema is said once, by name: a generated column made by hand is declared as a plain field (PormG
+# declares no generated column MySQL renders, and a plain declaration leaves it alone), and a CHECK or a
+# functional index whose text MySQL prints in no declarable form (`_mysql_declarable_sql`) is left out of
+# the model — the next `makemigrations` drops it when it is PormG's own (marked), so it must be declared by
+# hand. A default left out says so where it is compiled (`field_from_spec`).
+function convert_schema_to_models(db::PormGMySQL; kwargs...)::Vector{PormGModel}
+  tables = read_live_schema(db; kwargs...)
+  _warn_mysql_undeclarable(db, tables)
+  return PormGModel[model_from_live(table, db) for table in tables]
+end
+
+function _warn_mysql_undeclarable(db::PormGMySQL, tables::Vector{LiveTable})::Nothing
+  names = Set{String}(t.name for t in tables)
+  for r in eachrow(fetch(db, _MYSQL_GENERATED_SQL) |> DataFrame)
+    _mysql_str(r.tbl) in names || continue
+    @warn "inspectdb: a generated column made by hand is declared as a plain field; PormG declares no " *
+          "generated column on MySQL, and leaves this one's expression as it is." table = _mysql_str(r.tbl) column = _mysql_str(r.col) expression = _mysql_catalog_sql(something(_mysql_str(r.gen), ""))
+  end
+  owned(marker) = marker === nothing ? "" : " It is PormG's (it carries the marker), so the next makemigrations drops it unless it is declared by hand."
+  for t in tables
+    for c in t.checks
+      is_valid_db_default_sql(c.sql) && continue
+      @warn "inspectdb: a CHECK whose condition MySQL prints in no form a declaration can hold (a reserved-word " *
+            "column, a backslash in a literal) is left out of the model." * owned(c.marker) table = t.name check = c.name condition = c.sql
+    end
+    for c in t.composites
+      all(is_valid_db_default_sql, c.expressions) && continue
+      @warn "inspectdb: an index whose expressions MySQL prints in no form a declaration can hold (a reserved-word " *
+            "column, a backslash in a literal) is left out of the model." * owned(c.marker) table = t.name index = c.name expressions = join(c.expressions, ", ")
+    end
+  end
+  return nothing
+end
+
+# #767: the MySQL arm of `include_views`. A view is read as a table with no keys, through the reader's own
+# column rows. A view over a table or column dropped since reports no columns (MySQL records warning 1356,
+# measured on 8.4), so it is skipped with a warning and pushed onto `unreadable`, as SQLite's is.
+function read_live_views(db::PormGMySQL; ignore_table::Vector{String} = mysql_ignore_table,
+                         include_table::Union{Vector{String}, Nothing} = nothing,
+                         unreadable::Vector{String} = String[])::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  views = String[_mysql_str(r.tbl) for r in eachrow(fetch(db, _MYSQL_VIEWS_SQL) |> DataFrame)]
+  columns = _mysql_rows_by_table(db, _MYSQL_COLUMNS_SQL)
+  out = LiveTable[]
+  for view_name in views
+    include_table !== nothing && !any(included -> view_name == included, include_table) && continue
+    _is_ignored_table(view_name, ignore_table) && continue
+    rows = get(columns, view_name, Any[])
+    if isempty(rows)
+      @warn "inspectdb: the view could not be read (MySQL reports no columns: it reads a table or column that no longer exists); it is not imported" view = view_name
+      push!(unreadable, "$(view_name): MySQL reports no columns for the view")
+      continue
+    end
+    push!(out, _mysql_live_table(db, view_name, rows, Any[], Any[], Any[]))
+  end
+  return out
+end
+
 # Constants, so a mock connection keys on each statement exactly.
+const _MYSQL_VIEWS_SQL = """
+  SELECT TABLE_NAME AS tbl FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'VIEW' ORDER BY TABLE_NAME"""
+const _MYSQL_GENERATED_SQL = """
+  SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, GENERATION_EXPRESSION AS gen
+    FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND EXTRA IN ('VIRTUAL GENERATED', 'STORED GENERATED')
+   ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_TABLES_SQL = """
   SELECT TABLE_NAME AS tbl FROM information_schema.TABLES
    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"""

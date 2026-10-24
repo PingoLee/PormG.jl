@@ -1616,7 +1616,7 @@ The one `:id_pk` arm that DOES carry it is a lengthless `TEXT` key on SQLite, wh
 PormG can declare.
 """
 _arm_carries_db_default(arm::Symbol, ctype::CanonicalType,
-                        conn::Union{PormGPostgres, PormGSQLite})::Bool =
+                        conn::_SQLEngine)::Bool =
   arm !== :id_pk || (_text_key_is_uuid(conn) && ctype isa CText)
 
 # The inverse of `Models._foreign_key_on_delete_sql` for the values a catalog can hold: the stored
@@ -1670,7 +1670,16 @@ the readers have always emitted — the readers coerce every literal per `Canoni
 this is a second line of defence, not the policy.
 """
 function field_from_spec(spec::ColumnSpec, table::LiveTable,
-                         conn::Union{PormGPostgres, PormGSQLite})::PormGField
+                         conn::_SQLEngine)::PormGField
+  # MySQL (#1130 phase 4c): an expression default PormG stamped is read by its marker without the
+  # declaration validator, and its text has no declarable form when MySQL's re-print cannot be rewritten
+  # (`_mysql_declarable_sql`: a reserved-word column, a backslash in a literal). The constructor would
+  # refuse it, so it is left out of the declaration, said out loud, rather than aborting the whole import.
+  # PostgreSQL's and SQLite's readers validated every expression already, so this never fires there.
+  if spec.default isa ExpressionDefault && !is_valid_db_default_sql(spec.default.sql)
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table.name) column = spec.name default = spec.default.sql reason = "the DEFAULT is an expression MySQL prints in a form no declaration can hold (a reserved-word column, a backslash in a literal); declare it by hand"
+    spec = _with_default(spec, NoDefault())
+  end
   default = spec.default isa LiteralDefault ? spec.default.value : nothing
   # #496: an expression default becomes a `db_default=` in the generated models file instead of
   # being discarded. The PIN is recorded here rather than in the reader, because `ColumnSpec` carries
@@ -1754,7 +1763,7 @@ function _recover_generated_search_vector(sql::AbstractString, owned::AbstractSt
 end
 
 # The `db_default` an introspected column declares, or `nothing`.
-_db_default_from_spec(spec::ColumnSpec, conn::Union{PormGPostgres, PormGSQLite}) =
+_db_default_from_spec(spec::ColumnSpec, conn::_SQLEngine) =
   if !(spec.default isa ExpressionDefault)
     nothing
   elseif db_default_is_portable(spec.default.sql)
@@ -1846,8 +1855,22 @@ function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, 
   end
 end
 
+# MySQL (#1130 phase 4c): an `IDField` is `BIGINT AUTO_INCREMENT` there (`_column_identity(::PormGMySQL)`
+# reads the renderer, not the `auto_increment` slot), so every fall-through key is declared as one, and a
+# key of another shape — an `INT`, one without `AUTO_INCREMENT`, a text key — says so: the next plan changes
+# the column to PormG's, which MySQL refuses on a key another table's foreign key references (3780).
+function _inspectdb_id_pk(conn::PormGMySQL, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
+                          table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
+  if !(ctype isa CInt64 && spec.identity !== nothing)
+    @warn "inspectdb: an IDField is BIGINT AUTO_INCREMENT on MySQL, and this primary key is not; emitting " *
+          "IDField. A declared IDField will NOT match this column, so makemigrations plans a change to it " *
+          "(which MySQL refuses on a key a foreign key references) unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+  end
+  return Models.IDField(unique = true, null = false, db_index = true)
+end
+
 function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
-                          conn::Union{PormGPostgres, PormGSQLite}, indexed::Bool, default,
+                          conn::_SQLEngine, indexed::Bool, default,
                           db_default = nothing)::PormGField
   ctype = spec.type
   nullable = spec.nullable
@@ -1962,7 +1985,7 @@ physical order (#544), plus the index bookkeeping `Model_to_str` and the planner
 read from `cache`. `convertSQLToModel` and `convert_schema_to_models` are this function applied to
 what the readers return.
 """
-function model_from_live(table::LiveTable, conn::Union{PormGPostgres, PormGSQLite})::PormGModel
+function model_from_live(table::LiveTable, conn::_SQLEngine)::PormGModel
   fields = OrderedDict{String, PormGField}()
   for (col, spec) in table.columns
     fields[col] = field_from_spec(spec, table, conn)

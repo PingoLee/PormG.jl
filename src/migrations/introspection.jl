@@ -2058,8 +2058,27 @@ end
 # Parameterized, per this file's own rule: the unparameterized siblings predate it and are left
 # alone, but an edited query does not inherit the exemption. That was cosmetic while this ran only
 # for a `db_constraint` flip; #498 puts it on the ordinary re-point path.
-# MySQL (#1130): the catalog lookups of a change to an existing table — a key or an index dropped — are
-# phase 4b's.
+function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
+  query = """
+  SELECT tc.constraint_name
+  FROM information_schema.table_constraints AS tc
+  JOIN information_schema.key_column_usage AS kcu
+    ON tc.constraint_name = kcu.constraint_name
+   AND tc.table_schema   = kcu.table_schema
+   AND tc.table_name     = kcu.table_name
+  WHERE tc.table_name = \$1
+    AND tc.constraint_type = 'FOREIGN KEY'
+    AND kcu.column_name = \$2
+    AND tc.table_schema = ANY(current_schemas(false))
+  ORDER BY tc.constraint_name, tc.table_schema;
+  """
+  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
+end
+
 # MySQL (#1130 phase 4b): a column's foreign key, and its `db_index` index — single-column, not unique, and
 # not the index InnoDB made for a foreign key (named after it), as the reader decides it. Bound by value.
 function get_constraints_fk(conn::PormGMySQL, table_name::Symbol, field_name::String)::Union{String, Nothing}
@@ -2095,35 +2114,53 @@ function _foreign_key_leaves_index(conn::PormGMySQL, table_name, constraint_name
   return nrow(rows) > 0 && rows[1, :n] > 0
 end
 
-# The views that read any of `tables`, as `_throw_dropped_table_dependents` reports them.
-function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String})::Vector{Tuple{String, String}}
+# The views that read any of `tables`, and the foreign keys to them on a table outside `keep`, as
+# `_throw_dropped_table_dependents` reports them.
+function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String};
+                                      keep::Set{String} = Set{String}(tables))::Vector{Tuple{String, String}}
   isempty(tables) && return Tuple{String, String}[]
+  marks = join(fill("?", length(tables)), ", ")
   rows = fetch(conn, """
     SELECT TABLE_NAME AS tbl, VIEW_NAME AS view FROM information_schema.VIEW_TABLE_USAGE
-     WHERE TABLE_SCHEMA = DATABASE() AND VIEW_SCHEMA = DATABASE() AND TABLE_NAME IN ($(join(fill("?", length(tables)), ", ")))
+     WHERE TABLE_SCHEMA = DATABASE() AND VIEW_SCHEMA = DATABASE() AND TABLE_NAME IN ($(marks))
      ORDER BY VIEW_NAME, TABLE_NAME""", Any[tables...]) |> DataFrame
-  return Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in eachrow(rows)]
+  found = Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in eachrow(rows)]
+  fks = fetch(conn, """
+    SELECT REFERENCED_TABLE_NAME AS tbl, TABLE_NAME AS child, CONSTRAINT_NAME AS name
+      FROM information_schema.REFERENTIAL_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IN ($(marks))
+     ORDER BY TABLE_NAME, CONSTRAINT_NAME""", Any[tables...]) |> DataFrame
+  for r in eachrow(fks)
+    child = _mysql_str(r.child)
+    child in keep && continue
+    push!(found, (_mysql_str(r.tbl), "foreign key `$(_mysql_str(r.name))` on `$(child)`"))
+  end
+  return found
 end
 
-function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
-  query = """
-  SELECT tc.constraint_name
-  FROM information_schema.table_constraints AS tc
-  JOIN information_schema.key_column_usage AS kcu
-    ON tc.constraint_name = kcu.constraint_name
-   AND tc.table_schema   = kcu.table_schema
-   AND tc.table_name     = kcu.table_name
-  WHERE tc.table_name = \$1
-    AND tc.constraint_type = 'FOREIGN KEY'
-    AND kcu.column_name = \$2
-    AND tc.table_schema = ANY(current_schemas(false))
-  ORDER BY tc.constraint_name, tc.table_schema;
-  """
-  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
-  if nrow(result) == 0
-      return nothing
-  end
-  return result[1, :constraint_name]
+# What `MODIFY COLUMN` would reset on one column unless restated (measured on 8.4), as the catalog holds it
+# before the plan runs: its COMMENT, `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP`, a collation other than
+# the table's, and an expression default (as MySQL prints it, one level of escaping undone). Bound by
+# value; `nothing` for a column the catalog does not hold.
+function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
+  rows = fetch(conn, """
+    SELECT c.COLUMN_COMMENT AS comment, c.EXTRA AS extra, c.COLLATION_NAME AS coll,
+           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt
+      FROM information_schema.COLUMNS c
+      JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+     WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = ? AND c.COLUMN_NAME = ?""",
+    [String(table_name), String(column)]) |> DataFrame
+  nrow(rows) == 0 && return nothing
+  r = rows[1, :]
+  extra = lowercase(something(_mysql_str(r.extra), ""))
+  coll, dflt = _mysql_str(r.coll), _mysql_str(r.dflt)
+  # A collation name is an identifier the server printed; anything else is not restated.
+  keep_coll = coll !== nothing && coll != _mysql_str(r.table_coll) && occursin(r"^[A-Za-z0-9_]+$", coll)
+  return (comment = something(_mysql_str(r.comment), ""),
+          invisible = occursin("invisible", extra),
+          on_update = occursin("on update current_timestamp", extra),
+          collation = keep_coll ? coll : nothing,
+          default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing)
 end
 
 """

@@ -44,6 +44,7 @@ import PormG: CBool, CUUID, CJSON
 import PormG: CInet, CCidr, CArray
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
+import PormG: _column_attributes
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
 # #564: the read side of the canonical timestamp text, now that its PARSER lives here beside the
 # mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
@@ -3366,7 +3367,7 @@ ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
 function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol};
-                      old_spec = nothing, new_spec = nothing)   # MySQL's reads them (#1130); a rename here touches nothing else
+                      old_spec = nothing, new_spec = nothing, catalog_table = nothing)   # MySQL's reads them (#1130); a rename here touches nothing else
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$(_quote_table_ddl(old_field_name))" TO "$(_quote_table_ddl(new_field_name))";"""
 end
 
@@ -4734,10 +4735,16 @@ end
 
 # A column's definition without its keys and CHECKs: the name, the type, `NULL`/`NOT NULL`, the default
 # and `AUTO_INCREMENT` — exactly what `ALTER TABLE … MODIFY COLUMN` replaces. MODIFY drops whatever it
-# does not restate (measured on 8.4: the default, `AUTO_INCREMENT`, `NOT NULL`), and keeps the column's
-# indexes and CHECKs, so restating `UNIQUE` there would add a second unique index (`c_2`).
+# does not restate (measured on 8.4: the default, `AUTO_INCREMENT`, `NOT NULL`, a COMMENT), and keeps the
+# column's indexes and CHECKs, so restating `UNIQUE` there would add a second unique index (`c_2`).
+#
+# `live` is what the catalog holds that the model does not state (`_column_attributes`), restated so a
+# MODIFY changes only what the model changed, as PostgreSQL's per-slot `ALTER` does: a COMMENT,
+# `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP` on a column still a timestamp, a collation other than the
+# table's on a column still text, and — with `keep_default` — an expression default the model does not
+# declare (the planner reports one a retype drops, `:drop_default`).
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
-                            temporary_default::Any = nothing)::String
+                            temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
   generated_sql(field) === nothing || throw(_mysql_not_yet("The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)
@@ -4745,9 +4752,35 @@ function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::P
   push!(parts, (hasproperty(field, :null) && field.null) ? "NULL" : "NOT NULL")
   default = _mysql_default_clause(field, col_name, base_type, conn; temporary_default = temporary_default)
   default === nothing || push!(parts, default)
+  if live !== nothing
+    default === nothing && keep_default && live.default_expression !== nothing &&
+      push!(parts, _mysql_restated_default(live.default_expression))
+    # The precision must be the column's (`DATETIME(3)` takes `CURRENT_TIMESTAMP(3)` only, error 1294).
+    on_update = live.on_update ? match(r"^DATETIME(\(\d\))?$"i, base_type) : nothing
+    on_update === nothing || push!(parts, "ON UPDATE CURRENT_TIMESTAMP" * something(on_update[1], ""))
+    live.invisible && push!(parts, "INVISIBLE")
+  end
   _mysql_auto_increments(field) && push!(parts, "AUTO_INCREMENT")
+  if live !== nothing
+    isempty(live.comment) || push!(parts, "COMMENT " * _format_default_sql_value(live.comment, conn))
+    live.collation !== nothing && occursin(r"^(VARCHAR|CHAR|LONGTEXT)\b"i, base_type) &&
+      push!(parts, "COLLATE " * live.collation)
+  end
   return join(parts, " ")
 end
+
+# An expression default as the catalog prints it, restated: `CURRENT_TIMESTAMP(3)` bare (in parentheses
+# MySQL stores it as `now(3)`, which no declaration reads as), any other expression in the parentheses
+# MySQL requires.
+_mysql_restated_default(text::AbstractString)::String =
+  occursin(r"^current_timestamp(\(\d\))?$"i, text) ? "DEFAULT $(text)" : "DEFAULT ($(text))"
+
+# A CHECK's name as it is after the plan's `RENAME TABLE`: MySQL renames the CHECKs it named itself
+# (`<table>_chk_<n>`) with the table and keeps a name a constraint was given (measured on 8.4). The
+# catalog is read before the plan runs, under the old name.
+_mysql_check_after_rename(name::AbstractString, catalog::AbstractString, table::AbstractString)::String =
+  (catalog != table && Base.startswith(name, catalog * "_chk_") &&
+   occursin(r"^\d+$", chopprefix(name, catalog * "_chk_"))) ? table * chopprefix(name, catalog) : String(name)
 
 # `AUTO_INCREMENT` is written on an `IDField` key and nowhere else (`_column_identity(::PormGMySQL)`).
 _mysql_auto_increments(field::PormGField)::Bool =
@@ -4837,11 +4870,13 @@ end
 # A column change on MySQL (#1130 phase 4b): ONE `ALTER TABLE` whose clauses carry every slot of the delta,
 # so the change applies whole or not at all — MySQL's DDL commits each statement, and an `ALTER TABLE` is
 # atomic on its own (#1268). In order:
-#   1. `DROP CHECK` for PormG's CHECKs the column loses (looked up by name; MySQL names them itself);
+#   1. `DROP CHECK` for PormG's CHECKs the column loses (looked up by name, under the name a table rename
+#      in the same plan gives it; MySQL names them itself);
 #   2. one `MODIFY COLUMN` restating the whole column body when its type, nullability, default or
 #      identity changed — MODIFY replaces what it does not restate, so a default change goes through it
-#      too (`ALTER COLUMN … SET DEFAULT ('x')` on a LONGTEXT is error 1101). No `USING`: MySQL converts,
-#      and its strict mode fails a row that does not convert or fit;
+#      too (`ALTER COLUMN … SET DEFAULT ('x')` on a LONGTEXT is error 1101), and what the catalog holds
+#      that the model does not state is restated from it (`_column_attributes`). No `USING`: MySQL
+#      converts, and its strict mode fails a row that does not convert or fit;
 #   3. `ADD CHECK` for the CHECKs it gains;
 #   4. `ADD UNIQUE INDEX `c` (`c`)` / `DROP INDEX `c``, named after the column as an inline `UNIQUE` is;
 #   5. `ADD` / `DROP PRIMARY KEY`, with the `AUTO_INCREMENT` the MODIFY adds or removes (one statement
@@ -4854,20 +4889,28 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
   live_column = isempty(delta.old_spec.name) ? col : delta.old_spec.name
   renamed = live_column != col
   catalog = string(catalog_table)
+  table = model_table_name(model)
   ident = _ddl_ident(conn, col)
   clauses = String[]
+  drop_check(n) = "DROP CHECK $(_ddl_ident(conn, _mysql_check_after_rename(n, catalog, table)))"
   if :checks in delta && !renamed
     _has_non_negative(delta.old_spec) && !_has_non_negative(delta.new_spec) &&
-      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_checks(conn, catalog, live_column)))
+      append!(clauses, (drop_check(n) for n in get_constraints_checks(conn, catalog, live_column)))
     old_bound, new_bound = _byte_bound(delta.old_spec), _byte_bound(delta.new_spec)
     old_bound !== nothing && old_bound != new_bound &&
-      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_byte_length_checks(conn, catalog, live_column)))
+      append!(clauses, (drop_check(n) for n in get_constraints_byte_length_checks(conn, catalog, live_column)))
   end
   adds_key = :primary_key in delta && delta.new_spec.primary_key
   drops_key = :primary_key in delta && delta.old_spec.primary_key
   adds_key && push!(clauses, "ADD PRIMARY KEY ($(ident))")
-  any(s -> s in delta, (:type, :nullable, :default, :identity)) &&
-    push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn))
+  if any(s -> s in delta, (:type, :nullable, :default, :identity))
+    # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
+    keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
+                   delta.new_spec.default isa NoDefault
+    push!(clauses, "MODIFY COLUMN " * _mysql_column_body(col, new_field, conn;
+                                                        live = _column_attributes(conn, catalog, live_column),
+                                                        keep_default = keep_default))
+  end
   drops_key && push!(clauses, "DROP PRIMARY KEY")
   if :checks in delta && !renamed
     _has_non_negative(delta.new_spec) && !_has_non_negative(delta.old_spec) &&
@@ -4900,18 +4943,21 @@ drop_field(conn::PormGMySQL, table_name::Union{String,Symbol}, field_name::Union
 # (error 3959), so PormG's CHECKs are dropped and the ones the new column keeps added back, and the
 # column's own unique index keeps the old name after `RENAME COLUMN` (measured), so it is renamed too —
 # the reader takes a unique index as the column's only when it carries the column's name. `old_spec` and
-# `new_spec` are the delta's; without them (a bare rename) nothing beside the column is touched.
+# `new_spec` are the delta's; without them (a bare rename) nothing beside the column is touched. The CHECKs
+# are looked up under `catalog_table`, the table's name before the plan runs (a table rename runs first).
 function rename_field(conn::PormGMySQL, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol},
                       new_field_name::Union{String,Symbol};
-                      old_spec::Union{ColumnSpec, Nothing} = nothing, new_spec::Union{ColumnSpec, Nothing} = nothing)::String
+                      old_spec::Union{ColumnSpec, Nothing} = nothing, new_spec::Union{ColumnSpec, Nothing} = nothing,
+                      catalog_table::Union{String,Symbol} = table_name)::String
   old_ident, new_ident = _ddl_ident(conn, old_field_name), _ddl_ident(conn, new_field_name)
-  table = string(table_name)
+  table, catalog = string(table_name), string(catalog_table)
+  drop_check(n) = "DROP CHECK $(_ddl_ident(conn, _mysql_check_after_rename(n, catalog, table)))"
   clauses = String[]
   if old_spec !== nothing && !isempty(old_spec.checks)
     _has_non_negative(old_spec) &&
-      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_checks(conn, table, string(old_field_name))))
+      append!(clauses, (drop_check(n) for n in get_constraints_checks(conn, catalog, string(old_field_name))))
     _byte_bound(old_spec) === nothing ||
-      append!(clauses, ("DROP CHECK $(_ddl_ident(conn, n))" for n in get_constraints_byte_length_checks(conn, table, string(old_field_name))))
+      append!(clauses, (drop_check(n) for n in get_constraints_byte_length_checks(conn, catalog, string(old_field_name))))
   end
   push!(clauses, "RENAME COLUMN $(old_ident) TO $(new_ident)")
   old_spec !== nothing && old_spec.unique && !old_spec.primary_key &&

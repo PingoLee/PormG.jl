@@ -301,6 +301,10 @@ function get_constraints_checks end
 # matches only the `>= 0` clause of a positive-integer field — the two constraints can coexist on
 # one table and must never be mistaken for each other when a column type transitions.
 function get_constraints_byte_length_checks end
+# The live attributes of one column that a model does not state (#1130, MySQL): `MODIFY COLUMN` resets
+# what it does not restate, so `Dialect.alter_field` asks the catalog for them. The MySQL method is with
+# the other catalog readers, in `Migrations`.
+function _column_attributes end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Error-message helper

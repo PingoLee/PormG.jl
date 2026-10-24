@@ -36,7 +36,8 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
         "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME NOT LIKE 'm4b\\_%'"))]
     folder = mktempdir()
     yml = YAML.load_file(joinpath(@__DIR__, "db_my", "connection.yml"))
-    yml[get(yml, "default_env", "dev")]["ignore_tables"] = others
+    # `m4b_ext` stands for a table outside what PormG reads: it holds a foreign key to a table a plan drops.
+    yml[get(yml, "default_env", "dev")]["ignore_tables"] = vcat(others, ["m4b_ext"])
     YAML.write_file(joinpath(folder, "connection.yml"), yml)
     models_path = joinpath(folder, "models.jl")
     pending = joinpath(folder, "migrations", "pending_migrations.jl")
@@ -60,6 +61,19 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
         Mig.makemigrations(folder; interactive = false)
         return !isfile(pending)
     end
+    # One session variable on every connection of the folder's pool, each leased at once so each is a
+    # different connection: what a plan set on the one it ran on must not reach any of them.
+    function every_session(var)
+        held = [PormG.ConnectionPool.acquire_connection(pool) for _ in 1:pool.pool_size]
+        try
+            return [DataFrame(first(PormG.ConnectionPool.with_transaction(pool, "SELECT @@SESSION.$(var) AS v"; conn = c)))[1, :v]
+                    for c in held]
+        finally
+            foreach(c -> PormG.ConnectionPool.release_connection(pool, c), held)
+        end
+    end
+    column_row(table, col) = raw("SELECT COLUMN_DEFAULT AS d, COLUMN_COMMENT AS c, COLLATION_NAME AS k, IS_NULLABLE AS n " *
+        "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$(table)' AND COLUMN_NAME = '$(col)'")[1, :]
     try
         # What: a UniqueConstraint added to a table that exists, over rows it would reject and over rows
         # it accepts.
@@ -222,28 +236,98 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test isempty(t.composites) && isempty(t.indexes) && converged()
         end
 
-        # What: a table renamed (by a rename hint), and a parent and its child dropped together.
-        # SQL: `RENAME TABLE `m4b_team` TO `m4b_constructor``; `SET FOREIGN_KEY_CHECKS = 0; DROP TABLE …`.
-        # Why: MySQL has no `DROP TABLE … CASCADE` and refuses to drop a table another references (3730); the
-        # plan drops each with the session's key checks off, on the one connection the plan runs on.
+        # What: a column dropped from under a UniqueConstraint, with rows the rest of the key repeats.
+        # SQL: `DROP INDEX `m4b_team_abbr_pts_uniq` ON `m4b_team``, then `ALTER TABLE `m4b_team` DROP COLUMN `pts``.
+        # Why: MySQL narrows the index to `UNIQUE (abbr)` instead of dropping it with the column (PostgreSQL's
+        # meaning), so the DROP COLUMN fails on the repeated `abbr` (1062); the plan drops the index first.
+        @testset "a column dropped from under a composite key" begin
+            team(pts, tail) = "Team = Models.Model(\"m4b_team\", teamid = Models.IDField(), abbr = Models.CharField(max_length = 8)$(pts)$(tail))"
+            pts = ", pts = Models.PositiveIntegerField(default = 0)"
+            apply!(team(pts, "; constraints = [Models.UniqueConstraint(fields = (\"abbr\", \"pts\"))]"))
+            exec("INSERT INTO `m4b_team` (`abbr`, `pts`) VALUES ('WIL', 1), ('WIL', 2)")
+            plan = apply!(team("", ""))
+            @test occursin(r"DROP INDEX `m4b_team_abbr_pts_uniq` ON `m4b_team`;[\s\S]*DROP COLUMN `pts`", plan)
+            t = live("m4b_team")
+            @test !haskey(t.columns, "pts") && isempty(t.composites) && isempty(t.indexes) && converged()
+            apply!(team(pts, ""))
+            @test haskey(live("m4b_team").columns, "pts") && converged()
+        end
+
+        # What: a table renamed (by a rename hint) with a CHECKed column renamed in the same plan, and a parent
+        # and its child dropped together.
+        # SQL: `RENAME TABLE `m4b_team` TO `m4b_constructor``, then `ALTER TABLE `m4b_constructor` DROP CHECK
+        #      `m4b_constructor_chk_1`, RENAME COLUMN `pts` TO `points`, ADD CHECK …`; `SET FOREIGN_KEY_CHECKS = 0;
+        #      DROP TABLE …`.
+        # Why: the table rename runs first and renames the CHECKs MySQL named, so the column's DROP CHECK must
+        # name the new one (3821/3959 after `RENAME TABLE` committed otherwise). MySQL has no `DROP TABLE …
+        # CASCADE` and refuses to drop a table another references (3730); the plan drops each with the
+        # session's key checks off, on the one connection the plan runs on.
         @testset "tables renamed and dropped" begin
             write_models("Constructor = Models.Model(\"m4b_constructor\", teamid = Models.IDField(), " *
-                         "abbr = Models.CharField(max_length = 8), pts = Models.PositiveIntegerField(default = 0))\n" *
+                         "abbr = Models.CharField(max_length = 8), points = Models.PositiveIntegerField(default = 0))\n" *
                          "Seat = Models.Model(\"m4b_seat\", seatid = Models.IDField(), teamid = Models.BigIntegerField(null = true))")
-            Mig.makemigrations(folder; interactive = false, renames = ["m4b_team" => "m4b_constructor"])
-            @test occursin("RENAME TABLE `m4b_team` TO `m4b_constructor`", read(pending, String))
-            Mig.migrate(folder; interactive = false, atomic = false)
+            Mig.makemigrations(folder; interactive = false,
+                               renames = ["m4b_team" => "m4b_constructor", "m4b_constructor.pts" => "m4b_constructor.points"])
+            plan = read(pending, String)
+            @test occursin("RENAME TABLE `m4b_team` TO `m4b_constructor`", plan) &&
+                  occursin(r"DROP CHECK `m4b_constructor_chk_\d+`, RENAME COLUMN `pts` TO `points`", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true, lock_timeout = 2.5)
             @test "m4b_constructor" in scratch_tables() && !("m4b_team" in scratch_tables()) && converged()
+            @test live("m4b_constructor").columns["points"].checks == [PormG.NonNegativeCheck()]
             apply!("Constructor = Models.Model(\"m4b_constructor\", teamid = Models.IDField(), " *
-                   "abbr = Models.CharField(max_length = 8), pts = Models.PositiveIntegerField(default = 0))\n" *
+                   "abbr = Models.CharField(max_length = 8), points = Models.PositiveIntegerField(default = 0))\n" *
                    "Seat = Models.Model(\"m4b_seat\", seatid = Models.IDField(), teamid = Models.ForeignKey(Constructor, " *
                    "pk_field = \"teamid\", null = true))")
             @test live("m4b_seat").columns["teamid"].reference !== nothing && converged()
             # The parent and its child dropped together: the parent first, its child's key notwithstanding.
             apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())")
             @test !("m4b_seat" in scratch_tables()) && !("m4b_constructor" in scratch_tables()) && converged()
-            # The connection the plan ran on was renewed: no pooled connection has the key checks off.
-            @test raw("SELECT @@SESSION.FOREIGN_KEY_CHECKS AS c")[1, :c] == 1
+            # The connections the plans ran on were renewed: none in the pool has the key checks off, or the
+            # `lock_wait_timeout` the rename plan set (`lock_timeout = 2.5`, three seconds).
+            @test all(==(1), every_session("FOREIGN_KEY_CHECKS")) && !any(==(3), every_session("lock_wait_timeout"))
+        end
+
+        # What: a table dropped while a table PormG does not read (an ignored one) holds a foreign key to it.
+        # SQL: none — `makemigrations` refuses, naming the key; once it is gone, `DROP TABLE` runs.
+        # Why: the drop runs with the key checks off, so the key would be left pointing at a missing table
+        # (PostgreSQL's `CASCADE` removes it); PormG manages neither that table nor its key.
+        @testset "a dropped table another table's key points at is refused" begin
+            apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())\n" *
+                   "Venue = Models.Model(\"m4b_venue\", venueid = Models.IDField())")
+            exec("CREATE TABLE `m4b_ext` (`id` BIGINT NOT NULL PRIMARY KEY, `venueid` BIGINT NULL, " *
+                 "CONSTRAINT `m4b_ext_venue_fk` FOREIGN KEY (`venueid`) REFERENCES `m4b_venue` (`venueid`)) ENGINE=InnoDB")
+            write_models("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())")
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError &&
+                  occursin("foreign key `m4b_ext_venue_fk` on `m4b_ext`", sprint(showerror, e)) && !isfile(pending)
+            exec("DROP TABLE `m4b_ext`")
+            apply!("Circuit = Models.Model(\"m4b_circuit\", circuitid = Models.IDField())")
+            @test !("m4b_venue" in scratch_tables()) && converged()
+        end
+
+        # What: a column change over a column carrying what no model states — an expression default, a COMMENT,
+        # its own collation — set by hand.
+        # SQL: `ALTER TABLE `m4b_car` MODIFY COLUMN `tag` VARCHAR(40) NULL DEFAULT (uuid()) COMMENT 'set by hand'
+        #      COLLATE utf8mb4_0900_ai_ci;`, then a retype without the default.
+        # Why: MODIFY resets what it does not restate, where PostgreSQL's per-slot ALTER changes only the slot;
+        # a retype drops the expression default (it may not suit the new type), which takes `destructive`.
+        @testset "a MODIFY keeps what the model does not state" begin
+            car(tag) = "Car = Models.Model(\"m4b_car\", carid = Models.IDField(), tag = $(tag))"
+            apply!(car("Models.CharField(max_length = 40)"))
+            exec("ALTER TABLE `m4b_car` MODIFY COLUMN `tag` VARCHAR(40) NOT NULL DEFAULT (uuid()) " *
+                 "COMMENT 'set by hand' COLLATE utf8mb4_0900_ai_ci")
+            @test converged()
+            apply!(car("Models.CharField(max_length = 40, null = true)"))
+            r = column_row("m4b_car", "tag")
+            @test (r.d, r.c, r.k, r.n) == ("uuid()", "set by hand", "utf8mb4_0900_ai_ci", "YES") && converged()
+            write_models(car("Models.CharField(max_length = 60, null = true)"))
+            Mig.makemigrations(folder; interactive = false)
+            @test occursin("drop_default", read(pending, String))
+            e = try; Mig.migrate(folder; interactive = false, atomic = false); nothing; catch err; err; end
+            @test e isa Mig.DestructiveMigrationError
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            r = column_row("m4b_car", "tag")
+            @test ismissing(r.d) && (r.c, r.k) == ("set by hand", "utf8mb4_0900_ai_ci") && converged()
         end
 
         # What: an alter plan stopped part-way — its `ADD CONSTRAINT` refused because another table holds the

@@ -300,6 +300,8 @@ _MM.get_constraints_byte_length_checks(::MmMockMySQL, table::String, column::Str
 _MM.get_constraints_index(::MmMockMySQL, table::Symbol, column::String) = "$(table)_$(column)_idx"
 _MM.get_constraints_fk(::MmMockMySQL, table::Symbol, column::String) = "$(table)_$(column)_fk"
 _MM._foreign_key_leaves_index(::MmMockMySQL, table, name::AbstractString) = true
+# A column with nothing beyond what the model states.
+PormG._column_attributes(::MmMockMySQL, table::AbstractString, column::AbstractString) = nothing
 
 # A delta between two fields of the fixtures, as the planner builds it.
 _mm_delta(new, old; name = "c", old_name = name) =
@@ -549,4 +551,106 @@ end
   @test _MM._fit_derived_name(_mm_my, _MM.DeclaredComposite(long, ["a"], true, true, false)).name == long   # explicit
   @test _MM._fit_derived_name(_mm_my, _MM.DeclaredComposite("short_uniq", ["a"], true, false, false)).name == "short_uniq"
   @test _MM._fit_derived_name(MmMockPostgres(), d).name == long
+end
+
+# A column whose catalog holds what no model states: a COMMENT, INVISIBLE, ON UPDATE, its own collation and
+# an expression default. Its CHECK lookups answer as `MmMockMySQL`'s do.
+struct MmMockMySQLAttr <: PormG.PormGMySQL end
+PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
+  (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()")
+
+# What: a MODIFY on MySQL restates what the column holds that the model does not state.
+# SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
+#      `DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s'` on a timestamp.
+# Why: MODIFY resets what it does not restate (measured), where PostgreSQL's per-slot ALTER changes only the
+# slot; an expression default the model does not declare is kept unless the type changes, and a retype that
+# drops it records `:drop_default`, which takes `destructive = true`, as PostgreSQL's `USING` retype does.
+@testset "#1130: a MySQL MODIFY keeps what the model does not state" begin
+  at = MmMockMySQLAttr()
+  with_uuid(field) = _MM._with_default(_MM.column_spec(field, at; name = "c"), PormG.ExpressionDefault("uuid()"))
+  delta(new, old_spec) = _MM.column_delta(new, old_spec, at; name = "c")
+  nullable = delta(Models.CharField(max_length = 8, null = true), with_uuid(Models.CharField(max_length = 8)))
+  @test _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 8, null = true), nullable) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' " *
+        "COLLATE utf8mb4_0900_ai_ci;"
+  @test !any(f -> f.kind === :drop_default, _MM._lossy_alters(nullable, at; table = "driver", column = "c"))
+  retyped = delta(Models.CharField(max_length = 12), with_uuid(Models.CharField(max_length = 8)))
+  @test _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 12), retyped) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(12) NOT NULL INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci;"
+  @test any(f -> f.kind === :drop_default, _MM._lossy_alters(retyped, at; table = "driver", column = "c"))
+  # ON UPDATE at the column's own precision on a timestamp, and no collation on a column that is not text;
+  # the catalog's expression default is not restated over a column the delta says has none.
+  stamp = _mm_delta(Models.DateTimeField(null = true), Models.DateTimeField())
+  @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
+  @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
+  # A column with nothing else, as before.
+  @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
+                        _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(8) NULL;"
+end
+
+# What: a CHECK dropped in the plan that also renames the table.
+# SQL: `ALTER TABLE `pilot` DROP CHECK `pilot_chk_1``, the catalog read under `driver`.
+# Why: the table rename runs first, and MySQL renames the CHECKs it named itself with the table (measured);
+# the name read before the plan must be the one the table has when the DROP runs, or the plan fails part-way
+# (3821, and 3959 for a renamed column) after `RENAME TABLE` committed.
+@testset "#1130: a CHECK's name follows the table's rename on MySQL" begin
+  pilot = Models.Model("pilot", id = Models.IDField(), c = Models.IntegerField())
+  @test _MD.alter_field(_mm_my, pilot, "c", Models.IntegerField(),
+                        _mm_delta(Models.IntegerField(), Models.PositiveIntegerField()); catalog_table = "driver") ==
+        "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`;"
+  old_spec = _MM.column_spec(Models.PositiveIntegerField(), _mm_my; name = "number")
+  new_spec = _MM.column_spec(Models.PositiveIntegerField(), _mm_my; name = "num")
+  @test _MD.rename_field(_mm_my, "pilot", "number", "num"; old_spec = old_spec, new_spec = new_spec,
+                         catalog_table = "driver") ==
+        "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`, RENAME COLUMN `number` TO `num`, ADD CHECK (`num` >= 0);"
+  # A name the constraint was given, and one under the same table, are kept.
+  @test _MD._mysql_check_after_rename("mine", "driver", "pilot") == "mine"
+  @test _MD._mysql_check_after_rename("driver_chk_x", "driver", "pilot") == "driver_chk_x"
+  @test _MD._mysql_check_after_rename("driver_chk_2", "driver", "driver") == "driver_chk_2"
+end
+
+# What: the MySQL retypes whose conversion gives every value another meaning, or fails on rows nothing counts.
+# SQL: none — the plan is refused (`:no_implicit_cast`), before any statement.
+# Why: MySQL turns a DATE into a TIME as midnight, a TIME into today's date, a date into its digits, a
+# number into a date read from such digits, a number into a UUID's CHAR(36) as text (measured on 8.4);
+# PostgreSQL has no cast for these pairs and refuses them, so the engine that departs refuses on itself.
+# The pairs that keep the value build.
+@testset "#1130: the MySQL retypes that change every value are refused" begin
+  kinds(new, old) = [f.kind for f in _MM._lossy_alters(_mm_delta(new, old), _mm_my; table = "driver", column = "c")]
+  for (old, new) in ((Models.DateField(), Models.TimeField()), (Models.TimeField(), Models.DateField()),
+                     (Models.TimeField(), Models.DateTimeField()), (Models.DateField(), Models.IntegerField()),
+                     (Models.DateTimeField(), Models.BigIntegerField()), (Models.IntegerField(), Models.DateField()),
+                     (Models.BooleanField(), Models.DateField()), (Models.IntegerField(), Models.UUIDField()),
+                     (Models.JSONField(), Models.IntegerField()), (Models.UUIDField(), Models.JSONField()),
+                     (Models.DateField(), Models.JSONField()))
+    @test (typeof(old), typeof(new), kinds(new, old)) == (typeof(old), typeof(new), [:no_implicit_cast])
+  end
+  @test kinds(Models.DateTimeField(), Models.DateField()) == Symbol[]
+  @test kinds(Models.JSONField(), Models.IntegerField()) == Symbol[]
+  @test kinds(Models.DateField(), Models.CharField(max_length = 20)) == [:text_cast]
+  @test kinds(Models.DateField(), Models.DateTimeField()) == [:to_date]
+end
+
+# What: a composite index over a column the plan drops, on MySQL.
+# SQL: `DROP INDEX `drv_fc_idx` ON `driver``, then `ALTER TABLE `driver` DROP COLUMN `code``.
+# Why: MySQL narrows such an index to the columns that remain (a `UNIQUE (a, b)` becomes `UNIQUE (a)`, and
+# the DROP COLUMN fails on its duplicates), where PostgreSQL drops it with the column; it is dropped first.
+@testset "#1130: an index over a dropped column is dropped first on MySQL" begin
+  live = _mm_driver("", "; indexes = [Models.Index(fields = (\"forename\", \"code\"), name = \"drv_fc_idx\")]")
+  declared = "Driver = Models.Model(\"driver\", driverid = Models.IDField(), forename = Models.CharField(max_length = 100, db_index = true))"
+  steps = collect(keys(_mm_plan(_mm_my, live, declared)[:driver]))
+  index_at, field_at = findfirst(==("Remove composite index: drv_fc_idx"), steps), findfirst(==("Remove field: code"), steps)
+  @test index_at !== nothing && field_at !== nothing && index_at < field_at
+end
+
+# What: the refusal of a plan that cannot apply whole counts statements, not plan entries.
+# SQL: none.
+# Why: a hand-written step holding two statements is two commits on MySQL, as two entries are.
+@testset "#1130: one entry of two statements is not atomic on MySQL" begin
+  e = _mm_err(() -> _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1; UPDATE b SET y = 2"], true))
+  @test e isa PormG.BackendCapabilityError && occursin("2 statements", sprint(showerror, e))
+  @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1"], true) === nothing
+  @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1; UPDATE b SET y = 2"], false) === nothing
 end

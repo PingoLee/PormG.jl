@@ -638,7 +638,8 @@ refusals. Without it each engine lost the object a different way:
     database failed on the missing table — the end of every later table rebuild.
     What is found is [`_sqlite_drop_table_dependents`](@ref).
 """
-function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::Set{String})::Nothing
+function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::Set{String};
+                                           read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
   found = _pg_drop_table_dependents(conn, sort!(collect(dropped_tables)))
   isempty(found) && return nothing
@@ -646,16 +647,22 @@ function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::S
     "PostgreSQL drops a table with CASCADE, which would remove them too without the plan saying so")
 end
 
-# MySQL (#1130): a view that reads a dropped table (`VIEW_TABLE_USAGE`). A trigger is the table's own and
-# goes with it.
-function _refuse_dropped_table_dependents(conn::PormGMySQL, dropped_tables::Set{String})::Nothing
+# MySQL (#1130): a view that reads a dropped table (`VIEW_TABLE_USAGE`), and a foreign key to one from a
+# table the plan neither drops nor reads (`read_tables`: an ignored table, one outside the schema read).
+# The drop runs with the key checks off, so that key would be left pointing at a missing table, where
+# PostgreSQL's `CASCADE` removes it; a table the plan reads has its keys planned. A trigger is the table's
+# own and goes with it.
+function _refuse_dropped_table_dependents(conn::PormGMySQL, dropped_tables::Set{String};
+                                          read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
-  found = _mysql_drop_table_dependents(conn, sort!(collect(dropped_tables)))
+  found = _mysql_drop_table_dependents(conn, sort!(collect(dropped_tables)); keep = union(dropped_tables, read_tables))
   isempty(found) && return nothing
-  _throw_dropped_table_dependents(found, "MySQL would leave each view reading a table that no longer exists")
+  _throw_dropped_table_dependents(found, "MySQL would leave each view reading a table that no longer exists, " *
+                                         "and each foreign key pointing at one")
 end
 
-function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String})::Nothing
+function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String};
+                                          read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
   objects = _sqlite_schema_objects(conn)
   isempty(objects) && return nothing
@@ -744,7 +751,9 @@ a non-unique create lands in the last bucket regardless.
 composite over a renamed column matches its declaration — `RENAME COLUMN` carries the index. A live
 composite over a column the declared model no longer has is SKIPPED, not dropped: PostgreSQL's
 `DROP COLUMN` takes the index or constraint with it, and the SQLite rebuild's `surviving_columns`
-filters it, so a planned drop would name something that no longer exists by the time it ran.
+filters it, so a planned drop would name something that no longer exists by the time it ran. MySQL
+narrows it to the columns that remain instead (`_drop_column_drops_its_indexes`), so there it is
+dropped, ahead of the column.
 
 **The SQLite rebuild is decided before anything is emitted.** A rebuild re-creates every live bare
 index from its plan-time snapshot and none of the table-level `UNIQUE` clauses (`rebuild_table`
@@ -780,10 +789,15 @@ function _plan_composite_actions!(conn::_SQLEngine,
   # #934: a covering index's payload columns are mapped and checked the same way — PostgreSQL's
   # `DROP COLUMN` takes the index with an INCLUDE column as well.
   live = Tuple{LiveComposite, Vector{String}, Vector{String}}[]
+  vanishing = LiveComposite[]   # over a column going away, where `DROP COLUMN` does not take them (MySQL)
   for lc in live_composites
     cols = String[get(column_renames, c, c) for c in lc.columns]
     inc = String[get(column_renames, c, c) for c in lc.include]
-    all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc) && push!(live, (lc, cols, inc))
+    if all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc)
+      push!(live, (lc, cols, inc))
+    elseif !_drop_column_drops_its_indexes(conn)
+      push!(vanishing, lc)
+    end
   end
 
   # Match declared ⇒ live by kind and columns. Two passes, so that when the live side carries two
@@ -899,6 +913,17 @@ function _plan_composite_actions!(conn::_SQLEngine,
                                                     Dialect.drop_index(conn, lc.name; table = table)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove composite index: $(lc.name)", sql)
     push!(dropped, lc.name)
+  end
+  # MySQL narrows an index over a dropped column to the columns that remain, where PostgreSQL drops it with
+  # the column: a `UNIQUE (a, b)` would become `UNIQUE (a)`, a stricter key, and the `DROP COLUMN` fails on
+  # the rows that break it (error 1062). So the index is dropped first, and the table's column drops move
+  # after it. One that is the only index a surviving foreign key has is MySQL's to refuse (error 1553).
+  if !isempty(vanishing)
+    foreach(drop!, vanishing)
+    steps = migration_plan[model_name]
+    for key in [k for k in keys(steps) if Base.startswith(k, "Remove field: ")]
+      steps[key] = pop!(steps, key)
+    end
   end
   foreach(drop!, drops)
   # Before the renames: the comment belongs to the index, not its name, so a rename after it carries
@@ -1571,7 +1596,8 @@ function _plan_column_change!(conn::_SQLEngine,
   old_column === nothing ||
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
                                          Dialect.rename_field(conn, model_name, old_column, field_name;
-                                                              old_spec = delta.old_spec, new_spec = delta.new_spec))
+                                                              old_spec = delta.old_spec, new_spec = delta.new_spec,
+                                                              catalog_table = catalog_table))
 
   # 3. The column change. On SQLite this is a full table rebuild from the DESIRED model, which is
   #    also what re-points a foreign key there; on PostgreSQL it is the per-slot ALTER. An empty
@@ -3286,7 +3312,7 @@ end
 
 # #754: a table the plan drops must not still be read by a view or a trigger. First of the whole-plan
 # refusals, so a rebuild whose carried view names the dropped table is reported by its cause.
-_refuse_dropped_table_dependents(conn, dropped_tables)
+_refuse_dropped_table_dependents(conn, dropped_tables; read_tables = Set{String}(t.name for t in all_live))
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, all_live, dropped_tables, table_renames)

@@ -945,8 +945,8 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
 end
 
 # MySQL (#1130): each `:rows` finding counted in MySQL's own SQL — backtick names, `?` markers, `SIGNED`
-# for `BIGINT`. The kinds a key or index records (#1130 phase 4a finishes a stopped plan with them) are
-# counted here; the column kinds are phase 4b's.
+# for `BIGINT`. Every `:rows` kind is counted: the keys and indexes a stopped plan leaves (phase 4a) and
+# each column change (phase 4b).
 function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
@@ -3378,9 +3378,10 @@ deleted on purpose — is applied without the precondition.
   SQLite always apply a plan whole, so there it changes nothing.
 
 `lock_timeout` and `statement_timeout` are PostgreSQL's. SQLite accepts and ignores them, so one deploy
-script can run on both; MySQL refuses them (`UnsupportedConnectionError`) until phase 4b of #1130
-decides their MySQL meaning. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each must be a positive number of
-seconds.
+script can run on both. On MySQL `lock_timeout` sets `lock_wait_timeout` (whole seconds) on the connection
+the plan runs on, and `statement_timeout` raises `BackendCapabilityError` (`statement_timeouts`): MySQL
+bounds no DDL statement's run time. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each
+must be a positive number of seconds.
 
 Use [`dry_run`](@ref) to inspect a plan without applying it.
 """
@@ -3494,12 +3495,13 @@ end
 # statement), so it runs as it is.
 function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool;
                               applied::Function = () -> false)::Nothing
-  (atomic && length(statements) > 1) || return nothing
-  _plan_statement_count(connection, statements) > 1 || return nothing
+  atomic || return nothing
+  count = _plan_statement_count(connection, statements)
+  count > 1 || return nothing
   _supports(connection, :transactional_ddl) && return nothing
   applied() && return nothing
   _require_feature(connection, :transactional_ddl,
-                   "Applying a migration plan of $(length(statements)) statements as one change";
+                   "Applying a migration plan of $(count) statements as one change";
                    why = "Each statement commits on its own, so a failure part-way leaves the statements " *
                          "before it applied. Call `migrate(…; atomic = false)` to apply it statement by " *
                          "statement; after a failure, run `makemigrations` again, and `migrate` applies " *
@@ -4405,11 +4407,19 @@ function _ensure_table_locked(connection::PormGMySQL, settings::PormGSettings, t
   return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
                                          wait = true, timeout_ms = _migration_timeouts().lock_wait_ms) do
     _live_table_exists(connection, table) && return :exists
+    # The table is dropped again only once this call has created it: its `CREATE TABLE` is written without
+    # `IF NOT EXISTS`, so a table another process made since the check fails it instead of being taken
+    # for this one's and dropped with its rows.
+    parts = String[part for statement in statements for part in _split_mysql_statements(statement)]
+    isempty(parts) || (parts[1] = replace(parts[1], r"^CREATE TABLE IF NOT EXISTS "i => "CREATE TABLE "))
+    created = false
     try
-      for statement in statements, part in _split_mysql_statements(statement)
+      for part in parts
         fetch(connection, part)
+        created = true
       end
     catch
+      created || rethrow()
       try
         fetch(connection, Dialect.drop_table_only(connection, table))
       catch cleanup_err

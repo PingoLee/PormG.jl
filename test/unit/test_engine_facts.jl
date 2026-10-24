@@ -106,9 +106,11 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_builtin_ignore_tables, :_builtin_ignore_tables_name,
                                :_parenthesizes_db_default, :_expression_default_findings,
                                :_invalid_index_findings, :_can_rename_index,
-                               # Phase 4b: what the row pre-checks count, and a retype's cast rules.
-                               :_pk_precheck_counts_nulls, :_no_implicit_cast, :_retype_has_using,
-                               :_negative_value_predicate, :_byte_length_predicate])
+                               # Phase 4b: what the row pre-checks count, a retype's cast rules, and
+                               # what a dropped column takes with it.
+                               :_pk_precheck_counts_nulls, :_no_implicit_cast, :_retype_drops_default,
+                               :_negative_value_predicate, :_byte_length_predicate,
+                               :_drop_column_drops_its_indexes])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -198,12 +200,16 @@ end
   # Phase 3c-1: a bulk INSERT binds one parameter per cell, and counts its skips from MySQL's report.
   @test !_EF_QB._bulk_binds_column_arrays(_EfMy()) && _EF_QB._counts_skips_from_report(_EfMy())
   # Phase 4a: MySQL alters in place, renames an index in place, and adopts no index it did not create;
-  # phase 4b: MODIFY converts every pair, with no USING. What `inspectdb` declares is phase 4c's.
+  # phase 4b: MODIFY converts a pair unless the rule changes every value, a retype drops an undeclared
+  # expression default, and a dropped column narrows its indexes. What `inspectdb` declares is phase 4c's.
   @test !PormG.Migrations._rebuilds_table(_EfMy()) && !PormG.Migrations._adopts_indexes(_EfMy())
   @test PormG.Migrations._can_rename_index(_EfMy())
   @test PormG.Migrations._composite_name_key(_EfMy(), "Result_Idx") == "result_idx"
   @test !PormG.Migrations._no_implicit_cast(_EfMy(), PormG.CInt32(), PormG.CText()) &&
-        !PormG.Migrations._retype_has_using(_EfMy(), PormG.CText(), PormG.CInt32())
+        PormG.Migrations._no_implicit_cast(_EfMy(), PormG.CDate(), PormG.CTime()) &&
+        PormG.Migrations._retype_drops_default(_EfMy(), PormG.CText(), PormG.CInt32())
+  @test !PormG.Migrations._drop_column_drops_its_indexes(_EfMy()) &&
+        PormG.Migrations._drop_column_drops_its_indexes(_EfPg()) && PormG.Migrations._drop_column_drops_its_indexes(_EfSl())
   @test PormG.Migrations._byte_length_predicate(_EfMy(), "`b`", "?") == "LENGTH(`b`) > ?"
   @test_throws MethodError PormG.Migrations._text_key_is_uuid(_EfMy())
 end

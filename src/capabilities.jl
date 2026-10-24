@@ -67,7 +67,7 @@ const _BACKEND_FEATURES = (
   :unbounded_text_indexes => "an index or key over a whole column of unbounded text, bytes or JSON",
   # #737: PostgreSQL's `SET LOCAL statement_timeout` on the migration transaction; SQLite accepts the option
   # and ignores it, as every timeout. MySQL bounds no DDL statement's run time.
-  :statement_timeouts     => "a bound on how long one migration statement may run (`statement_timeout`)",
+  :statement_timeouts     => "`migrate`'s `statement_timeout`, a bound on how long one plan statement may run (accepted and ignored on SQLite)",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",

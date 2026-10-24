@@ -528,7 +528,32 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
         "name = Models.CharField(max_length = 9); constraints = [Models.CheckConstraint(condition = \"name <> ''\", name = \"Code_Set\")])"
   e = _mm_err(() -> _mm_plan(_mm_my, _mm_driver(), two))
   @test e isa PormG.InvalidMigrationError && occursin("declared on models", sprint(showerror, e))
+  # On an empty database too, where every table is new.
+  e = _mm_err(() -> _MM.get_migration_plan(_MM.LiveTable[], _mm_schema(two), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  @test e isa PormG.InvalidMigrationError && occursin("declared on models", sprint(showerror, e))
   @test _MM._refuse_shared_check_names(MmMockPostgres(), _mm_schema(two)) === nothing
+  # Under a table rename, the old name's prefix is MySQL's too; and a CHECK this plan drops or renames away
+  # (a rename only in case) no longer holds its name.
+  drv = first(values(_mm_schema(_mm_driver())))[:model]
+  e = _mm_err(() -> _MM._refuse_check_name_clash(_mm_my, drv, "pilot", :driver, "driver_chk_pos"))
+  @test e isa PormG.InvalidMigrationError && occursin("starts with 'driver_chk_'", sprint(showerror, e))
+  @test _MM._refuse_check_name_clash(_mm_my, drv, "driver", :driver, "held_here"; freed = Set(["held_here"])) === nothing
+  @test _mm_err(() -> _MM._refuse_check_name_clash(_mm_my, drv, "driver", :driver, "held_here")) isa PormG.InvalidMigrationError
+
+  # After a `RENAME TABLE` earlier in the plan, a CHECK MySQL named after the old table has the new name.
+  @test _MM._check_name_at_run(_mm_my, "driver_chk_1", :driver, :pilot) == "pilot_chk_1"
+  @test _MM._check_name_at_run(_mm_my, "code_set", :driver, :pilot) == "code_set"
+  @test _MM._check_name_at_run(MmMockPostgres(), "driver_chk_1", :driver, :pilot) == "driver_chk_1"
+  cp = _MM._CheckPlan(["driver_chk_1"], Models.CheckConstraint[], Tuple{String, Models.CheckConstraint}[],
+                      Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  out = OrderedDict{Symbol, OrderedDict{String, String}}()
+  _MM._plan_check_drops!(_mm_my, out, :pilot, drv, cp; catalog_table = :driver)
+  @test out[:pilot]["Remove check constraint: driver_chk_1"] == "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`;"
+  ren = _MM._CheckPlan(String[], Models.CheckConstraint[], [("driver_chk_1", c)], Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  out = OrderedDict{Symbol, OrderedDict{String, String}}()
+  _MM._plan_check_adds!(_mm_my, out, :pilot, drv, ren; catalog_table = :driver)
+  @test Base.startswith(out[:pilot]["Rename check constraint: driver_chk_1"], "ALTER TABLE `pilot` DROP CHECK `pilot_chk_1`, ADD CONSTRAINT `code_nonempty`")
 
   # The reader: a marked clause is the declared CHECK, its condition unescaped — even one of PormG's own
   # column shape — and an unmarked one of that shape is still the column's.

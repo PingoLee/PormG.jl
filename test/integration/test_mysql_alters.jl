@@ -457,10 +457,27 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             plan = apply!(grid())
             @test occursin("DROP CHECK `m4b_grid_min`", plan) && isempty(live("m4b_grid").checks) && converged()
             apply!(grid(ck("m4b_grid_min")))
-            write_models(grid(ck("m4b_grid_min")) * "\nLap = Models.Model(\"m4b_lap3\", lapid = Models.IDField(), " *
-                         "lap = Models.IntegerField(); constraints = [$(ck("m4b_grid_min", "lap >= 0"))])")
-            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
-            @test e isa PormG.InvalidMigrationError && occursin("already the name of a CHECK on table 'm4b_grid'", sprint(showerror, e))
+            lap3 = "\nLap = Models.Model(\"m4b_lap3\", lapid = Models.IDField(), " *
+                   "lap = Models.IntegerField(); constraints = [$(ck("m4b_grid_min", "lap >= 0"))])"
+            # Two models declaring it; and a name moved to a new table in the plan that drops it from its own,
+            # which MySQL still holds when the new table's CHECK is added (two migrations, then).
+            for (src, why) in (grid(ck("m4b_grid_min")) * lap3 => "declared on models",
+                               grid() * lap3 => "already the name of a CHECK on table 'm4b_grid'")
+                write_models(src)
+                e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+                @test e isa PormG.InvalidMigrationError && occursin(why, sprint(showerror, e))
+            end
+            # A CHECK MySQL named itself (`<table>_chk_1`, the name `inspectdb` declares it under), adopted,
+            # then dropped by the plan that renames its table: the RENAME TABLE runs first and renames the
+            # CHECK with it, so the drop names it as it is then.
+            exec("CREATE TABLE `m4b_tr` (`trid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, `lap` INT NULL, " *
+                 "CHECK (`lap` < 100)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
+            tr(name, cs) = "Tr = Models.Model(\"$(name)\", trid = Models.IDField(), lap = Models.IntegerField(null = true)$(cs))"
+            apply!(tr("m4b_tr", "; constraints = [$(ck("m4b_tr_chk_1", "lap < 100"))]"))
+            @test only(live("m4b_tr").checks).marker == PormG.check_marker("lap < 100") && converged()
+            plan = apply!(tr("m4b_tr2", ""); renames = ["m4b_tr" => "m4b_tr2"])
+            @test occursin("RENAME TABLE `m4b_tr` TO `m4b_tr2`", plan) && occursin("DROP CHECK `m4b_tr2_chk_1`", plan)
+            @test isempty(live("m4b_tr2").checks) && converged()
         end
 
         # What: a functional index and a functional UniqueConstraint (#1130 phase 4c): created, converged,

@@ -550,7 +550,7 @@ status = Models.CharField(max_length=10, default="active")
 
 An **expression** default — `DEFAULT now()`, `DEFAULT CURRENT_DATE`, `DEFAULT gen_random_uuid()`,
 `DEFAULT (random() * 10)::integer` — is recognised as an expression while the schema is being read,
-on **every** column type and both engines. It is stored in a slot of its own, `db_default`, and
+on **every** column type and engine. It is stored in a slot of its own, `db_default`, and
 rendered back verbatim.
 
 ```julia
@@ -587,7 +587,8 @@ a constant is decided by the schema reader itself, so `CAST(0 AS integer)` and `
 are constants on PostgreSQL too: its catalog stores them as `0` and `'2024-01-01'::date`. Django
 accepts `db_default=0`; PormG compares the text, not an expression object, so it keeps one spelling
 per fact. A field that takes no `default=` at all (`SearchVectorField`) cannot carry a constant
-database default either.
+database default either. MySQL stores a number or `NULL` in parentheses as an expression, so
+`db_default=(mysql="0",)` builds there; a quoted string is a constant on MySQL too.
 
 ### Portable, or pinned to one engine
 
@@ -596,19 +597,19 @@ is how you say:
 
 | You write | Meaning |
 |---|---|
-| `db_default="CURRENT_TIMESTAMP"` | portable — rendered on both engines |
-| `db_default=(postgres="now()",)` | pinned — rendered on PostgreSQL, **raises** on SQLite |
-| `db_default=(postgres="now()", sqlite="CURRENT_TIMESTAMP")` | a spelling for each engine |
-| `db_default=(postgres="gen_random_uuid()", sqlite=nothing)` | PostgreSQL only; no default on SQLite |
+| `db_default="CURRENT_TIMESTAMP"` | portable — rendered on every engine |
+| `db_default=(postgres="now()",)` | pinned — rendered on PostgreSQL, **raises** on SQLite and MySQL |
+| `db_default=(postgres="now()", sqlite="CURRENT_TIMESTAMP")` | a spelling for each of two engines |
+| `db_default=(postgres="gen_random_uuid()", mysql="uuid()", sqlite=nothing)` | PostgreSQL and MySQL; no default on SQLite |
 
-A bare string is accepted **only** for the two expressions that round-trip identically through both
-catalogs — `CURRENT_TIMESTAMP` and `CURRENT_DATE`. Anything else must name its engine:
+A bare string is accepted **only** for the two expressions that round-trip identically through every
+catalog — `CURRENT_TIMESTAMP` and `CURRENT_DATE`. Anything else must name its engine:
 
 ```julia
 Models.DateTimeField(db_default="now()")     # FieldValidationError: name the engine
 ```
 
-Migrating a pinned column on the other engine raises `BackendCapabilityError` rather than emitting
+Migrating a pinned column on an engine it does not name raises `BackendCapabilityError` rather than emitting
 DDL that database would reject. That is deliberate — PormG will not guess a translation — and the
 message names both remedies: add the other engine's spelling, or `sqlite=nothing` to declare that
 the column simply has no database default there.
@@ -645,6 +646,14 @@ the column simply has no database default there.
     `PormG.Migrations.check("db")` (below) and `inspectdb` print, and anything `inspectdb` generates
     is already in that form. Any other spelling costs one `SET DEFAULT` on the first `migrate`,
     which stamps the column. SQLite stores your text verbatim and needs no marker.
+
+    MySQL re-prints as PostgreSQL does — `lower('OPEN')` reads back as `lower(_utf8mb4\'OPEN\')` —
+    and PormG stamps the same marker there, in the column's comment. MySQL has no anonymous block
+    to compute the second hash in, and changes a column's comment only by restating the whole
+    column, so the stamp is one `SET` that reads the default MySQL printed and builds the `MODIFY`
+    restating the column with the marker, run by `PREPARE` and `EXECUTE`: static SQL, in the same
+    migration step. Each MySQL DDL statement commits on its own, so a plan that stops between a
+    default and its stamp leaves the column unmarked, and the next `migrate` stamps it.
 
     The marker is part of the schema a pending plan was written for: a plan file records a
     fingerprint of every table it compares (see [Shipping a plan with a release](migrations/deploying.md#Shipping-a-plan-with-a-release)), and a

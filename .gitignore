@@ -2,6 +2,7 @@ db/*
 Manifest.toml
 *connection.yml
 test/integration/db_2/migrations/
+test/integration/db_my/migrations/
 todo.txt
 
 # --- Personal dev notes (not for contributors) ---

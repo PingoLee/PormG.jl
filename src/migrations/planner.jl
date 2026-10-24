@@ -304,7 +304,8 @@ function _drop_fk_constraint_in_alteration(conn::_SQLEngine, migration_plan::Ord
       return nothing
     end
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove foreign key: $field_name", 
-    Dialect.drop_foreign_key(conn, model_name, constraint_name))
+    Dialect.drop_foreign_key(conn, model_name, constraint_name;
+                             with_index = _foreign_key_leaves_index(conn, catalog_table, constraint_name)))
   end
   return nothing
 end
@@ -347,7 +348,7 @@ function _drop_index(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, Order
   # `model_name` is already the RESOLVED physical table name (db_table when set, #59) and needs no
   # re-normalization through `format_model_name`; `Dialect.drop_index` does the quoting (#394).
   _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name",
-  Dialect.drop_index(conn, index_name))
+  Dialect.drop_index(conn, index_name; table = model_name))
   return nothing
 end
 function _drop_index(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing, catalog_table::Symbol = model_name)
@@ -503,6 +504,20 @@ end
 # `_add_new_table` hands it an empty live side, `_alter_table_fields` hands it the table's
 # `LiveTable.composites`, and one body decides for both.
 
+# A name PormG derives for a model-level index (`composite_index_name`, `<table>_<cols>_uniq`; no `name=`)
+# must fit the engine. PostgreSQL cuts a long one itself and every comparison already reads it cut
+# (`_catalog_index_name`); MySQL refuses one over 64 characters (error 1059), so there it is cut to 55 and
+# given 8 hex digits of its own hash — the same on every plan, so a table created now and the diff later
+# agree. A derived name is no intent (#161): a composite is matched by its shape, never by it. A name the
+# model wrote is the model's, and MySQL's refusal of a long one stands.
+_fit_derived_name(::Union{PormGPostgres, PormGSQLite}, d::DeclaredComposite)::DeclaredComposite = d
+function _fit_derived_name(::PormGMySQL, d::DeclaredComposite)::DeclaredComposite
+  (d.explicit || length(d.name) <= 64) && return d
+  name = first(d.name, 55) * "_" * bytes2hex(SHA.sha256(d.name))[1:8]
+  return DeclaredComposite(name, d.columns, d.unique, d.explicit, d.auto, d.method, d.descending, d.opclasses,
+                           d.expressions, d.condition, d.include)
+end
+
 """
     _catalog_index_name(conn, name) -> String
 
@@ -623,7 +638,8 @@ refusals. Without it each engine lost the object a different way:
     database failed on the missing table — the end of every later table rebuild.
     What is found is [`_sqlite_drop_table_dependents`](@ref).
 """
-function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::Set{String})::Nothing
+function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::Set{String};
+                                           read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
   found = _pg_drop_table_dependents(conn, sort!(collect(dropped_tables)))
   isempty(found) && return nothing
@@ -631,14 +647,23 @@ function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::S
     "PostgreSQL drops a table with CASCADE, which would remove them too without the plan saying so")
 end
 
-# MySQL (#1130 phase 4a): a plan that drops a table is phase 4b's, refused here, before its dependents
-# would need reading.
-function _refuse_dropped_table_dependents(::PormGMySQL, dropped_tables::Set{String})::Nothing
+# MySQL (#1130): a view that reads a dropped table (`VIEW_TABLE_USAGE`), and a foreign key to one from a
+# table the plan neither drops nor manages (`read_tables`, the managed tables it reads: not an ignored
+# table, an unmanaged model's, or one in another database). The drop runs with the key checks off, so
+# that key would be left pointing at a missing table, where PostgreSQL's `CASCADE` removes it; a table
+# the plan manages has its keys planned. A trigger is the table's
+# own and goes with it.
+function _refuse_dropped_table_dependents(conn::PormGMySQL, dropped_tables::Set{String};
+                                          read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
-  throw(Dialect._mysql_not_yet("A migration plan that drops a table ($(join(sort!(collect(dropped_tables)), ", ")))", "4b"))
+  found = _mysql_drop_table_dependents(conn, sort!(collect(dropped_tables)); keep = union(dropped_tables, read_tables))
+  isempty(found) && return nothing
+  _throw_dropped_table_dependents(found, "MySQL would leave each view reading a table that no longer exists, " *
+                                         "and each foreign key pointing at one")
 end
 
-function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String})::Nothing
+function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String};
+                                          read_tables::Set{String} = Set{String}())::Nothing
   isempty(dropped_tables) && return nothing
   objects = _sqlite_schema_objects(conn)
   isempty(objects) && return nothing
@@ -674,6 +699,14 @@ function _throw_dropped_table_dependents(found::Vector{Tuple{String, String}}, c
     "rename question: a rename on its own keeps them. (On SQLite, a rename in the same migration as " *
     "a table rebuild is refused when a view or trigger the rebuild carries names the renamed table; " *
     "apply the rename as a migration of its own first.)"))
+end
+
+# The live columns of `live` whose foreign key `model` still declares (renamed columns mapped, live ⇒
+# declared), as `_plan_composite_actions!` reads them.
+function _kept_key_columns(model::PormGModel, live::LiveTable, renames::AbstractDict{String, String})::Set{String}
+  declared = Set{String}(Models.field_db_column(f, string(k)) for (k, f) in model.fields
+                         if f isa Models.sRelationalColumn && f.db_constraint)
+  return Set{String}(c for (c, s) in live.columns if s.reference !== nothing && get(renames, c, c) in declared)
 end
 
 """
@@ -727,7 +760,9 @@ a non-unique create lands in the last bucket regardless.
 composite over a renamed column matches its declaration — `RENAME COLUMN` carries the index. A live
 composite over a column the declared model no longer has is SKIPPED, not dropped: PostgreSQL's
 `DROP COLUMN` takes the index or constraint with it, and the SQLite rebuild's `surviving_columns`
-filters it, so a planned drop would name something that no longer exists by the time it ran.
+filters it, so a planned drop would name something that no longer exists by the time it ran. MySQL
+narrows it to the columns that remain instead (`_drop_column_drops_its_indexes`), so there it is
+dropped, ahead of the column.
 
 **The SQLite rebuild is decided before anything is emitted.** A rebuild re-creates every live bare
 index from its plan-time snapshot and none of the table-level `UNIQUE` clauses (`rebuild_table`
@@ -750,11 +785,14 @@ function _plan_composite_actions!(conn::_SQLEngine,
                                   # `UniqueConstraint` records into. `nothing` for a table this plan
                                   # creates — it is empty, so nothing can fail.
                                   live_columns = nothing,
+                                  # The live columns whose foreign key the declared model keeps (MySQL: an
+                                  # index over a dropped column may be the only one such a key has).
+                                  kept_key_columns::Set{String} = Set{String}(),
                                   lossy_alters::Vector{LossyAlter} = LossyAlter[],
                                   # #934: the live columns this plan retypes, which a partial
                                   # UniqueConstraint's condition cannot be counted over.
                                   retyped::Set{String} = Set{String}())::Set{String}
-  declared = declared_composites(model)
+  declared = DeclaredComposite[_fit_derived_name(conn, d) for d in declared_composites(model)]
   table = String(model_table_name(model))
   declared_cols = _model_physical_columns(model)
 
@@ -763,10 +801,15 @@ function _plan_composite_actions!(conn::_SQLEngine,
   # #934: a covering index's payload columns are mapped and checked the same way — PostgreSQL's
   # `DROP COLUMN` takes the index with an INCLUDE column as well.
   live = Tuple{LiveComposite, Vector{String}, Vector{String}}[]
+  vanishing = LiveComposite[]   # over a column going away, where `DROP COLUMN` does not take them (MySQL)
   for lc in live_composites
     cols = String[get(column_renames, c, c) for c in lc.columns]
     inc = String[get(column_renames, c, c) for c in lc.include]
-    all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc) && push!(live, (lc, cols, inc))
+    if all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc)
+      push!(live, (lc, cols, inc))
+    elseif !_drop_column_drops_its_indexes(conn)
+      push!(vanishing, lc)
+    end
   end
 
   # Match declared ⇒ live by kind and columns. Two passes, so that when the live side carries two
@@ -879,9 +922,48 @@ function _plan_composite_actions!(conn::_SQLEngine,
   dropped = Set{String}()
   drop!(lc::LiveComposite) = begin
     sql = !_rebuilds_table(conn) && lc.constraint ? Dialect.drop_unique_constraint(conn, table, lc.name) :
-                                                    Dialect.drop_index(conn, lc.name)
+                                                    Dialect.drop_index(conn, lc.name; table = table)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove composite index: $(lc.name)", sql)
     push!(dropped, lc.name)
+  end
+  # MySQL narrows an index over a dropped column to the columns that remain, where PostgreSQL drops it with
+  # the column: a `UNIQUE (a, b)` would become `UNIQUE (a)`, a stricter key, and the `DROP COLUMN` fails on
+  # the rows that break it (error 1062). So the index is dropped before the table's column drops, and after
+  # its foreign-key drops: MySQL keeps every foreign key indexed, so an index a key still needs cannot go
+  # (error 1553). One that a key the table KEEPS would be left without refuses the plan, before anything
+  # runs: the key needs an index of its own first, made by an earlier migration.
+  if !isempty(vanishing)
+    # Every index this pass drops: an undeclared one going too is no index the key keeps.
+    gone = String[lc.name for lc in Iterators.flatten((vanishing, drops))]
+    for lc in vanishing
+      lead = isempty(lc.columns) ? nothing : first(lc.columns)
+      (lead !== nothing && lead in kept_key_columns &&
+       !_leads_another_index(conn, String(catalog_table), lead, gone)) || continue
+      dropped_cols = String[c for c in lc.columns if !(get(column_renames, c, c) in declared_cols)]
+      throw(InvalidMigrationError(
+        "Index '$(lc.name)' on table '$(table)' is the only index of the foreign key on '$(lead)', and this plan " *
+        "drops $(join(("'$(c)'" for c in dropped_cols), ", ")), which the index also covers. MySQL keeps every " *
+        "foreign key indexed: it would narrow the index rather than drop it with the column, and refuses to " *
+        "drop it while the key needs it (error 1553). Index '$(lead)' on its own first (`db_index = true` on " *
+        "its field, applied by a migration of its own), then drop the column."))
+    end
+    steps = get!(OrderedDict{String, String}, migration_plan, model_name)
+    before = collect(steps)
+    foreach(drop!, vanishing)
+    added = collect(steps)[length(before)+1:end]
+    # Just ahead of the first column drop, so the other steps keep their places (a primary key moved to a
+    # column that stays still waits for the old key's column to go), with the table's foreign-key drops
+    # moved ahead of them: a key's drop depends on no step before it.
+    first_drop = findfirst(p -> Base.startswith(p.first, "Remove field: "), before)
+    if first_drop !== nothing
+      tail = before[first_drop:end]
+      is_key_drop(p) = Base.startswith(p.first, "Remove foreign key: ")
+      empty!(steps)
+      for p in Iterators.flatten((before[1:first_drop-1], filter(is_key_drop, tail), added,
+                                  filter(!is_key_drop, tail)))
+        steps[p.first] = p.second
+      end
+    end
   end
   foreach(drop!, drops)
   # Before the renames: the comment belongs to the index, not its name, so a rename after it carries
@@ -899,7 +981,7 @@ function _plan_composite_actions!(conn::_SQLEngine,
       _claim_composite_target!(conn, targets, d.name, table)
       _configure_order_dict_migration_plan(migration_plan, model_name, "Rename composite index: $(lc.name)",
         lc.constraint ? Dialect.rename_constraint(conn, table, lc.name, d.name) :
-                        Dialect.rename_index(conn, lc.name, d.name))
+                        Dialect.rename_index(conn, lc.name, d.name; table = table))
     else
       drop!(lc)                                      # SQLite cannot rename an index
       push!(creates, d)
@@ -1310,7 +1392,6 @@ function _add_new_field(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, Or
                         # a table rename, #615), and the lossy-ALTER sink the finding goes into.
                         catalog_table::Union{Symbol, Nothing} = nothing,
                         lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
-  _require_column_alters(conn, model_name, field_name; added = true)
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
@@ -1531,7 +1612,6 @@ function _plan_column_change!(conn::_SQLEngine,
                               catalog_table::Symbol = model_name,
                               lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   isempty(delta) && old_column === nothing && return nothing
-  _require_column_alters(conn, catalog_table, field_name; delta = delta, renamed = old_column !== nothing)
   # #1032: a generated column is re-created, never altered, and only under its own name
   # (`_generated_recreates`). Reached here, it is a renamed column that is also made generated or given
   # another expression — two steps PormG will not guess an order for.
@@ -1555,7 +1635,9 @@ function _plan_column_change!(conn::_SQLEngine,
   # 2. The rename itself.
   old_column === nothing ||
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
-                                         Dialect.rename_field(conn, model_name, old_column, field_name))
+                                         Dialect.rename_field(conn, model_name, old_column, field_name;
+                                                              old_spec = delta.old_spec, new_spec = delta.new_spec,
+                                                              catalog_table = catalog_table))
 
   # 3. The column change. On SQLite this is a full table rebuild from the DESIRED model, which is
   #    also what re-points a foreign key there; on PostgreSQL it is the per-slot ALTER. An empty
@@ -1928,6 +2010,8 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
                                                 catalog_table = catalog_table,
                                                 targets = composite_targets,
                                                 live_columns = Set{String}(keys(live.columns)),
+                                                kept_key_columns = _kept_key_columns(current_schema[model_name][:model],
+                                                                                     live, sqlite_rename_map),
                                                 lossy_alters = lossy_alters, retyped = retyped)
 
   # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on
@@ -3270,7 +3354,7 @@ end
 
 # #754: a table the plan drops must not still be read by a view or a trigger. First of the whole-plan
 # refusals, so a rebuild whose carried view names the dropped table is reported by its cause.
-_refuse_dropped_table_dependents(conn, dropped_tables)
+_refuse_dropped_table_dependents(conn, dropped_tables; read_tables = Set{String}(t.name for t in live))
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, all_live, dropped_tables, table_renames)
@@ -3413,9 +3497,8 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   return nothing
 end
 
-# MySQL (#1130 phase 4a): the SQLite method's shape, with the plan floor PostgreSQL checks. Phase 4a plans
-# tables created from nothing; a plan that would change or drop a table that exists is phase 4b's, and is
-# refused before it is written (`_refuse_mysql_alter_plan`).
+# MySQL (#1130): the SQLite method's shape, with the plan floor PostgreSQL checks. What MySQL cannot plan
+# yet (a declared CheckConstraint, a functional index, phase 4c) is refused where the planner reaches it.
 function makemigrations(connection::PormGMySQL, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
                         renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
   Configuration._require_folder_backed(settings, "makemigrations")
@@ -3432,46 +3515,9 @@ function makemigrations(connection::PormGMySQL, settings::PormGSettings; path::S
   live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
                                       lossy_alters = lossy_alters, schema_scope = schema_scope, renames = renames)
-  _refuse_mysql_alter_plan(migration_plan, live_schema)
   _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters,
                       schema_tables = _scoped_fingerprints(live_fingerprints, schema_scope))
   return nothing
-end
-
-# Phase 4a plans a schema created from nothing, and the steps that complete a table that exists without
-# them: a foreign key and an index. That is what a re-run plans after a MySQL `migrate` stopped part-way
-# (#1268), each DDL statement having committed on its own. Any other step on an existing table — a column
-# added, altered, dropped or renamed, a table dropped or renamed, an index or key removed — is phase 4b's,
-# and is refused before the plan is written. The column steps are refused earlier still, where the
-# planner reaches them (`_require_column_alters`).
-const _MYSQL_ADDITIVE_STEPS = ("New model", "New foreign key: ", "Create index on ", "Create index: ",
-                               "Create unique constraint: ", "Create many-to-many unique index")
-
-function _refuse_mysql_alter_plan(migration_plan::AbstractDict, live_schema::AbstractVector{LiveTable})::Nothing
-  live_names = Set{String}(t.name for t in live_schema)
-  steps = String[]
-  for (table, entries) in migration_plan, label in keys(entries)
-    # A new table's "New model" step is a `CREATE TABLE`; on a table that exists it is not planned.
-    any(p -> startswith(label, p), _MYSQL_ADDITIVE_STEPS) && !(label == "New model" && String(table) in live_names) &&
-      continue
-    push!(steps, "$(table): $(label)")
-  end
-  isempty(steps) || throw(Dialect._mysql_not_yet(
-    "A migration plan that changes an existing table ($(join(sort!(steps), "; ")))", "4b"))
-  return nothing
-end
-
-# A planned column change or a column added to an existing table, refused on MySQL until phase 4b —
-# except a foreign key added to a column that has none, the one column step a stopped plan leaves to
-# finish (the column exists, its constraint does not). It renders as on PostgreSQL: no `ALTER` of the
-# column (`Dialect.alter_field` answers nothing for it) and an `ADD CONSTRAINT` after.
-_require_column_alters(::Union{PormGPostgres, PormGSQLite}, table, column; kwargs...)::Nothing = nothing
-function _require_column_alters(::PormGMySQL, table, column; delta::Union{ColumnDelta, Nothing} = nothing,
-                                renamed::Bool = false, added::Bool = false)::Nothing
-  !added && !renamed && delta !== nothing && delta.changed == [:reference] &&
-    delta.old_spec.reference === nothing && return nothing
-  throw(Dialect._mysql_not_yet("A migration plan that adds or changes a column of an existing table " *
-                               "($(table).$(column))", "4b"))
 end
 
 # The tail both `makemigrations` methods end with (#727): afterwards the pending file describes the

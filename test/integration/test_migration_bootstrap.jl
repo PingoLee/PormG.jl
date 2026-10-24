@@ -24,6 +24,14 @@ end
 
 using OrderedCollections
 
+# MySQL (#1130): the raw SQL below is written with double-quoted names, which MySQL's `sql_mode` reads as
+# string literals, so it goes through `engine_sql` (common_setup.jl). And a MySQL plan of more than one
+# statement needs `atomic = false` (#1268); on PostgreSQL and SQLite, which apply every plan whole, it
+# changes nothing, so every `migrate` here passes it.
+edge_fetch(pool, sql::AbstractString, args...; kw...) =
+  PormG.ConnectionPool.fetch(pool, engine_sql(sql; conn = pool), args...; kw...)
+edge_migrate(args...; kw...) = migrate(args...; atomic = false, kw...)
+
 # ─── Phase A: Migration Preflight ────────────────────────────────────────────
 # Goal: prove the migration engine can start from an empty selected DB,
 #       create the history table, generate a plan, and apply it.
@@ -53,7 +61,7 @@ using OrderedCollections
 
   # A4. migrate should apply the schema without error.
   #     destructive=true because some backends may need it for fresh creation.
-  migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
+  edge_migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
 
   # A5. Verify post-migration state.
   st2 = status(settings.connections, settings)
@@ -75,7 +83,7 @@ end
 
   # Recreate pormg_migrations WITHOUT format_version, mimicking an older release's schema. The DDL is
   # each engine's own (engine mechanics, #1179).
-  PormG.ConnectionPool.fetch(conn, "DROP TABLE IF EXISTS pormg_migrations;")
+  edge_fetch(conn, "DROP TABLE IF EXISTS pormg_migrations;")
   legacy_ddl = by_engine(
     postgres = """CREATE TABLE pormg_migrations (
       "id" SERIAL PRIMARY KEY,
@@ -87,6 +95,16 @@ end
       "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
       "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE
     );""",
+    mysql = """CREATE TABLE pormg_migrations (
+      `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      `version` VARCHAR(17) NOT NULL UNIQUE,
+      `name` VARCHAR(255) NOT NULL,
+      `checksum` VARCHAR(64) NOT NULL,
+      `sql_content` LONGTEXT NOT NULL DEFAULT (''),
+      `applied_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      `status` VARCHAR(20) NOT NULL DEFAULT 'applied',
+      `is_destructive` TINYINT(1) NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;""",
     sqlite = """CREATE TABLE pormg_migrations (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "version" VARCHAR(17) NOT NULL UNIQUE,
@@ -97,10 +115,10 @@ end
       "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
       "is_destructive" BOOLEAN NOT NULL DEFAULT 0
     );""")
-  PormG.ConnectionPool.fetch(conn, legacy_ddl)
+  edge_fetch(conn, legacy_ddl)
 
   # A legacy applied record, written before the column existed.
-  PormG.ConnectionPool.fetch(conn,
+  edge_fetch(conn,
     """INSERT INTO pormg_migrations ("version", "name", "checksum", "status")
        VALUES ('20250101000000000', 'legacy_init', 'deadbeef', 'applied');""")
 
@@ -117,7 +135,7 @@ end
 
   # The column now exists and the legacy row backfilled to 1 via the DEFAULT.
   @test format_version_present() == true
-  legacy = DataFrame(PormG.ConnectionPool.fetch(conn,
+  legacy = DataFrame(edge_fetch(conn,
     """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000000000';"""))
   @test nrow(legacy) == 1
   @test legacy[1, :format_version] == 1
@@ -126,7 +144,7 @@ end
   # mark_applied requires a verifiable checksum basis (issue #81), so pass sql_content.
   Migrations.mark_applied(conn, settings, "20250101000001000", "after_upgrade";
                           sql_content = "-- post-upgrade reconciliation (format-version backfill test)")
-  fresh = DataFrame(PormG.ConnectionPool.fetch(conn,
+  fresh = DataFrame(edge_fetch(conn,
     """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000001000';"""))
   @test fresh[1, :format_version] == Migrations.MIGRATION_FORMAT_VERSION
 
@@ -136,7 +154,7 @@ end
   # stale default is still in force, because the INSERT now writes `applied_at` explicitly.
   if only_on(:sqlite, "#570 repairs `applied_at` stored as TEXT (PostgreSQL's column is a timestamp)")
     canonical = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$"
-    stamps = DataFrame(PormG.ConnectionPool.fetch(conn,
+    stamps = DataFrame(edge_fetch(conn,
       """SELECT "version", "applied_at" FROM pormg_migrations
          WHERE "version" IN ('20250101000000000', '20250101000001000') ORDER BY "version";"""))
     @test nrow(stamps) == 2
@@ -161,7 +179,7 @@ end
 
   # B2. Run the real migration lifecycle.
   makemigrations(PORMG_DB_FOLDER, interactive=false)
-  migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
+  edge_migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
 
   # B3. Reload everything so M.*.objects point at the rebuilt schema.
   settings = reload_config_and_models!()
@@ -198,7 +216,10 @@ end
 # resolve to that binding for the SQLite adapter path.
 
 # The temp DB folder, one per engine: SQLite's is created here, PostgreSQL's ships a committed fixture.
-edge_db_name = by_engine(sqlite = "db_test_migration", postgres = "db_test_migration_pg")
+# MySQL's test user owns one database, so its edge folder is a temporary one over the selected database
+# (an absolute path: `joinpath(@__DIR__, edge_db_name)` is then that path).
+edge_db_name = by_engine(sqlite = "db_test_migration", postgres = "db_test_migration_pg",
+                         mysql = joinpath(mktempdir(), "db_test_migration_my"))
 const edge_db_reuses_selected_db = Ref(false)
 const edge_db_fixture_generated = Ref(false)
 
@@ -280,6 +301,21 @@ function provision_postgres_edge_db!()
   return nothing
 end
 
+# MySQL: the test user cannot create a database, so the edge cases run on the selected one — the path
+# `edge_db_reuses_selected_db` already takes — emptied first; the reactivation testset rebuilds it after.
+# The edge folder's connection.yml is the selected one's, written to a temporary folder (it carries the
+# credentials, so never under test/).
+function provision_mysql_edge_db!()
+  edge_path = joinpath(@__DIR__, edge_db_name)
+  ispath(edge_path) && rm(edge_path; recursive = true)
+  mkpath(edge_path)
+  cp(joinpath(@__DIR__, PORMG_DB_FOLDER, "connection.yml"), joinpath(edge_path, "connection.yml"))
+  edge_db_reuses_selected_db[] = true
+  reset_database!(PormG.Configuration.get_settings(PORMG_DB_FOLDER))
+  return nothing
+end
+teardown_mysql_edge_db!(edge_settings) = rm(joinpath(@__DIR__, edge_db_name); recursive = true, force = true)
+
 function teardown_sqlite_edge_db!(edge_settings)
   # SQLite: remove the entire disposable folder
   ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
@@ -307,13 +343,13 @@ end
 
 @testset "Migration Engine Edge Cases ($(adapter_name) temp DB)" begin
   # ── Setup: create/reset the isolated temp database ──────────────────
-  by_engine(sqlite = provision_sqlite_edge_db!, postgres = provision_postgres_edge_db!)()
+  by_engine(sqlite = provision_sqlite_edge_db!, postgres = provision_postgres_edge_db!, mysql = provision_mysql_edge_db!)()
 
   PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
   edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
   # This reload re-read the fixture. PostgreSQL's is credential-free, so re-hydrate it in memory; the
   # edge-case tests below reuse this pool and never reload the fixture, so one hydrate suffices.
-  by_engine(sqlite = s -> nothing,
+  by_engine(sqlite = s -> nothing, mysql = s -> nothing,
             postgres = s -> hydrate_postgres_settings!(s,
               PormG.Configuration.get_settings(PORMG_DB_FOLDER), joinpath(@__DIR__, edge_db_name)))(edge_settings)
   pool = edge_settings.connections
@@ -329,7 +365,7 @@ end
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
 
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
 
     @test table_exists(pool, "migrationtest")
     cols = column_names(pool, "migrationtest")
@@ -347,7 +383,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
 
     cols = column_names(pool, "migrationtest")
     @test "age" in cols
@@ -362,7 +398,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
     @test !("age" in cols)
@@ -382,7 +418,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @test table_exists(pool, "secondtable")
     cols = column_names(pool, "secondtable")
@@ -400,8 +436,8 @@ end
     @assert foreign_key_count(pool, "secondtable") >= 1 "Phase 4b requires the FK created in phase 4"
 
     # Seed a parent + child row (raw SQL; explicit ids keep the child's parent reference deterministic).
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (900, 'fk-parent-83');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "secondtable" ("id", "test_id", "description") VALUES (901, 900, 'fk-child-83');""")
+    edge_fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (900, 'fk-parent-83');""")
+    edge_fetch(pool, """INSERT INTO "secondtable" ("id", "test_id", "description") VALUES (901, 900, 'fk-child-83');""")
 
     # Desired model: keep the column, drop only the DB-level FK constraint.
     write_edge_models("""
@@ -423,14 +459,14 @@ end
     pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
     @test !occursin("BEGIN TRANSACTION", pending)
 
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # AC1: the FK constraint is gone, and the column is preserved.
     @test foreign_key_count(pool, "secondtable") == 0
     @test "test_id" in column_names(pool, "secondtable")
 
     # Data fidelity: the child row survived the table rebuild with its values intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "test_id", "description" FROM "secondtable" WHERE "id" = 901;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -438,8 +474,8 @@ end
     @test isequal(surviving[1, :description], "fk-child-83")
 
     # Cleanup: restore the empty-table precondition later phases assume.
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "secondtable" WHERE "id" = 901;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 900;""")
+    edge_fetch(pool, """DELETE FROM "secondtable" WHERE "id" = 901;""")
+    edge_fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 900;""")
   end
 
   # ── Phase 4c: Delete a live FK field (#116) ───────────────────────
@@ -477,7 +513,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # Baseline: the new table has TWO live FKs (both created via CREATE TABLE) and the doomed column.
     @assert foreign_key_count(pool, "childfktable") == 2 "Phase 4c requires two live FKs on childfktable"
@@ -485,8 +521,8 @@ end
     @test "doomed" in column_names(pool, "childfktable")
 
     # Seed a parent + child; keep_id/label carry data that must survive the rebuild.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (920, 'fk-parent-116');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "drop_id", "doomed", "label") VALUES (921, 920, 920, 'gone-116', 'child-116');""")
+    edge_fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (920, 'fk-parent-116');""")
+    edge_fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "drop_id", "doomed", "label") VALUES (921, 920, 920, 'gone-116', 'child-116');""")
 
     # Desired model: delete BOTH the `drop_id` FK field and the plain `doomed` column (keep keep_id + label).
     write_edge_models("""
@@ -513,7 +549,7 @@ end
 
     # AC1: this must NOT raise (pre-fix, SQLite `DROP COLUMN "drop_id"` aborts because drop_id is an FK
     # column; a naïve rebuild would instead fail re-creating drop_id's index — both are the #116 bug).
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # Both deleted columns are gone (drop_id via the FK-forced rebuild, doomed swept up in the same rebuild);
     # the sibling FK column, its FK, and the remaining columns survive.
@@ -525,7 +561,7 @@ end
     @test foreign_key_count(pool, "childfktable") == 1   # drop_id's FK removed; keep_id's preserved
 
     # Data fidelity: the child row survived the rebuild with its surviving values intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "keep_id", "label" FROM "childfktable" WHERE "id" = 921;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -534,8 +570,8 @@ end
 
     # Cleanup child-then-parent so the DELETE never depends on ON DELETE CASCADE (childfktable itself is
     # dropped later by Phase 5's model redefinition).
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 921;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 920;""")
+    edge_fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 921;""")
+    edge_fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 920;""")
   end
 
   # ── Phase 4d: Alter a field AND delete an FK field together (#116) ─
@@ -550,8 +586,8 @@ end
     @assert column_nullable(pool, "childfktable", "label") "Phase 4d requires label to start nullable"
 
     # Seed a parent + child; label carries data that must survive, and must be non-NULL for SET NOT NULL.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (930, 'fk-parent-116d');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "label") VALUES (931, 930, 'child-116d');""")
+    edge_fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (930, 'fk-parent-116d');""")
+    edge_fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "label") VALUES (931, 930, 'child-116d');""")
 
     # Desired model: delete keep_id (FK) AND alter label (null=true -> null=false) in the SAME migration.
     write_edge_models("""
@@ -576,7 +612,7 @@ end
 
     # Must NOT raise: on SQLite the FK-delete rebuild and the label alteration collapse into one recreation
     # whose preserved indexes exclude keep_id's (a broken alteration-site filter → "no such column: keep_id").
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "childfktable")
     @test !("keep_id" in cols)                            # FK field deleted
@@ -585,14 +621,14 @@ end
     @test !column_nullable(pool, "childfktable", "label") # the alteration applied: label is now NOT NULL
 
     # Data fidelity: the row survived the combined rebuild.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "label" FROM "childfktable" WHERE "id" = 931;""") |> DataFrame
     @test nrow(surviving) == 1
     @test isequal(surviving[1, :label], "child-116d")
 
     # Cleanup (childfktable is dropped by Phase 5's model redefinition).
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 931;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 930;""")
+    edge_fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 931;""")
+    edge_fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 930;""")
   end
 
   # ── Phase 4e: Rename an FK field whose FK constraint also changes (#150) ─
@@ -628,7 +664,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # Baseline: one live FK on the indexed old_parent_id column, plus the field's secondary index (db_index).
     @assert foreign_key_count(pool, "renamefkchild") == 1 "Phase 4e requires a live FK on renamefkchild"
@@ -637,8 +673,8 @@ end
     @assert !isempty(idx_before) "Phase 4e requires the db_index secondary index on the FK field"
 
     # Seed a parent + child row whose FK value must survive the rebuild.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (940, 'fk-parent-150');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "renamefkchild" ("id", "old_parent_id", "note") VALUES (941, 940, 'child-150');""")
+    edge_fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (940, 'fk-parent-150');""")
+    edge_fetch(pool, """INSERT INTO "renamefkchild" ("id", "old_parent_id", "note") VALUES (941, 940, 'child-150');""")
 
     # Desired: RENAME old_parent_id → new_parent_id AND flip db_constraint true→false (drop the FK) in the
     # same migration. Everything else is identical so the only interactive decision is this one field rename.
@@ -679,7 +715,7 @@ end
     # Must NOT raise. Pre-fix on SQLite the rename emitted only RENAME COLUMN (no rebuild); the rebuild here
     # re-creates the field's secondary index against the RENAMED column, so a broken column_renames rewrite
     # would abort with "no such column: old_parent_id".
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # The column is renamed and the FK constraint change took effect on BOTH backends.
     cols = column_names(pool, "renamefkchild")
@@ -699,7 +735,7 @@ end
     @test !("old_parent_id" in idxcols)
 
     # Data fidelity: the child row survived with its (renamed) FK value intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "new_parent_id", "note" FROM "renamefkchild" WHERE "id" = 941;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -707,8 +743,8 @@ end
     @test isequal(surviving[1, :note], "child-150")
 
     # Cleanup child-then-parent (renamefkchild is dropped by Phase 5's model redefinition).
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "renamefkchild" WHERE "id" = 941;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 940;""")
+    edge_fetch(pool, """DELETE FROM "renamefkchild" WHERE "id" = 941;""")
+    edge_fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 940;""")
   end
 
   # ── Phase 4f: Rename FK field (constraint change) + delete another field, same migration (#150) ─
@@ -749,13 +785,13 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @assert foreign_key_count(pool, "renamedelchild") == 1 "Phase 4f requires a live FK on renamedelchild"
     @assert "zztombstone" in column_names(pool, "renamedelchild") "Phase 4f requires the doomed column"
 
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (950, 'fk-parent-150f');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "renamedelchild" ("id", "link_id", "zztombstone", "note") VALUES (951, 950, 'gone', 'child-150f');""")
+    edge_fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (950, 'fk-parent-150f');""")
+    edge_fetch(pool, """INSERT INTO "renamedelchild" ("id", "link_id", "zztombstone", "note") VALUES (951, 950, 'gone', 'child-150f');""")
 
     # Desired: rename link_id → link_ref_id (flip db_constraint true→false) AND delete zztombstone.
     write_edge_models(base_models * """
@@ -782,7 +818,7 @@ end
 
     # Must NOT raise: pre-fix on SQLite the deletion loop emitted `DROP COLUMN "zztombstone"` AFTER the
     # rename-rebuild already dropped it → "no such column". The deletion-loop skip defers to the rebuild.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "renamedelchild")
     @test !("link_id" in cols)        # renamed away
@@ -791,15 +827,15 @@ end
     @test foreign_key_count(pool, "renamedelchild") == 0   # FK dropped by the db_constraint flip
 
     # Data fidelity: the row survived the combined rebuild with its renamed FK value intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "link_ref_id", "note" FROM "renamedelchild" WHERE "id" = 951;""") |> DataFrame
     @test nrow(surviving) == 1
     @test isequal(surviving[1, :link_ref_id], 950)
     @test isequal(surviving[1, :note], "child-150f")
 
     # Cleanup child-then-parent (renamedelchild is dropped by Phase 5's model redefinition).
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "renamedelchild" WHERE "id" = 951;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 950;""")
+    edge_fetch(pool, """DELETE FROM "renamedelchild" WHERE "id" = 951;""")
+    edge_fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 950;""")
   end
 
   # ── Phase 4g: Delete a UNIQUE (and, guarded, a PK) non-FK column (#151) ─
@@ -813,7 +849,7 @@ end
   # #151 as data: whether dropping the PK column of a table leaves it PK-less (`:applies`) or is
   # refused at makemigrations (`:refuses`). The `PkGuardChild` Phase 4g leaves behind is what the
   # 4h-4k phases carry forward, so they read it from the same row.
-  pk_drop = by_engine(postgres = :applies, sqlite = :refuses)
+  pk_drop = by_engine(postgres = :applies, sqlite = :refuses, mysql = :applies)
   pkguard_with_pk = """
     PkGuardChild = Models.Model(
         pk_code = Models.CharField(primary_key=true, null=false),
@@ -864,19 +900,19 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @assert "code" in column_names(pool, "uniquedelchild") "Phase 4g requires the unique column to exist"
 
     # The UNIQUE constraint is live: seed one row, then a duplicate `code` INSERT must raise (behavioral
     # verification, per the #82 technique — introspection can't confirm uniqueness on SQLite).
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (960, 'code-X', 'keep-960');""")
+    edge_fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (960, 'code-X', 'keep-960');""")
     dup_err = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (961, 'code-X', 'dup');""")
+      edge_fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (961, 'code-X', 'dup');""")
       nothing
     catch e; e; end
     @test dup_err !== nothing
-    @test any(tok -> occursin(tok, lowercase(string(dup_err))), ["unique", "constraint", "duplicate"])
+    @test any(tok -> occursin(tok, driver_message(dup_err)), ["unique", "constraint", "duplicate"])
 
     # Desired: remove the UNIQUE `code` column.
     write_edge_models(base5 * """
@@ -891,13 +927,13 @@ end
 
     # Must NOT raise. Pre-fix on SQLite, deleting `code` took the plain path — `DROP INDEX` on its
     # `sqlite_autoindex` (or the `DROP COLUMN` itself) is refused. #151 routes it through the rebuild.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "uniquedelchild")
     @test !("code" in cols)          # the unique column is gone
     @test "keeper" in cols           # the plain column survives
     # Data fidelity: the surviving row kept its non-unique value.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "keeper" FROM "uniquedelchild" WHERE "id" = 960;""") |> DataFrame
     @test nrow(surviving) == 1
     @test isequal(surviving[1, :keeper], "keep-960")
@@ -905,7 +941,7 @@ end
     # the `DROP INDEX` of its `sqlite_autoindex`. `code` being absent proves its UNIQUE index is gone too —
     # SQLite can't keep an index on a dropped column. No separate auto-index count is asserted because the
     # surviving `id` column keeps its own UNIQUE auto-index, so "no auto-index at all" would be wrong.)
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "uniquedelchild" WHERE "id" = 960;""")
+    edge_fetch(pool, """DELETE FROM "uniquedelchild" WHERE "id" = 960;""")
 
     # ── PK column drop that leaves NO primary key ──
     # PormG permits PK-less models, so this is reachable. What each engine owes is stated as data
@@ -919,14 +955,14 @@ end
     """
     write_edge_models(base5 * uniquedelchild_now * pkguard_with_pk)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @assert "pk_code" in column_names(pool, "pkguardchild") "Phase 4g requires the PK column to exist"
 
     # Desired: drop pk_code, leaving `payload` only → NO primary key.
     write_edge_models(base5 * uniquedelchild_now * pkguard_without_pk)
     pk_err = try
       makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-      pk_drop === :applies && migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      pk_drop === :applies && edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
       nothing
     catch e; e; end
     if pk_drop === :refuses
@@ -1007,7 +1043,7 @@ end
     # ── Baseline: the key points at A, with ON DELETE CASCADE ──
     write_edge_models(repoint_models("RepointParentA", "CASCADE"))
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     baseline = foreign_key_target(pool, "repointchild", "parent_ref_id")
     @assert baseline !== nothing "Phase 4h requires a live FK on repointchild.parent_ref_id"
@@ -1017,9 +1053,9 @@ end
     # Seed a row on EACH parent plus a child pointing at A. The child's value (970) exists in both
     # parents, so the re-pointed constraint is satisfiable — the deferred check at COMMIT would
     # otherwise roll the whole migration back, which is the documented failure mode, not this test's.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointparenta" ("id", "label") VALUES (970, 'parent-a-498');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointparentb" ("id", "label") VALUES (970, 'parent-b-498');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointchild" ("id", "parent_ref_id", "note") VALUES (971, 970, 'child-498');""")
+    edge_fetch(pool, """INSERT INTO "repointparenta" ("id", "label") VALUES (970, 'parent-a-498');""")
+    edge_fetch(pool, """INSERT INTO "repointparentb" ("id", "label") VALUES (970, 'parent-b-498');""")
+    edge_fetch(pool, """INSERT INTO "repointchild" ("id", "parent_ref_id", "note") VALUES (971, 970, 'child-498');""")
 
     # ── The re-point: same column, same type, different parent ──
     write_edge_models(repoint_models("RepointParentB", "CASCADE"))
@@ -1031,12 +1067,13 @@ end
     @test !occursin("BEGIN TRANSACTION", pending)
     # PostgreSQL expresses this as DROP + ADD CONSTRAINT; SQLite as a whole-table rebuild. Assert the
     # shape each backend actually owes, so a plan that reverted to "nothing at all" cannot pass.
-    @test occursin("REFERENCES \"repointparentb\"", pending)
-    @test occursin(by_engine(postgres = "DROP CONSTRAINT", sqlite = "Alter table: repointchild"), pending)
+    @test occursin(engine_sql("REFERENCES \"repointparentb\""), pending)
+    @test occursin(by_engine(postgres = "DROP CONSTRAINT", sqlite = "Alter table: repointchild",
+                             mysql = "DROP FOREIGN KEY"), pending)
 
     # `destructive=true` is REQUIRED on PostgreSQL and is the documented cost of a re-point: the plan
     # carries `DROP CONSTRAINT`, which `_DESTRUCTIVE_PATTERNS` classifies as destructive.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # THE ASSERTION #498 EXISTS FOR — and it is the target, not the count.
     repointed = foreign_key_target(pool, "repointchild", "parent_ref_id")
@@ -1046,7 +1083,7 @@ end
     @test foreign_key_count(pool, "repointchild") == 1   # re-pointed, not duplicated
 
     # Data fidelity: the child row survived (a rebuild on SQLite, a constraint swap on PostgreSQL).
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "parent_ref_id", "note" FROM "repointchild" WHERE "id" = 971;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -1059,7 +1096,7 @@ end
     # genuine `ON DELETE` change was discarded before it could reach the alteration gate.
     write_edge_models(repoint_models("RepointParentB", "SET_NULL"))
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     after_action = foreign_key_target(pool, "repointchild", "parent_ref_id")
     @test after_action !== nothing
@@ -1098,9 +1135,9 @@ end
     @test !occursin("# table:", settled)
 
     # Cleanup: drop the seeded rows; the tables go with Phase 5's model redefinition.
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointchild" WHERE "id" = 971;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointparenta" WHERE "id" = 970;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointparentb" WHERE "id" = 970;""")
+    edge_fetch(pool, """DELETE FROM "repointchild" WHERE "id" = 971;""")
+    edge_fetch(pool, """DELETE FROM "repointparenta" WHERE "id" = 970;""")
+    edge_fetch(pool, """DELETE FROM "repointparentb" WHERE "id" = 970;""")
   end
 
   # ── Phase 4i: Rename an FK field whose constraint does NOT change (#504) ─
@@ -1125,7 +1162,7 @@ end
   # live, and every model here has its table, so `:exist` is set true in the first loop and that
   # prompt cannot fire whatever `carried` omits. The hazard is quieter and worse. A table left out
   # of `carried` is a live model with no declared counterpart, which the planner turns into
-  # `Drop table` — and the `migrate(destructive=true)` two lines below APPLIES it. Omitting one
+  # `Drop table` — and the `edge_migrate(destructive=true)` two lines below APPLIES it. Omitting one
   # would silently destroy Phase 4h state that Phase 5 and everything after it inherits (on
   # PostgreSQL, `DROP TABLE … CASCADE` takes its FK'd children with it), with nothing in this phase
   # failing to say so. Exactly one prompt is asked here — the field rename — and it gets the one
@@ -1202,14 +1239,14 @@ end
     # `destructive=true` is genuinely needed on SQLite even here: 4h's last makemigrations left an
     # unapplied plan for the three churning `db_constraint=false` tables it documents, and those are
     # whole-table rebuilds (DROP TABLE).
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @assert foreign_key_count(pool, "dupfkchild") == 1 "Phase 4i requires exactly one live FK on dupfkchild"
     @assert "old_ref_id" in column_names(pool, "dupfkchild") "Phase 4i requires the pre-rename column"
 
     # Seed a parent + child row whose FK value must survive the rename.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "dupfkparent" ("id", "label") VALUES (980, 'dup-parent-504');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "dupfkchild" ("id", "old_ref_id", "note") VALUES (981, 980, 'child-504');""")
+    edge_fetch(pool, """INSERT INTO "dupfkparent" ("id", "label") VALUES (980, 'dup-parent-504');""")
+    edge_fetch(pool, """INSERT INTO "dupfkchild" ("id", "old_ref_id", "note") VALUES (981, 980, 'child-504');""")
 
     # ── The rename, with the FK definition left completely alone ──
     # Same parent, same target column, same ON DELETE, `db_constraint` still true. Only the name moves,
@@ -1233,7 +1270,7 @@ end
     # tells you the outcome, this tells you which half produced it. Pre-fix the plan carried both a
     # RENAME COLUMN and an ADD CONSTRAINT for the same column.
     @test occursin("RENAME COLUMN", pending)
-    @test !occursin("FOREIGN KEY (\"new_ref_id\")", pending)
+    @test !occursin(engine_sql("FOREIGN KEY (\"new_ref_id\")"), pending)
     # And the CHEAP path, not a whole-table rebuild, on every engine — SQLite's is the one that could
     # rebuild — so the phase must not pass by quietly rebuilding, since a rebuild renders exactly one
     # clause and satisfies the count too. Asserted on the PLAN KEY the rebuild is emitted under, not
@@ -1241,10 +1278,10 @@ end
     # new index (`dupfkchild_new_ref_id_<hash>_idx`), so the obvious spelling is a false positive
     # that fails on a correct plan. Measured, not theorised.
     @test !occursin("Alter table: dupfkchild", pending)
-    @test !occursin("CREATE TABLE \"dupfkchild_new\"", pending)
+    @test !occursin(engine_sql("CREATE TABLE \"dupfkchild_new\""), pending)
 
     # Destructive because the rename plan carries DROP INDEX — `ForeignKey` defaults db_index=true.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "dupfkchild")
     @test !("old_ref_id" in cols)
@@ -1262,7 +1299,7 @@ end
     @test surviving_fk.on_delete == "CASCADE"
 
     # Data fidelity: the child row survived with its (renamed) FK value intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "new_ref_id", "note" FROM "dupfkchild" WHERE "id" = 981;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -1284,8 +1321,8 @@ end
     # Cleanup child-then-parent. Phase 5 drops these tables, and its `Drop table` steps come from a
     # plain Dict (arbitrary order) while SQLite's drop_table renders no CASCADE — empty tables drop
     # cleanly either way, populated ones need not.
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkchild" WHERE "id" = 981;""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkparent" WHERE "id" = 980;""")
+    edge_fetch(pool, """DELETE FROM "dupfkchild" WHERE "id" = 981;""")
+    edge_fetch(pool, """DELETE FROM "dupfkparent" WHERE "id" = 980;""")
   end
 
   # ── Phase 4j: Rename a UNIQUE field, constraint must survive (#515) ─────
@@ -1315,7 +1352,7 @@ end
   # Carries every prior table forward, INCLUDING Phase 4i's DupFkParent/DupFkChild at their
   # post-rename `new_ref_id` state, for the reason 4i spells out at length: a table left out of
   # `carried` is a live model with no declared counterpart, which the planner turns into `Drop table`
-  # and the `migrate(destructive=true)` below APPLIES — silently destroying state Phase 5 inherits.
+  # and the `edge_migrate(destructive=true)` below APPLIES — silently destroying state Phase 5 inherits.
   @testset "Phase 4j: Rename a Unique Field, Constraint Survives (#515)" begin
     carried4j = """
     MigrationTest = Models.Model(
@@ -1387,14 +1424,14 @@ end
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     # `destructive=true` for Phase 4i's reason: 4h left an unapplied plan for the three churning
     # `db_constraint=false` tables it documents, and those are whole-table rebuilds (DROP TABLE).
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @assert "old_code" in column_names(pool, "uniquerenamechild") "Phase 4j requires the pre-rename column"
 
     # The constraint is live BEFORE the rename — otherwise the assertion after it proves nothing.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (990, 'uq-515', 'keep-me');""")
+    edge_fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (990, 'uq-515', 'keep-me');""")
     pre_dup = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (991, 'uq-515', 'dup');""")
+      edge_fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (991, 'uq-515', 'dup');""")
       nothing
     catch e; e; end
     @assert pre_dup !== nothing "Phase 4j requires a live UNIQUE constraint before the rename"
@@ -1425,7 +1462,7 @@ end
 
     # Must NOT raise. Pre-fix on SQLite this is where the migration died with "index associated with
     # UNIQUE or PRIMARY KEY constraint cannot be dropped" and rolled everything back.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "uniquerenamechild")
     @test !("old_code" in cols)
@@ -1434,17 +1471,17 @@ end
     # ── THE ASSERTION #515 EXISTS FOR ──
     # Pre-fix PostgreSQL renames the column and reports success with the constraint gone.
     dup_err = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (992, 'uq-515', 'dup');""")
+      edge_fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (992, 'uq-515', 'dup');""")
       nothing
     catch e; e; end
     @test dup_err !== nothing
-    @test any(tok -> occursin(tok, lowercase(string(dup_err))), ["unique", "constraint", "duplicate"])
+    @test any(tok -> occursin(tok, driver_message(dup_err)), ["unique", "constraint", "duplicate"])
 
     # …and that raise is the constraint, not collateral damage — a DISTINCT value still inserts.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (993, 'uq-515-other', 'other');""")
+    edge_fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (993, 'uq-515-other', 'other');""")
 
     # Data fidelity: the pre-rename row survived with its (renamed) value intact.
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "new_code", "note" FROM "uniquerenamechild" WHERE "id" = 990;""") |> DataFrame
     @test nrow(surviving) == 1
     # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
@@ -1458,7 +1495,7 @@ end
     @test !occursin("uniquerenamechild", lowercase(settled_4j))
 
     # Cleanup. Phase 5 drops these tables and populated ones need not drop cleanly on SQLite.
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "uniquerenamechild" WHERE "id" IN (990, 993);""")
+    edge_fetch(pool, """DELETE FROM "uniquerenamechild" WHERE "id" IN (990, 993);""")
   end
 
   # ── Phase 4k: A new ForeignKey column on an existing table (#514) ───────
@@ -1543,13 +1580,13 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @assert foreign_key_count(pool, "freshfkchild") == 0 "Phase 4k requires a child table with no live FK"
 
     # Seed a parent and a keyless child row — both must survive whichever path the backend takes.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkparent" ("id", "label") VALUES (970, 'fresh-parent-514');""")
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "note") VALUES (971, 'child-514');""")
+    edge_fetch(pool, """INSERT INTO "freshfkparent" ("id", "label") VALUES (970, 'fresh-parent-514');""")
+    edge_fetch(pool, """INSERT INTO "freshfkchild" ("id", "note") VALUES (971, 'child-514');""")
 
     # ── The change: a NEW ForeignKey column, nullable with no default ──
     # Nullable on purpose — that is the shape SQLite will accept an inline `REFERENCES` for, and the
@@ -1572,12 +1609,12 @@ end
     @test !occursin("BEGIN TRANSACTION", pending)
     # The plan shape differs by backend and that difference is the point: SQLite declares the key
     # WITH the column, PostgreSQL as a separate named constraint.
-    for fragment in by_engine(postgres = ["ADD CONSTRAINT", "FOREIGN KEY"],
+    for fragment in by_engine(postgres = ["ADD CONSTRAINT", "FOREIGN KEY"], mysql = ["ADD CONSTRAINT", "FOREIGN KEY"],
                               sqlite = ["ADD COLUMN", "REFERENCES \"freshfkparent\"(\"id\")"])
       @test occursin(fragment, pending)
     end
 
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # ── THE ASSERTION #514 EXISTS FOR ──
     # Pre-fix SQLite reads 0 here: the column landed, the constraint did not.
@@ -1592,7 +1629,7 @@ end
 
     # Data fidelity: the pre-existing child row survived (SQLite's ineligible path rebuilds the
     # table, and this phase's eligible path must not).
-    surviving = PormG.ConnectionPool.fetch(pool,
+    surviving = edge_fetch(pool,
       """SELECT "note", "fresh_ref_id" FROM "freshfkchild" WHERE "id" = 971;""") |> DataFrame
     @test nrow(surviving) == 1
     @test isequal(surviving[1, :note], "child-514")
@@ -1601,18 +1638,18 @@ end
     # only enforces foreign keys when `PRAGMA foreign_keys` is on, which is why this is asserted
     # rather than assumed — and if it is off, the INSERT succeeds and this test says so.
     if only_on(:sqlite, "foreign-key enforcement is a per-connection PRAGMA")
-      fk_on = PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_keys;") |> DataFrame
+      fk_on = edge_fetch(pool, "PRAGMA foreign_keys;") |> DataFrame
       @test nrow(fk_on) == 1 && fk_on[1, 1] == 1
     end
     orphan_err = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (972, 99999, 'orphan');""")
+      edge_fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (972, 99999, 'orphan');""")
       nothing
     catch e; e; end
     @test orphan_err !== nothing
     @test any(tok -> occursin(tok, lowercase(string(orphan_err))), ["foreign key", "violates", "constraint"])
 
     # A VALID reference still inserts — so the raise above is the key, not a broken table.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (973, 970, 'valid');""")
+    edge_fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (973, 970, 'valid');""")
 
     # Convergence, SCOPED to this table. This is the half #514's own diagnosis got wrong: it expected
     # the constraint-less column to compare converged, but introspection reads it back as a plain
@@ -1625,8 +1662,8 @@ end
     @test !occursin("freshfkchild", lowercase(settled_4k))
 
     # Cleanup child-then-parent.
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "freshfkchild" WHERE "id" IN (971, 973);""")
-    PormG.ConnectionPool.fetch(pool, """DELETE FROM "freshfkparent" WHERE "id" = 970;""")
+    edge_fetch(pool, """DELETE FROM "freshfkchild" WHERE "id" IN (971, 973);""")
+    edge_fetch(pool, """DELETE FROM "freshfkparent" WHERE "id" = 970;""")
   end
 
   # ── Phase 5: Indexes and unique constraints ───────────────────────
@@ -1638,7 +1675,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     indices = index_names(pool, "migrationtest")
     # Must have at least one user-defined index (beyond the implicit PK)
@@ -1659,7 +1696,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @test column_nullable(pool, "migrationtest", "name")
   end
@@ -1679,7 +1716,7 @@ end
     # to guess. The hint makes this the RENAME the phase is named for; it used to plan ADD + DROP.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false,
                    renames = ["migrationtest.name" => "migrationtest.fullname"])
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
     @test "fullname" in cols
@@ -1702,7 +1739,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "typestable")
     @test "is_active" in cols
@@ -1745,7 +1782,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test "level" in column_names(pool, "posintcheck")
     @test !column_has_nonneg_check(pool, "posintcheck", "level")
 
@@ -1757,7 +1794,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test column_has_nonneg_check(pool, "posintcheck", "level")
 
     # Transition back out to IntegerField — the CHECK must be dropped. On PostgreSQL
@@ -1769,7 +1806,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test !column_has_nonneg_check(pool, "posintcheck", "level")
   end
 
@@ -1788,7 +1825,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test "level" in column_names(pool, "posintcheck")
     @test column_has_nonneg_check(pool, "posintcheck", "level")
 
@@ -1811,7 +1848,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test !column_has_nonneg_check(pool, "posintcheck", "level")
   end
 
@@ -1847,7 +1884,7 @@ end
     """)
     # This must not throw a MethodError on either SQLite or PostgreSQL.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
     @test "updated_at" in cols
@@ -1895,7 +1932,7 @@ end
       s -> occursin("DROP TABLE IF EXISTS", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
       result.statements
     )
-    @test recreation_count == by_engine(postgres = 0, sqlite = 1)
+    @test recreation_count == by_engine(postgres = 0, sqlite = 1, mysql = 0)
     if only_on(:sqlite, "the table rebuild's DROP TABLE is what makes the plan destructive")
       @test Migrations.is_destructive(result) == true
       # Count only MigrationTest-related destructive statements; other tables
@@ -1905,7 +1942,7 @@ end
     end
 
     # Apply the plan so the table is in a consistent state for later phases.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     cols = column_names(pool, "migrationtest")
     @test "activated_at" in cols
   end
@@ -1949,10 +1986,10 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @assert table_exists(pool, "nullstamp") "Phase 8c2 setup: nullstamp was not created"
     for (i, label) in enumerate(("Monza", "Spa", "Suzuka"))
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "nullstamp" ("id", "label") VALUES ($i, '$label');""")
+      edge_fetch(pool, """INSERT INTO "nullstamp" ("id", "label") VALUES ($i, '$label');""")
     end
 
     # 2. Add the two nullable temporal columns to it.
@@ -1974,24 +2011,24 @@ end
     @test all(occursin("ADD COLUMN", uppercase(s)) for s in nullstamp_stmts)
     @test !any(occursin("DEFAULT", uppercase(s)) for s in nullstamp_stmts)
     @test !any(occursin("NULLSTAMP_NEW", uppercase(s)) for s in nullstamp_stmts)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # THE assertion: every pre-existing row is still NULL in BOTH new columns. Before #607 this
     # read 0 — each row carried the instant `migrate` ran.
     cols = column_names(pool, "nullstamp")
     @test "noted_at" in cols
     @test "noted_on" in cols
-    nulls = DataFrame(PormG.ConnectionPool.fetch(pool,
+    nulls = DataFrame(edge_fetch(pool,
       """SELECT count(*) AS n FROM "nullstamp" WHERE "noted_at" IS NULL AND "noted_on" IS NULL;"""))
     @test nulls[1, :n] == 3
-    total = DataFrame(PormG.ConnectionPool.fetch(pool, """SELECT count(*) AS n FROM "nullstamp";"""))
+    total = DataFrame(edge_fetch(pool, """SELECT count(*) AS n FROM "nullstamp";"""))
     @test total[1, :n] == 3
 
     # 3. Restore Phase 8c's models file; the destructive migrate drops `nullstamp`, so Phase 8d
     # starts from the state it expects.
     write_edge_models(phase8c_models)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test !table_exists(pool, "nullstamp")
   end
 
@@ -2004,7 +2041,7 @@ end
   # field is a rename of an old one. Since #734 a same-definition pair
   # with no hint is refused rather than guessed; `"old" => nothing` takes
   # the add+drop path: ADD the new column, DROP the old column.
-  # Because DROP is destructive, `migrate(..., destructive=true)` is
+  # Because DROP is destructive, `edge_migrate(..., destructive=true)` is
   # required — exactly as Django would require an explicit confirmation.
   #
   # We use a CharField rename (not a DateField rename) because the
@@ -2052,7 +2089,7 @@ end
     # Overall the plan is destructive because of the DROP.
     @test Migrations.is_destructive(result)
 
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
     @test "display_name" in cols
@@ -2117,7 +2154,7 @@ end
 
     # Apply — use destructive=true because the plan may include unrelated
     # table recreations alongside the rename.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
     @test "full_name" in cols
@@ -2155,7 +2192,7 @@ end
     # Seed one row so that a buggy INSERT SELECT (missing the new NOT NULL column)
     # will fail with a NOT NULL constraint instead of succeeding vacuously on an
     # empty table.
-    PormG.ConnectionPool.fetch(pool,
+    edge_fetch(pool,
       """INSERT INTO "migrationtest" ("full_name", "updated_at", "created_date", "activated_at")
          VALUES ('survivor-8f', '2024-01-01 00:00:00', '2024-01-01', '2024-01-01 00:00:00')""")
 
@@ -2198,9 +2235,9 @@ end
     end
 
     # ── Data-survival assertion ──────────────────────────────────────────
-    # migrate() must not throw. If the bug is present the INSERT will violate
+    # edge_migrate() must not throw. If the bug is present the INSERT will violate
     # the NOT NULL constraint and the whole migration will fail.
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # Column must exist in the live schema after migration.
     cols = column_names(pool, "migrationtest")
@@ -2208,8 +2245,8 @@ end
 
     # The survivor row inserted before the migration must still be present.
     # A failed INSERT SELECT leaves the old table intact (SQLite rolls back the
-    # whole recreation block), but migrate() would also have thrown above.
-    survivors = PormG.ConnectionPool.fetch(pool,
+    # whole recreation block), but edge_migrate() would also have thrown above.
+    survivors = edge_fetch(pool,
       """SELECT "full_name" FROM "migrationtest" WHERE "full_name" = 'survivor-8f'""") |> DataFrame
     @test DataFrames.nrow(survivors) == 1
   end
@@ -2221,7 +2258,7 @@ end
 
   # ── Phase 9: init_migrations idempotency ──────────────────────────
   @testset "Phase 9: History Table Bootstrap (init_migrations)" begin
-    # pormg_migrations already exists because migrate() calls init_migrations()
+    # pormg_migrations already exists because edge_migrate() calls init_migrations()
     @test table_exists(pool, "pormg_migrations")
 
     # Second call must be idempotent
@@ -2269,7 +2306,7 @@ end
     # Apply the plan so DryRunTable actually exists for Phase 12 to drop. This plan is destructive
     # (it also drops leftover tables from earlier phases), so it needs the explicit destructive=true.
     # (Pre-#87 this call silently skipped without the flag — a latent no-op the new gate surfaces.)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
   end
 
   # ── Phase 12: Destructive guard ───────────────────────────────────
@@ -2292,18 +2329,18 @@ end
     # migrate without destructive=true must refuse. In a non-interactive context (#87) this is a
     # hard error — it THROWS DestructiveMigrationError instead of silently returning nothing, so
     # CI/automation fails loudly. The pending file must remain (the guard fires before execution).
-    @test_throws Migrations.DestructiveMigrationError migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=false)
+    @test_throws Migrations.DestructiveMigrationError edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=false)
     @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
 
     # Anti-hang guarantee (#87): even with interactive=true, a non-TTY process (stdin redirected to a
     # non-terminal) must NOT block on readline() — it throws immediately rather than waiting on input.
     redirect_stdin(devnull) do
-      @test_throws Migrations.DestructiveMigrationError migrate(joinpath(@__DIR__, edge_db_name), interactive=true, destructive=false)
+      @test_throws Migrations.DestructiveMigrationError edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=true, destructive=false)
     end
     @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
 
     # With destructive=true it should succeed
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @test !table_exists(pool, "dryruntable")
   end
@@ -2361,7 +2398,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The physical columns carry the declared case verbatim (table stays lowercase).
     cols = column_names(pool, "mixedcasetable")
@@ -2391,7 +2428,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The physical column carries the db_column name; the field name is NOT a column.
     cols = column_names(pool, "dbcoltable")
@@ -2417,8 +2454,8 @@ end
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     result = Migrations.dry_run(pool, edge_settings)
     @test any(s -> occursin("quantity_col", lowercase(s)), result.statements)   # ADD COLUMN → db_column
-    @test !any(s -> occursin("add column \"qty\"", lowercase(s)), result.statements)  # not the field name
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test !any(s -> occursin(lowercase(engine_sql("add column \"qty\"")), lowercase(s)), result.statements)  # not the field name
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     cols2 = column_names(pool, "dbcoltable")
     @test "quantity_col" in cols2
     @test !("qty" in cols2)
@@ -2441,7 +2478,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)  # must not error on the DROP DEFAULT
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)  # must not error on the DROP DEFAULT
     stamp_cols = column_names(pool, "dbcoltable")
     @test "stamp_ts" in stamp_cols
     @test !("stamp" in stamp_cols)
@@ -2449,7 +2486,7 @@ end
     # (e) FK honors db_column on BOTH the local column and the referenced parent
     # column (the parent's pk field is itself renamed via db_column). The FK target
     # is a model instance, so fk_target_column resolves the parent's db_column —
-    # migrate() succeeding proves the FK REFERENCES targets the real column.
+    # edge_migrate() succeeding proves the FK REFERENCES targets the real column.
     # The parent's PRIMARY KEY field is itself renamed via db_column (IDField is
     # inherently unique — satisfies PostgreSQL's FK-target requirement — and round-trips
     # cleanly through introspection, unlike a UNIQUE non-PK column).
@@ -2464,7 +2501,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test "parent_code" in column_names(pool, "dbcolparent")   # parent pk physical column
     ccols = column_names(pool, "dbcolchild")
     @test "parent_fk" in ccols                                 # local FK column = db_column
@@ -2478,7 +2515,7 @@ end
     # (g) #62: a STRING FK target + an OMITTED pk_field over the renamed-PK parent. The
     # migration prelude (_load_current_models) must resolve "DbColParent" → the model AND
     # default pk_field to the parent's PK ("code"), so the FK REFERENCES
-    # "dbcolparent"("parent_code") — not the "id" fallback. migrate() SUCCEEDING is the
+    # "dbcolparent"("parent_code") — not the "id" fallback. edge_migrate() SUCCEEDING is the
     # assertion: dbcolparent has no "id" column, so an unresolved target / "id" fallback
     # would raise. (Before #62 this churned + emitted the wrong referenced column.)
     write_edge_models("""
@@ -2497,22 +2534,24 @@ end
     """)
     isfile(pending) && rm(pending)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     scols = column_names(pool, "dbcolstrchild")
     @test "parent_strfk" in scols                              # local FK column = db_column
     @test !("parent" in scols)                                 # field name is NOT a column
 
-    # Adapter-neutral proof of the REFERENCED column: migrate() raising is a
+    # Adapter-neutral proof of the REFERENCED column: edge_migrate() raising is a
     # PostgreSQL-only signal (SQLite validates FK targets lazily at create time), so
     # introspect the migrated FK and confirm it points at the parent's db_column
     # ("parent_code"), not the "id" fallback an unresolved target would have produced.
-    strchild_intro = nothing
-    for m in PormG.Migrations.convert_schema_to_models(pool)
-      lowercase(string(m.name)) == "dbcolstrchild" && (strchild_intro = m)
+    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+      strchild_intro = nothing
+      for m in PormG.Migrations.convert_schema_to_models(pool)
+        lowercase(string(m.name)) == "dbcolstrchild" && (strchild_intro = m)
+      end
+      @test strchild_intro !== nothing
+      @test any(f -> hasproperty(f, :to) && hasproperty(f, :pk_field) && f.pk_field == "parent_code",
+                values(strchild_intro.fields))
     end
-    @test strchild_intro !== nothing
-    @test any(f -> hasproperty(f, :to) && hasproperty(f, :pk_field) && f.pk_field == "parent_code",
-              values(strchild_intro.fields))
 
     # (h) No churn for the string-target + omitted-pk_field model.
     isfile(pending) && rm(pending)
@@ -2521,13 +2560,13 @@ end
   end
 
   # ── Phase 16: idempotent re-apply / archive-failure landmine (#81) ─
-  # Acceptance criteria 1 & 3: re-running migrate() over a pending_migrations.jl that a previous
+  # Acceptance criteria 1 & 3: re-running edge_migrate() over a pending_migrations.jl that a previous
   # apply COMMITted but then failed to archive must be a NO-OP, not a destructive re-apply.
   #
   # We reproduce the landmine deterministically. A CREATE TABLE is emitted with IF NOT EXISTS and
   # would survive a re-run harmlessly, so instead we apply an ADD COLUMN migration (a plain
   # `ALTER TABLE … ADD COLUMN`, which is NOT idempotent), then hand the engine back the exact
-  # pending file a failed archive would have left and call migrate() again:
+  # pending file a failed archive would have left and call edge_migrate() again:
   #   • Pre-fix: the second run re-executes ADD COLUMN, errors on the duplicate column, records a
   #     spurious `failed` row, and rethrows.
   #   • Post-fix: the checksum guard recognises the content as already-applied, skips the DDL, and
@@ -2544,7 +2583,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
     @test table_exists(pool, "reapply81")
     @test !("beta" in column_names(pool, "reapply81"))
 
@@ -2562,7 +2601,7 @@ end
     stashed_pending = read(pending_path, String)
 
     applied_before = length(Migrations.status(pool, edge_settings).applied)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test "beta" in column_names(pool, "reapply81")   # applied
     @test !isfile(pending_path)                        # archived on success
 
@@ -2577,7 +2616,7 @@ end
 
     # The re-run must NOT throw. Pre-fix the duplicate ADD COLUMN raises → reapplied_ok = false.
     reapplied_ok = try
-      migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+      edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
       true
     catch
       false
@@ -2605,16 +2644,16 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @test table_exists(pool, "uniqtest")
     # The composite unique index exists on the freshly created table (both backends).
     @test "uniqtest_season_round_uniq" in index_names(pool, "uniqtest")
 
     # First (2021, 1) inserts; the duplicate must violate the composite unique index.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
+    edge_fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
     dup_rejected = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
+      edge_fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
       false
     catch
       true
@@ -2623,7 +2662,7 @@ end
 
     # A different pair is accepted — uniqueness is composite, not per-column.
     accepted = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 2);""")
+      edge_fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 2);""")
       true
     catch
       false
@@ -2660,38 +2699,40 @@ end
     # #734: Uniqcomp318 has the shape of Phase 17's `uniqtest`, which this file stops declaring. That
     # is not a rename — the phase asserts a FRESH table's constraint names — so the hint says so.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false, renames = ["uniqtest" => nothing])
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The constraints are physically REAL, asserted behaviorally (the same oracle Phase 17 uses):
     #     a metadata query here would just re-implement the production predicate and could not catch
     #     it being wrong.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token","plain") VALUES ('s1','t1','p');""")
+    edge_fetch(pool, """INSERT INTO uniq318 ("slug","token","plain") VALUES ('s1','t1','p');""")
     # Match the UNIQUE-violation message rather than catching everything: a bare `catch` would read a
     # typo'd table name or a pool error as "constraint enforced" and pass for the wrong reason.
-    _is_unique_violation(e) = occursin("unique", lowercase(sprint(showerror, e)))
+    _is_unique_violation(e) = occursin("unique", driver_message(e)) || occursin("duplicate entry", driver_message(e))
     dup_slug = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s1','t2');"""); false
+      edge_fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s1','t2');"""); false
     catch e; _is_unique_violation(e) end
     dup_token = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s2','t1');"""); false
+      edge_fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s2','t1');"""); false
     catch e; _is_unique_violation(e) end
     ok_both = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s3','t3');"""); true
+      edge_fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s3','t3');"""); true
     catch; false end
     @test dup_slug     # both single-column uniques are enforced…
     @test dup_token
     @test ok_both      # …and independently, not as a composite
 
     # (b) INTROSPECTION reads them back — the unit of the fix, against a live database.
-    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
-    @test intro["uniq318"].fields["slug"].unique
-    @test intro["uniq318"].fields["token"].unique    # mutation gate for the PG per-table-array bug
-    @test !intro["uniq318"].fields["plain"].unique   # …and it did not over-mark
+    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+      intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+      @test intro["uniq318"].fields["slug"].unique
+      @test intro["uniq318"].fields["token"].unique    # mutation gate for the PG per-table-array bug
+      @test !intro["uniq318"].fields["plain"].unique   # …and it did not over-mark
 
-    # Composite uniqueness is model-level (#19), never a per-field attribute. Marking a member column
-    # would churn in the OPPOSITE direction on every subsequent makemigrations.
-    @test !intro["uniqcomp318"].fields["season"].unique
-    @test !intro["uniqcomp318"].fields["round"].unique
+      # Composite uniqueness is model-level (#19), never a per-field attribute. Marking a member column
+      # would churn in the OPPOSITE direction on every subsequent makemigrations.
+      @test !intro["uniqcomp318"].fields["season"].unique
+      @test !intro["uniqcomp318"].fields["round"].unique
+    end
 
     # (c) NO CHURN — the reason #318 exists.
     pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
@@ -2755,7 +2796,7 @@ end
     """)
     # #734: the same again — Rtidx325 has Phase 18's `uniqcomp318` shape, and is a new table.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false, renames = ["uniqcomp318" => nothing])
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The columns are physically REAL and hold what they claim to. A behavioral oracle, like
     #     Phase 18's: a metadata query here would just re-implement the production reader.
@@ -2765,58 +2806,60 @@ end
     @test length(long_url) == 500
     # `created_at`/`updated_at` are supplied explicitly: `auto_now`/`auto_now_add` are stamped by
     # PormG in Julia on write and emit no column DEFAULT, so a raw INSERT must provide them.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
+    edge_fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
       VALUES ('$(long_url)', 's1', '11111111-1111-4111-8111-111111111111', 'c1', 'p1',
-              '2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00');""")
-    stored = PormG.ConnectionPool.fetch(pool, """SELECT "canonical_url" FROM rt325;""") |> DataFrame
+              '2026-01-01 00:00:00+00:00', '2026-01-01 00:00:00+00:00');""")
+    stored = edge_fetch(pool, """SELECT "canonical_url" FROM rt325;""") |> DataFrame
     @test nrow(stored) == 1
     @test length(stored[1, :canonical_url]) == 500
 
     # The SlugField's UNIQUE is still enforced — the type fix must not have relaxed it away.
-    _is_unique_violation(e) = occursin("unique", lowercase(sprint(showerror, e)))
+    _is_unique_violation(e) = occursin("unique", driver_message(e)) || occursin("duplicate entry", driver_message(e))
     dup_slug = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
+      edge_fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
         VALUES ('u2', 's1', '22222222-2222-4222-8222-222222222222', 'c2', 'p2',
-                '2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00');"""); false
+                '2026-01-01 00:00:00+00:00', '2026-01-01 00:00:00+00:00');"""); false
     catch e; _is_unique_violation(e) end
     @test dup_slug
 
     # (b) INTROSPECTION reads the schema-visible attributes back — the unit of the fix, live.
-    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
-    live = intro["rt325"]
+    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+      intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+      live = intro["rt325"]
 
-    # `max_length`: kept where the column carries one, absent where it does not. On PostgreSQL
-    # `canonical_url` used to come back as a TextField with no length at all; on SQLite `photo`,
-    # `payload` and `uuid_token` used to come back as CharField(250), a length nothing declared.
-    @test live.fields["canonical_url"].max_length == 500
-    @test live.fields["slug"].max_length == 120
-    @test !hasfield(typeof(live.fields["payload"]), :max_length)
-    @test !hasfield(typeof(live.fields["photo"]), :max_length)
-    @test !hasfield(typeof(live.fields["body"]), :max_length)
-    # #28: `inet`/`cidr` read back as their own fields — not the warned `TextField` they were — and
-    # the declared default comes back in its normalized text, which is what keeps (c) below quiet.
-    if has_net
-      @test live.fields["client_ip"] isa Models.sGenericIPAddressField
-      @test live.fields["subnet"] isa Models.sCIDRField
-      @test live.fields["client_ip"].default == "2001:db8::1"
+      # `max_length`: kept where the column carries one, absent where it does not. On PostgreSQL
+      # `canonical_url` used to come back as a TextField with no length at all; on SQLite `photo`,
+      # `payload` and `uuid_token` used to come back as CharField(250), a length nothing declared.
+      @test live.fields["canonical_url"].max_length == 500
+      @test live.fields["slug"].max_length == 120
+      @test !hasfield(typeof(live.fields["payload"]), :max_length)
+      @test !hasfield(typeof(live.fields["photo"]), :max_length)
+      @test !hasfield(typeof(live.fields["body"]), :max_length)
+      # #28: `inet`/`cidr` read back as their own fields — not the warned `TextField` they were — and
+      # the declared default comes back in its normalized text, which is what keeps (c) below quiet.
+      if has_net
+        @test live.fields["client_ip"] isa Models.sGenericIPAddressField
+        @test live.fields["subnet"] isa Models.sCIDRField
+        @test live.fields["client_ip"].default == "2001:db8::1"
+      end
+
+      # `db_index`: read back on both backends now, and NOT over-marked. `slug` is the interesting
+      # one — SlugField defaults `db_index=true` AND declares `unique=true`, so PormG emits both a
+      # UNIQUE constraint and a separate CREATE INDEX; the reader must see the latter without
+      # mistaking the former for it.
+      @test live.fields["code"].db_index
+      @test live.fields["slug"].db_index
+      @test !live.fields["plain"].db_index          # …and it did not over-mark
+      @test !live.fields["canonical_url"].db_index
+      # A UNIQUE constraint's backing index is `field.unique`, never `db_index`; a composite
+      # UniqueConstraint (#19) marks neither of its members.
+      @test !intro["rtidx325"].fields["season"].db_index
+      @test !intro["rtidx325"].fields["round"].db_index
+      @test !intro["rtidx325"].fields["season"].unique
+      # `unique` itself still round-trips (#318) — this fix must not have regressed it.
+      @test live.fields["slug"].unique
+      @test !live.fields["plain"].unique
     end
-
-    # `db_index`: read back on both backends now, and NOT over-marked. `slug` is the interesting
-    # one — SlugField defaults `db_index=true` AND declares `unique=true`, so PormG emits both a
-    # UNIQUE constraint and a separate CREATE INDEX; the reader must see the latter without
-    # mistaking the former for it.
-    @test live.fields["code"].db_index
-    @test live.fields["slug"].db_index
-    @test !live.fields["plain"].db_index          # …and it did not over-mark
-    @test !live.fields["canonical_url"].db_index
-    # A UNIQUE constraint's backing index is `field.unique`, never `db_index`; a composite
-    # UniqueConstraint (#19) marks neither of its members.
-    @test !intro["rtidx325"].fields["season"].db_index
-    @test !intro["rtidx325"].fields["round"].db_index
-    @test !intro["rtidx325"].fields["season"].unique
-    # `unique` itself still round-trips (#318) — this fix must not have regressed it.
-    @test live.fields["slug"].unique
-    @test !live.fields["plain"].unique
 
     # (c) NO CHURN — the reason #325 exists. A re-diff against the SAME models proposes nothing,
     #     even though every declared field type above reads back as a different Julia struct.
@@ -2856,13 +2899,15 @@ end
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test isfile(pending)   # 500 → 900 is a real column change; dropping db_index is a real DROP INDEX
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # …and applying it converges: the widened column and the dropped index both land, and the
     # NEXT diff is empty again.
-    intro2 = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
-    @test intro2["rt325"].fields["canonical_url"].max_length == 900
-    @test !intro2["rt325"].fields["code"].db_index
+    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+      intro2 = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+      @test intro2["rt325"].fields["canonical_url"].max_length == 900
+      @test !intro2["rt325"].fields["code"].db_index
+    end
     isfile(pending) && rm(pending)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test !isfile(pending)
@@ -2893,7 +2938,7 @@ end
     )
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     @test table_exists(pool, "idx347")
     # (a) The index physically exists under the declared name, on both backends.
@@ -2901,28 +2946,30 @@ end
 
     # …and it is an INDEX, not a constraint. Two rows sharing (raceid, lap) must be accepted — this
     # is the assertion that fails if `create_index` were ever swapped for `create_unique_index`.
-    PormG.ConnectionPool.fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'a');""")
+    edge_fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'a');""")
     dup_ok = try
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'b');"""); true
+      edge_fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'b');"""); true
     catch; false end
     @test dup_ok
 
     # (b) INTROSPECTION reads it back — the unit of the fix, against a live database.
-    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
-    live = intro["idx347"]
-    @test haskey(live.cache, "composite_indexes")
-    live_ix = live.cache["composite_indexes"]["indexes"]
-    @test length(live_ix) == 1
-    @test live_ix[1].fields == ["raceid", "lap"]   # declared ORDER, not table order
-    @test live_ix[1].name == "idx347_race_lap_idx" # the live name, so a re-migration reproduces it
+    if not_yet_on(:mysql, "inspectdb, which this block reads the schema back through, is phase 4c (#1130)")
+      intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+      live = intro["idx347"]
+      @test haskey(live.cache, "composite_indexes")
+      live_ix = live.cache["composite_indexes"]["indexes"]
+      @test length(live_ix) == 1
+      @test live_ix[1].fields == ["raceid", "lap"]   # declared ORDER, not table order
+      @test live_ix[1].name == "idx347_race_lap_idx" # the live name, so a re-migration reproduces it
 
-    # The two index readers PARTITION the same set. A composite index marks neither of its member
-    # columns `db_index` (that would churn one way), and the single-column index is still read as
-    # `db_index` and NOT as a composite Index (that would churn the other).
-    @test !live.fields["raceid"].db_index
-    @test !live.fields["lap"].db_index
-    @test live.fields["solo"].db_index
-    @test !live.fields["plain"].db_index
+      # The two index readers PARTITION the same set. A composite index marks neither of its member
+      # columns `db_index` (that would churn one way), and the single-column index is still read as
+      # `db_index` and NOT as a composite Index (that would churn the other).
+      @test !live.fields["raceid"].db_index
+      @test !live.fields["lap"].db_index
+      @test live.fields["solo"].db_index
+      @test !live.fields["plain"].db_index
+    end
 
     # (c) NO CHURN — a re-diff against the SAME models proposes nothing.
     pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
@@ -2945,7 +2992,7 @@ end
     """)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test isfile(pending)
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # The composite index must SURVIVE that alteration. On SQLite the change above is a full table
     # rebuild (CREATE/INSERT-SELECT/DROP/RENAME), which drops every secondary index; the rebuild
@@ -2966,7 +3013,7 @@ end
   # identity yet, and changing the flavour of one that already is takes `SET GENERATED`.
   #
   # THIS PHASE EXISTS BECAUSE THE STRING IS NOT THE BUG. Every plan-text check passed on the broken
-  # statement; only the server rejected it. So the assertions that matter here are the `migrate()`
+  # statement; only the server rejected it. So the assertions that matter here are the `edge_migrate()`
   # calls completing and `pg_attribute.attidentity` reading back `a` then `d` — the catalog, not the
   # plan. The rendering itself is pinned hermetically in `test/unit/test_plan_actions_golden.jl`.
   #
@@ -2987,7 +3034,7 @@ end
       # `pqparse(PQChar, "")` raises a `BoundsError` on. Unreachable while `id` really is an identity,
       # but a helper whose own comment documents the `''` case must not throw on it.
       identity_flavour = function (table::String, col::String)
-        rows = PormG.ConnectionPool.fetch(pool, """
+        rows = edge_fetch(pool, """
           SELECT a.attidentity::text AS flavour
           FROM pg_attribute a
           JOIN pg_class c ON c.oid = a.attrelid
@@ -3005,14 +3052,14 @@ end
       )
       """)
       makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-      migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
       @test table_exists(pool, "ident523")
       @assert identity_flavour("ident523", "id") == "d" "Phase 21 requires a live BY DEFAULT identity"
 
       # A row the database numbers itself, so the flip is exercised on a column with a live sequence
       # rather than on an empty one.
-      PormG.ConnectionPool.fetch(pool, """INSERT INTO "ident523" ("label") VALUES ('before-flip');""")
+      edge_fetch(pool, """INSERT INTO "ident523" ("label") VALUES ('before-flip');""")
 
       # ── (a) BY DEFAULT -> ALWAYS: the statement PormG used to get wrong ──
       isfile(pending_path_523) && rm(pending_path_523)
@@ -3032,7 +3079,7 @@ end
 
       # The gate. Before #523 this call raised *"column "id" is already an identity column"* and the
       # runner rolled the migration back.
-      migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
       @test identity_flavour("ident523", "id") == "a"
 
       # ALWAYS is ENFORCED, so it really is the stricter mode and not just a catalog label: an
@@ -3042,7 +3089,7 @@ end
       # would read a typo'd table name, a permission error or a dead connection as "ALWAYS is
       # enforced" and pass for the wrong reason. PostgreSQL's refusal here is specific.
       always_refuses_msg = try
-        PormG.ConnectionPool.fetch(pool,
+        edge_fetch(pool,
           """INSERT INTO "ident523" ("id", "label") VALUES (9523, 'explicit');"""); ""
       catch e; sprint(showerror, e) end
       @test occursin("non-DEFAULT value", always_refuses_msg) ||
@@ -3051,7 +3098,7 @@ end
       # assertions after it are genuine rather than collateral.
 
       # The pre-existing row survived — a flavour change must not rewrite or renumber data.
-      surviving = PormG.ConnectionPool.fetch(pool,
+      surviving = edge_fetch(pool,
         """SELECT count(*) AS n FROM "ident523" WHERE "label" = 'before-flip';""") |> DataFrame
       @test surviving[1, :n] == 1
 
@@ -3074,7 +3121,7 @@ end
       @test !occursin("ADD GENERATED", pending_523_back)
       @test !occursin("DROP IDENTITY", pending_523_back)
 
-      migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      edge_migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
       @test identity_flavour("ident523", "id") == "d"
 
       # …and the column takes a hand-supplied id again, which is the observable half of BY DEFAULT.
@@ -3082,12 +3129,12 @@ end
       # ALWAYS and accepted under BY DEFAULT, so neither result can come from the statement itself
       # being wrong.
       by_default_error = try
-        PormG.ConnectionPool.fetch(pool,
+        edge_fetch(pool,
           """INSERT INTO "ident523" ("id", "label") VALUES (9524, 'explicit-ok');"""); ""
       catch e; sprint(showerror, e) end
       @test by_default_error == ""
       # …and the row really landed with the id it was given.
-      explicit_row = PormG.ConnectionPool.fetch(pool,
+      explicit_row = edge_fetch(pool,
         """SELECT count(*) AS n FROM "ident523" WHERE "id" = 9524;""") |> DataFrame
       @test explicit_row[1, :n] == 1
 
@@ -3105,7 +3152,7 @@ end
   #
   #   (a) v1 → v2: both kinds added to an existing table are created;
   #   (b) v2 → v3: the uniqueness moves to other columns and the Index is removed — both drops are
-  #       destructive, so `dry_run()` must say so and `migrate()` needs `destructive=true`;
+  #       destructive, so `dry_run()` must say so and `edge_migrate()` needs `destructive=true`;
   #   (c) v3 → v4: an explicit rename (PostgreSQL `ALTER INDEX`, SQLite drop and create);
   #   (d) an ADOPTED table-level UNIQUE (…) — what Django's `unique_together` leaves behind — is
   #       matched by its columns when declared (no second index), and removed when not
@@ -3122,13 +3169,13 @@ end
       ok = try
         for r in rows
           cols = join(("\"$(k)\"" for k in keys(r)), ", ")
-          PormG.ConnectionPool.fetch(pool, "INSERT INTO \"$(table)\" ($(cols)) VALUES ($(join(values(r), ", ")));")
+          edge_fetch(pool, "INSERT INTO \"$(table)\" ($(cols)) VALUES ($(join(values(r), ", ")));")
         end
         true
       catch
         false
       end
-      PormG.ConnectionPool.fetch(pool, "DELETE FROM \"$(table)\";")
+      edge_fetch(pool, "DELETE FROM \"$(table)\";")
       ok
     end
     div161(extra) = """
@@ -3143,13 +3190,13 @@ end
     # (a) An existing table gains both kinds.
     write_edge_models(div161(""))
     makemigrations(edge_path, interactive=false)
-    migrate(edge_path, interactive=false, destructive=true)
+    edge_migrate(edge_path, interactive=false, destructive=true)
     write_edge_models(div161(""",
         constraints = [Models.UniqueConstraint(fields=("raceid", "driverid"))],
         indexes = [Models.Index(fields=("driverid", "grid"))]"""))
     makemigrations(edge_path, interactive=false)
     @test isfile(pending)                       # used to plan nothing at all
-    migrate(edge_path, interactive=false, destructive=true)
+    edge_migrate(edge_path, interactive=false, destructive=true)
     @test "div161_raceid_driverid_uniq" in index_names(pool, "div161")
     @test "div161_driverid_grid_idx" in index_names(pool, "div161")
     @test !both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=1, grid=2))
@@ -3161,7 +3208,7 @@ end
     makemigrations(edge_path, interactive=false)
     @test isfile(pending)
     @test Migrations.is_destructive(Migrations.dry_run(edge_path))
-    migrate(edge_path, interactive=false, destructive=true)
+    edge_migrate(edge_path, interactive=false, destructive=true)
     names_b = index_names(pool, "div161")
     @test !("div161_raceid_driverid_uniq" in names_b) && !("div161_driverid_grid_idx" in names_b)
     @test "div161_entry_uq" in names_b
@@ -3174,7 +3221,7 @@ end
         constraints = [Models.UniqueConstraint(fields=("raceid", "grid"), name="div161_grid_entry_uq")]"""))
     makemigrations(edge_path, interactive=false)
     @test isfile(pending)
-    migrate(edge_path, interactive=false, destructive=true)
+    edge_migrate(edge_path, interactive=false, destructive=true)
     names_c = index_names(pool, "div161")
     @test "div161_grid_entry_uq" in names_c && !("div161_entry_uq" in names_c)
     @test !both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=2, grid=1))
@@ -3186,7 +3233,7 @@ end
                          round = Models.IntegerField())
     create_sql = PormG.Dialect.create_table(pool, adopt)
     cut = findlast(')', create_sql)
-    PormG.ConnectionPool.fetch(pool, create_sql[1:prevind(create_sql, cut)] *
+    edge_fetch(pool, create_sql[1:prevind(create_sql, cut)] *
       ",\n  CONSTRAINT \"adopt161_django_uq\" UNIQUE (\"season\", \"round\")\n" * create_sql[cut:end])
     adopt_models(extra) = div161(""",
         constraints = [Models.UniqueConstraint(fields=("raceid", "grid"), name="div161_grid_entry_uq")]""") * """
@@ -3204,14 +3251,14 @@ end
     write_edge_models(adopt_models(""))           # …and undeclared, it goes
     makemigrations(edge_path, interactive=false)
     @test isfile(pending)
-    migrate(edge_path, interactive=false, destructive=true)
+    edge_migrate(edge_path, interactive=false, destructive=true)
     @test both_insert("adopt161", (season=2021, round=1), (season=2021, round=1))
     @test replan_is_empty()
   end
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
-  by_engine(sqlite = teardown_sqlite_edge_db!, postgres = teardown_postgres_edge_db!)(edge_settings)
+  by_engine(sqlite = teardown_sqlite_edge_db!, postgres = teardown_postgres_edge_db!, mysql = teardown_mysql_edge_db!)(edge_settings)
 end  # @testset "Migration Engine Edge Cases"
 
 # ─── Final Reactivation: Selected Integration DB ────────────────────────────
@@ -3225,7 +3272,7 @@ end  # @testset "Migration Engine Edge Cases"
 
   settings = reload_config_and_models!()
   makemigrations(PORMG_DB_FOLDER, interactive=false)
-  migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
+  edge_migrate(PORMG_DB_FOLDER, interactive=false, destructive=true)
 
   settings = reload_config_and_models!()
   assert_clean_state()
@@ -3236,6 +3283,9 @@ end  # @testset "Migration Engine Edge Cases"
   @test M.Circuit.objects.count() == 0
 
   @info "Selected integration DB rebuilt after edge-case migration tests" adapter=adapter_name db=PORMG_DB_FOLDER fallback=edge_db_reuses_selected_db[]
+  # MySQL: the full suite does not run there yet (`runtests.jl`), and its own files create and drop their
+  # tables — `test_mysql_reads.jl` the F1 ones by name — so the rebuilt schema is not left behind.
+  by_engine(postgres = () -> nothing, sqlite = () -> nothing, mysql = () -> reset_database!(PormG.config[PORMG_DB_FOLDER]))()
 end
 
 # ── SQLite table-rebuild: preserve secondary indexes + FK-integrity gate (#82) ──

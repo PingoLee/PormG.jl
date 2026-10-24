@@ -174,6 +174,24 @@ function only_on(engine::Symbol, why::AbstractString;
     return false
 end
 
+"""
+    not_yet_on(engine::Symbol, why; conn = <this run's pool>) -> Bool
+
+`only_on`'s other half: `false` — the skip recorded with `why`, as `only_on` records one — when this
+run's engine is `engine`, which does not have what the block needs YET (a later phase of #1130);
+`true` everywhere else. For a block that will run on `engine` once that phase lands.
+"""
+function not_yet_on(engine::Symbol, why::AbstractString;
+                    conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool
+    _check_engine_keys((engine,))
+    engine_key(conn) === engine || return true
+    reason = "not yet on $(PormG.Kernel._backend_name(conn)): $(why)"
+    Test.record(Test.get_testset(), Test.Broken(:skipped, reason))
+    reason in ENGINE_SKIPS || println(reason)
+    push!(ENGINE_SKIPS, reason)
+    return false
+end
+
 function print_engine_skips(io::IO = stdout)
     isempty(ENGINE_SKIPS) && return nothing
     println(io, "\nNot run on $(PORMG_DB_FOLDER), pinned to another engine (#1179):")
@@ -193,11 +211,25 @@ end
 #   test which shape to expect would pass whatever the code did.
 split_statements(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections) =
     by_engine(conn; postgres = PormG.Migrations._split_pg_statements,
-                    sqlite = PormG.Migrations._split_sqlite_statements)(sql)
+                    sqlite = PormG.Migrations._split_sqlite_statements,
+                    mysql = PormG.Migrations._split_mysql_statements)(sql)
 placeholder(i::Integer; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
     by_engine(conn; postgres = "\$$(i)", sqlite = "?", mysql = "?")
 binds_column_arrays(; conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool =
-    by_engine(conn; postgres = true, sqlite = false)
+    by_engine(conn; postgres = true, sqlite = false, mysql = false)
+# - `engine_sql(sql)`: hand-written SQL in the standard spelling, double-quoted names, as this engine
+#   reads it. MySQL's `sql_mode` reads `"x"` as a string literal, so there each becomes a backticked name;
+#   a single-quoted literal (and the `"` inside one, as in JSON) is left as it is (#1130).
+_to_backticks(sql::AbstractString) = replace(sql, r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"" => function (m)
+    startswith(m, "'") && return m
+    return "`" * replace(m[2:end-1], "\"\"" => "\"", "`" => "``") * "`"
+end)
+engine_sql(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
+    by_engine(conn; postgres = String(sql), sqlite = String(sql), mysql = _to_backticks(sql))
+# - `driver_message(e)`: an error's message with the driver's own text, lower-cased. MySQL's errors keep the
+#   server's message (`Duplicate entry … for key …`) in `.cause`, since it quotes the input (#1130).
+driver_message(e)::String = lowercase(sprint(showerror, e) *
+    (hasproperty(e, :cause) && getproperty(e, :cause) !== nothing ? " " * sprint(showerror, getproperty(e, :cause)) : ""))
 marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::Int =
     by_engine(conn; postgres = length(unique(m.match for m in eachmatch(r"\$\d+", sql))),
                     sqlite = count(==('?'), sql), mysql = count(==('?'), sql))

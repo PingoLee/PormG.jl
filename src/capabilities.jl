@@ -65,6 +65,9 @@ const _BACKEND_FEATURES = (
   :partial_indexes        => "a partial index (an index with a `WHERE` condition)",
   # MySQL indexes a `LONGTEXT`, `LONGBLOB` or `JSON` column only by a prefix of it (errors 1170, 3152).
   :unbounded_text_indexes => "an index or key over a whole column of unbounded text, bytes or JSON",
+  # #737: PostgreSQL's `SET LOCAL statement_timeout` on the migration transaction; SQLite accepts the option
+  # and ignores it, as every timeout. MySQL bounds no DDL statement's run time.
+  :statement_timeouts     => "`migrate`'s `statement_timeout`, a bound on how long one plan statement may run (accepted and ignored on SQLite)",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
@@ -97,7 +100,7 @@ for f in _FEATURE_NAMES
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
           :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys,
-          :transactional_ddl, :partial_indexes, :unbounded_text_indexes)
+          :transactional_ddl, :partial_indexes, :unbounded_text_indexes, :statement_timeouts)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the

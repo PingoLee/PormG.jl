@@ -23,16 +23,15 @@ _rebuilds_table(::PormGMySQL) = false
 # its comment (#29). SQLite has no comment on an index to stamp.
 _adopts_indexes(::PormGPostgres) = true
 _adopts_indexes(::PormGSQLite) = false
-# MySQL has an index COMMENT, but PormG writes no marker there until phase 4c (#1130): an index it did
-# not create is not adopted.
+# MySQL has an index COMMENT, and PormG writes its bare marker on an advanced index it creates (a
+# descending one); adopting an index it did not create is phase 4c's (#1130).
 _adopts_indexes(::PormGMySQL) = false
 
 # A renamed model-level index is renamed in place. SQLite has no `ALTER INDEX … RENAME`, so the index
 # is dropped and re-created under its new name.
 _can_rename_index(::PormGPostgres) = true
 _can_rename_index(::PormGSQLite) = false
-# MySQL renames in place (`ALTER TABLE … RENAME INDEX`); the statement itself is phase 4b's
-# (`Dialect.rename_index(::PormGMySQL)` refuses until then).
+# MySQL renames in place (`ALTER TABLE … RENAME INDEX`, `Dialect.rename_index`).
 _can_rename_index(::PormGMySQL) = true
 
 # The key a model-level index name is unique under, as the catalog stores it: PostgreSQL truncates at
@@ -59,11 +58,26 @@ _builtin_ignore_tables_name(::PormGMySQL) = "mysql_ignore_table"
 # values through the new column's affinity, so nothing is castless there.
 _no_implicit_cast(::PormGPostgres, old::CanonicalType, new::CanonicalType)::Bool = _pg_no_implicit_cast(old, new)
 _no_implicit_cast(::PormGSQLite, ::CanonicalType, ::CanonicalType)::Bool = false
+# MySQL's `MODIFY COLUMN` converts between any two of the types PormG writes, and a value that does not
+# convert or fit fails the row under strict mode (measured on 8.4), which the row pre-checks count. The
+# pairs it converts by a rule that changes every value (a DATE into a TIME is midnight, into a number its
+# digits) are refused as castless, the pairs PostgreSQL has no cast for (`_mysql_no_implicit_cast`).
+_no_implicit_cast(::PormGMySQL, old::CanonicalType, new::CanonicalType)::Bool = _mysql_no_implicit_cast(old, new)
 
-# A retype carries a `USING` clause, before which `alter_field` drops the column's expression default
-# (#828). SQLite's rebuild has no `USING`.
-_retype_has_using(::PormGPostgres, old::CanonicalType, new::CanonicalType)::Bool = _pg_retype_has_using(old, new)
-_retype_has_using(::PormGSQLite, ::CanonicalType, ::CanonicalType)::Bool = false
+# A retype drops an expression default the model does not declare, which nothing puts back (#828):
+# PostgreSQL's `alter_field` drops the default before a `USING` clause, which could not cast it. SQLite's
+# rebuild has no `USING`. MySQL's MODIFY restates the column, and across a retype PormG does not carry the
+# default over (it may not suit the new type); without a retype it is restated (`Dialect.alter_field`).
+_retype_drops_default(::PormGPostgres, old::CanonicalType, new::CanonicalType)::Bool = _pg_retype_has_using(old, new)
+_retype_drops_default(::PormGSQLite, ::CanonicalType, ::CanonicalType)::Bool = false
+_retype_drops_default(::PormGMySQL, ::CanonicalType, ::CanonicalType)::Bool = true
+
+# `DROP COLUMN` takes every index that includes the column: PostgreSQL drops it, SQLite's rebuild leaves
+# it out. MySQL narrows such an index to the columns that remain (measured on 8.4), so the planner drops
+# it first.
+_drop_column_drops_its_indexes(::PormGPostgres) = true
+_drop_column_drops_its_indexes(::PormGSQLite) = true
+_drop_column_drops_its_indexes(::PormGMySQL) = false
 
 # A lengthless TEXT primary key is what `UUIDField(primary_key = true)` renders, so `inspectdb` emits
 # that. On PostgreSQL a uuid key renders `uuid`, and a bare `text` key has no declaration.
@@ -85,14 +99,20 @@ _declares_naive_timestamp(::PormGSQLite) = false
 # fills one with a rowid, so there a NULL fails only through NOT NULL, `:set_not_null`'s finding.
 _pk_precheck_counts_nulls(::PormGPostgres) = true
 _pk_precheck_counts_nulls(::PormGSQLite) = false
+# MySQL makes a primary key's columns NOT NULL, as PostgreSQL does.
+_pk_precheck_counts_nulls(::PormGMySQL) = true
 
 # The pre-check predicate for a value that would violate a `>= 0` CHECK. SQLite's rebuild copies a
 # text `'-5'` into an INTEGER-affinity column as `-5`, so it compares the number the text becomes.
 _negative_value_predicate(::PormGPostgres, col::AbstractString)::String = "$col < 0"
 _negative_value_predicate(::PormGSQLite, col::AbstractString)::String = "CAST($col AS REAL) < 0"
+# MySQL compares a text value with a number by the number it reads (`'-5' < 0`), as the retype would.
+_negative_value_predicate(::PormGMySQL, col::AbstractString)::String = "$col < 0"
 
 # The pre-check predicate for a value longer, in bytes, than the bound placeholder `ph`.
 _byte_length_predicate(::PormGPostgres, col::AbstractString, ph::AbstractString)::String =
   "octet_length($col) > $(ph)::integer"
 _byte_length_predicate(::PormGSQLite, col::AbstractString, ph::AbstractString)::String =
   "length(CAST($col AS BLOB)) > $(ph)"
+# MySQL's `LENGTH` counts bytes (`CHAR_LENGTH` counts characters), of any value.
+_byte_length_predicate(::PormGMySQL, col::AbstractString, ph::AbstractString)::String = "LENGTH($col) > $(ph)"

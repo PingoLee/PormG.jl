@@ -37,7 +37,7 @@ end
                                      models_file = models_path, include_table = [table])
     # One statement per call on either engine, as `migrate` sends a plan (#841); `split_statements`
     # is the engine's own splitter, a row per engine (#1179).
-    run_sql(sql) = for part in split_statements(sql; conn = conn)
+    run_sql(sql) = for part in split_statements(engine_sql(sql; conn = conn); conn = conn)
         PormG.ConnectionPool.fetch(conn, part)
     end
 

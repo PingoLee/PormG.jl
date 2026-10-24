@@ -48,6 +48,7 @@ using .Kernel
 # Underscore-private members are not exported by Kernel; import those reached across
 # submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name, with_location
+import .Kernel: _column_attributes  # #1130: Dialect calls it, Migrations defines MySQL's method
 # #1129: the backend capability table, refused through by every submodule that meets a feature.
 import .Kernel: _SQLEngine  # #1130: every engine, for a signature that is the same on each
 import .Kernel: _supports, _require_feature, _capability_error, _backend_name, _engine_key, _BACKEND_FEATURES, _BACKENDS,

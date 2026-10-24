@@ -1110,29 +1110,29 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 
 | kind | engine | class | when |
 |:-----|:-------|:------|:-----|
-| `:set_not_null` | both | `:rows` | a nullable column becomes NOT NULL |
-| `:varchar_length` | PostgreSQL | `:rows` | a column becomes a VARCHAR shorter than it could hold |
-| `:integer_range` | PostgreSQL | `:rows` | an integer narrows, or a float/decimal becomes an integer |
-| `:decimal_precision` | PostgreSQL | `:rows` | a NUMERIC loses whole digits (or rounds up into one) |
-| `:non_negative_check` | both | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
-| `:byte_length_check` | both | `:rows` | a `BinaryField` byte bound is added or lowered |
-| `:add_not_null` | both | `:rows` | a new NOT NULL column with no default is added to a table with rows |
-| `:add_unique` | both | `:rows` | `unique = true` is added to a column holding duplicates |
-| `:add_primary_key` | both | `:rows` | `primary_key = true` moves to a column holding duplicates (or NULLs, on PostgreSQL) |
-| `:add_composite_unique` | both | `:rows` | a `UniqueConstraint` is added over columns holding duplicate tuples |
-| `:add_check` | both | `:rows` | a `CheckConstraint` is added that some rows fail |
-| `:add_foreign_key` | both | `:rows` | a foreign key is added or re-pointed over rows with no parent |
-| `:decimal_scale` | PostgreSQL | `:silent` | a NUMERIC scale is lowered, so values round |
-| `:to_integer` | PostgreSQL | `:silent` | a float/decimal becomes an integer, so values round |
-| `:to_date` | PostgreSQL | `:silent` | a timestamp becomes a date, dropping the time |
-| `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
+| `:set_not_null` | every engine | `:rows` | a nullable column becomes NOT NULL |
+| `:varchar_length` | PostgreSQL, MySQL | `:rows` | a column becomes a VARCHAR shorter than it could hold |
+| `:integer_range` | PostgreSQL, MySQL | `:rows` | an integer narrows, or a float/decimal becomes an integer |
+| `:decimal_precision` | PostgreSQL, MySQL | `:rows` | a NUMERIC loses whole digits (or rounds up into one) |
+| `:non_negative_check` | every engine | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
+| `:byte_length_check` | every engine | `:rows` | a `BinaryField` byte bound is added or lowered |
+| `:add_not_null` | every engine | `:rows` | a new NOT NULL column with no default is added to a table with rows |
+| `:add_unique` | every engine | `:rows` | `unique = true` is added to a column holding duplicates |
+| `:add_primary_key` | every engine | `:rows` | `primary_key = true` moves to a column holding duplicates (or NULLs, on PostgreSQL and MySQL) |
+| `:add_composite_unique` | every engine | `:rows` | a `UniqueConstraint` is added over columns holding duplicate tuples |
+| `:add_check` | every engine | `:rows` | a `CheckConstraint` is added that some rows fail |
+| `:add_foreign_key` | every engine | `:rows` | a foreign key is added or re-pointed over rows with no parent |
+| `:decimal_scale` | PostgreSQL, MySQL | `:silent` | a NUMERIC scale is lowered, so values round |
+| `:to_integer` | PostgreSQL, MySQL | `:silent` | a float/decimal becomes an integer, so values round |
+| `:to_date` | PostgreSQL, MySQL | `:silent` | a timestamp becomes a date, dropping the time |
+| `:to_time` | PostgreSQL, MySQL | `:silent` | a timestamp becomes a time, dropping the date |
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
-| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON, an IP address or network, or an array (the plan casts with `USING`) — or an array's element type changes other than by widening (it converts through text) — and some values do not parse |
+| `:text_cast` | PostgreSQL, MySQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON, an IP address or network, or an array (the plan casts with `USING`) — or an array's element type changes other than by widening (it converts through text) — and some values do not parse |
 | `:host_bits` | PostgreSQL | `:rows` | an IP address (`inet`) becomes a network (`cidr`), and some values have bits set right of their mask (`10.0.0.1/24`) |
-| `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
-| `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
-| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` — since #28, an array becoming a scalar other than text, or a scalar other than text becoming an array |
+| `:to_boolean` | PostgreSQL, MySQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
+| `:drop_default` | PostgreSQL, MySQL | `:silent` | a `USING` retype (on MySQL, any retype) must drop a database default the model does not declare, and nothing puts it back |
+| `:no_implicit_cast` | PostgreSQL, MySQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` — since #28, an array becoming a scalar other than text, or a scalar other than text becoming an array; on MySQL, a pair PostgreSQL has no cast for that MySQL converts by a rule changing every value (a date into a time or a number, a time into a date, a number into a date or a UUID, a boolean into JSON) or only as text (binary, JSON, a UUID) |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
 `:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
@@ -1297,8 +1297,9 @@ function _lossy_alters(delta::ColumnDelta, conn::_SQLEngine;
   #
   # Asked of `_pg_retype_has_using` alone, not of `castless`: `inet` → text has an assignment cast
   # and still gets a `USING` (`abbrev`, #28), and `alter_field` drops the default before ANY `USING`.
+  # On MySQL every retype drops it (`_retype_drops_default`), since the MODIFY restates the column.
   if :type in delta && readable &&
-     _retype_has_using(conn, old_spec.type, new_spec.type) &&
+     _retype_drops_default(conn, old_spec.type, new_spec.type) &&
      old_spec.default isa ExpressionDefault && new_spec.default isa NoDefault
     push!(type_found, finding(:drop_default))
   end
@@ -1387,7 +1388,7 @@ Not a finding: a nullable column; one with a `default` or `db_default` (both fil
 the planner gives a temporary default (`_get_temporary_default_value`, #607); and an identity, which
 the engine fills itself. `spec` is the declared column's; `table` is the catalog's name for the table.
 """
-function _lossy_add_column(spec::ColumnSpec, ::Union{PormGPostgres, PormGSQLite};
+function _lossy_add_column(spec::ColumnSpec, ::_SQLEngine;
                            table::AbstractString, temporary_default::Any = nothing)::Vector{LossyAlter}
   (spec.nullable || !(spec.default isa NoDefault) || temporary_default !== nothing ||
    spec.identity !== nothing) && return LossyAlter[]
@@ -1404,6 +1405,7 @@ end
 # engine, not a stale type, decides that ALTER).
 _byte_length_countable(old::CanonicalType, ::PormGPostgres)::Bool = old isa Union{CBytes, _TextType}
 _byte_length_countable(::CanonicalType, ::PormGSQLite)::Bool = true
+_byte_length_countable(::CanonicalType, ::PormGMySQL)::Bool = true   # `LENGTH` measures any value
 
 function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLite, finding)::Vector{LossyAlter}
   # SQLite enforces no length, width, precision or scale, so the only type change that alters a
@@ -1464,6 +1466,75 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, conn::PormGP
     new isa CDate && push!(found, finding(:to_date))
     new isa CTime && push!(found, finding(:to_time))
     new isa CDateTime && old.with_timezone && !new.with_timezone && push!(found, finding(:drop_timezone))
+  end
+  return found
+end
+
+# The MySQL retypes refused as castless (measured on 8.4): pairs PostgreSQL has no cast for, which MySQL
+# converts by a rule that gives every value another meaning — a DATE into a TIME is midnight, a TIME into a
+# DATE or DATETIME takes today's date, a date into a number is its digits (`20240506`), a number into a date
+# is read back from such digits, a number into a UUID's `CHAR(36)` is text no UUID reads, a boolean into JSON
+# is `1`, a value into binary is its text's bytes — or fails part-way through the plan on rows nothing
+# counted (a date into JSON; binary, JSON and a UUID convert only to and from text). Text into any of them
+# is counted instead (`:text_cast`), and a number into JSON keeps the number.
+function _mysql_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
+  temporal, scalar = Union{CDate, CTime, CDateTime}, Union{_NumericType, CBool}
+  old isa temporal && new isa Union{scalar, CJSON} && return true
+  old isa scalar && new isa temporal && return true
+  old isa CDate && new isa CTime && return true
+  old isa CTime && new isa Union{CDate, CDateTime} && return true
+  old isa CBool && new isa CJSON && return true                     # `1`, not `true`
+  old isa CBytes && new isa CBytes && return false
+  (old isa CBytes || new isa CBytes) && return !(old isa _TextType || new isa _TextType)
+  old isa Union{CJSON, CUUID} && return !(new isa _TextType)
+  new isa CUUID && return !(old isa _TextType)
+  return false
+end
+
+# MySQL (#1130 phase 4b): `MODIFY COLUMN` converts every other pair, and under the strict `sql_mode` PormG
+# pins a row that does not convert or fit fails the ALTER instead of being cut or clipped — so those
+# changes are counted (`:rows`), measured on 8.4 for each kind below:
+#   * a string too long for the new length (1265/1406) — trailing spaces included, unlike PostgreSQL;
+#   * an integer out of the new range (1264), a `TINYINT(1)` (a boolean) included;
+#   * a decimal with too many whole digits (1264);
+#   * text that is not a number, a date, a time, JSON or a UUID (1366, 1292, 3140; a UUID column is a
+#     `CHAR(36)`, which takes any text, so PormG counts the values that are not UUIDs).
+# What MySQL applies and changes — a fraction rounded off (a lower scale, a number into an integer), a
+# timestamp's time of day or date dropped, a number into a boolean — is reported as on PostgreSQL.
+function _lossy_type_alters(old::CanonicalType, new::CanonicalType, conn::PormGMySQL, finding)::Vector{LossyAlter}
+  _mysql_no_implicit_cast(old, new) && return [finding(:no_implicit_cast)]
+  found = LossyAlter[]
+  if old isa _TextType && new isa Union{_NumericType, CBool, CDate, CTime, CDateTime, CJSON, CUUID}
+    push!(found, finding(:text_cast))
+    return found
+  end
+  if new isa CVarChar && new.length !== nothing
+    (old isa CVarChar && old.length !== nothing && old.length <= new.length) ||
+      push!(found, finding(:varchar_length; bound = new.length))
+  end
+  if new isa _IntType
+    if old isa Union{CFloat64, CDecimal} && _exceeds(_frac_digits(old), 0)
+      push!(found, finding(:to_integer))
+    end
+    too_wide = old isa _IntType ? _int_bits(old) > _int_bits(new) :
+               old isa Union{CFloat64, CDecimal} ? _exceeds(_whole_digits(old), _int_safe_digits(new)) : false
+    too_wide && push!(found, finding(:integer_range; bound = _int_bits(new)))
+  end
+  if new isa CBool && old isa Union{_IntType, CFloat64, CDecimal}
+    push!(found, finding(:integer_range; bound = 8))   # a TINYINT holds -128..127
+    push!(found, finding(:to_boolean))
+  end
+  if new isa CDecimal && new.precision !== nothing && old isa _NumericType
+    new_whole, new_scale = _whole_digits(new), _decimal_scale(new)
+    old_whole, old_frac = _whole_digits(old), _frac_digits(old)
+    fewer_whole = _exceeds(old_whole, new_whole)
+    carry = old_whole == new_whole && _exceeds(old_frac, new_scale)
+    (fewer_whole || carry) && push!(found, finding(:decimal_precision; bound = new_whole, scale = new_scale))
+    _exceeds(old_frac, new_scale) && push!(found, finding(:decimal_scale; scale = new_scale))
+  end
+  if old isa CDateTime
+    new isa CDate && push!(found, finding(:to_date))
+    new isa CTime && push!(found, finding(:to_time))
   end
   return found
 end

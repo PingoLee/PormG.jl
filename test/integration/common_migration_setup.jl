@@ -20,7 +20,7 @@ no pormg_migrations history.
 function reset_database!(settings::PormG.PormGSettings)
   conn_pool = settings.connections
   # Engine mechanics: each engine's own reset, and an error naming any engine without one (#1179).
-  by_engine(conn_pool; sqlite = _reset_sqlite!, postgres = _reset_postgres!)(conn_pool)
+  by_engine(conn_pool; sqlite = _reset_sqlite!, postgres = _reset_postgres!, mysql = _reset_mysql!)(conn_pool)
   nothing
 end
 
@@ -60,6 +60,16 @@ function _reset_postgres!(pool::PormG.PormGPostgres)
       PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"$tbl\" CASCADE;")
     end
   end
+end
+
+# MySQL (#1130): every base table of the connection's database, in one `DROP TABLE` (MySQL has no CASCADE,
+# and a multi-table drop takes a parent and its children in any order).
+function _reset_mysql!(pool::PormG.PormGMySQL)
+  df = DataFrame(PormG.ConnectionPool.fetch(pool,
+    "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'"))
+  nrow(df) == 0 && return nothing
+  PormG.ConnectionPool.fetch(pool, "DROP TABLE " * join(("`$(replace(String(t), "`" => "``"))`" for t in df.t), ", "))
+  return nothing
 end
 
 """
@@ -508,3 +518,53 @@ function all_table_names(pool::PormG.PormGPostgres)::Vector{String}
   df = DataFrame(rows)
   return nrow(df) > 0 ? String.(df[!, 1]) : String[]
 end
+# ── MySQL (#1130) ────────────────────────────────────────────────────────────────────────────────
+# The same questions over `information_schema`, scoped to the connection's database, every name bound.
+_my_rows(pool, sql, params...) = DataFrame(PormG.ConnectionPool.fetch(pool, sql, Any[params...]))
+
+table_exists(pool::PormG.PormGMySQL, table_name::String)::Bool =
+  _my_rows(pool, "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table_name)[1, :n] > 0
+
+column_names(pool::PormG.PormGMySQL, table_name::String)::Vector{String} =
+  String[String(c) for c in _my_rows(pool, "SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+                                            "AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION", table_name).c]
+
+function column_nullable(pool::PormG.PormGMySQL, table_name::String, col_name::String)::Bool
+  df = _my_rows(pool, "SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+                      "AND TABLE_NAME = ? AND COLUMN_NAME = ?", table_name, col_name)
+  isempty(df) && error("Column '$col_name' not found in '$table_name'")
+  return String(df[1, :n]) == "YES"
+end
+
+column_has_nonneg_check(pool::PormG.PormGMySQL, table_name::String, col_name::String)::Bool =
+  !isempty(PormG.get_constraints_checks(pool, table_name, col_name))
+
+index_names(pool::PormG.PormGMySQL, table_name::String)::Vector{String} =
+  String[String(i) for i in _my_rows(pool, "SELECT DISTINCT INDEX_NAME AS i FROM information_schema.STATISTICS " *
+                                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table_name).i]
+
+# An index name is unique per table on MySQL; PormG keeps it unique across the database's tables, so the
+# name alone finds it here as on the other engines.
+index_columns(pool::PormG.PormGMySQL, index_name::String)::Vector{String} =
+  String[String(c) for c in _my_rows(pool, "SELECT COLUMN_NAME AS c FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() " *
+                                            "AND INDEX_NAME = ? AND COLUMN_NAME IS NOT NULL ORDER BY SEQ_IN_INDEX", index_name).c]
+
+foreign_key_count(pool::PormG.PormGMySQL, table_name::String)::Int =
+  Int(_my_rows(pool, "SELECT COUNT(*) AS n FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() " *
+                     "AND TABLE_NAME = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'", table_name)[1, :n])
+
+function foreign_key_target(pool::PormG.PormGMySQL, table_name::String, column_name::String)
+  df = _my_rows(pool, """
+    SELECT k.REFERENCED_TABLE_NAME AS parent, k.REFERENCED_COLUMN_NAME AS parent_column, r.DELETE_RULE AS on_delete
+      FROM information_schema.KEY_COLUMN_USAGE k
+      JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+        ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME
+     WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ? AND k.COLUMN_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL""",
+    table_name, column_name)
+  nrow(df) == 0 && return nothing
+  return (parent = String(df[1, :parent]), column = String(df[1, :parent_column]), on_delete = String(df[1, :on_delete]))
+end
+
+all_table_names(pool::PormG.PormGMySQL)::Vector{String} =
+  String[String(t) for t in _my_rows(pool, "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() " *
+                                            "AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME").t]

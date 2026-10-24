@@ -37,10 +37,14 @@ end
     conn = settings.connections
     @test settings.change_db                       # the fixture can change the schema
     table = "ensure1230"
+    # MySQL indexes a LONGTEXT only by a prefix, so an Index over a TextField is refused there
+    # (`unbounded_text_indexes`); the indexed text is a CharField on that engine.
+    payload = by_engine(postgres = "Models.TextField(null = true)", sqlite = "Models.TextField(null = true)",
+                        mysql = "Models.CharField(max_length = 200, null = true)")
     source = "module models\nimport PormG.Models\n" *
              "Ensure1230 = Models.Model(\"ensure1230\",\n    id = Models.IDField(),\n" *
              "    driverref = Models.CharField(max_length = 64),\n" *
-             "    payload = Models.TextField(null = true);\n" *
+             "    payload = $(payload);\n" *
              "    indexes = [Models.Index(fields = (\"driverref\", \"payload\"), name = \"ensure1230_lookup\")])\nend\n"
     dir = mktempdir()
     models_path = joinpath(dir, "models.jl")
@@ -52,7 +56,7 @@ end
 
     drift() = PormG.Migrations.check(conn, settings; kinds = [:schema_drift],
                                      models_file = models_path, include_table = [table])
-    run_sql(sql) = for part in split_statements(sql; conn = conn)
+    run_sql(sql) = for part in split_statements(engine_sql(sql; conn = conn); conn = conn)
         PormG.ConnectionPool.fetch(conn, part)
     end
     exists() = PormG.Migrations._live_table_exists(conn, table)
@@ -114,7 +118,7 @@ end
         id = PormG.Models.IDField(),
         driverref = PormG.Models.CharField(max_length = 64, db_index = true))
     PormG.Models.bind!(model, key)
-    run_sql(sql) = for part in split_statements(sql; conn = conn)
+    run_sql(sql) = for part in split_statements(engine_sql(sql; conn = conn); conn = conn)
         PormG.ConnectionPool.fetch(conn, part)
     end
 

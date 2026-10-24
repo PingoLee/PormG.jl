@@ -37,8 +37,9 @@ const _DESTRUCTIVE_PATTERNS = [
 # not data, and `Dialect.alter_field` emits the first three for ordinary nullability, default and
 # identity changes. Anchored on the `ALTER [COLUMN] <col>` that owns the clause, so
 # `ALTER TABLE t DROP identity` — dropping a column NAMED identity — still reads as a drop.
+# A name is double-quoted (PostgreSQL, SQLite), backticked (MySQL, #1130) or bare.
 const _PROPERTY_DROP_CLAUSE =
-  r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"|\w+)\s+DROP\s+(?:NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b"i
+  r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"|`(?:[^`]|``)*`|\w+)\s+DROP\s+(?:NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b"i
 
 # ==============================================================================
 # Reading a migration plan file as DATA (#710)
@@ -943,20 +944,97 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
   return ("true", Any[])
 end
 
-# MySQL (#1130 phase 4a): the one finding a phase-4a plan records — the rows a foreign key added to an
-# existing column would reject, when a stopped plan is finished (`_require_column_alters`). Every other
-# kind comes from a column change, which is phase 4b's.
+# MySQL (#1130): each `:rows` finding counted in MySQL's own SQL — backtick names, `?` markers, `SIGNED`
+# for `BIGINT`. Every `:rows` kind is counted: the keys and indexes a stopped plan leaves (phase 4a) and
+# each column change (phase 4b).
 function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
-  f.kind === :add_foreign_key ||
-    throw(Dialect._mysql_not_yet("Counting the rows a $(f.kind) change rejects", "4b"))
   q(name) = Dialect._ddl_ident(conn, name)
+  table = q(f.table)
   col = q(f.column)
-  parent, key = f.references
-  return ("SELECT COUNT(*) AS n FROM $(q(f.table)) AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
-          "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
-          "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  # The rows in duplicate groups, as one `SIGNED` (MySQL's `SUM` of a count is a `DECIMAL`). The key and
+  # the `GROUP BY` compare by the column's collation alike, so the groups are the ones the index refuses.
+  # MySQL has no partial index, so a composite carries no condition.
+  duplicates(cols) =
+    "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM $table WHERE " *
+    join(("$c IS NOT NULL" for c in cols), " AND ") *
+    " GROUP BY $(join(cols, ", ")) HAVING COUNT(*) > 1) AS pormg_duplicates"
+  if f.kind === :add_unique || (f.kind === :add_primary_key && !_pk_precheck_counts_nulls(conn))
+    return ("SELECT CAST(($(duplicates([col]))) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_primary_key
+    return ("SELECT CAST(($(duplicates([col]))) + (SELECT COUNT(*) FROM $table WHERE $col IS NULL) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_composite_unique
+    return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]))) AS SIGNED) AS n", Any[])
+  elseif f.kind === :add_foreign_key
+    parent, key = f.references
+    return ("SELECT COUNT(*) AS n FROM $table AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
+            "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
+            "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  elseif f.kind === :add_not_null
+    return ("SELECT COUNT(*) AS n FROM $table", Any[])
+  elseif f.kind === :add_check
+    throw(Dialect._mysql_not_yet("A declared CheckConstraint"))
+  elseif f.kind === :text_cast
+    pred, params = _mysql_text_cast_failure(col, parse_canonical_type(f.new_type, conn))
+    return ("SELECT COUNT(*) AS n FROM $table WHERE $col IS NOT NULL AND $pred", params)
+  end
+  pred, params = if f.kind === :set_not_null
+    "$col IS NULL", Any[]
+  elseif f.kind === :non_negative_check
+    _negative_value_predicate(conn, col), Any[]
+  elseif f.kind === :byte_length_check
+    _byte_length_predicate(conn, col, "?"), Any[f.bound]
+  elseif f.kind === :varchar_length
+    # Measured whole: MySQL refuses a value longer than the new length even when the excess is trailing
+    # spaces (1265, measured), where PostgreSQL cuts them.
+    "CHAR_LENGTH(CAST($col AS CHAR)) > ?", Any[f.bound]
+  elseif f.kind === :integer_range
+    lo, hi = f.bound == 8 ? (-128, 127) : _INT_RANGE[f.bound]   # 8: a TINYINT(1), MySQL's boolean
+    "ROUND(CAST($col AS DECIMAL(65, 30))) NOT BETWEEN ? AND ?", Any[Int(lo), Int(hi)]
+  elseif f.kind === :decimal_precision
+    # MySQL has no NaN. The power of ten is a DECIMAL built from its digits, exact at any width.
+    "ABS(ROUND(CAST($col AS DECIMAL(65, 30)), ?)) >= CAST(CONCAT('1', REPEAT('0', ?)) AS DECIMAL(65, 0))",
+      Any[f.scale, f.bound]
+  else
+    throw(InvalidMigrationError("No pre-check is defined for the lossy-ALTER kind `$(f.kind)`."))
+  end
+  return ("SELECT COUNT(*) AS n FROM $table WHERE $pred", params)
+end
+
+# The text values MySQL's `MODIFY` would refuse to convert into `target` (strict mode fails the row), as
+# a predicate over the old text column. A number or a boolean (a TINYINT) is matched by its grammar and
+# its range, a date or a time by whether MySQL's own `CAST` reads it (`NULL` when it does not), JSON by
+# `JSON_VALID`. A UUID column is a `CHAR(36)`, which takes any text, so the values that are not UUIDs are
+# counted: a UUIDField column holding one would not read back. The patterns are bound, not written.
+const _MYSQL_INT_TEXT = raw"^\s*[+-]?[0-9]+\s*$"
+const _MYSQL_NUMBER_TEXT = raw"^\s*[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?\s*$"
+const _MYSQL_UUID_TEXT = raw"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+function _mysql_text_cast_failure(col::AbstractString, target::CanonicalType)::Tuple{String, Vector{Any}}
+  if target isa Union{CInt16, CInt32, CInt64, CBool}
+    lo, hi = target isa CBool ? (-128, 127) : _INT_RANGE[_int_bits(target)]
+    return ("NOT (REGEXP_LIKE($col, ?) AND CAST(TRIM($col) AS DECIMAL(65, 0)) BETWEEN ? AND ?)",
+            Any[_MYSQL_INT_TEXT, Int(lo), Int(hi)])
+  elseif target isa CFloat64
+    return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_NUMBER_TEXT])
+  elseif target isa CDecimal
+    whole = _whole_digits(target)
+    whole === nothing && return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_NUMBER_TEXT])
+    return ("NOT (REGEXP_LIKE($col, ?) AND ABS(ROUND(CAST(TRIM($col) AS DECIMAL(65, 30)), ?)) < " *
+            "CAST(CONCAT('1', REPEAT('0', ?)) AS DECIMAL(65, 0)))",
+            Any[_MYSQL_NUMBER_TEXT, something(_decimal_scale(target), 0), whole])
+  elseif target isa CDate
+    return ("CAST($col AS DATE) IS NULL", Any[])
+  elseif target isa CTime
+    return ("CAST($col AS TIME(6)) IS NULL", Any[])
+  elseif target isa CDateTime
+    return ("CAST($col AS DATETIME(3)) IS NULL", Any[])
+  elseif target isa CJSON
+    return ("NOT JSON_VALID($col)", Any[])
+  elseif target isa CUUID
+    return ("NOT REGEXP_LIKE($col, ?)", Any[_MYSQL_UUID_TEXT])
+  end
+  throw(InvalidMigrationError("No MySQL pre-check is defined for text into $(target)."))
 end
 
 # Does the live table still have this column? A plan header can outlive what it describes — the plan
@@ -3300,9 +3378,10 @@ deleted on purpose — is applied without the precondition.
   SQLite always apply a plan whole, so there it changes nothing.
 
 `lock_timeout` and `statement_timeout` are PostgreSQL's. SQLite accepts and ignores them, so one deploy
-script can run on both; MySQL refuses them (`UnsupportedConnectionError`) until phase 4b of #1130
-decides their MySQL meaning. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each must be a positive number of
-seconds.
+script can run on both. On MySQL `lock_timeout` sets `lock_wait_timeout` (whole seconds) on the connection
+the plan runs on, and `statement_timeout` raises `BackendCapabilityError` (`statement_timeouts`): MySQL
+bounds no DDL statement's run time. `lock_wait` bounds the wait for the lock on PostgreSQL and MySQL. Each
+must be a positive number of seconds.
 
 Use [`dry_run`](@ref) to inspect a plan without applying it.
 """
@@ -3395,7 +3474,7 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
     # refused for another finding does not first claim these are taken care of.
     for f in _handled_alters(lossy_alters)
       something(f.rows, 0) > 0 &&
-        @info("A change is marked handled=pre, so its rows are left to the plan's `Data (pre)` step; if any remain after it, the migration fails and rolls back.",
+        @info("A change is marked handled=pre, so its rows are left to the plan's `Data (pre)` step; if any remain after it, the migration fails (and rolls back where the engine's DDL is transactional).",
               finding = _lossy_alter_summary(f))
     end
     _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive,
@@ -3416,25 +3495,86 @@ end
 # statement), so it runs as it is.
 function _require_atomic_plan(connection::PormGBackend, statements::AbstractVector{<:AbstractString}, atomic::Bool;
                               applied::Function = () -> false)::Nothing
-  (atomic && length(statements) > 1) || return nothing
+  atomic || return nothing
+  count = _plan_statement_count(connection, statements)
+  count > 1 || return nothing
   _supports(connection, :transactional_ddl) && return nothing
   applied() && return nothing
   _require_feature(connection, :transactional_ddl,
-                   "Applying a migration plan of $(length(statements)) statements as one change";
+                   "Applying a migration plan of $(count) statements as one change";
                    why = "Each statement commits on its own, so a failure part-way leaves the statements " *
                          "before it applied. Call `migrate(…; atomic = false)` to apply it statement by " *
                          "statement; after a failure, run `makemigrations` again, and `migrate` applies " *
                          "the steps still missing.")
 end
 
-# `lock_timeout` and `statement_timeout` are PostgreSQL's `SET LOCAL` settings on the migration
-# transaction (#737). On MySQL they are refused rather than ignored until phase 4b decides their MySQL
-# meaning (`lock_wait_timeout` bounds a DDL statement's wait for its table's metadata lock; a statement's
-# run time has no DDL bound).
-_require_migration_timeouts(::Union{PormGPostgres, PormGSQLite}, ::_MigrationTimeouts)::Nothing = nothing
-function _require_migration_timeouts(connection::PormGMySQL, timeouts::_MigrationTimeouts)::Nothing
-  (timeouts.lock_timeout_ms === nothing && timeouts.statement_timeout_ms === nothing) && return nothing
-  throw(Dialect._mysql_not_yet("migrate(…; lock_timeout, statement_timeout)", "4b"))
+# `statement_timeout` bounds how long one plan statement may run: PostgreSQL's `SET LOCAL
+# statement_timeout` (#737), and on SQLite accepted and ignored, as every timeout is there. MySQL has no
+# bound on a DDL statement's run time (`max_execution_time` stops a SELECT only), so it is refused through
+# the capability table rather than ignored. `lock_timeout` has a MySQL meaning, `lock_wait_timeout`.
+function _require_migration_timeouts(connection::PormGBackend, timeouts::_MigrationTimeouts)::Nothing
+  timeouts.statement_timeout_ms === nothing && return nothing
+  _require_feature(connection, :statement_timeouts, "migrate(…; statement_timeout)";
+                   why = "Leave it out, or bound the wait for a table's lock with `lock_timeout`.")
+end
+
+# The statements a plan runs, as `_require_atomic_plan` counts them: one per plan entry, except on MySQL,
+# where an entry can hold several (`Dialect.drop_table(::PormGMySQL)`, a hand-written data step) and
+# each commits on its own. A session `SET` is no change to the schema and is not counted.
+_plan_statement_count(::Union{PormGPostgres, PormGSQLite}, statements::AbstractVector{<:AbstractString})::Int =
+  length(statements)
+_plan_statement_count(::PormGMySQL, statements::AbstractVector{<:AbstractString})::Int =
+  count(s -> !occursin(r"^SET\s"i, s), (p for s in statements for p in _split_mysql_statements(s)))
+
+# One plan entry as the statements it holds, for MySQL, which takes one statement per call (two in one
+# are a syntax error, 1064). Split at a `;` outside a quoted string (`'…'`, `"…"`, with `\` and doubled
+# quotes), a backticked name, and a comment (`-- `, `#`, `/* … */`); empty pieces are dropped.
+function _split_mysql_statements(sql::AbstractString)::Vector{String}
+  out = String[]
+  buf = IOBuffer()
+  cs = collect(sql)
+  n = length(cs)
+  i = 1
+  flush!() = (s = strip(String(take!(buf))); isempty(s) || push!(out, s))
+  while i <= n
+    c = cs[i]
+    if c in ('\'', '"', '`')
+      print(buf, c)
+      i += 1
+      while i <= n
+        print(buf, cs[i])
+        if cs[i] == '\\' && c != '`' && i < n
+          i += 1
+          print(buf, cs[i])
+        elseif cs[i] == c
+          if i < n && cs[i + 1] == c
+            i += 1
+            print(buf, cs[i])
+          else
+            break
+          end
+        end
+        i += 1
+      end
+      i += 1
+    elseif c == '#' || (c == '-' && i + 2 <= n && cs[i + 1] == '-' && isspace(cs[i + 2]))
+      while i <= n && cs[i] != '\n'
+        print(buf, cs[i]); i += 1
+      end
+    elseif c == '/' && i < n && cs[i + 1] == '*'
+      print(buf, "/*"); i += 2
+      while i <= n && !(cs[i] == '*' && i < n && cs[i + 1] == '/')
+        print(buf, cs[i]); i += 1
+      end
+      i <= n && (print(buf, "*/"); i += 2)
+    elseif c == ';'
+      flush!(); i += 1
+    else
+      print(buf, c); i += 1
+    end
+  end
+  flush!()
+  return out
 end
 
 # Whether `checksum` is the latest applied migration's — the #81 guard's question, asked outside
@@ -3516,7 +3656,7 @@ function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSet
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool,
-                                      ::_MigrationTimeouts = _migration_timeouts();
+                                      timeouts::_MigrationTimeouts = _migration_timeouts();
                                       schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
   # The #81 guard, as on PostgreSQL: a plan already applied whose files were not archived.
@@ -3532,23 +3672,35 @@ function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSet
   end
   schema_tables === nothing || _check_schema_precondition(connection, settings, schema_tables)
 
+  # Every statement and the history row on ONE leased connection: the session settings a plan uses —
+  # `lock_wait_timeout`, the foreign-key checks a table drop turns off (`Dialect.drop_table`) — hold for
+  # the statements after them, and the connection is renewed at the end so none of it reaches the pool.
+  conn = acquire_connection(connection)
   applied = 0
   try
-    for statement in ordered_statements
-      @debug "Executing: $statement"
-      fetch(connection, statement)
-      applied += 1
+    if timeouts.lock_timeout_ms !== nothing
+      # Whole seconds, at least one (the server's minimum); an `Int` PormG computed, never caller text.
+      with_transaction(connection, "SET SESSION lock_wait_timeout = $(max(1, cld(timeouts.lock_timeout_ms, 1000)))"; conn = conn)
     end
-  catch e
     try
-      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
-    catch record_err
-      @error "Failed to record migration failure in history table" exception=record_err
+      for entry in ordered_statements, statement in _split_mysql_statements(entry)
+        @debug "Executing: $statement"
+        with_transaction(connection, statement; conn = conn)
+        applied += 1
+      end
+    catch e
+      try
+        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn = conn)
+      catch record_err
+        @error "Failed to record migration failure in history table" exception=record_err
+      end
+      @error "Error applying migrations: the statements before the failed one stay applied; run `makemigrations` again and `migrate` to apply the rest" applied = applied exception=e
+      rethrow(e)
     end
-    @error "Error applying migrations: the statements before the failed one stay applied; run `makemigrations` again and `migrate` to apply the rest" applied = applied total = length(ordered_statements) exception=e
-    rethrow(e)
+    _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn = conn)
+  finally
+    finalize_transaction_connection!(connection, conn; renew = true)
   end
-  _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive)
   @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
   try
     _archive_migration_files(settings, date_str)
@@ -4047,13 +4199,15 @@ beside it.
 - **Recorded in `pormg_migrations_data`**, one row per name, created on first use. The row is the
   whole of "applied": a step is never re-run, whatever its code says now, so give a changed step a
   new name. There is no down step.
-- **The migration lock.** On PostgreSQL it holds the advisory lock `migrate` holds
-  (`pormg::migrations`), waiting up to `lock_wait` seconds (`OperationalError` naming the holder
-  after that), so a data step and a schema migration never run at once and two instances cannot both
-  run one step. SQLite has no such lock; there the transactional step checks its record inside its
-  `BEGIN IMMEDIATE` transaction, which no other process can share.
+- **The migration lock.** On PostgreSQL and MySQL it holds the lock `migrate` holds
+  (`pormg::migrations`: an advisory lock, `GET_LOCK` on MySQL), waiting up to `lock_wait` seconds
+  (`OperationalError` naming the holder after that), so a data step and a schema migration never run
+  at once and two instances cannot both run one step. SQLite has no such lock; there the transactional
+  step checks its record inside its `BEGIN IMMEDIATE` transaction, which no other process can share.
 - **`transaction = true`** (default): the step and its record commit together. If `f` throws, both
-  roll back, nothing is recorded, the error propagates, and the next call runs the step again.
+  roll back, nothing is recorded, the error propagates, and the next call runs the step again. On
+  MySQL a DDL statement inside `f` commits the transaction implicitly, so the writes before it stay
+  and the step is no longer one unit: keep a MySQL data step to writes.
 - **`transaction = false`**: for what cannot run inside a transaction — PostgreSQL's
   `CREATE INDEX CONCURRENTLY` — or a backfill too large for one. The record is written after `f`
   returns, so a throw records nothing and keeps whatever `f` already did: write such a step to be
@@ -4069,7 +4223,7 @@ characters. It reads no files, so a `register_connection` database works too.
 Expand → backfill → contract is two plans with a `run_once` between them: see *Data Migrations* in
 the advanced migrations guide.
 """
-function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+function run_once(f::Function, connection::_SQLEngine, settings::PormGSettings,
                   name::AbstractString; transaction::Bool = true, lock_wait::Real = 30)::Symbol
   step = String(name)
   isempty(strip(step)) && throw(InvalidValueError("run_once needs a step name; got $(repr(step))."))  # refusal-value-ok: a run_once step name the developer wrote
@@ -4089,18 +4243,15 @@ function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, se
   return _run_once_locked(f, connection, settings, step, transaction, timeouts)
 end
 
-# MySQL (#1130): a data step is phase 4b's. Refused before `f` runs or the step table is touched.
-run_once(f::Function, connection::PormGMySQL, settings::PormGSettings, name::AbstractString; kwargs...)::Symbol =
-  throw(Dialect._mysql_not_yet("run_once", "4b"))
-
 function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,PormGSettings} = config,
                   transaction::Bool = true, lock_wait::Real = 30)::Symbol
   settings = config[db]
   return run_once(f, settings.connections, settings, name; transaction = transaction, lock_wait = lock_wait)
 end
 
-# PostgreSQL: everything under the migration lock — the table, the record check, the step.
-function _run_once_locked(f::Function, connection::PormGPostgres, settings::PormGSettings, step::String,
+# PostgreSQL and MySQL (`GET_LOCK`, #1130): everything under the migration lock — the table, the record
+# check, the step. InnoDB's writes are transactional, so the step and its record commit together there too.
+function _run_once_locked(f::Function, connection::Union{PormGPostgres, PormGMySQL}, settings::PormGSettings, step::String,
                           transaction::Bool, timeouts::_MigrationTimeouts)::Symbol
   return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
                                          wait = true, timeout_ms = timeouts.lock_wait_ms) do
@@ -4152,10 +4303,10 @@ function _run_once_locked(f::Function, connection::PormGSQLite, settings::PormGS
 end
 
 # `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection.
-_data_step_recorded(connection::Union{PormGPostgres, PormGSQLite}, step::String)::Bool =
+_data_step_recorded(connection::_SQLEngine, step::String)::Bool =
   nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
 
-_record_data_step(connection::Union{PormGPostgres, PormGSQLite}, step::String, transactional::Bool) =
+_record_data_step(connection::_SQLEngine, step::String, transactional::Bool) =
   fetch(connection, Dialect.insert_data_step_sql(connection); params = Any[step, transactional])
 
 # The recorded data steps for `status()`: empty when the table does not exist yet, which `status`
@@ -4176,7 +4327,7 @@ end
 # CHECKs — so a table made here and one `migrate` would make are one rendering. `indexes = false`
 # drops only the plain indexes ("Create index…" entries); unique constraints are kept, since they
 # are part of what the rows mean.
-function _ensure_table_statements(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel;
+function _ensure_table_statements(connection::_SQLEngine, model::PormGModel;
                                   indexes::Bool = true)::Vector{String}
   plan = OrderedDict{Symbol, OrderedDict{String, String}}()
   _add_new_table(connection, plan, Symbol(model_table_name(model)), model)
@@ -4242,6 +4393,39 @@ function _ensure_table_locked(connection::PormGPostgres, settings::PormGSettings
       for statement in statements, part in _split_pg_statements(statement)
         fetch(connection, part)
       end
+    end
+    return :created
+  end
+end
+
+# MySQL (#1130): under `GET_LOCK`, as on PostgreSQL, but with no transaction to put the DDL in (each
+# statement commits). The table is the call's own until it returns, so when a statement after the `CREATE
+# TABLE` fails the table is dropped again: `:exists` then never reports a table this call left half-made.
+function _ensure_table_locked(connection::PormGMySQL, settings::PormGSettings, table::String,
+                              statements::Vector{String})::Symbol
+  _live_table_exists(connection, table) && return :exists
+  return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
+                                         wait = true, timeout_ms = _migration_timeouts().lock_wait_ms) do
+    _live_table_exists(connection, table) && return :exists
+    # The table is dropped again only once this call has created it: its `CREATE TABLE` is written without
+    # `IF NOT EXISTS`, so a table another process made since the check fails it instead of being taken
+    # for this one's and dropped with its rows.
+    parts = String[part for statement in statements for part in _split_mysql_statements(statement)]
+    isempty(parts) || (parts[1] = replace(parts[1], r"^CREATE TABLE IF NOT EXISTS "i => "CREATE TABLE "))
+    created = false
+    try
+      for part in parts
+        fetch(connection, part)
+        created = true
+      end
+    catch
+      created || rethrow()
+      try
+        fetch(connection, Dialect.drop_table_only(connection, table))
+      catch cleanup_err
+        @error "ensure_table!: could not drop the table it had begun to create" table = table exception = cleanup_err
+      end
+      rethrow()
     end
     return :created
   end

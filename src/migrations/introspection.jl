@@ -329,6 +329,9 @@ _inspectdb_field_name(probe::ColumnSpec, table_name, conn)::String =
   Logging.with_logger(Logging.NullLogger()) do
     string(nameof(typeof(_inspectdb_field(probe, table_name, conn, false, nothing))))[2:end]
   end
+# MySQL has no `inspectdb` compiler yet (#1130 phase 4c-2), so the warning names the column's type as the
+# catalog reports it.
+_inspectdb_field_name(probe::ColumnSpec, table_name, ::PormGMySQL)::String = something(probe.raw, string(probe.type))
 
 """
     _default_or_drop(table_name, probe::ColumnSpec, raw, conn) -> ColumnDefault
@@ -4918,8 +4921,8 @@ end
 
 # The default reduced to what the declared side compiles (`_column_default`): the portable vocabulary
 # back to its word, the `('…')` a literal on a TEXT, BLOB or JSON column is written as back to the
-# literal, a boolean folded from `1`/`0`. Any other expression is carried as MySQL printed it, which no
-# declaration renders (a non-portable `db_default` is refused until phase 4c).
+# literal, a boolean folded from `1`/`0`. Any other expression is carried as MySQL printed it; one PormG
+# stamped is read with its marker instead (`_mysql_live_table`), and one it did not is compared as text.
 _clean_default(::Nothing, ::CanonicalType, ::PormGMySQL) = nothing
 function _clean_default(raw::_MySQLColumnDefault, ctype::CanonicalType, ::PormGMySQL)
   s = raw.text
@@ -4992,7 +4995,7 @@ const _MYSQL_TABLES_SQL = """
    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"""
 const _MYSQL_COLUMNS_SQL = """
   SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, COLUMN_TYPE AS ctype, IS_NULLABLE AS nullable,
-         COLUMN_DEFAULT AS dflt, EXTRA AS extra, COLUMN_KEY AS ckey
+         COLUMN_DEFAULT AS dflt, EXTRA AS extra, COLUMN_KEY AS ckey, COLUMN_COMMENT AS comment
     FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_STATISTICS_SQL = """
@@ -5160,7 +5163,15 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
                        _reader_checks(get(col_checks, lowercase(col_name), CheckKind[]), ctype), identity, raw_type)
     dflt = _mysql_str(r.dflt)
     raw_default = dflt === nothing ? nothing : _MySQLColumnDefault(dflt, occursin("default_generated", extra))
-    columns[col_name] = _finish_column_spec(table_name, probe, raw_default, db)
+    # An expression default PormG stamped (`Dialect.stamp_db_default(::PormGMySQL)`) carries the declared
+    # hash its marker vouches for, checked against the RAW `COLUMN_DEFAULT`, the text the server hashed.
+    # Its text is MySQL's re-print, unescaped: catalog text, not a declaration, so it is not put through
+    # the declaration validator, which refuses the backticks and escapes MySQL prints.
+    owner = (raw_default !== nothing && raw_default.generated && hasproperty(r, :comment)) ?
+            db_default_owner(_mysql_str(r.comment), dflt) : nothing
+    columns[col_name] = owner !== nothing ?
+      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_unescape(dflt)), owner)) :
+      _finish_column_spec(table_name, probe, raw_default, db)
   end
   return LiveTable(table_name, columns, indexes, composites, table_checks)
 end

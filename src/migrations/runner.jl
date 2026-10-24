@@ -4416,19 +4416,25 @@ function _ensure_table_locked(connection::PormGMySQL, settings::PormGSettings, t
     parts = String[part for statement in statements for part in _split_mysql_statements(statement)]
     isempty(parts) || (parts[1] = replace(parts[1], r"^CREATE TABLE IF NOT EXISTS "i => "CREATE TABLE "))
     created = false
+    # On one leased connection, as `migrate` runs a plan: an expression default's stamp keeps a session
+    # variable and a prepared statement between its statements. Renewed afterwards, so neither reaches
+    # the pool.
+    conn = acquire_connection(connection)
     try
       for part in parts
-        fetch(connection, part)
+        with_transaction(connection, part; conn = conn)
         created = true
       end
     catch
       created || rethrow()
       try
-        fetch(connection, Dialect.drop_table_only(connection, table))
+        with_transaction(connection, Dialect.drop_table_only(connection, table); conn = conn)
       catch cleanup_err
         @error "ensure_table!: could not drop the table it had begun to create" table = table exception = cleanup_err
       end
       rethrow()
+    finally
+      finalize_transaction_connection!(connection, conn; renew = true)
     end
     return :created
   end

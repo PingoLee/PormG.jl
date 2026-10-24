@@ -939,6 +939,12 @@ function _db_default_read_back(sql::AbstractString, engine::Symbol, field_type::
     # `_clean_default`'s bytea step: the hex text decoded, or "no default" when it is not hex.
     (cleaned isa AbstractString && field_type == "BinaryField") && return _pg_bytea_literal_bytes(cleaned)
     return cleaned
+  elseif engine === :mysql
+    # MySQL stores every `DEFAULT (<expr>)` as an expression (`DEFAULT_GENERATED`, measured on 8.4), a
+    # number or `NULL` included, and its reader takes back as a literal only a string one, which it
+    # re-prints `_utf8mb4'…'` (the form a literal on a TEXT column is written in).
+    m = match(r"^(?:_[0-9a-z]+)?'((?:[^'\\]|'')*)'$"s, text)
+    return m === nothing ? _ExpressionDefault(text) : replace(m[1], "''" => "'")
   end
   type_sym = field_type == "BinaryField" ? :BinaryField : field_type == "BooleanField" ? :BooleanField : :TextField
   return _normalize_sqlite_default(text, type_sym)

@@ -488,6 +488,45 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             exec("DROP INDEX `m4b_fn_idx` ON `m4b_fn`")
         end
 
+        # What: a per-engine db_default on MySQL (#1130 phase 4c): created with its stamp, converged, changed
+        # (a DBA's comment kept), changed by hand and seen, added with a new column, non-ASCII text included.
+        # SQL: `CREATE TABLE … `label` VARCHAR(40) NOT NULL DEFAULT (lower('AbC'))`, then the stamp:
+        #      `SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `m4b_tag` MODIFY COLUMN …', QUOTE(…)) …);
+        #      PREPARE pormg_stamp FROM @pormg_stamp; EXECUTE pormg_stamp; DEALLOCATE PREPARE pormg_stamp;`.
+        # Why: MySQL re-prints the expression, so only the marker's second hash, computed by the server from
+        # the text it printed, makes the column converge, and tells a hand-made SET DEFAULT (which keeps the
+        # comment) from PormG's own.
+        @testset "a per-engine db_default" begin
+            tag(d, extra = "") = "Tag = Models.Model(\"m4b_tag\", tagid = Models.IDField(), " *
+                                 "label = Models.CharField(max_length = 40$(d))$(extra))"
+            ex(e) = ", db_default = (postgres = \"$(e)\", mysql = \"$(e)\")"
+            marked(c) = occursin(r"pormg:default:[0-9a-f]{16}:[0-9a-f]{16}$", c)
+            plan = apply!(tag(ex("lower('AbC')")))
+            @test occursin("PREPARE pormg_stamp FROM @pormg_stamp;", plan)
+            r = column_row("m4b_tag", "label")
+            @test r.d == "lower(_utf8mb4\\'AbC\\')" && marked(r.c) && converged()
+            exec("INSERT INTO `m4b_tag` () VALUES ()")
+            @test raw("SELECT `label` FROM `m4b_tag`")[1, :label] == "abc"
+            # A note a DBA adds beside the marker is kept through a changed default.
+            exec("ALTER TABLE `m4b_tag` MODIFY COLUMN `label` VARCHAR(40) NOT NULL DEFAULT (lower('AbC')) COMMENT 'note $(r.c)'")
+            @test converged()
+            apply!(tag(ex("upper('ção')")))
+            r = column_row("m4b_tag", "label")
+            @test occursin("upper(", r.d) && Base.startswith(r.c, "note pormg:default:") && marked(r.c) && converged()
+            # Changed by hand: the comment stays, the second hash no longer matches, and the plan re-applies it.
+            exec("ALTER TABLE `m4b_tag` ALTER COLUMN `label` SET DEFAULT (concat('a', 'b'))")
+            @test !converged()
+            Mig.migrate(folder; interactive = false, atomic = false)
+            @test occursin("upper(", column_row("m4b_tag", "label").d) && converged()
+            # A new column with one: ADD COLUMN, then its stamp. (Deterministic: a server logging statements
+            # refuses a `uuid()` default added over rows, 1674.)
+            code = ", code = Models.CharField(max_length = 36, db_default = (mysql = \"concat('M', 'Y')\",))"
+            plan = apply!(tag(ex("upper('ção')"), code))
+            @test occursin("ADD COLUMN `code` VARCHAR(36) NOT NULL DEFAULT (concat('M', 'Y'))", plan)
+            @test raw("SELECT `code` FROM `m4b_tag`")[1, :code] == "MY"
+            @test marked(column_row("m4b_tag", "code").c) && converged()
+        end
+
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
         # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
         #      transaction; `ensure_table!`'s CREATE TABLE and key.
@@ -521,6 +560,12 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test Mig.ensure_table!(lap, folder) === :created
             @test Mig.ensure_table!(lap, folder) === :exists
             @test live("m4b_lap").columns["circuitid"].reference !== nothing
+            # An expression default's stamp keeps a session variable between its statements: they run on
+            # one connection.
+            stamped = PormG.Models.Model("m4b_lap4", lapid = PormG.Models.IDField(),
+                                         label = PormG.Models.CharField(max_length = 9, db_default = (mysql = "lower('X')",)))
+            @test Mig.ensure_table!(stamped, folder) === :created
+            @test occursin(r"^pormg:default:[0-9a-f]{16}:[0-9a-f]{16}$", column_row("m4b_lap4", "label").c)
             # A key to a table that does not exist fails after the CREATE TABLE: the table goes again.
             nowhere = PormG.Models.Model("m4b_nowhere", nid = PormG.Models.IDField())
             ghost = PormG.Models.Model("m4b_lap2", lapid = PormG.Models.IDField(),

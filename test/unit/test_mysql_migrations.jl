@@ -172,8 +172,8 @@ end
 end
 
 # Synthetic catalog rows for the tables above, as MySQL 8.4 reports them after `migrate`.
-_mm_col(tbl, col, ctype, nullable, dflt, extra, key) =
-  (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key)
+_mm_col(tbl, col, ctype, nullable, dflt, extra, key; comment = "") =
+  (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key, comment = comment)
 _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing) =
   (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr)
 
@@ -273,14 +273,13 @@ end
   @test _MM._split_mysql_statements("SELECT 'it\\'s; ok', 'a''b;'") == ["SELECT 'it\\'s; ok', 'a''b;'"]
 end
 
-# What: the declarations phase 4a cannot render for MySQL, each refused before any DDL.
+# What: the declarations MySQL cannot take, each refused before any DDL.
 # SQL: none.
-# Why: each one would otherwise be written as another engine's DDL, or re-planned forever, because
-# MySQL re-prints an expression and has nowhere to keep the marker that says PormG owns it (phase 4c).
-@testset "#1268: what phase 4a does not render is refused, naming its phase" begin
-  refused(f) = (e = _mm_err(f); e isa PormG.UnsupportedConnectionError ? sprint(showerror, e) : e)
-  m = refused(() -> _MD.field_to_column("lowered", Models.CharField(db_default = (postgres = "lower('X')", sqlite = nothing)), _mm_my))
-  @test m isa String && occursin("phase 4c", m) && occursin("lowered", m)
+# Why: each one would otherwise be written as another engine's DDL: a per-engine `db_default` with no
+# MySQL entry (PormG never guesses a translation), a partial index, an index method.
+@testset "#1130: what MySQL cannot take is refused before any DDL" begin
+  e = _mm_err(() -> _MD.field_to_column("lowered", Models.CharField(db_default = (postgres = "lower('X')", sqlite = nothing)), _mm_my))
+  @test e isa PormG.BackendCapabilityError && occursin("this migration targets mysql", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; condition = "dob IS NOT NULL"))
   @test e isa PormG.BackendCapabilityError && occursin("MySQL", sprint(showerror, e))
   e = _mm_err(() -> _MD.create_index(_mm_my, "`i`", "`driver`", ["`dob`"]; method = "gin"))
@@ -839,4 +838,54 @@ end
   @test e isa PormG.BackendCapabilityError && occursin("2 statements", sprint(showerror, e))
   @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1"], true) === nothing
   @test _MM._require_atomic_plan(_mm_my, ["UPDATE a SET x = 1; UPDATE b SET y = 2"], false) === nothing
+end
+
+# What: a per-engine `db_default` on MySQL: its DEFAULT clause, the stamp of PormG's marker after every
+# statement that writes one (CREATE TABLE, ADD COLUMN, a MODIFY changing the default), and the reader
+# taking an owned default by its marker.
+# SQL: `DEFAULT (lower('X'))`, then `SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `driver` MODIFY COLUMN
+#      <body> COMMENT ', QUOTE(…)) FROM information_schema.COLUMNS …); PREPARE …; EXECUTE …; DEALLOCATE …`.
+# Why: MySQL re-prints the expression (`lower(_utf8mb4\'X\')`), so without the marker's two hashes a
+# declared default would be re-planned on every run, and a hand-made SET DEFAULT (which keeps the comment)
+# would go unseen. The body sits inside a string literal, so its quotes and backslashes are escaped.
+@testset "#1130: a per-engine db_default on MySQL carries PormG's stamped marker" begin
+  f = Models.CharField(max_length = 20, db_default = (postgres = "lower('X')", mysql = "lower('X')"))
+  body = "`tag` VARCHAR(20) NOT NULL DEFAULT (lower('X'))"
+  @test _MD.field_to_column("tag", f, _mm_my) == body
+  h1 = PormG.db_default_hash("lower('X')")
+  stamp(t, b) = "SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `$(t)` MODIFY COLUMN $(replace(replace(b, "\\" => "\\\\"), "'" => "''")) COMMENT ', " *
+                "QUOTE(CONCAT_WS(' ', NULLIF(TRIM(REGEXP_REPLACE(COLUMN_COMMENT, '[[:space:]]*$(PormG.DB_DEFAULT_MARKER_RE.pattern)', '')), ''), " *
+                "CONCAT('pormg:default:$(h1):', LEFT(SHA2(COLUMN_DEFAULT, 256), 16))))) FROM information_schema.COLUMNS " *
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$(t)' AND COLUMN_NAME = 'tag');\n" *
+                "PREPARE pormg_stamp FROM @pormg_stamp;\nEXECUTE pormg_stamp;\nDEALLOCATE PREPARE pormg_stamp;"
+  @test _MD.stamp_db_default(_mm_my, "driver", "tag", "(lower('X'))"; body = body) == stamp("driver", body)
+  # A backslash in the body is doubled with the quotes, or MySQL would read it as an escape.
+  @test occursin("DEFAULT (''a\\\\b'')", _MD.stamp_db_default(_mm_my, "driver", "tag", "(lower('X'))"; body = "`tag` DEFAULT ('a\\b')"))
+  @test _MD.add_field(_mm_my, "driver", "tag", f) == "ALTER TABLE `driver` ADD COLUMN $(body);\n" * stamp("driver", body)
+  created = _MD.create_table(_mm_my, Models.Model("driver", driverid = Models.IDField(), tag = f))
+  @test Base.startswith(created, "CREATE TABLE IF NOT EXISTS `driver`") && Base.endswith(created, "\n" * stamp("driver", body))
+  # The portable vocabulary reads back as its word, so it takes no stamp.
+  @test !occursin("PREPARE", _MD.add_field(_mm_my, "driver", "at", Models.DateTimeField(db_default = "CURRENT_TIMESTAMP")))
+  # A changed default: the MODIFY restates the column's comment (an old marker with it), and the stamp's
+  # body restates everything else, without the comment, which the stamp computes.
+  tagged(d) = "Driver = Models.Model(\"driver\", driverid = Models.IDField(), tag = Models.CharField(max_length = 20$(d)))"
+  plan = _mm_plan(MmMockMySQLAttr(), tagged(""), tagged(", db_default = (mysql = \"lower('X')\",)"))[:driver]
+  alter = plan["Alter field: tag"]
+  @test Base.startswith(alter, "ALTER TABLE `driver` MODIFY COLUMN `tag` VARCHAR(20) NOT NULL DEFAULT (lower('X')) INVISIBLE COMMENT 'it''s' ")
+  @test occursin("MODIFY COLUMN `tag` VARCHAR(20) NOT NULL DEFAULT (lower(''X'')) INVISIBLE COLLATE utf8mb4_0900_ai_ci COMMENT ', QUOTE(", alter)
+  @test isempty(_mm_plan(_mm_my, tagged(", db_default = (mysql = \"lower('X')\",)"), tagged(", db_default = (mysql = \"lower('X')\",)")))
+
+  # The reader: an owned default by its marker (re-print and all); one changed by hand fails the second
+  # hash, so it is compared as text, which the declaration validator refuses, and the plan re-applies it.
+  raw = "lower(_utf8mb4\\'X\\')"
+  marker = "pormg:default:$(h1):$(PormG.live_default_hash(raw))"
+  pk = _mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI")
+  owned = _MM._mysql_live_table(_mm_my, "driver", [pk, _mm_col("driver", "tag", "varchar(20)", "NO", raw, "DEFAULT_GENERATED", "";
+                                                                  comment = "kept $(marker)")], Any[], Any[], Any[])
+  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower(_utf8mb4'X')", h1)
+  @test owned.columns["tag"] == _MM.column_spec(f, _mm_my; name = "tag")
+  hand = "upper(_utf8mb4\\'X\\')"
+  changed = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+    [pk, _mm_col("driver", "tag", "varchar(20)", "NO", hand, "DEFAULT_GENERATED", ""; comment = marker)], Any[], Any[], Any[])
+  @test changed.columns["tag"].default isa PormG.NoDefault && changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
 end

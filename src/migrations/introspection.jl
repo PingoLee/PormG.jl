@@ -4948,6 +4948,12 @@ _mysql_unescape(s::AbstractString)::String =
 # The bare `pormg:index` marker as a whole token of an index's COMMENT (not the hashed `pormg:index:<h>`).
 const _MYSQL_INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?![0-9A-Za-z_:])")
 
+# A declared CHECK as MySQL re-prints the clause `Dialect.add_check_constraint` writes: the condition,
+# then the marker's always-true term, both escaped as `information_schema` escapes a quote (`\'`). The
+# introducer is the charset of the connection that wrote it.
+const _MYSQL_MARKED_CHECK_RE =
+  Regex("^\\((.*) and \\((?:_[0-9a-z]+)?\\\\'(" * CHECK_MARKER_PREFIX * "[0-9a-f]{16})\\\\' is not null\\)\\)\$", "s")
+
 const _MYSQL_NON_NEGATIVE_CHECK_RE = r"^\(`((?:[^`]|``)+)` >= 0\)$"
 const _MYSQL_BYTE_LENGTH_CHECK_RE = r"^\(length\(`((?:[^`]|``)+)`\) <= (\d+)\)$"i
 
@@ -5031,6 +5037,17 @@ function _mysql_column_checks(conn::PormGMySQL, table_name::AbstractString, colu
   end
   return out
 end
+# The tables of the schema holding a CHECK of this name (MySQL compares constraint names without case).
+# A CHECK name is unique per schema on MySQL, so a declared one must not take a name any table holds.
+# Bound by value.
+function _mysql_check_name_holders(conn::PormGMySQL, name::AbstractString)::Vector{String}
+  rows = fetch(conn, """
+    SELECT TABLE_NAME AS tbl FROM information_schema.TABLE_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'CHECK' AND CONSTRAINT_NAME = ?
+     ORDER BY TABLE_NAME""", [String(name)]) |> DataFrame
+  return String[_mysql_str(t) for t in rows.tbl]
+end
+
 get_constraints_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
   _mysql_column_checks(conn, table_name, field_name, _MYSQL_NON_NEGATIVE_CHECK_RE)
 get_constraints_byte_length_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =
@@ -5046,11 +5063,18 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
   fk_map = Dict{String, Any}(_mysql_str(r.col) => r for r in fk_rows if per_fk[_mysql_str(r.name)] == 1)
   fk_names = Set{String}(lowercase(_mysql_str(r.name)) for r in fk_rows)
 
-  # PormG's own column CHECKs by column; every other CHECK is the table's.
+  # A declared CHECK carries PormG's marker, and is read first: a declared `grid >= 0` re-prints as PormG's
+  # own column CHECK would, but for the marker. PormG's own column CHECKs by column; every other CHECK is
+  # the table's.
   col_checks = Dict{String, Vector{CheckKind}}()
   table_checks = LiveCheck[]
   for r in check_rows
     clause = String(strip(_mysql_str(r.clause)))
+    m = match(_MYSQL_MARKED_CHECK_RE, clause)
+    if m !== nothing
+      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_unescape(m[1]), m[2]))
+      continue
+    end
     m = match(_MYSQL_NON_NEGATIVE_CHECK_RE, clause)
     if m !== nothing
       push!(get!(col_checks, lowercase(replace(m[1], "``" => "`")), CheckKind[]), NonNegativeCheck())

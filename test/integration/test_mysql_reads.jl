@@ -332,16 +332,20 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test_throws PormG.PormGError M.Driver.objects.filter("driverref" => "senna").select_for_update().list()
         end
 
-        # What: what MySQL does not do yet stays loud, never another engine's SQL.
-        # SQL: none — a declared CheckConstraint (phase 4c, #1130) is refused where its DDL would be
-        # rendered, before a plan is written.
+        # What: what MySQL does not have stays loud, never another engine's SQL.
+        # SQL: none — a partial index (a feature MySQL has no counterpart for) is refused where its DDL
+        # would be rendered, before a plan is written.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
-        @testset "what is not supported yet fails before any SQL is sent" begin
+        @testset "what is not supported fails before any SQL is sent" begin
             pool = PormG.config[PORMG_DB_FOLDER].connections
-            check = PormG.Models.CheckConstraint(condition = "grid >= 0", name = "result_grid_nonneg")
-            e = try; PormG.Dialect.add_check_constraint(pool, "result", check); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("CheckConstraint", sprint(showerror, e)) &&
-                  occursin("phase 4c", sprint(showerror, e))
+            e = try
+                PormG.Dialect.create_index(pool, "`result_grid_idx`", "`result`", ["`grid`"]; condition = "grid >= 0")
+                nothing
+            catch err
+                err
+            end
+            @test e isa PormG.BackendCapabilityError && occursin("partial", sprint(showerror, e)) &&
+                  occursin("MySQL", sprint(showerror, e))
             @test M.New_join_position.objects.count() == 3
         end
 

@@ -539,8 +539,9 @@ end
 # `SELECT COUNT(*) … WHERE NOT (<condition>)`. That is SQL the developer wrote, and the plan runs it
 # as DDL anyway — but the header is outside what `migrate` executes, so a condition is only taken
 # from it when the plan's own statements carry the same CHECK: `CHECK (<condition>)` on PostgreSQL,
-# `CHECK (<condition> /* pormg:check:… */)` in SQLite's rebuild. A header that does not match was
-# edited apart from the plan, and is refused like any other damaged line.
+# `CHECK (<condition> /* pormg:check:… */)` in SQLite's rebuild, `CHECK ((<condition>) AND 'pormg:check:…'
+# IS NOT NULL)` on MySQL. A header that does not match was edited apart from the plan, and is refused
+# like any other damaged line.
 function _refuse_unplanned_conditions(found::Vector{LossyAlter}, plan_path::AbstractString)::Nothing
   # #934: a partial UniqueConstraint's condition rides the same way, and must match the plan's own
   # `CREATE UNIQUE INDEX … WHERE <condition>;`.
@@ -549,8 +550,8 @@ function _refuse_unplanned_conditions(found::Vector{LossyAlter}, plan_path::Abst
   statements, _ = _order_statements(_read_migration_plan(plan_path))
   for f in checks
     planned = if f.kind === :add_check
-      pg, sl = "CHECK ($(f.condition))", "CHECK ($(f.condition) /* "
-      any(s -> occursin(pg, s) || occursin(sl, s), statements)
+      pg, sl, my = "CHECK ($(f.condition))", "CHECK ($(f.condition) /* ", "CHECK (($(f.condition)) AND '$(CHECK_MARKER_PREFIX)"
+      any(s -> occursin(pg, s) || occursin(sl, s) || occursin(my, s), statements)
     else
       any(s -> occursin("CREATE UNIQUE INDEX", s) && occursin(" WHERE $(f.condition);", s), statements)
     end
@@ -974,7 +975,9 @@ function _precheck_sql(conn::PormGMySQL, f::LossyAlter;
   elseif f.kind === :add_not_null
     return ("SELECT COUNT(*) AS n FROM $table", Any[])
   elseif f.kind === :add_check
-    throw(Dialect._mysql_not_yet("A declared CheckConstraint"))
+    # Interpolated as on PostgreSQL, and only a condition the models file declares (`_anchor_check_conditions`).
+    f.condition === nothing && throw(InvalidMigrationError("No CheckConstraint condition to count with."))
+    return ("SELECT COUNT(*) AS n FROM $table WHERE NOT ($(f.condition))", Any[])
   elseif f.kind === :text_cast
     pred, params = _mysql_text_cast_failure(col, parse_canonical_type(f.new_type, conn))
     return ("SELECT COUNT(*) AS n FROM $table WHERE $col IS NOT NULL AND $pred", params)

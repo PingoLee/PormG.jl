@@ -3553,6 +3553,11 @@ function rename_constraint(conn::PormGPostgres, table_name::String, old_name::St
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME CONSTRAINT "$(_quote_table_ddl(old_name))" TO "$(_quote_table_ddl(new_name))";"""
 end
 
+# A declared CHECK renamed (#742): in place on PostgreSQL. SQLite renames none — its rebuild re-creates
+# every CHECK — and MySQL re-creates it (its method beside the other MySQL renderers).
+rename_check_constraint(conn::PormGPostgres, table_name::String, old_name::String, c::CheckConstraint)::String =
+  rename_constraint(conn, table_name, old_name, c.name)
+
 function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)
   return """ALTER TABLE "$(_quote_table_ddl(old_table_name))" RENAME TO "$(_quote_table_ddl(new_table_name))";"""
 end
@@ -4808,12 +4813,10 @@ function create_table(conn::PormGMySQL, table_name::String, columns::Vector{Stri
     ) $(MYSQL_TABLE_OPTIONS);"""
 end
 
-# As on PostgreSQL, the table carries no foreign key: the planner adds each with `add_foreign_key` once
-# every table exists. A declared `CheckConstraint` is refused until phase 4c: a MySQL constraint takes no
-# comment, so there is nowhere to keep the marker that says PormG owns it.
+# As on PostgreSQL, the table carries no foreign key and no declared `CheckConstraint`: the planner adds
+# each foreign key with `add_foreign_key` once every table exists, and each CHECK with
+# `add_check_constraint` after the table.
 function create_table(conn::PormGMySQL, model::PormGModel)
-  isempty(Models.declared_check_constraints(model)) ||
-    throw(_mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
   columns = String[]
   for (field_name, field) in model.fields
     field isa sManyToManyField && continue
@@ -4999,15 +5002,43 @@ rename_index(conn::PormGMySQL, old_name::String, new_name::String; table::Union{
 rename_table(conn::PormGMySQL, old_table_name::String, new_table_name::String)::String =
   "RENAME TABLE $(_ddl_ident(conn, old_table_name)) TO $(_ddl_ident(conn, new_table_name));"
 
-# PormG's MySQL reader takes no unique index as a constraint (a MySQL UNIQUE is an index), so the planner
-# never asks for these; a declared CHECK is phase 4c's.
-for (f, what, phase) in ((:drop_unique_constraint, "Dropping a constraint-backed unique key", "4c"),
-                         (:rename_constraint, "Renaming a constraint", "4c"),
-                         (:drop_check_constraint, "Dropping a declared CheckConstraint", "4c"),
-                         (:add_check_constraint, "A declared CheckConstraint", "4c"),
-                         (:comment_check_constraint, "A declared CheckConstraint", "4c"))
-  @eval $f(::PormGMySQL, args...; kwargs...) = throw(_mysql_not_yet($what, $phase))
+# PormG's MySQL reader takes no unique index as a constraint (a MySQL UNIQUE is an index, dropped with
+# `DROP INDEX`), and a CHECK is renamed by `rename_check_constraint`, so the planner never asks for these.
+for (f, what) in ((:drop_unique_constraint, "Dropping a constraint-backed unique key"),
+                  (:rename_constraint, "Renaming a constraint"))
+  @eval $f(::PormGMySQL, args...; kwargs...) = throw(UnsupportedConnectionError(
+    $what * " has no MySQL counterpart: a MySQL UNIQUE is an index, and a CHECK is re-created under its new name."))
 end
+
+# A declared `CheckConstraint` on MySQL (#1130 phase 4c). A MySQL constraint takes no comment, and MySQL
+# drops a SQL comment from the clause it stores (measured on 8.4), so PormG's ownership marker rides in
+# the clause as a term that is always true: `(<condition>) AND '<marker>' IS NOT NULL`. A row the
+# condition rejects is still rejected, and one it leaves NULL still passes. MySQL keeps the term as it is
+# (it is not folded away) and re-prints the clause as
+# `(<condition> and (_utf8mb4\'<marker>\' is not null))`, which is how the reader finds the marker. The
+# marker is `pormg:check:` and hex digits, so the literal needs no escaping.
+_mysql_check_clause(c::CheckConstraint)::String = "($(c.condition)) AND '$(check_marker(c.condition))' IS NOT NULL"
+
+function add_check_constraint(conn::PormGMySQL, table_name::String, c::CheckConstraint)::String
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) ADD CONSTRAINT $(_ddl_ident(conn, c.name)) " *
+         "CHECK ($(_mysql_check_clause(c)));"
+end
+
+# No `IF EXISTS` on MySQL. The planner drops a table's CHECKs before its column pass, so a column the
+# plan drops still holds them.
+drop_check_constraint(conn::PormGMySQL, table_name::String, constraint_name::String)::String =
+  "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP CHECK $(_ddl_ident(conn, constraint_name));"
+
+# A CHECK renamed, or adopted (a hand-written one of the declared name, given PormG's marker): MySQL can
+# neither rename nor comment a constraint, so both re-create it in ONE `ALTER TABLE`, which applies whole —
+# when the rows fail the condition, the old CHECK is still there (measured).
+function rename_check_constraint(conn::PormGMySQL, table_name::String, old_name::String, c::CheckConstraint)::String
+  return "ALTER TABLE $(_ddl_ident(conn, table_name)) DROP CHECK $(_ddl_ident(conn, old_name)), " *
+         "ADD CONSTRAINT $(_ddl_ident(conn, c.name)) CHECK ($(_mysql_check_clause(c)));"
+end
+comment_check_constraint(conn::PormGMySQL, table_name::String, c::CheckConstraint;
+                         keep::Union{String, Nothing} = nothing)::String =
+  rename_check_constraint(conn, table_name, c.name, c)
 
 # No `CASCADE` on MySQL, and a table another table's foreign key references cannot be dropped (3730). The
 # plan drops a table before the steps that drop its children's keys (`_ordered_entries` runs "Drop table"

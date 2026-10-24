@@ -1169,7 +1169,7 @@ function _plan_check_adds!(conn::_SQLEngine,
   for (old, c) in plan.renames
     _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Rename", old),
-                                         Dialect.rename_constraint(conn, table, old, c.name))
+                                         Dialect.rename_check_constraint(conn, table, old, c))
   end
   for (c, existing) in plan.stamps
     _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Adopt", c.name),
@@ -1193,11 +1193,23 @@ end
 # carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
 # holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
 # this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
-# MySQL: a declared CheckConstraint is phase 4c's (`Dialect.create_table(::PormGMySQL, model)` refuses it on
-# a new table); this is the same refusal for one added to a table that exists.
-_refuse_check_name_clash(::PormGMySQL, model::PormGModel, table::AbstractString,
-                         catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing =
-  throw(Dialect._mysql_not_yet("A declared CheckConstraint (on model $(model.name))"))
+# MySQL (#1130 phase 4c): a CHECK name is unique per SCHEMA (error 3822, measured), not per table, and
+# is not shared with foreign-key names. So the name is taken when any table of the schema holds a CHECK
+# of that name — a CHECK of this table the plan drops first never reaches here (`_plan_check_adds!`
+# skips the names in `plan.drops`) — or when it has the shape MySQL gives PormG's own column CHECKs on
+# this table, `<table>_chk_<n>`, which the next column CHECK MySQL names could take.
+function _refuse_check_name_clash(conn::PormGMySQL, model::PormGModel, table::AbstractString,
+                                  catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
+  suffix = chopprefix(String(name), "$(table)_chk_")
+  own = suffix != name && !isempty(suffix) && all(isdigit, suffix)
+  holders = own ? String[] : _mysql_check_name_holders(conn, name)
+  (own || !isempty(holders)) && throw(InvalidMigrationError(
+    "CheckConstraint name '$(name)' on table '$(table)' is " *
+    (own ? "the name MySQL gives the CHECKs PormG writes for a positive-integer or bounded binary column of that table"
+         : "already the name of a CHECK on table '$(first(holders))'") *
+    ". CHECK names are unique per schema on MySQL; give the CheckConstraint another name."))
+  return nothing
+end
 
 function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table::AbstractString,
                                   catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
@@ -3498,7 +3510,7 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
 end
 
 # MySQL (#1130): the SQLite method's shape, with the plan floor PostgreSQL checks. What MySQL cannot plan
-# yet (a declared CheckConstraint, a functional index, phase 4c) is refused where the planner reaches it.
+# (a partial index, an index method) is refused where the planner reaches it.
 function makemigrations(connection::PormGMySQL, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
                         renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
   Configuration._require_folder_backed(settings, "makemigrations")

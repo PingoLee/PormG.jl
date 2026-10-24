@@ -412,6 +412,49 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test live("m4b_seat2").columns["circuitid"].reference !== nothing && converged()
         end
 
+        # What: a declared CheckConstraint on a table that exists (#1130 phase 4c): added over rows it rejects
+        # and over rows it accepts, read back as declared, renamed, given a new condition, adopted from one
+        # written by hand, dropped with its declaration; a CHECK name another table holds is refused.
+        # SQL: the pre-check `SELECT COUNT(*) AS n FROM `m4b_grid` WHERE NOT (grid >= 0)`, then
+        #      `ADD CONSTRAINT `m4b_grid_nonneg` CHECK ((grid >= 0) AND 'pormg:check:<h>' IS NOT NULL)`; a rename
+        #      `DROP CHECK `m4b_grid_nonneg`, ADD CONSTRAINT `m4b_grid_min` …`; `DROP CHECK `m4b_grid_min``.
+        # Why: MySQL keeps no comment on a CHECK and strips one from its clause, so PormG's marker rides in the
+        # clause. Read back, the CHECK must be the declared one (not the positive-integer column CHECK its
+        # condition looks like), converge, follow a rename, and go when its declaration goes.
+        @testset "a declared CheckConstraint" begin
+            grid(cs = "") = "Grid = Models.Model(\"m4b_grid\", gridid = Models.IDField(), grid = Models.IntegerField(null = true)" *
+                            (isempty(cs) ? ")" : "; constraints = [$(cs)])")
+            ck(name, cond = "grid >= 0") = "Models.CheckConstraint(condition = \"$(cond)\", name = \"$(name)\")"
+            apply!(grid())
+            exec("INSERT INTO `m4b_grid` (`grid`) VALUES (-1), (3), (NULL)")
+            @test refused_by_precheck(grid(ck("m4b_grid_nonneg"))) == [(:add_check, 1)]
+            @test isempty(live("m4b_grid").checks)
+            exec("DELETE FROM `m4b_grid` WHERE `grid` < 0")
+            apply!(grid(ck("m4b_grid_nonneg")))
+            t = live("m4b_grid")
+            @test [(c.name, c.marker) for c in t.checks] == [("m4b_grid_nonneg", PormG.check_marker("grid >= 0"))]
+            @test isempty(t.columns["grid"].checks) && converged()
+            @test (try; exec("INSERT INTO `m4b_grid` (`grid`) VALUES (-5)"); false; catch; true; end)
+            plan = apply!(grid(ck("m4b_grid_min")))
+            @test occursin("DROP CHECK `m4b_grid_nonneg`, ADD CONSTRAINT `m4b_grid_min`", plan)
+            @test [c.name for c in live("m4b_grid").checks] == ["m4b_grid_min"] && converged()
+            apply!(grid(ck("m4b_grid_min", "grid >= 1")))
+            @test only(live("m4b_grid").checks).marker == PormG.check_marker("grid >= 1") && converged()
+            # Written by hand under the declared name: no marker, so it is re-created with one. (A condition
+            # of its own, or the plan would repeat the last one's text, which `migrate` takes as applied.)
+            exec("ALTER TABLE `m4b_grid` DROP CHECK `m4b_grid_min`, ADD CONSTRAINT `m4b_grid_min` CHECK (grid >= 2)")
+            @test only(live("m4b_grid").checks).marker === nothing
+            apply!(grid(ck("m4b_grid_min", "grid >= 2")))
+            @test only(live("m4b_grid").checks).marker == PormG.check_marker("grid >= 2") && converged()
+            plan = apply!(grid())
+            @test occursin("DROP CHECK `m4b_grid_min`", plan) && isempty(live("m4b_grid").checks) && converged()
+            apply!(grid(ck("m4b_grid_min")))
+            write_models(grid(ck("m4b_grid_min")) * "\nLap = Models.Model(\"m4b_lap3\", lapid = Models.IDField(), " *
+                         "lap = Models.IntegerField(); constraints = [$(ck("m4b_grid_min", "lap >= 0"))])")
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("already the name of a CHECK on table 'm4b_grid'", sprint(showerror, e))
+        end
+
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
         # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
         #      transaction; `ensure_table!`'s CREATE TABLE and key.

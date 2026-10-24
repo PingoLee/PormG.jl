@@ -4940,8 +4940,10 @@ function _clean_default(raw::_MySQLColumnDefault, ctype::CanonicalType, ::PormGM
     # backslashes, and the expression is itself a backslash-escaped literal (`_utf8mb4'it\'s'`).
     m = match(r"^_utf8mb4'(.*)'$"s, _mysql_unescape(s))
     # In declarable form (`_mysql_declarable_sql`), or as MySQL printed it, which the declaration validator
-    # then refuses, so the column reads with no default and a warning, as before.
-    m === nothing && return _ExpressionDefault(something(_mysql_declarable_sql(_mysql_unescape(s)), s))
+    # then refuses, so the column reads with no default and a warning, as before. MySQL's reserved words
+    # alone: an expression outside the portable vocabulary imports as the `mysql` entry of a per-engine
+    # `db_default`, which only MySQL reads.
+    m === nothing && return _ExpressionDefault(something(_mysql_declarable_sql(_mysql_unescape(s); reserved = _MYSQL_RESERVED_WORDS), s))
     return _mysql_unescape(m[1])
   end
   ctype isa CBool && s in ("0", "1") && return s == "1"

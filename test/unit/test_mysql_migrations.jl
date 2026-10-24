@@ -823,11 +823,15 @@ PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::Ab
   @test _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 12), retyped) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(12) NOT NULL INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci;"
   @test any(f -> f.kind === :drop_default, _MM._lossy_alters(retyped, at; table = "driver", column = "c"))
+  # A default the reader reads as none (no declaration holds its text) is still the catalog's, and kept.
+  unread = delta(Models.CharField(max_length = 8, null = true), _MM.column_spec(Models.CharField(max_length = 8), at; name = "c"))
+  @test occursin("VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE",
+                 _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 8, null = true), unread))
   # ON UPDATE at the column's own precision on a timestamp, and no collation on a column that is not text;
-  # the catalog's expression default is not restated over a column the delta says has none.
+  # the catalog's expression default is restated, as by any MODIFY that changes no type.
   stamp = _mm_delta(Models.DateTimeField(null = true), Models.DateTimeField())
   @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
-        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL DEFAULT (uuid()) ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
   @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
   # A MODIFY that left a generation out would end it (STORED) or fail (VIRTUAL, 3106), so a generated column
   # made by hand is restated with it, and with no default.

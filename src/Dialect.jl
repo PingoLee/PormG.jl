@@ -4982,15 +4982,17 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
   adds_key && push!(clauses, "ADD PRIMARY KEY ($(ident))")
   live = nothing
   if any(s -> s in delta, (:type, :nullable, :default, :identity))
-    # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
-    keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
-                   delta.new_spec.default isa NoDefault
     # A generated column made by hand reads as a plain one; the MODIFY restates its generation
     # (`_mysql_column_body`), which a MODIFY that left it out would end. Such a column holds no default,
     # so a declared one could never be applied, and every plan would ask for it again.
     live = _column_attributes(conn, catalog, live_column)
     # A retype writes the declared type; only a MODIFY that keeps the type restates the column's own.
     live !== nothing && :type in delta && (live = merge(live, (column_type = nothing,)))
+    # An undeclared expression default is kept unless the type changes (`_retype_drops_default`): one the
+    # reader reads, and one it reads as none because no declaration can hold its text, which the catalog
+    # still holds (`live.default_expression`).
+    keep_default = !(:type in delta) && delta.new_spec.default isa NoDefault &&
+                   (delta.old_spec.default isa ExpressionDefault || (live !== nothing && live.default_expression !== nothing))
     live !== nothing && live.generation !== nothing && !(delta.new_spec.default isa NoDefault) &&
       throw(InvalidMigrationError(
         "Column \"$(live_column)\" of table \"$(catalog)\" is a generated column made by hand, which holds no " *

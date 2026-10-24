@@ -148,6 +148,15 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
                   occursin("pormg:check:", plan)
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             @test converged()
+            # A MODIFY for another change keeps the default the model could not hold (`odd`'s backslash).
+            write(models_path, replace(read(models_path, String), r"odd = Models\.CharField\(([^)]*)null\s*=\s*true" =>
+                                                                   s"odd = Models.CharField(\1null = false"))
+            exec("UPDATE `m4c_legacy` SET `odd` = 'v'")
+            Mig.makemigrations(folder; interactive = false)
+            @test occursin(r"MODIFY COLUMN `odd` VARCHAR\(9\) NOT NULL DEFAULT \(concat\(", read(pending, String))
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test occursin("concat", String(raw("SELECT COLUMN_DEFAULT AS d FROM information_schema.COLUMNS WHERE " *
+                                                "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'm4c_legacy' AND COLUMN_NAME = 'odd'")[1, :d]))
         end
     finally
         drop_scratch!()

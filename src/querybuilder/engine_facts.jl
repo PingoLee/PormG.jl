@@ -256,10 +256,12 @@ _sums_integers_as_decimal(::PormGMySQL) = true
 # `numeric(2,0)`; up to `SQLITE_EXACT_DECIMAL_DIGITS` the double it returns is still the exact decimal,
 # and a wider declaration stays a width-less computed decimal, unchecked. `0`: the engine applies it.
 # PostgreSQL rounds and raises "numeric field overflow" (SQLSTATE 22003). MySQL rounds and clamps an
-# overflow to the largest value the type holds, so the read could not tell it from a value that fits.
+# overflow to the largest value the type holds, so the read could not tell it from a value that fits
+# (measured: `Cast("driverid", "numeric(2,0)")` read `99` for driver 100). So MySQL computes every width
+# it has at `DECIMAL(65, s)` (`Dialect.cast_type_sql`), and its read applies `p` as SQLite's does.
 _unapplied_decimal_width(::PormGPostgres) = 0
 _unapplied_decimal_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
-_unapplied_decimal_width(::PormGMySQL) = 0
+_unapplied_decimal_width(::PormGMySQL) = 65
 
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).

@@ -132,6 +132,11 @@ end
 # is MySQL 8.4's default, written out: it keeps `||` a logical OR and `"x"` a string (no `ANSI_QUOTES`,
 # no `PIPES_AS_CONCAT`), which the MySQL dialect (#1271) renders against: backticks, `CONCAT`.
 #
+# Plus `NO_AUTO_VALUE_ON_ZERO`: without it an `AUTO_INCREMENT` column reads a written 0 as "generate one",
+# so `create("statusid" => 0)` stored the next id with no error (measured: 340003), where PostgreSQL and
+# SQLite store 0. PormG never writes 0 to ask for a key: it leaves the column out. The mode
+# also keeps an `ALTER` that makes a column `AUTO_INCREMENT` from renumbering its rows that hold 0.
+#
 # #1265: a text comparison compares code points. A column PormG creates declares `utf8mb4_0900_bin`
 # (`NO PAD`, so `'Senna'` and `'Senna '` differ, as on PostgreSQL; `utf8mb4_bin` would pad), and the
 # connection collation is the same, so a parameter compared with a parameter or a literal does not
@@ -142,7 +147,8 @@ end
 # plus this many digits, and the default 4 makes `AVG` of `1, 2, 2` read `1.6667`. Thirty digits are
 # more than a `Float64` holds, so the mean reads as the nearest double, as on PostgreSQL (#1121).
 const _SESSION_SQL = "SET time_zone = '+00:00', sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES," *
-                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION', " *
+                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION," *
+                     "NO_AUTO_VALUE_ON_ZERO', " *
                      "collation_connection = 'utf8mb4_0900_bin', div_precision_increment = 30"
 
 # `major * 10000 + minor * 100 + patch`, the number the capability table's MySQL rows use.
@@ -400,9 +406,10 @@ end
 PormG.backend_num_rows(pool::_Pool, result::MySQLResult) = result.nrows
 PormG.backend_num_affected_rows(pool::_Pool, result::MySQLResult) = result.rows_affected
 # The AUTO_INCREMENT value the INSERT wrote, from its OK packet: the generated id, or the one the
-# statement supplied (measured on 8.4: a supplied 100 reports 100, a supplied 0 the id it generated),
-# and 0 for a table without AUTO_INCREMENT. `LAST_INSERT_ID()` is not the same thing: it changes only
-# when the server generates the value, so after a supplied id it still holds an older one (#1266).
+# statement supplied (measured on 8.4: a supplied 100 reports 100, and a supplied 0 reports 0, since the
+# session's `NO_AUTO_VALUE_ON_ZERO` stores it as 0), and 0 for a table without AUTO_INCREMENT.
+# `LAST_INSERT_ID()` is not the same thing: it changes only when the server generates the value, so after
+# a supplied id it still holds an older one (#1266).
 PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last_insert_id)
 
 # What a multi-row INSERT reported (#1267): how many rows it carried and how many met a duplicate key,

@@ -92,8 +92,9 @@ function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
   name = String(pk)
   field = model.fields[name]
   # The OK packet's id first: it is the stored value whether the server generated it or the caller
-  # supplied it (a supplied 0 generates one). It is 0 when the table has no AUTO_INCREMENT, and then a
-  # supplied key is read back by the value the INSERT bound.
+  # supplied it. It is 0 when the table has no AUTO_INCREMENT, or when the caller supplied 0 (stored as
+  # 0 under the session's `NO_AUTO_VALUE_ON_ZERO`), and then the key is read back by the value the INSERT
+  # bound.
   id = _is_auto_generated_bulk_primary_key(field) ? backend_last_insert_id(conn, result) : 0
   value = id != 0 ? id : haskey(insert, name) ? _format_single(field, name, insert[name], "insert") : nothing
   value === nothing && return nothing

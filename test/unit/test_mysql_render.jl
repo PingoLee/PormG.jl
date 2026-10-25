@@ -1380,9 +1380,13 @@ PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
   # The read-back: an AUTO_INCREMENT pk by the OK packet's id, a generated or supplied one alike.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(42), "`driver`")
   @test rb[1] == "SELECT * FROM `driver` WHERE `driverid` = ?" && rb[2].select_params == Any[] && rb[2].where_params == Any[42]
-  # The stored id, not the bound one: a supplied 0 makes MySQL generate the id the packet reports.
-  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 0), MrInsertResult(501), "`driver`")
+  # The stored id first: the packet's id is what the row holds.
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 7), MrInsertResult(501), "`driver`")
   @test rb[2].where_params == Any[501]
+  # A supplied 0 is stored as 0 (the session's NO_AUTO_VALUE_ON_ZERO), the packet reports 0, and the key
+  # is read back by the value bound.
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 0), MrInsertResult(0), "`driver`")
+  @test rb[2].where_params == Any[0]
   # A table without AUTO_INCREMENT reports 0: the supplied key is read back by the value bound.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 500), MrInsertResult(0), "`driver`")
   @test rb[2].where_params == Any[500]

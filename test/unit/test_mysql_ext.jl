@@ -393,4 +393,6 @@ end
   @test occursin("collation_connection = 'utf8mb4_0900_bin'", sql)
   @test occursin("div_precision_increment = 30", sql)
   @test occursin("time_zone = '+00:00'", sql) && !occursin("ANSI_QUOTES", sql) && !occursin("PIPES_AS_CONCAT", sql)
+  # A written 0 key is stored as 0, as on PostgreSQL and SQLite, not replaced by a generated id.
+  @test occursin("NO_AUTO_VALUE_ON_ZERO", sql)
 end

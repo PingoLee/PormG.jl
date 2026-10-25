@@ -318,6 +318,35 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             @test !created && again.id == first_row.id && again.updated > first_row.updated
         end
 
+        # What: a 0 written into an AUTO_INCREMENT key is stored as 0, through create, bulk_insert and
+        # update_or_create, and update_or_create says `created` for it exactly once.
+        # SQL: INSERT INTO `p3w_team` (`id`, …) VALUES (?, …) bound to 0, under the session's
+        #      NO_AUTO_VALUE_ON_ZERO. update_or_create's OK packet then reports id 0 for the insert as for an
+        #      unchanged duplicate, so the pre-check and a plain read by the lookup decide `created`.
+        # Why: without the mode MySQL reads a written 0 as "generate one": the row was stored under the next
+        #      id with no error (measured: 340003), where PostgreSQL and SQLite store 0.
+        @testset "an explicit zero key is stored as zero" begin
+            zero = W.Team.objects.create("id" => 0, "name" => "Zero")
+            @test zero.id == 0
+            @test only(W.Team.objects.filter("name" => "Zero").values("id").list())[:id] == 0
+            W.Team.objects.filter("id" => 0).delete()
+            bulk_insert(W.Team.objects, DataFrame(id = [0], name = ["Bulk zero"], country = ["BR"]))
+            @test only(W.Team.objects.filter("name" => "Bulk zero").values("id").list())[:id] == 0
+            W.Team.objects.filter("id" => 0).delete()
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero"])
+            @test created && (row.id, row.name) == (0, "Upsert zero")
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero"])
+            @test !created && row.id == 0
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero 2"])
+            @test !created && (row.id, row.name) == (0, "Upsert zero 2")
+            @test W.Team.objects.filter("id" => 0).count() == 1
+            W.Team.objects.filter("id" => 0).delete()
+            # A zero spelled as text is the same 0, for MySQL and for `created`.
+            row, created = W.Team.objects.update_or_create("id" => "00"; defaults = ["name" => "Text zero"])
+            @test created && (row.id, row.name) == (0, "Text zero")
+            W.Team.objects.filter("id" => 0).delete()
+        end
+
         # What: get_or_create finds the row by its lookup, or inserts it with a plain INSERT.
         # SQL: SELECT … WHERE `ref` = ? LIMIT 1; on a miss INSERT INTO `p3w_circuit` (…) VALUES (?, ?), then
         #      the same SELECT.

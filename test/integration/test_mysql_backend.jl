@@ -26,16 +26,18 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         run("DROP TABLE IF EXISTS $(t)")
     end
 
-    # What: every connection runs against a MySQL 8.4+ server, in UTC, under 8.4's default sql_mode.
+    # What: every connection runs against a MySQL 8.4+ server, in UTC, under 8.4's default sql_mode plus
+    # NO_AUTO_VALUE_ON_ZERO.
     # SQL: `SELECT @@time_zone, @@sql_mode, @@character_set_client` on a pooled connection.
     # Why: a TIMESTAMP shifts with the session time zone, and a server's global sql_mode (ANSI_QUOTES,
     # PIPES_AS_CONCAT) would change what `"x"` and `||` mean; the extension pins both at connect, and
-    # the #1264 floor is checked on the server's own version.
-    @testset "a connection is MySQL 8.4+, in UTC, under 8.4's sql_mode" begin
+    # the #1264 floor is checked on the server's own version. Without NO_AUTO_VALUE_ON_ZERO a written 0
+    # key is replaced by a generated one (test_mysql_writes.jl pins the write).
+    @testset "a connection is MySQL 8.4+, in UTC, under 8.4's sql_mode and NO_AUTO_VALUE_ON_ZERO" begin
         r = rows("SELECT @@time_zone AS tz, @@sql_mode AS sm, @@character_set_client AS cs")
         @test r.tz[1] == "+00:00"
-        @test r.sm[1] == "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE," *
-                         "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"
+        @test r.sm[1] == "ONLY_FULL_GROUP_BY,NO_AUTO_VALUE_ON_ZERO,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE," *
+                         "NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"
         @test r.cs[1] == "utf8mb4"
         v = PormG._server_version(pool)
         @test v >= 80_400

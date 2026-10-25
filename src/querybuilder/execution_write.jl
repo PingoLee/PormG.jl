@@ -426,7 +426,10 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
     return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
   end
   pk = get_model_pk_field(model)
-  counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)])
+  # A row that writes 0 into the AUTO_INCREMENT key stores 0 (the session's `NO_AUTO_VALUE_ON_ZERO`), and
+  # the OK packet's id is then 0 for the insert too, so the reads decide, as without AUTO_INCREMENT.
+  counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)]) &&
+                  !_writes_zero_key(real_obj.insert, model, String(pk))
   do_upsert = () -> begin
     existed = counts_insert ? false :
       !isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
@@ -463,6 +466,16 @@ end
 # found no row, and the count is not the 2 of a duplicate it changed.
 _odku_created(counts_insert::Bool, existed::Bool, count::Integer, id::Integer)::Bool =
   counts_insert ? (count == 1 && id != 0) : (!existed && count != 2)
+
+# Whether the row writes 0 into its key `name`, as the INSERT binds it: a number, or text that reads as
+# one (`"00"` stores 0, measured through update_or_create).
+function _writes_zero_key(insert, model, name::String)::Bool
+  haskey(insert, name) || return false
+  bound = _format_single(model.fields[name], name, insert[name], "insert")
+  bound isa Number && return iszero(bound)
+  number = bound isa AbstractString ? tryparse(Float64, strip(bound)) : nothing
+  return number !== nothing && iszero(number)
+end
 
 # `<head> FROM <table> WHERE <target> = <the value the INSERT bound> … LIMIT 1`, on a fresh parameter
 # object each call: a statement's parameters are never reused across fetches. `lock` makes it a

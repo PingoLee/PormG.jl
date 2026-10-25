@@ -4711,7 +4711,7 @@ end
 
 # A column whose type takes no literal default (error 1101), so a literal is written as an expression.
 _mysql_expression_only(base_type::AbstractString)::Bool =
-  occursin(r"^(LONGTEXT|LONGBLOB|JSON)$", base_type)
+  occursin(r"^(LONGTEXT|MEDIUMTEXT|TEXT|TINYTEXT|LONGBLOB|JSON)$", base_type)
 
 # The `DEFAULT` clause, or `nothing`. The portable vocabulary is spelled the way MySQL requires it on
 # this column; any other expression is the `mysql` entry of a per-engine `db_default`, in the
@@ -4721,8 +4721,9 @@ function _mysql_default_clause(field::PormGField, col_name::AbstractString, base
   db_expr = db_default_sql(field, conn)
   if db_expr !== nothing
     word = uppercase(db_expr)
-    word == "CURRENT_TIMESTAMP" && return "DEFAULT " *
-      (Base.startswith(base_type, "DATETIME(") ? "CURRENT_TIMESTAMP$(base_type[9:end])" : "CURRENT_TIMESTAMP")
+    # The precision must be the column's (`DATETIME(3)` takes `CURRENT_TIMESTAMP(3)` only, error 1067).
+    precision = match(r"^(?:DATETIME|TIMESTAMP)(\(\d\))$", base_type)
+    word == "CURRENT_TIMESTAMP" && return "DEFAULT CURRENT_TIMESTAMP" * (precision === nothing ? "" : precision[1])
     word == "CURRENT_DATE" && return "DEFAULT (CURRENT_DATE)"
     return "DEFAULT $(db_expr)"
   end
@@ -4751,6 +4752,12 @@ function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::P
   generated_sql(field) === nothing ||
     throw(_capability_error(conn, :generated_columns, "The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)
+  # A MODIFY that changes no type restates the column's own when it spells the same values another way
+  # (`live.column_type`, which `alter_field` clears on a retype): `DATETIME(3)` over a `datetime(6)` would
+  # round every stored value to milliseconds, and a `TIMESTAMP` would become a `DATETIME`.
+  live_type = live === nothing ? nothing : live.column_type
+  live_type !== nothing && replace(uppercase(live_type), " " => "") != replace(base_type, " " => "") &&
+    (base_type = uppercase(live_type))
   parts = String[_ddl_ident(conn, col_name), base_type]
   # A generation expression made by hand is restated where MySQL takes it, after the type; such a column
   # holds no default.
@@ -4765,14 +4772,14 @@ function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::P
     default === nothing && keep_default && live.default_expression !== nothing &&
       push!(parts, _mysql_restated_default(live.default_expression))
     # The precision must be the column's (`DATETIME(3)` takes `CURRENT_TIMESTAMP(3)` only, error 1294).
-    on_update = live.on_update ? match(r"^DATETIME(\(\d\))?$"i, base_type) : nothing
+    on_update = live.on_update ? match(r"^(?:DATETIME|TIMESTAMP)(\(\d\))?$"i, base_type) : nothing
     on_update === nothing || push!(parts, "ON UPDATE CURRENT_TIMESTAMP" * something(on_update[1], ""))
     live.invisible && push!(parts, "INVISIBLE")
   end
   _mysql_auto_increments(field) && push!(parts, "AUTO_INCREMENT")
   if live !== nothing
     isempty(live.comment) || push!(parts, "COMMENT " * _format_default_sql_value(live.comment, conn))
-    live.collation !== nothing && occursin(r"^(VARCHAR|CHAR|LONGTEXT)\b"i, base_type) &&
+    live.collation !== nothing && occursin(r"^(VARCHAR|CHAR|LONGTEXT|MEDIUMTEXT|TEXT|TINYTEXT)\b"i, base_type) &&
       push!(parts, "COLLATE " * live.collation)
   end
   return join(parts, " ")
@@ -4975,13 +4982,19 @@ function alter_field(conn::PormGMySQL, model::PormGModel, field_name::Union{Symb
   adds_key && push!(clauses, "ADD PRIMARY KEY ($(ident))")
   live = nothing
   if any(s -> s in delta, (:type, :nullable, :default, :identity))
-    # An undeclared expression default is kept unless the type changes (`_retype_drops_default`).
-    keep_default = !(:type in delta) && delta.old_spec.default isa ExpressionDefault &&
-                   delta.new_spec.default isa NoDefault
     # A generated column made by hand reads as a plain one; the MODIFY restates its generation
     # (`_mysql_column_body`), which a MODIFY that left it out would end. Such a column holds no default,
     # so a declared one could never be applied, and every plan would ask for it again.
     live = _column_attributes(conn, catalog, live_column)
+    # A retype writes the declared type; only a MODIFY that keeps the type restates the column's own.
+    live !== nothing && :type in delta && (live = merge(live, (column_type = nothing,)))
+    # An undeclared expression default is kept unless the type changes (`_retype_drops_default`): one the
+    # reader reads, and one it reads as none because no declaration can hold its text, which the catalog
+    # still holds (`live.default_expression`). Not a literal the model drops: on a TEXT or JSON column MySQL
+    # holds one as an expression (`DEFAULT ('x')`), which the reader reads back as the literal.
+    keep_default = !(:type in delta) && delta.new_spec.default isa NoDefault &&
+                   (delta.old_spec.default isa ExpressionDefault ||
+                    (delta.old_spec.default isa NoDefault && live !== nothing && live.default_expression !== nothing))
     live !== nothing && live.generation !== nothing && !(delta.new_spec.default isa NoDefault) &&
       throw(InvalidMigrationError(
         "Column \"$(live_column)\" of table \"$(catalog)\" is a generated column made by hand, which holds no " *

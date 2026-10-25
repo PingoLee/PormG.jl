@@ -132,8 +132,9 @@ end
     # A plan's statements the server cannot run (#1146): one refusal listing each, with its own way out;
     # the features and versions are the table's (#1163).
     "src/migrations/introspection.jl" => 1,
-    # `import_models_from_sqlite` pointed at a backend that is not the one it reads.
-    "src/migrations/importers.jl" => 1,
+    # `import_models_from_sqlite` and `import_models_from_mysql` pointed at a backend that is not the one
+    # each reads.
+    "src/migrations/importers.jl" => 2,
   )
   found = Dict{String,Int}()
   for (dir, _, files) in walkdir(joinpath(_CT_ROOT, "src")), f in files

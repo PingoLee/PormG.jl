@@ -84,16 +84,23 @@ _drop_column_drops_its_indexes(::PormGMySQL) = false
 # that. On PostgreSQL a uuid key renders `uuid`, and a bare `text` key has no declaration.
 _text_key_is_uuid(::PormGPostgres) = false
 _text_key_is_uuid(::PormGSQLite) = true
+# MySQL (#1130 phase 4c): a uuid key renders `CHAR(36)`, which reads as a uuid key, and a `LONGTEXT` key takes
+# no index without a prefix.
+_text_key_is_uuid(::PormGMySQL) = false
 
 # `inspectdb`: a 64-bit integer column is a `BigIntegerField`. SQLite renders `BigIntegerField` and
 # `IntegerField` as the same `INTEGER`, so it emits the plainer one.
 _declares_bigint(::PormGPostgres) = true
 _declares_bigint(::PormGSQLite) = false
+# MySQL renders `BigIntegerField` as `BIGINT` and `IntegerField` as `INT`, as PostgreSQL does.
+_declares_bigint(::PormGMySQL) = true
 
 # `inspectdb`: a timestamp without a time zone is declared as one (`type = "TIMESTAMP"`). SQLite stores
 # both as text, so it emits the default `DateTimeField`.
 _declares_naive_timestamp(::PormGPostgres) = true
 _declares_naive_timestamp(::PormGSQLite) = false
+# MySQL renders every `DateTimeField` as `DATETIME(3)`, whatever its `type`, so it emits the default one.
+_declares_naive_timestamp(::PormGMySQL) = false
 
 # The lossy pre-check for a new primary key counts NULLs as well as duplicates: PostgreSQL's primary
 # key implies NOT NULL. SQLite's non-`INTEGER` primary key accepts NULL and its `INTEGER PRIMARY KEY`

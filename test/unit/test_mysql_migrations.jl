@@ -125,8 +125,10 @@ end
 # What: `parse_canonical_type` over every type the MySQL map writes, as `COLUMN_TYPE` reports it.
 # SQL: none.
 # Why: the diff compares the two sides by canonical type; a reported spelling that parsed to another
-# type than its rendering would re-plan the column forever, and a spelling PormG never writes
-# (`tinyint(4)`, `datetime(6)`, an unsigned integer) must not equal a declaration.
+# type than its rendering would re-plan the column forever. A spelling PormG never writes reads as the
+# type whose values it holds (an integer's display width, any `datetime(n)`/`time(n)`, a `timestamp`,
+# `text`; #1130 phase 4c, for `inspectdb`), and one whose values differ (`tinyint(4)`, an unsigned
+# integer, `char(10)`, `enum`) must not equal a declaration.
 @testset "#1268: a reported MySQL type parses as its rendering does" begin
   for model in (_MmCircuit, _MmDriver, _MmResult), (name, field) in model.fields
     rendered = _MD._get_column_type(field, _mm_my)
@@ -134,9 +136,17 @@ end
           (name, _MM.parse_canonical_type(rendered, _mm_my))
     @test (name, _MM.parse_canonical_type(rendered, _mm_my) isa PormG.CUnsupported) == (name, false)
   end
-  for foreign in ("tinyint(4)", "tinyint", "datetime(6)", "datetime", "time", "char(10)", "text", "mediumtext",
-                  "int unsigned", "bigint unsigned", "float", "blob", "timestamp")
+  for foreign in ("tinyint(4)", "tinyint", "mediumint", "char(10)", "int unsigned", "bigint unsigned",
+                  "int(10) unsigned", "decimal(6,2) unsigned", "float", "double(8,2)", "blob", "varbinary(16)",
+                  "enum('a','b')", "set('a')", "year", "bit(1)", "text(5)")
     @test (foreign, _MM.parse_canonical_type(foreign, _mm_my)) == (foreign, PormG.CUnsupported(foreign))
+  end
+  for (spelling, want) in ("int(11)" => PormG.CInt32(), "bigint(20)" => PormG.CInt64(), "smallint(6)" => PormG.CInt16(),
+                           "datetime" => PormG.CDateTime(false), "datetime(6)" => PormG.CDateTime(false),
+                           "timestamp" => PormG.CDateTime(false), "timestamp(3)" => PormG.CDateTime(false),
+                           "time" => PormG.CTime(), "time(0)" => PormG.CTime(), "text" => PormG.CText(),
+                           "mediumtext" => PormG.CText(), "tinytext" => PormG.CText())
+    @test (spelling, _MM.parse_canonical_type(spelling, _mm_my)) == (spelling, want)
   end
   # Each spelling the map writes, against the type it means: a deleted arm reads both sides of the law
   # above as the same `CUnsupported`, which only this table catches.
@@ -163,7 +173,9 @@ end
   # As measured on 8.4 for `DEFAULT ('it''s a \\ b')`: the value is `it's a \ b`.
   @test clean("_utf8mb4\\'it\\\\\\'s a \\\\\\\\ b\\'", true) == "it's a \\ b"
   @test clean("_utf8mb4\\'{\"k\": 1}\\'", true) == "{\"k\": 1}"
-  @test clean("lower(`x`)", true) == PormG._ExpressionDefault("lower(`x`)")
+  # Any other expression in declarable form (#1130 phase 4c); one with none as MySQL printed it.
+  @test clean("lower(`x`)", true) == PormG._ExpressionDefault("lower(x)")
+  @test clean("lower(`order`)", true) == PormG._ExpressionDefault("lower(`order`)")
   @test clean("1", false, PormG.CBool()) === true && clean("0", false, PormG.CBool()) === false
   @test clean("a\\b'c", false, PormG.CVarChar(8)) == "a\\b'c"   # a literal is reported unescaped
   @test _MM._clean_default(nothing, PormG.CText(), _mm_my) === nothing
@@ -229,7 +241,8 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
   # A CHECK that is not one of PormG's two column shapes is the table's.
   other = _MM._mysql_live_table(_mm_my, "driver", dcols, Any[], Any[],
                                 [(tbl = "driver", name = "driver_chk_1", clause = "(`dob` > _utf8mb4'1950-01-01')")])
-  @test [(c.name, c.sql) for c in other.checks] == [("driver_chk_1", "(`dob` > _utf8mb4'1950-01-01')")]
+  # Its text in declarable form: MySQL's backticks and introducer off (#1130 phase 4c).
+  @test [(c.name, c.sql) for c in other.checks] == [("driver_chk_1", "(dob > '1950-01-01')")]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -574,8 +587,8 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
                                 (tbl = "driver", name = "code_nonempty", clause = marked("(`code` <> _utf8mb4\\'\\')", "code <> ''")),
                                 (tbl = "driver", name = "driver_chk_1", clause = "(`grid` >= 0)")])
   @test sort!([(k.name, k.sql, k.marker) for k in rd.checks]) ==
-        [("code_nonempty", "(`code` <> _utf8mb4'')", PormG.check_marker("code <> ''")),
-         ("grid_nonneg", "(`grid` >= 0)", PormG.check_marker("grid >= 0"))]
+        [("code_nonempty", "(code <> '')", PormG.check_marker("code <> ''")),
+         ("grid_nonneg", "(grid >= 0)", PormG.check_marker("grid >= 0"))]
   @test rd.columns["grid"].checks == [PormG.NonNegativeCheck()]
 
   # The pre-check's condition is taken from the plan's header only when a statement of the plan carries
@@ -588,6 +601,44 @@ _MM._mysql_check_name_holders(::MmMockMySQL, name::AbstractString) =
   write(joinpath(dir, "q.jl"), replace(read(joinpath(dir, "p.jl"), String), "condition=code <> ''" => "condition=code <> '' OR true"))
   e = _mm_err(() -> _MM._plan_lossy_alters(joinpath(dir, "q.jl")))
   @test e isa PormG.InvalidMigrationError && occursin("names a condition no statement in the plan adds", sprint(showerror, e))
+end
+
+# What: MySQL's re-print of a SQL expression, as the MySQL reader hands it to the planner and `inspectdb`.
+# SQL: none.
+# Why: MySQL quotes every identifier in backticks and puts its charset introducer before every literal
+# (measured on 8.4), which a declaration cannot hold, so without this an imported CHECK, functional index or
+# default is left out and the next plan drops PormG's own (#1130 phase 4c). What cannot be written for every
+# engine — a reserved-word name, a backslash escape other than a quote's, a `_binary` literal — is no text.
+@testset "#1130: MySQL's re-printed SQL in declarable form" begin
+  for (printed, want) in ("(`grid` >= 0)" => "(grid >= 0)",
+                          "(`grid` in (1,2,3))" => "(grid in (1,2,3))",
+                          "(`name` like _utf8mb4'a%')" => "(name like 'a%')",
+                          "(`name` <> _utf8mb4'it\\'s')" => "(name <> 'it''s')",
+                          "((case when (`grid` > 0) then 1 else 0 end) = 1)" => "((case when (grid > 0) then 1 else 0 end) = 1)",
+                          "(cast(`grid` as char(3) charset utf8mb4) <> _utf8mb4'x')" => "(cast(grid as char(3) charset utf8mb4) <> 'x')",
+                          "(`Mixed` > 0)" => "(Mixed > 0)", "concat(`name`,_utf8mb4'x')" => "concat(name,'x')",
+                          "lower(_utf8mb4'O''Neil')" => "lower('O''Neil')", "uuid()" => "uuid()",
+                          "_utf8mb4'_x' = `_y`" => "'_x' = _y", "(`c` <> _utf8mb4 'x')" => "(c <> 'x')",
+                          "(`c` <> _utf8mb4 0x41)" => "(c <> _utf8mb4 0x41)")
+    @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, want)
+  end
+  # A name an engine reserves (`order` on all three; `user`, which PostgreSQL reads bare as `current_user`;
+  # `nothing` on SQLite), a name MySQL would read bare as a charset introducer (`_latin1`, the `_utf8` alias),
+  # and anything not a plain ASCII name keep their backticks: no declaration holds them.
+  for printed in ("(`order` > 0)", "(`user` <> _utf8mb4'')", "(`nothing` > 0)", "(`_latin1` > 0)", "(`_utf8` > 0)",
+                  "(`a b` > 0)", "(`x``y` > 0)", "(`pé` > 0)", "concat(_utf8mb4'a\\\\b')", "(_utf8mb4'a\\nb' <> `c`)",
+                  "(`c` = _binary'ab')", "(`c` = _binary 'ab')", "(`c` <> \"x\")", "(`c` <> _utf8mb4'open)")
+    @test (printed, _MM._mysql_declarable_sql(printed)) == (printed, nothing)
+  end
+  # From `information_schema`, escaped once more; text with no declarable form stays as MySQL printed it.
+  @test _MM._mysql_catalog_sql("(`name` <> _utf8mb4\\'it\\\\\\'s\\')") == "(name <> 'it''s')"
+  @test _MM._mysql_catalog_sql("(`order` > 0)") == "(`order` > 0)"
+  # An object PormG made was declared in this bare text, which MySQL took: only MySQL's words keep backticks.
+  my = _MM._MYSQL_RESERVED_WORDS
+  @test _MM._mysql_declarable_sql("(`user` <> _utf8mb4'')"; reserved = my) == "(user <> '')"
+  @test _MM._mysql_catalog_sql("(`nothing` > 0)"; reserved = my) == "(nothing > 0)"
+  @test _MM._mysql_declarable_sql("(`order` > 0)"; reserved = my) === nothing
+  @test _MM._mysql_declarable_sql("(`_latin1` > 0)"; reserved = my) === nothing
 end
 
 # What: a functional index and a functional UniqueConstraint on MySQL: the statement, the plan for each
@@ -623,16 +674,19 @@ end
   changed = _mm_plan(_mm_my, idx(["lower(forename)"]), idx(["upper(forename)"]))[:driver]
   @test changed["Remove composite index: drv_lower_idx"] == "DROP INDEX `drv_lower_idx` ON `driver`;" &&
         haskey(changed, "Create index: drv_lower_idx")
-  # One made by hand under the declared name, as the reader reports it (MySQL's re-print, no marker): its
-  # name is taken, so the plan is refused before it runs.
-  live = [let t = _MM.live_table(e[:model], _mm_my)
-            _MM.LiveTable(t.name, t.columns, t.indexes,
-                          [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
-                                             nothing, nothing; expressions = ["lower(`forename`)"]) for c in t.composites],
-                          t.checks)
-          end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
-  e = _mm_err(() -> _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
-                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false))
+  # One made by hand under the declared name, as the reader reports it (no marker, its text in declarable
+  # form): of the declared text, it is the declaration's, left unowned as on SQLite (MySQL cannot change an
+  # index's comment in place); of another, its name is taken, so the plan is refused before it runs.
+  hand(text) = [let t = _MM.live_table(e[:model], _mm_my)
+                  _MM.LiveTable(t.name, t.columns, t.indexes,
+                                [_MM.LiveComposite(c.name, c.columns, c.unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
+                                                   nothing, nothing; expressions = [text]) for c in t.composites],
+                                t.checks)
+                end for (_, e) in _mm_schema(idx(["lower(forename)"]))]
+  plan_over(live) = _MM.get_migration_plan(live, _mm_schema(idx(["lower(forename)"])), _mm_my,
+                                           PormG.Configuration.Settings(connections = _mm_my); interactive = false)
+  @test isempty(plan_over(hand("lower(forename)")))
+  e = _mm_err(() -> plan_over(hand("upper(forename)")))
   @test e isa PormG.InvalidMigrationError && occursin("drv_lower_idx", sprint(showerror, e))
 
   # The reader: a functional index of expressions only, with its marker and directions; a column beside an
@@ -648,7 +702,7 @@ end
   rd = _MM._mysql_live_table(_mm_my, "driver", dcols, stats, Any[], Any[])
   @test isempty(rd.indexes)
   @test sort!([(c.name, c.columns, c.expressions, c.marker) for c in rd.composites]) ==
-        [("drv_lower_idx", String[], ["lower(`forename`)", "concat(`code`,_utf8mb4'x') DESC"], mk),
+        [("drv_lower_idx", String[], ["lower(forename)", "concat(code,'x') DESC"], mk),
          ("drv_solo_idx", ["code"], String[], PormG.INDEX_MARKER)]
 end
 
@@ -736,12 +790,19 @@ end
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
   (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
-   generated = false, generation = nothing)
+   generated = false, generation = nothing, column_type = nothing)
 # A generated column made by hand, which the reader takes for a plain one.
 struct MmMockMySQLGen <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
   (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true,
-   generation = (expr = "(`a` * 2)", stored = false))
+   generation = (expr = "(`a` * 2)", stored = false), column_type = nothing)
+# A column PormG did not write, of a type that holds a field's values in another spelling: `T` is its
+# `COLUMN_TYPE`; a `datetime(6)` also updates itself (`ON UPDATE`), and a `text` has its own collation.
+struct MmMockMySQLLive{T} <: PormG.PormGMySQL end
+PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::AbstractString) where {T} =
+  (comment = "", invisible = false, on_update = T === Symbol("datetime(6)"),
+   collation = T === :text ? "utf8mb4_0900_ai_ci" : nothing, default_expression = nothing, generated = false,
+   generation = nothing, column_type = String(T))
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
 # SQL: `MODIFY COLUMN `c` VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci`;
@@ -762,11 +823,19 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
   @test _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 12), retyped) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(12) NOT NULL INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci;"
   @test any(f -> f.kind === :drop_default, _MM._lossy_alters(retyped, at; table = "driver", column = "c"))
+  # A default the reader reads as none (no declaration holds its text) is still the catalog's, and kept.
+  unread = delta(Models.CharField(max_length = 8, null = true), _MM.column_spec(Models.CharField(max_length = 8), at; name = "c"))
+  @test occursin("VARCHAR(8) NULL DEFAULT (uuid()) INVISIBLE",
+                 _MD.alter_field(at, _MmDriver, "c", Models.CharField(max_length = 8, null = true), unread))
+  # A literal the model drops is dropped, though MySQL holds one on a TEXT column as an expression.
+  dropped = delta(Models.TextField(), _MM.column_spec(Models.TextField(default = "x"), at; name = "c"))
+  @test _MD.alter_field(at, _MmDriver, "c", Models.TextField(), dropped) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` LONGTEXT NOT NULL INVISIBLE COMMENT 'it''s' COLLATE utf8mb4_0900_ai_ci;"
   # ON UPDATE at the column's own precision on a timestamp, and no collation on a column that is not text;
-  # the catalog's expression default is not restated over a column the delta says has none.
+  # the catalog's expression default is restated, as by any MODIFY that changes no type.
   stamp = _mm_delta(Models.DateTimeField(null = true), Models.DateTimeField())
   @test _MD.alter_field(at, _MmDriver, "c", Models.DateTimeField(null = true), stamp) ==
-        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NULL DEFAULT (uuid()) ON UPDATE CURRENT_TIMESTAMP(3) INVISIBLE COMMENT 'it''s';"
   @test _MD._mysql_restated_default("CURRENT_TIMESTAMP(3)") == "DEFAULT CURRENT_TIMESTAMP(3)"
   # A MODIFY that left a generation out would end it (STORED) or fail (VIRTUAL, 3106), so a generated column
   # made by hand is restated with it, and with no default.
@@ -784,6 +853,26 @@ PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::Abstra
   @test _MD.alter_field(_mm_my, _MmDriver, "c", Models.CharField(max_length = 8, null = true),
                         _mm_delta(Models.CharField(max_length = 8, null = true), Models.CharField(max_length = 8))) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(8) NULL;"
+  # A type the planner calls equal to the field's, in another spelling, is restated as the column holds it:
+  # `DATETIME(3)` over a `datetime(6)` would round every stored value to milliseconds. Its ON UPDATE and its
+  # `CURRENT_TIMESTAMP` default take its precision, and a `text` keeps its collation and takes a literal
+  # default only as an expression. A retype writes the declared type, as before.
+  live(t, new, old) = (conn = MmMockMySQLLive{t}(); _MD.alter_field(conn, _MmDriver, "c", new,
+                       _MM.column_delta(new, _MM.column_spec(old, conn; name = "c"), conn; name = "c")))
+  dt6 = Symbol("datetime(6)")
+  @test live(dt6, Models.DateTimeField(), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(6) NOT NULL ON UPDATE CURRENT_TIMESTAMP(6);"
+  @test occursin("MODIFY COLUMN `c` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);",
+                 live(dt6, Models.DateTimeField(db_default = "CURRENT_TIMESTAMP"), Models.DateTimeField()))
+  @test live(:timestamp, Models.DateTimeField(null = true), Models.DateTimeField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` TIMESTAMP NULL;"
+  @test live(:text, Models.TextField(default = "x"), Models.TextField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` TEXT NOT NULL DEFAULT ('x') COLLATE utf8mb4_0900_ai_ci;"
+  @test live(dt6, Models.DateField(null = true), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATE NULL;"
+  # PormG's own spelling is restated as PormG writes it.
+  @test live(Symbol("datetime(3)"), Models.DateTimeField(), Models.DateTimeField(null = true)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NOT NULL;"
 end
 
 # What: a CHECK dropped in the plan that also renames the table.
@@ -933,10 +1022,89 @@ end
   pk = _mm_col("driver", "driverid", "bigint", "NO", missing, "auto_increment", "PRI")
   owned = _MM._mysql_live_table(_mm_my, "driver", [pk, _mm_col("driver", "tag", "varchar(20)", "NO", raw, "DEFAULT_GENERATED", "";
                                                                   comment = "kept $(marker)")], Any[], Any[], Any[])
-  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower(_utf8mb4'X')", h1)
+  @test owned.columns["tag"].default == PormG.ExpressionDefault("lower('X')", h1)
   @test owned.columns["tag"] == _MM.column_spec(f, _mm_my; name = "tag")
   hand = "upper(_utf8mb4\\'X\\')"
-  changed = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+  changed = _MM._mysql_live_table(_mm_my, "driver",
     [pk, _mm_col("driver", "tag", "varchar(20)", "NO", hand, "DEFAULT_GENERATED", ""; comment = marker)], Any[], Any[], Any[])
-  @test changed.columns["tag"].default isa PormG.NoDefault && changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
+  @test changed.columns["tag"].default == PormG.ExpressionDefault("upper('X')") &&
+        changed.columns["tag"] != _MM.column_spec(f, _mm_my; name = "tag")
+  # A default whose text has no declarable form (a backslash in a literal reads per engine) keeps MySQL's,
+  # which the declaration validator refuses: the column reads with no default, and a warning.
+  odd = "concat(_utf8mb4\\'a\\\\\\\\b\\')"
+  dropped = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM._mysql_live_table(_mm_my, "driver",
+    [pk, _mm_col("driver", "tag", "varchar(20)", "NO", odd, "DEFAULT_GENERATED", "")], Any[], Any[], Any[])
+  @test dropped.columns["tag"].default isa PormG.NoDefault
+end
+
+# What: `inspectdb` on MySQL (#1130 phase 4c) over the catalog rows MySQL reports for tables PormG created:
+# each column it reads compiles to a field whose column is that column again, the field each type means, a
+# declared CHECK and a functional index in declarable text, and the importer refusing another engine.
+# SQL: none.
+# Why: this is the `inspectdb` law the PostgreSQL and SQLite readers keep (`test_live_schema_reader.jl`): a
+# models file written from a database must converge with it, or the first `makemigrations` after an import
+# plans changes nobody asked for. On MySQL the choices are its own: `BIGINT` is a `BigIntegerField` (a
+# `DurationField` cannot be told from one), `CHAR(36)` a `UUIDField`, `DATETIME(3)` the default `DateTimeField`.
+@testset "#1130: inspectdb on MySQL compiles each column back to itself" begin
+  cols = [_mm_col("result", "resultid", "bigint", "NO", missing, "auto_increment", "PRI"),
+          _mm_col("result", "driverid", "bigint", "NO", missing, "", "MUL"),
+          _mm_col("result", "laptime", "time(6)", "YES", missing, "", ""),
+          _mm_col("result", "fastest", "bigint", "YES", missing, "", ""),
+          _mm_col("result", "uid", "char(36)", "YES", missing, "", ""),
+          _mm_col("result", "meta", "json", "YES", missing, "", ""),
+          _mm_col("result", "notes", "longtext", "NO", "_utf8mb4\\'it\\\\\\'s\\'", "DEFAULT_GENERATED", ""),
+          _mm_col("result", "points", "double", "NO", "0", "", ""),
+          _mm_col("result", "laps", "int", "NO", "0", "", ""),
+          _mm_col("result", "grid", "int", "NO", "0", "", ""),
+          _mm_col("result", "at", "datetime(3)", "YES", missing, "", ""),
+          _mm_col("result", "code", "varchar(8)", "NO", "lower(_utf8mb4\\'X\\')", "DEFAULT_GENERATED", "")]
+  fks = [(tbl = "result", name = "result_driverid_ab_fk", col = "driverid", parent = "driver", parent_col = "driverid", on_delete = "CASCADE")]
+  mk = PormG.index_text_marker(["lower(code)"], nothing)
+  stats = [_mm_stat("result", "PRIMARY", 0, "resultid"), _mm_stat("result", "result_driverid_ab_fk", 1, "driverid"),
+           _mm_stat("result", "result_code_idx", 1, missing; expr = "lower(`code`)", comment = mk)]
+  marked = "((`laps` <= 100) and (_utf8mb4\\'$(PormG.check_marker("laps <= 100"))\\' is not null))"
+  checks = [(tbl = "result", name = "result_chk_1", clause = "(`grid` >= 0)"), (tbl = "result", name = "laps_cap", clause = marked)]
+  live = _MM._mysql_live_table(_mm_my, "result", cols, stats, fks, checks)
+  for (col, spec) in live.columns
+    field = _MM.field_from_spec(spec, live, _mm_my)
+    @test (col, _MM.column_spec(field, _mm_my; name = col) == spec) == (col, true)
+  end
+  m = _MM.model_from_live(live, _mm_my)
+  kinds = Dict(String(k) => typeof(f) for (k, f) in m.fields)
+  @test (kinds["resultid"], kinds["driverid"], kinds["fastest"], kinds["laps"], kinds["grid"]) ==
+        (Models.sIDField, Models.sForeignKey, Models.sBigIntegerField, Models.sIntegerField, Models.sPositiveIntegerField)
+  @test (kinds["uid"], kinds["at"], kinds["laptime"], kinds["notes"]) ==
+        (Models.sUUIDField, Models.sDateTimeField, Models.sTimeField, Models.sTextField)
+  # The default DateTimeField (MySQL writes `DATETIME(3)` whatever its `type`), not `type = "TIMESTAMP"`.
+  @test m.fields["at"].type == Models.DateTimeField().type
+  # A text key takes no `db_default` on MySQL: a uuid key is `CHAR(36)` (its own arm), and a `LONGTEXT` key
+  # takes no index without a prefix, so no declaration renders one.
+  @test !_MM._arm_carries_db_default(:id_pk, PormG.CText(), _mm_my) && _MM._arm_carries_db_default(:id_pk, PormG.CText(), _MM._SQLiteEngine())
+  @test m.fields["code"].db_default == (mysql = "lower('X')",)
+  @test [(c.name, c.condition) for c in Models.declared_check_constraints(m)] == [("laps_cap", "(laps <= 100)")]
+  @test [(d.name, d.expressions) for d in _MM.declared_composites(m)] == [("result_code_idx", ["lower(code)"])]
+
+  # A key PormG would not write (an `INT`, no `AUTO_INCREMENT`) is an IDField, said out loud.
+  key = _MM._mysql_live_table(_mm_my, "lap", [_mm_col("lap", "lapid", "int", "NO", missing, "", "PRI")], Any[], Any[], Any[])
+  @test (@test_logs (:warn, r"IDField is BIGINT AUTO_INCREMENT") _MM.field_from_spec(key.columns["lapid"], key, _mm_my)) isa Models.sIDField
+
+  # A stamped default whose re-print has no declarable form is left out, said out loud, not raised.
+  raw = "lower(`order`)"
+  odd = _MM._mysql_live_table(_mm_my, "lap", [_mm_col("lap", "lapid", "bigint", "NO", missing, "auto_increment", "PRI"),
+                                              _mm_col("lap", "tag", "varchar(9)", "NO", raw, "DEFAULT_GENERATED", "";
+                                                      comment = "pormg:default:$(PormG.db_default_hash("lower(x)")):$(PormG.live_default_hash(raw))")],
+                              Any[], Any[], Any[])
+  @test odd.columns["tag"].default isa PormG.ExpressionDefault
+  tag = @test_logs (:warn, _MM._DEFAULT_DROPPED_MESSAGE) match_mode = :any _MM.field_from_spec(odd.columns["tag"], odd, _mm_my)
+  @test tag isa Models.sCharField && tag.db_default === nothing
+
+  # The importer reads a MySQL connection only.
+  key = "importer_wrong_dialect_mysql"
+  PormG.config[key] = PormG.Configuration.Settings(connections = MmMockPostgres(), db_def_folder = mktempdir())
+  try
+    e = _mm_err(() -> _MM.import_models_from_mysql(key))
+    @test e isa PormG.BackendCapabilityError && occursin("is not a MySQL connection", sprint(showerror, e))
+  finally
+    delete!(PormG.config, key)
+  end
 end

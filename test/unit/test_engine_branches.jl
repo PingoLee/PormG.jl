@@ -43,10 +43,11 @@ const _EB_REVIEWED = Dict(
   #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
   #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
   #     other arm is the plain `ADD COLUMN` every engine has;
-  #   - importers: the SQLite-only importer's capability refusal; tools: the setup wizard's choice.
+  #   - importers: the SQLite-only and MySQL-only importers' capability refusals (each reads its own
+  #     catalog, so the other arm is a refusal, not another engine's path); tools: the setup wizard's choice.
   "src/Configuration.jl" => 11,
   "src/ConnectionPool.jl" => 2,
-  "src/migrations/importers.jl" => 1,
+  "src/migrations/importers.jl" => 2,
   "src/migrations/planner.jl" => 4,
   # #1129 item 2 (PR A): every silent branch in `Dialect.jl` and `src/querybuilder/` now asks an engine
   # fact (`querybuilder/engine_facts.jl`). What remains here is compliant or a recorded quirk:

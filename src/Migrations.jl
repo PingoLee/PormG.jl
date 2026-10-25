@@ -119,7 +119,7 @@ include("migrations/runner.jl")
 
 # Exports — existing
 export makemigrations, migrate
-export import_models_from_postgres, import_models_from_sqlite, import_models_from_django
+export import_models_from_postgres, import_models_from_sqlite, import_models_from_mysql, import_models_from_django
 export django_to_string
 export convertSQLToModel, convert_schema_to_models
 export get_migration_plan

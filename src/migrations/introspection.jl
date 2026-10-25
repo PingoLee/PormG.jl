@@ -329,10 +329,6 @@ _inspectdb_field_name(probe::ColumnSpec, table_name, conn)::String =
   Logging.with_logger(Logging.NullLogger()) do
     string(nameof(typeof(_inspectdb_field(probe, table_name, conn, false, nothing))))[2:end]
   end
-# MySQL has no `inspectdb` compiler yet (#1130 phase 4c-2), so the warning names the column's type as the
-# catalog reports it.
-_inspectdb_field_name(probe::ColumnSpec, table_name, ::PormGMySQL)::String = something(probe.raw, string(probe.type))
-
 """
     _default_or_drop(table_name, probe::ColumnSpec, raw, conn) -> ColumnDefault
 
@@ -2167,7 +2163,8 @@ end
 function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
   rows = fetch(conn, """
     SELECT c.COLUMN_COMMENT AS comment, c.EXTRA AS extra, c.COLLATION_NAME AS coll,
-           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt, c.GENERATION_EXPRESSION AS gen
+           t.TABLE_COLLATION AS table_coll, c.COLUMN_DEFAULT AS dflt, c.GENERATION_EXPRESSION AS gen,
+           c.COLUMN_TYPE AS ctype
       FROM information_schema.COLUMNS c
       JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
      WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = ? AND c.COLUMN_NAME = ?""",
@@ -2175,7 +2172,7 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
   nrow(rows) == 0 && return nothing
   r = rows[1, :]
   extra = lowercase(something(_mysql_str(r.extra), ""))
-  coll, dflt = _mysql_str(r.coll), _mysql_str(r.dflt)
+  coll, dflt, ctype = _mysql_str(r.coll), _mysql_str(r.dflt), _mysql_str(r.ctype)
   # A collation name is an identifier the server printed; anything else is not restated.
   keep_coll = coll !== nothing && coll != _mysql_str(r.table_coll) && occursin(r"^[A-Za-z0-9_]+$", coll)
   generated = occursin(r"(stored|virtual) generated", extra)
@@ -2190,7 +2187,10 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
           # one (3106, measured).
           generation = (generated && gen !== nothing && !isempty(gen)) ?
                        (expr = _mysql_unescape(gen), stored = occursin("stored generated", extra)) : nothing,
-          default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing)
+          default_expression = (dflt !== nothing && occursin("default_generated", extra)) ? _mysql_unescape(dflt) : nothing,
+          # The type as the column holds it, which a MODIFY that changes no type restates when it spells the
+          # same values otherwise (`datetime(6)` under a `DateTimeField`): a type and its size, nothing else.
+          column_type = (ctype !== nothing && occursin(r"^[a-z]+(\([0-9]+(,[0-9]+)?\))?$", ctype)) ? ctype : nothing)
 end
 
 """
@@ -4939,7 +4939,11 @@ function _clean_default(raw::_MySQLColumnDefault, ctype::CanonicalType, ::PormGM
     # Two levels of escaping: `information_schema` backslash-escapes the printed expression's quotes and
     # backslashes, and the expression is itself a backslash-escaped literal (`_utf8mb4'it\'s'`).
     m = match(r"^_utf8mb4'(.*)'$"s, _mysql_unescape(s))
-    m === nothing && return _ExpressionDefault(s)
+    # In declarable form (`_mysql_declarable_sql`), or as MySQL printed it, which the declaration validator
+    # then refuses, so the column reads with no default and a warning, as before. MySQL's reserved words
+    # alone: an expression outside the portable vocabulary imports as the `mysql` entry of a per-engine
+    # `db_default`, which only MySQL reads.
+    m === nothing && return _ExpressionDefault(something(_mysql_declarable_sql(_mysql_unescape(s); reserved = _MYSQL_RESERVED_WORDS), s))
     return _mysql_unescape(m[1])
   end
   ctype isa CBool && s in ("0", "1") && return s == "1"
@@ -4954,6 +4958,153 @@ _mysql_unescape(s::AbstractString)::String =
     c = last(escape)   # the matched text is the backslash and the character it escapes
     c == 'n' ? "\n" : c == 't' ? "\t" : c == 'r' ? "\r" : c == '0' ? "\0" : c == 'Z' ? "\x1a" : string(c)
   end)
+
+# MySQL 8.4's reserved words (`information_schema.KEYWORDS WHERE RESERVED = 1`, measured). An identifier
+# that is one stays quoted in declarable text, so text naming one is not declarable (`_mysql_declarable_sql`).
+const _MYSQL_RESERVED_WORDS = Set{String}(split("""
+  ACCESSIBLE ADD ALL ALTER ANALYZE AND AS ASC ASENSITIVE BEFORE BETWEEN BIGINT BINARY BLOB BOTH BY CALL CASCADE
+  CASE CHANGE CHAR CHARACTER CHECK COLLATE COLUMN CONDITION CONSTRAINT CONTINUE CONVERT CREATE CROSS CUBE
+  CUME_DIST CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DATABASES DAY_HOUR
+  DAY_MICROSECOND DAY_MINUTE DAY_SECOND DEC DECIMAL DECLARE DEFAULT DELAYED DELETE DENSE_RANK DESC DESCRIBE
+  DETERMINISTIC DISTINCT DISTINCTROW DIV DOUBLE DROP DUAL EACH ELSE ELSEIF EMPTY ENCLOSED ESCAPED EXCEPT EXISTS
+  EXIT EXPLAIN FALSE FETCH FIRST_VALUE FLOAT FLOAT4 FLOAT8 FOR FORCE FOREIGN FROM FULLTEXT FUNCTION GENERATED
+  GET GRANT GROUP GROUPING GROUPS HAVING HIGH_PRIORITY HOUR_MICROSECOND HOUR_MINUTE HOUR_SECOND IF IGNORE IN
+  INDEX INFILE INNER INOUT INSENSITIVE INSERT INT INT1 INT2 INT3 INT4 INT8 INTEGER INTERSECT INTERVAL INTO
+  IO_AFTER_GTIDS IO_BEFORE_GTIDS IS ITERATE JOIN JSON_TABLE KEY KEYS KILL LAG LAST_VALUE LATERAL LEAD LEADING
+  LEAVE LEFT LIKE LIMIT LINEAR LINES LOAD LOCALTIME LOCALTIMESTAMP LOCK LONG LONGBLOB LONGTEXT LOOP
+  LOW_PRIORITY MATCH MAXVALUE MEDIUMBLOB MEDIUMINT MEDIUMTEXT MIDDLEINT MINUTE_MICROSECOND MINUTE_SECOND MOD
+  MODIFIES NATURAL NO_WRITE_TO_BINLOG NOT NTH_VALUE NTILE NULL NUMERIC OF ON OPTIMIZE OPTIMIZER_COSTS OPTION
+  OPTIONALLY OR ORDER OUT OUTER OUTFILE OVER PARTITION PERCENT_RANK PRECISION PRIMARY PROCEDURE PURGE QUALIFY
+  RANGE RANK READ READ_WRITE READS REAL RECURSIVE REFERENCES REGEXP RELEASE RENAME REPEAT REPLACE REQUIRE
+  RESIGNAL RESTRICT RETURN REVOKE RIGHT RLIKE ROW ROW_NUMBER ROWS SCHEMA SCHEMAS SECOND_MICROSECOND SELECT
+  SENSITIVE SEPARATOR SET SHOW SIGNAL SMALLINT SPATIAL SPECIFIC SQL SQL_BIG_RESULT SQL_CALC_FOUND_ROWS
+  SQL_SMALL_RESULT SQLEXCEPTION SQLSTATE SQLWARNING SSL STARTING STORED STRAIGHT_JOIN SYSTEM TABLE TABLESAMPLE
+  TERMINATED THEN TINYBLOB TINYINT TINYTEXT TO TRAILING TRIGGER TRUE UNDO UNION UNIQUE UNLOCK UNSIGNED UPDATE
+  USAGE USE USING UTC_DATE UTC_TIME UTC_TIMESTAMP VALUES VARBINARY VARCHAR VARCHARACTER VARYING VIRTUAL WHEN
+  WHERE WHILE WINDOW WITH WRITE XOR YEAR_MONTH ZEROFILL"""))
+
+# PostgreSQL's reserved key words, both kinds (PostgreSQL 16's `pg_get_keywords()`, `catcode` `R` and `T`;
+# the documentation's appendix C). A column so named, written bare, is either syntax or something else:
+# `user` is `current_user`, which a CHECK would compare instead of the column.
+const _POSTGRES_RESERVED_WORDS = Set{String}(split("""
+  ALL ANALYSE ANALYZE AND ANY ARRAY AS ASC ASYMMETRIC AUTHORIZATION BINARY BOTH CASE CAST CHECK COLLATE
+  COLLATION COLUMN CONCURRENTLY CONSTRAINT CREATE CROSS CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE
+  CURRENT_SCHEMA CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER DEFAULT DEFERRABLE DESC DISTINCT DO ELSE END
+  EXCEPT FALSE FETCH FOR FOREIGN FREEZE FROM FULL GRANT GROUP HAVING ILIKE IN INITIALLY INNER INTERSECT INTO
+  IS ISNULL JOIN LATERAL LEADING LEFT LIKE LIMIT LOCALTIME LOCALTIMESTAMP NATURAL NOT NOTNULL NULL OFFSET ON
+  ONLY OR ORDER OUTER OVERLAPS PLACING PRIMARY REFERENCES RETURNING RIGHT SELECT SESSION_USER SIMILAR SOME
+  SYMMETRIC SYSTEM_USER TABLE TABLESAMPLE THEN TO TRAILING TRUE UNION UNIQUE USER USING VARIADIC VERBOSE
+  WHEN WHERE WINDOW WITH"""))
+
+# The names a declaration cannot hold bare: a word any engine reserves. A declaration is every engine's.
+const _UNDECLARABLE_WORDS = union(_MYSQL_RESERVED_WORDS, _POSTGRES_RESERVED_WORDS, _SQLITE_RESERVED_WORDS)
+
+# MySQL 8.4's character sets (`information_schema.CHARACTER_SETS`) and the `utf8` alias: `_` and one of
+# them, bare, is an introducer, so a column so named is syntax (1064, measured) where `_rank` is a name.
+const _MYSQL_CHARSETS = Set{String}(split("""
+  armscii8 ascii big5 binary cp1250 cp1251 cp1256 cp1257 cp850 cp852 cp866 cp932 dec8 eucjpms euckr gb18030
+  gb2312 gbk geostd8 greek hebrew hp8 keybcs2 koi8r koi8u latin1 latin2 latin5 latin7 macce macroman sjis swe7
+  tis620 ucs2 ujis utf16 utf16le utf32 utf8 utf8mb3 utf8mb4"""))
+
+"""
+    _mysql_declarable_sql(sql; reserved = _UNDECLARABLE_WORDS) -> Union{String, Nothing}
+
+MySQL's re-print of a SQL expression (a CHECK's condition, a functional index member, a column default,
+unescaped once from `information_schema`) as text a declaration can hold, or `nothing` when it has none
+(#1130 phase 4c). MySQL quotes every identifier in backticks, which a declaration cannot hold (on the other
+engines a backtick means nothing), and puts its charset introducer before every string literal
+(`_utf8mb4'x'`). So:
+
+- a backtick-quoted identifier loses its backticks when it is a plain name (`[A-Za-z_][A-Za-z0-9_]*`) that
+  is not in `reserved` and is not `_` and a charset's name, which MySQL reads bare as an introducer
+  (`_latin1`); any other keeps them, and the text is not declarable. `reserved` is every engine's reserved
+  words (`_UNDECLARABLE_WORDS`: a CHECK on PostgreSQL would read a bare `user` as `current_user`), since a
+  declaration made from the text is every engine's; for an object PormG made (it carries the marker), it
+  is MySQL's alone, since the declaration it came from was already this bare text, which MySQL took;
+- an introducer before a literal is dropped (the literal keeps the connection's charset, PormG's `utf8mb4`),
+  except `_binary`, which makes the literal a byte string: that text is not declarable;
+- inside a literal, MySQL's escaped quote `\\'` becomes the standard `''`. Any other backslash escape is
+  read per engine (MySQL takes `\\n` as a newline, PostgreSQL as two characters), so the text is not
+  declarable;
+- a double-quoted string (never in a re-print) is not declarable either.
+
+Everything else is kept as MySQL printed it. The planner compares the two sides by this text (and by the
+marker first), and `inspectdb` writes it, which is what makes an imported model converge, as on PostgreSQL
+where `inspectdb` writes the catalog's own spelling.
+"""
+function _mysql_declarable_sql(sql::AbstractString; reserved::Set{String} = _UNDECLARABLE_WORDS)::Union{String, Nothing}
+  chars = collect(String(sql))
+  n = length(chars)
+  out = IOBuffer()
+  ident(c) = isletter(c) || isdigit(c) || c == '_' || c == '$'
+  i = 1
+  while i <= n
+    c = chars[i]
+    if c == '`'
+      j = findnext(==('`'), chars, i + 1)
+      j === nothing && return nothing
+      j < n && chars[j+1] == '`' && return nothing            # an escaped backtick: not a plain name
+      name = String(chars[i+1:j-1])
+      (occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", name) && !(uppercase(name) in reserved) &&
+       !(Base.startswith(name, "_") && lowercase(name[2:end]) in _MYSQL_CHARSETS)) || return nothing
+      print(out, name)
+      i = j + 1
+    elseif c == '_' && (i == 1 || !ident(chars[i-1]))
+      # An introducer: `_` and a charset name right before a literal.
+      j = i + 1
+      while j <= n && (isletter(chars[j]) || isdigit(chars[j]))
+        j += 1
+      end
+      k = j                                                    # MySQL takes a space before the literal too
+      while k <= n && isspace(chars[k])
+        k += 1
+      end
+      if j > i + 1 && k <= n && chars[k] == '\''
+        # `_binary` makes the literal a byte string: without it, it is text.
+        lowercase(String(chars[i+1:j-1])) == "binary" && return nothing
+        i = k                                                  # the literal itself is read next
+      else
+        print(out, c)
+        i += 1
+      end
+    elseif c == '\''
+      print(out, c)
+      i += 1
+      closed = false
+      while i <= n
+        d = chars[i]
+        if d == '\\'
+          (i < n && chars[i+1] == '\'') || return nothing
+          print(out, "''")
+          i += 2
+        elseif d == '\'' && i < n && chars[i+1] == '\''
+          print(out, "''")
+          i += 2
+        elseif d == '\''
+          print(out, d)
+          i += 1
+          closed = true
+          break
+        else
+          print(out, d)
+          i += 1
+        end
+      end
+      closed || return nothing
+    elseif c == '"'
+      return nothing
+    else
+      print(out, c)
+      i += 1
+    end
+  end
+  return String(take!(out))
+end
+
+# Catalog text in declarable form, or as MySQL printed it (unescaped) when it has none: the planner still
+# compares that, and `inspectdb` leaves out, with a warning, what holds it. `reserved` as above.
+_mysql_catalog_sql(raw::AbstractString; reserved::Set{String} = _UNDECLARABLE_WORDS)::String =
+  something(_mysql_declarable_sql(_mysql_unescape(raw); reserved = reserved), _mysql_unescape(raw))
 
 # A declared CHECK as MySQL re-prints the clause `Dialect.add_check_constraint` writes: the condition,
 # then the marker's always-true term, both escaped as `information_schema` escapes a quote (`\'`). The
@@ -4996,7 +5147,74 @@ function read_live_schema(db::PormGMySQL; ignore_table::Vector{String} = mysql_i
   return out
 end
 
+# `inspectdb` on MySQL (#1130 phase 4c). Before the models are compiled, what a model cannot say about
+# this schema is said once, by name: a generated column made by hand is declared as a plain field (PormG
+# declares no generated column MySQL renders, and a plain declaration leaves it alone), and a CHECK or a
+# functional index whose text MySQL prints in no declarable form (`_mysql_declarable_sql`) is left out of
+# the model — the next `makemigrations` drops it when it is PormG's own (marked), so it must be declared by
+# hand. A default left out says so where it is compiled (`field_from_spec`).
+function convert_schema_to_models(db::PormGMySQL; kwargs...)::Vector{PormGModel}
+  tables = read_live_schema(db; kwargs...)
+  _warn_mysql_undeclarable(db, tables)
+  return PormGModel[model_from_live(table, db) for table in tables]
+end
+
+function _warn_mysql_undeclarable(db::PormGMySQL, tables::Vector{LiveTable})::Nothing
+  names = Set{String}(t.name for t in tables)
+  for r in eachrow(fetch(db, _MYSQL_GENERATED_SQL) |> DataFrame)
+    _mysql_str(r.tbl) in names || continue
+    @warn "inspectdb: a generated column made by hand is declared as a plain field; PormG declares no " *
+          "generated column on MySQL, and leaves this one's expression as it is." table = _mysql_str(r.tbl) column = _mysql_str(r.col) expression = _mysql_catalog_sql(something(_mysql_str(r.gen), ""))
+  end
+  owned(marker) = marker === nothing ? "" : " It is PormG's (it carries the marker), so the next makemigrations drops it unless it is declared by hand."
+  for t in tables
+    for c in t.checks
+      is_valid_db_default_sql(c.sql) && continue
+      @warn "inspectdb: a CHECK whose condition MySQL prints in no form a declaration can hold (a reserved-word " *
+            "column, a backslash in a literal) is left out of the model." * owned(c.marker) table = t.name check = c.name condition = c.sql
+    end
+    for c in t.composites
+      all(is_valid_db_default_sql, c.expressions) && continue
+      @warn "inspectdb: an index whose expressions MySQL prints in no form a declaration can hold (a reserved-word " *
+            "column, a backslash in a literal) is left out of the model." * owned(c.marker) table = t.name index = c.name expressions = join(c.expressions, ", ")
+    end
+  end
+  return nothing
+end
+
+# #767: the MySQL arm of `include_views`. A view is read as a table with no keys, through the reader's own
+# column rows. A view over a table or column dropped since reports no columns (MySQL records warning 1356,
+# measured on 8.4), so it is skipped with a warning and pushed onto `unreadable`, as SQLite's is.
+function read_live_views(db::PormGMySQL; ignore_table::Vector{String} = mysql_ignore_table,
+                         include_table::Union{Vector{String}, Nothing} = nothing,
+                         unreadable::Vector{String} = String[])::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  views = String[_mysql_str(r.tbl) for r in eachrow(fetch(db, _MYSQL_VIEWS_SQL) |> DataFrame)]
+  columns = _mysql_rows_by_table(db, _MYSQL_COLUMNS_SQL)
+  out = LiveTable[]
+  for view_name in views
+    include_table !== nothing && !any(included -> view_name == included, include_table) && continue
+    _is_ignored_table(view_name, ignore_table) && continue
+    rows = get(columns, view_name, Any[])
+    if isempty(rows)
+      @warn "inspectdb: the view could not be read (MySQL reports no columns: it reads a table or column that no longer exists); it is not imported" view = view_name
+      push!(unreadable, "$(view_name): MySQL reports no columns for the view")
+      continue
+    end
+    push!(out, _mysql_live_table(db, view_name, rows, Any[], Any[], Any[]))
+  end
+  return out
+end
+
 # Constants, so a mock connection keys on each statement exactly.
+const _MYSQL_VIEWS_SQL = """
+  SELECT TABLE_NAME AS tbl FROM information_schema.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'VIEW' ORDER BY TABLE_NAME"""
+const _MYSQL_GENERATED_SQL = """
+  SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col, GENERATION_EXPRESSION AS gen
+    FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND (EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%')
+   ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_TABLES_SQL = """
   SELECT TABLE_NAME AS tbl FROM information_schema.TABLES
    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"""
@@ -5079,7 +5297,7 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     clause = String(strip(_mysql_str(r.clause)))
     m = match(_MYSQL_MARKED_CHECK_RE, clause)
     if m !== nothing
-      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_unescape(m[1]), m[2]))
+      push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_catalog_sql(m[1]; reserved = _MYSQL_RESERVED_WORDS), m[2]))
       continue
     end
     m = match(_MYSQL_NON_NEGATIVE_CHECK_RE, clause)
@@ -5092,7 +5310,7 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
       push!(get!(col_checks, lowercase(replace(m[1], "``" => "`")), CheckKind[]), ByteLengthCheck(parse(Int, m[2])))
       continue
     end
-    push!(table_checks, LiveCheck(_mysql_str(r.name), clause, nothing))
+    push!(table_checks, LiveCheck(_mysql_str(r.name), _mysql_catalog_sql(clause), nothing))
   end
 
   # Indexes grouped by name, in member order.
@@ -5119,9 +5337,11 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     comment = hasproperty(members[1], :comment) ? _mysql_str(members[1].comment) : nothing
     marker = comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment)
     if functional
-      # MySQL's re-print (`lower(`a`)`), escaped as `information_schema` escapes a quote; the marker, not
-      # this text, is what a declaration matches. A descending member keeps its direction in `COLLATION`.
-      exprs = String[_mysql_unescape(something(_mysql_str(r.expr), "")) * (d ? " DESC" : "")
+      # MySQL's re-print (``lower(`a`)``), escaped as `information_schema` escapes a quote, in declarable
+      # form (`_mysql_catalog_sql`); a declaration matches it by the marker or by this text. A descending
+      # member keeps its direction in `COLLATION`.
+      reserved = marker === nothing ? _UNDECLARABLE_WORDS : _MYSQL_RESERVED_WORDS
+      exprs = String[_mysql_catalog_sql(something(_mysql_str(r.expr), ""); reserved = reserved) * (d ? " DESC" : "")
                      for (r, d) in zip(members, desc)]
       push!(composites, LiveComposite(idx, String[], unique, false, "btree", Bool[], Union{String, Nothing}[], Bool[],
                                       marker, (comment === nothing || isempty(comment)) ? nothing : comment;
@@ -5172,12 +5392,12 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     raw_default = dflt === nothing ? nothing : _MySQLColumnDefault(dflt, occursin("default_generated", extra))
     # An expression default PormG stamped (`Dialect.stamp_db_default(::PormGMySQL)`) carries the declared
     # hash its marker vouches for, checked against the RAW `COLUMN_DEFAULT`, the text the server hashed.
-    # Its text is MySQL's re-print, unescaped: catalog text, not a declaration, so it is not put through
-    # the declaration validator, which refuses the backticks and escapes MySQL prints.
+    # Its text is MySQL's re-print in declarable form (`_mysql_catalog_sql`), or as MySQL printed it when
+    # it has none: catalog text, not a declaration, so it is not put through the declaration validator.
     owner = (raw_default !== nothing && raw_default.generated && hasproperty(r, :comment)) ?
             db_default_owner(_mysql_str(r.comment), dflt) : nothing
     columns[col_name] = owner !== nothing ?
-      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_unescape(dflt)), owner)) :
+      _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_catalog_sql(dflt; reserved = _MYSQL_RESERVED_WORDS)), owner)) :
       _finish_column_spec(table_name, probe, raw_default, db)
   end
   return LiveTable(table_name, columns, indexes, composites, table_checks)

@@ -11,8 +11,9 @@ by_engine(postgres = true, sqlite = true, mysql = false) || error(
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl`, " *
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl`, " *
     "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_bulk.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl` and " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_alters.jl`")
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl`, " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_alters.jl` and " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_inspectdb.jl`")
 
 # 1b. Load delete scratch modules at top level (module expressions are forbidden
 #     inside @testset / macro-wrapped bodies in Julia).

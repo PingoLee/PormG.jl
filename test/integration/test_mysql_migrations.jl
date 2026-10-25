@@ -110,7 +110,11 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
                   [(["forename", "code"], true, [false, false]), (["forename", "dob"], false, [false, true])]
             Mig.makemigrations(folder; interactive = false)
             @test !isfile(pending)
-            @test isempty(Mig.check(folder).findings)
+            @test isempty(Mig.check(folder; kinds = [:schema_drift]).findings)
+            # `check`'s default kind advises on each column whose DEFAULT is an expression, declared or not,
+            # as on PostgreSQL: it reads the database, not the models.
+            @test sort!([(f.table, only(f.columns), f.detail) for f in Mig.check(folder).findings]) ==
+                  [("m4a_driver", "created", "CURRENT_TIMESTAMP"), ("m4a_result", "today", "CURRENT_DATE")]
             @test Mig.migrate(folder; interactive = false).outcome === :nothing_pending
         end
 

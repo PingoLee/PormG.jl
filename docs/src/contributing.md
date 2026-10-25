@@ -159,6 +159,7 @@ expression that reflects the specific scenario you are investigating:
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_bulk.jl
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_alters.jl
+   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_inspectdb.jl
    ```
 6. Submit a pull request against `main`.
 

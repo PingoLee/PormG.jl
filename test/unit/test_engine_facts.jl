@@ -110,7 +110,11 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # what a dropped column takes with it.
                                :_pk_precheck_counts_nulls, :_no_implicit_cast, :_retype_drops_default,
                                :_negative_value_predicate, :_byte_length_predicate,
-                               :_drop_column_drops_its_indexes])
+                               :_drop_column_drops_its_indexes,
+                               # Phase 4c: what `inspectdb` declares for a key and the integer and
+                               # timestamp types.
+                               :_text_key_is_uuid, :_declares_bigint, :_declares_naive_timestamp,
+                               :_inspectdb_id_pk])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -201,7 +205,8 @@ end
   @test !_EF_QB._bulk_binds_column_arrays(_EfMy()) && _EF_QB._counts_skips_from_report(_EfMy())
   # Phase 4a: MySQL alters in place, renames an index in place, and adopts no index it did not create;
   # phase 4b: MODIFY converts a pair unless the rule changes every value, a retype drops an undeclared
-  # expression default, and a dropped column narrows its indexes. What `inspectdb` declares is phase 4c's.
+  # expression default, and a dropped column narrows its indexes; phase 4c: `inspectdb` reads a `CHAR(36)`
+  # key as a uuid (no text key), a `BIGINT` as a `BigIntegerField`, a `DATETIME` as the default `DateTimeField`.
   @test !PormG.Migrations._rebuilds_table(_EfMy()) && !PormG.Migrations._adopts_indexes(_EfMy())
   @test PormG.Migrations._can_rename_index(_EfMy())
   @test PormG.Migrations._composite_name_key(_EfMy(), "Result_Idx") == "result_idx"
@@ -211,5 +216,6 @@ end
   @test !PormG.Migrations._drop_column_drops_its_indexes(_EfMy()) &&
         PormG.Migrations._drop_column_drops_its_indexes(_EfPg()) && PormG.Migrations._drop_column_drops_its_indexes(_EfSl())
   @test PormG.Migrations._byte_length_predicate(_EfMy(), "`b`", "?") == "LENGTH(`b`) > ?"
-  @test_throws MethodError PormG.Migrations._text_key_is_uuid(_EfMy())
+  @test !PormG.Migrations._text_key_is_uuid(_EfMy()) && PormG.Migrations._declares_bigint(_EfMy()) &&
+        !PormG.Migrations._declares_naive_timestamp(_EfMy())
 end

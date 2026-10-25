@@ -494,11 +494,11 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'SEN'), ('Prost', 'PRO')")
             apply!(fn(index("lower(name)")))
             c = only(live("m4b_fn").composites)
-            @test (c.name, c.expressions, c.marker) == ("m4b_fn_idx", ["lower(`name`)"], PormG.index_text_marker(["lower(name)"], nothing))
+            @test (c.name, c.expressions, c.marker) == ("m4b_fn_idx", ["lower(name)"], PormG.index_text_marker(["lower(name)"], nothing))
             @test converged()
             plan = apply!(fn(index("upper(name) DESC")))
             @test occursin("DROP INDEX `m4b_fn_idx` ON `m4b_fn`", plan) && occursin("((upper(name)) DESC)", plan)
-            @test only(live("m4b_fn").composites).expressions == ["upper(`name`) DESC"] && converged()
+            @test only(live("m4b_fn").composites).expressions == ["upper(name) DESC"] && converged()
             unique = "; constraints = [Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"m4b_fn_code_uniq\")]"
             apply!(fn(unique))
             c = only(live("m4b_fn").composites)
@@ -506,8 +506,12 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test (try; exec("INSERT INTO `m4b_fn` (`name`, `code`) VALUES ('Senna', 'sen')"); false; catch; true; end)
             apply!(fn(""))
             @test isempty(live("m4b_fn").composites) && converged()
+            # Made by hand under the declared name: of the declared expression, it is the declaration's (its
+            # text read in declarable form), left unowned; of another, the name is taken and the plan refused.
             exec("CREATE INDEX `m4b_fn_idx` ON `m4b_fn` ((lower(`name`)))")
             write_models(fn(index("lower(name)")))
+            @test converged()
+            write_models(fn(index("upper(name)")))
             e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
             @test e isa PormG.InvalidMigrationError && occursin("m4b_fn_idx", sprint(showerror, e))
             exec("DROP INDEX `m4b_fn_idx` ON `m4b_fn`")
@@ -550,6 +554,48 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             @test occursin("ADD COLUMN `code` VARCHAR(36) NOT NULL DEFAULT (concat('M', 'Y'))", plan)
             @test raw("SELECT `code` FROM `m4b_tag`")[1, :code] == "MY"
             @test marked(column_row("m4b_tag", "code").c) && converged()
+        end
+
+        # What: columns PormG did not write, under the fields whose values they hold (#1130 phase 4c): a
+        # `datetime(6)`, a `timestamp`, a `time`, a `text`, an `int` — and an `int unsigned`, which holds others.
+        # SQL: none for the first five once declared; `MODIFY COLUMN `u` INT NULL` for the unsigned one; then,
+        #      for `NOT NULL`, `MODIFY COLUMN `at` DATETIME(6) NOT NULL` (the column's own type, not PormG's).
+        # Why: `inspectdb` reads such a schema as those fields, so the planner must call them equal rather
+        # than retype each to PormG's own spelling, and must still retype what holds other values; and a
+        # MODIFY for another change must not write PormG's spelling either, which rounds a `datetime(6)`.
+        @testset "columns PormG did not write, under the fields that hold their values" begin
+            exec("CREATE TABLE `m4b_legacy` (`legacyid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, " *
+                 "`at` DATETIME(6) NULL, `stamp` TIMESTAMP NULL, `lap` TIME NULL, `note` TEXT NULL, `n` INT NULL, " *
+                 "`u` INT UNSIGNED NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
+            legacy(u) = "Legacy = Models.Model(\"m4b_legacy\", legacyid = Models.IDField(), " *
+                        "at = Models.DateTimeField(null = true), stamp = Models.DateTimeField(null = true), " *
+                        "lap = Models.TimeField(null = true), note = Models.TextField(null = true), " *
+                        "n = Models.IntegerField(null = true), u = $(u))"
+            write_models(legacy("Models.IntegerField(null = true)"))
+            Mig.makemigrations(folder; interactive = false)
+            plan = read(pending, String)
+            @test occursin("MODIFY COLUMN `u` INT NULL", plan) && !occursin(r"MODIFY COLUMN `(at|stamp|lap|note|n)`", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test converged()
+            # A MODIFY that changes no type restates the column's own: `NOT NULL` keeps a `datetime(6)`'s
+            # microseconds (`DATETIME(3)` would round them, here into the next day) and a `timestamp`.
+            exec("INSERT INTO `m4b_legacy` (`at`, `stamp`, `note`) VALUES ('2026-01-01 23:59:59.999600', '2026-01-01 10:00:00', 'x')")
+            write_models(replace(legacy("Models.IntegerField(null = true)"),
+                                 "at = Models.DateTimeField(null = true), stamp = Models.DateTimeField(null = true)" =>
+                                 "at = Models.DateTimeField(), stamp = Models.DateTimeField()",
+                                 "note = Models.TextField(null = true)" => "note = Models.TextField()"))
+            Mig.makemigrations(folder; interactive = false)
+            plan = read(pending, String)
+            @test occursin("MODIFY COLUMN `at` DATETIME(6) NOT NULL", plan) && occursin("MODIFY COLUMN `stamp` TIMESTAMP NOT NULL", plan) &&
+                  occursin("MODIFY COLUMN `note` TEXT NOT NULL", plan)
+            Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
+            @test converged()
+            @test String.(raw("SELECT COLUMN_TYPE AS ctype FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+                              "AND TABLE_NAME = 'm4b_legacy' AND COLUMN_NAME IN ('at', 'stamp', 'note') ORDER BY COLUMN_NAME").ctype) ==
+                  ["datetime(6)", "text", "timestamp"]
+            row = raw("SELECT MICROSECOND(`at`) AS us, DATE(`at`) = '2026-01-01' AS same_day FROM `m4b_legacy`")[1, :]
+            @test (Int(row.us), Int(row.same_day)) == (999600, 1)
+            exec("DROP TABLE `m4b_legacy`")
         end
 
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.

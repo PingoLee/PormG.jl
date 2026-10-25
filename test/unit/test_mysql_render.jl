@@ -930,6 +930,40 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MySQL bitwise operators: signed 64-bit results, an arithmetic right shift, and xor (#1130 phase 5b)
+# MySQL computes `&`, `|`, `<<`, `>>`, `~` and `^` on BIGINT UNSIGNED (measured on 8.4: `~5` is
+# 18446744073709551610, `-8 >> 1` is 9223372036854775804), where PostgreSQL and SQLite compute signed
+# 64-bit integers (-6, -4). Expected SQL: each result `CAST(… AS SIGNED)`; `>>` as
+# `FLOOR(CAST(a AS DECIMAL(20, 0)) / (1 << b))`, which names `a` once, so each value binds once in text
+# order; `xor` as `^`, in a projection and an UPDATE alike. PostgreSQL and SQLite render as before.
+# Why: the unsigned results were silent wrong values, and `xor` was refused on MySQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bitwise operators: signed results, an arithmetic right shift, and xor" begin
+  R = _MR_MY.Result
+  proj(e) = (r = _mr_inspect(R.objects.values("v" => e));
+             (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")), r[:parameters]))
+  @test proj(F("grid") & 4) == ("CAST((`Tb`.`grid` & ?) AS SIGNED)", Any[4])
+  @test proj(F("grid") | F("laps")) == ("CAST((`Tb`.`grid` | `Tb`.`laps`) AS SIGNED)", Any[])
+  @test proj(~F("grid")) == ("CAST(~(`Tb`.`grid`) AS SIGNED)", Any[])
+  @test proj(F("grid") << 2) == ("CAST((`Tb`.`grid` << ?) AS SIGNED)", Any[2])
+  @test proj(F("grid") >> 2) == ("CAST(FLOOR(CAST(`Tb`.`grid` AS DECIMAL(20, 0)) / (1 << ?)) AS SIGNED)", Any[2])
+  @test proj(xor(F("grid"), 3)) == ("CAST((`Tb`.`grid` ^ ?) AS SIGNED)", Any[3])
+  # Nested: the inner result is signed before the outer operator reads it, and the values bind in order.
+  @test proj((F("grid") & 12) >> 1) ==
+        ("CAST(FLOOR(CAST(CAST((`Tb`.`grid` & ?) AS SIGNED) AS DECIMAL(20, 0)) / (1 << ?)) AS SIGNED)", Any[12, 1])
+  upd = R.objects.filter("grid" => 1).update("laps" => xor(F("laps"), 6); show_query = :dict)
+  @test upd[:sql_text] == "UPDATE `result` AS `Tb`\nSET `laps` = CAST((`Tb`.`laps` ^ ?) AS SIGNED)\nWHERE `Tb`.`grid` = ?\n"
+  @test upd[:parameters] == Any[6, 1]
+  # PostgreSQL and SQLite are unchanged: `#` and SQLite's `(a | b) - (a & b)`, each side bound twice.
+  pg = _mr_inspect(_MR_PG.Result.objects.values("v" => xor(F("grid"), 3)))
+  @test occursin("(\"Tb\".\"grid\" # \$1::bigint)", pg[:sql_text])
+  sl = _mr_inspect(_MR_SL.Result.objects.values("v" => xor(F("grid"), 3)))
+  @test occursin("(((\"Tb\".\"grid\") | (?)) - ((\"Tb\".\"grid\") & (?)))", sl[:sql_text]) && sl[:parameters] == Any[3, 3]
+  @test occursin("(\"Tb\".\"grid\" >> ?)", _mr_inspect(_MR_SL.Result.objects.values("v" => F("grid") >> 2))[:sql_text])
+  @test occursin("~(\"Tb\".\"grid\")", _mr_inspect(_MR_PG.Result.objects.values("v" => ~F("grid")))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MySQL conditionals: Case/When, Coalesce, Greatest/Least and NullIf (#1130 phase 2c-1)
 # MySQL has each of them natively. Expected SQL: `COALESCE(a, ?)`; `GREATEST(COALESCE(a, b),
 # COALESCE(b, a))` (MySQL's GREATEST/LEAST return NULL on any NULL, so the operands are the #844

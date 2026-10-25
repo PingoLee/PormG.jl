@@ -433,6 +433,18 @@ end
   M.New_join_position.objects.filter("description" => "bitwise").update("result" => F("result") ⊻ 6)
   row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
   @test row[:result] == 5
+
+  # 6. A bitwise result is a signed integer, and `>>` is arithmetic, on every engine. MySQL computes
+  # the operators on BIGINT UNSIGNED, so before #1130 phase 5b `~5` read 18446744073709551610 there and
+  # `-8 >> 1` read 9223372036854775804. The oracle is Julia's own Int64 operators.
+  row = M.New_join_position.objects.filter("description" => "bitwise").
+    values("n" => ~F("result"), "o" => F("result") | -8, "s" => (F("result") - 13) >> 1,
+           "x" => F("result") ⊻ -1, "l" => (F("result") - 6) << 2).list() |> first
+  @test Int64.((row[:n], row[:o], row[:s], row[:x], row[:l])) == (~5, 5 | -8, (5 - 13) >> 1, xor(5, -1), (5 - 6) << 2)
+  # 7. ... and an UPDATE writes it: `~5` is -6, which an unsigned result could not store.
+  M.New_join_position.objects.filter("description" => "bitwise").update("result" => ~F("result"))
+  row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
+  @test row[:result] == -6
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

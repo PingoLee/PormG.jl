@@ -271,6 +271,41 @@ _greatest_skips_nulls(::PormGSQLite) = false
 # 3)` is NULL), so the operands are rewritten there too, and MySQL renders its own `GREATEST` over them.
 _greatest_skips_nulls(::PormGMySQL) = false
 
+# The bitwise operators (`&`, `|`, `<<`, `>>`, `~`, `xor`) mean the signed integer PostgreSQL and SQLite
+# compute: `~5` is `-6`, and `>>` is arithmetic (`-8 >> 1` is `-4`). MySQL computes every one of them on
+# BIGINT UNSIGNED (measured on 8.4: `~5` is 18446744073709551610, `-8 >> 1` is 9223372036854775804), so
+# it casts each result back to SIGNED, the same 64 bits read as two's complement, and shifts right by
+# dividing: `FLOOR(a / 2^b)` over a DECIMAL is the arithmetic shift (measured equal to Julia's `>>` on
+# 609 values and counts up to 63, negative values and large counts among them), and it names `a` once. A
+# count of 64 or more is outside a 64-bit shift, and the engines already differ there: PostgreSQL takes
+# it modulo the operand's width, SQLite shifts every bit out, and on MySQL `1 << 64` is 0, so `<<` gives
+# 0 and the `>>` quotient is NULL.
+_bitwise_sql(::PormGPostgres, op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
+_bitwise_sql(::PormGSQLite, op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
+function _bitwise_sql(::PormGMySQL, op::String, left::AbstractString, right::AbstractString)
+  op == ">>" && return "CAST(FLOOR(CAST($(left) AS DECIMAL(20, 0)) / (1 << $(right))) AS SIGNED)"
+  return "CAST(($(left) $(op) $(right)) AS SIGNED)"
+end
+_bitwise_not_sql(::PormGPostgres, operand::AbstractString) = "~($(operand))"
+_bitwise_not_sql(::PormGSQLite, operand::AbstractString) = "~($(operand))"
+_bitwise_not_sql(::PormGMySQL, operand::AbstractString) = "CAST(~($(operand)) AS SIGNED)"
+# `xor` is PostgreSQL's `#` and MySQL's `^`. SQLite has no operator for it, so it is `(a | b) - (a & b)`,
+# which names each side twice: `sides()` renders both sides afresh on every call, so each parameter is
+# bound where its marker sits.
+function _xor_sql(::PormGPostgres, sides::Function)
+  left, right = sides()
+  return "($(left) # $(right))"
+end
+function _xor_sql(::PormGSQLite, sides::Function)
+  left1, right1 = sides()
+  left2, right2 = sides()
+  return "((($(left1)) | ($(right1))) - (($(left2)) & ($(right2))))"
+end
+function _xor_sql(::PormGMySQL, sides::Function)
+  left, right = sides()
+  return "CAST(($(left) ^ $(right)) AS SIGNED)"
+end
+
 # The engine has no boolean type to cast to (#1130 phase 2c-1, MySQL), so a boolean declaration
 # (`Cast(x, "boolean")`, `output_field = "boolean"`) over booleans or integers is `((x) <> 0)` there,
 # and refused over anything else (`_mysql_declared_output`). PostgreSQL casts to `boolean`; SQLite's

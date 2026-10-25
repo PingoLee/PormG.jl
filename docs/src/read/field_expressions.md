@@ -987,13 +987,22 @@ All examples in this section are **100% real and executable** directly against t
 | `~` | `~` | Unary Bitwise NOT (negation) |
 | `<<` | `<<` | Bitwise Shift Left |
 | `>>` | `>>` | Bitwise Shift Right |
-| `xor` / `⊻` | `#` (Postgres) / emulated (SQLite) | Bitwise XOR |
+| `xor` / `⊻` | `#` (Postgres) / emulated (SQLite) / `^` (MySQL) | Bitwise XOR |
 
 !!! note
     **XOR Dialect Support:**
     - In standard Julia, `^` represents exponentiation, which aligns with PostgreSQL's `^`. PormG preserves this by keeping `^` for mathematical exponentiation.
     - For bitwise XOR, PormG overloads Julia's idiomatic `xor` and `⊻` functions.
-    - PormG handles dialect differences transparently: rendering `(a # b)` on PostgreSQL, and emulating it via `((a | b) - (a & b))` on SQLite while correctly duplicating any internal parameters to preserve positional alignment.
+    - PormG handles dialect differences transparently: rendering `(a # b)` on PostgreSQL, `(a ^ b)` on MySQL, and emulating it via `((a | b) - (a & b))` on SQLite while correctly duplicating any internal parameters to preserve positional alignment.
+
+!!! note "Signed results on every engine"
+    The results are signed integers, as Julia's are: `~5` is `-6`, and `>>` is arithmetic (`-8 >> 1` is
+    `-4`). MySQL computes its bitwise operators on unsigned 64-bit integers, so there PormG casts each
+    result back to a signed 64-bit one and renders `>>` as a floor division by a power of two. PostgreSQL
+    keeps the column's own width, so `~` and `<<` over an `integer` column are 32-bit there
+    (`F("grid") << 31` with `grid = 1` is `-2147483648`, where SQLite and MySQL give `2147483648`). A
+    shift by at least the width also differs: PostgreSQL takes the count modulo the width, SQLite shifts
+    every bit out, and on MySQL `<<` gives `0` while `>>` gives NULL (an error in an `update`).
 
 ### Real-World F1 Case Study: The "Clean vs. Dirty" Grid Side Analysis
 

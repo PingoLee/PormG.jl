@@ -475,10 +475,15 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 #
 # This is the single-write funnel that locates a formatter's refusal (#971): the formatter knows the
 # reason, this knows the field, and the refusal carries both as data — no funnel re-reads its text.
-function _format_single(f_meta, field::AbstractString, value, op::AbstractString)
+#
+# `conn` is the connection the value is written to (#1348): the formatter is the one the value binds
+# through there (`_write_formatter`). Without one it is the field's own, which every engine but MySQL
+# writes; the callers that pass none never reach MySQL (`bulk_copy`) or only compare the text (the
+# `returning` key match).
+function _format_single(f_meta, field::AbstractString, value, op::AbstractString; conn = nothing)
   _refuse_collection(f_meta, field, value, op)
   formatted = try
-    f_meta.formatter(value)
+    _write_formatter(f_meta, conn)(value)
   catch e
     e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()
@@ -488,6 +493,14 @@ function _format_single(f_meta, field::AbstractString, value, op::AbstractString
     "The value contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul; op = op, field = field))
   return formatted
 end
+
+# #1348: what a write binds a field's value through on `conn`. A `DurationField` column is its
+# microseconds on MySQL (a BIGINT, #1130 phase 2b), so a write binds what a filter binds, the
+# value-representation table's formatter (`value_formatter(CInterval(), conn)`); on PostgreSQL and
+# SQLite that is the field's own text. Narrowed to durations: for every other kind the field's
+# formatter is already what the column stores, and an array's (`ArrayFormatter`) is not the table's.
+_write_formatter(f_meta, conn) = f_meta isa Models.sDurationField ? value_formatter(CInterval(), conn) : f_meta.formatter
+_write_formatter(f_meta, ::Nothing) = f_meta.formatter
 
 # #1283 — the refusal of an SQL expression where a value is written: every writer but `update`, which
 # writes one into its SET clause as SQL. One text for `_validate_field_value` (step 4) and the bulk
@@ -579,9 +592,11 @@ so the double refuses what PormG refuses (#1239).
 function validate_value(model::PormGModel, field::AbstractString, value)
   name = String(field)
   validate_field_data(model, name, value, "validate_value"; allow_primary_key = true)
-  formatted = _format_single(model.fields[name], name, value, "validate_value")
-  # The engine's bind, as `create` runs it, for the refusals that live there; its output is discarded.
   _, connection, _ = get_settings(object(model))
+  # Formatted for the engine the model is bound to, as `create` formats it (a duration is its
+  # microseconds on MySQL, #1348).
+  formatted = _format_single(model.fields[name], name, value, "validate_value"; conn = connection)
+  # The engine's bind, as `create` runs it, for the refusals that live there; its output is discarded.
   add_parameter!(get_parameter(connection), formatted)
   return formatted
 end

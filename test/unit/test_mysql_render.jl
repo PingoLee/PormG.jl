@@ -1878,6 +1878,37 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MySQL DurationField writes bind the microseconds a filter binds (#1348)
+# A `DurationField` is a BIGINT of microseconds on MySQL (#1130 phase 2b). Expected: `create`, `update`,
+# `bulk_insert` and `bulk_update` bind `Millisecond(83456)` as `83456000`, never the `"00:01:23.456"`
+# text MySQL rejects (1265); a duration string the field parses binds the same number; a value that is
+# no duration raises the field's own refusal; SQLite keeps the text it stores.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL DurationField writes: every write path binds the microseconds (#1348)" begin
+  v = Millisecond(83456)
+  us = 83_456_000
+  row(t) = ("raceid" => 1, "driverid" => 1, "grid" => 1, "points" => 0.0, "laps" => 50, "fastestlaptime" => t)
+  texts(params) = filter(p -> p isa AbstractString && occursin(':', p), params)
+  ins = _MR_MY.Result.objects.create(row(v)...; show_query = :dict)
+  @test us in ins[:parameters] && isempty(texts(ins[:parameters]))
+  @test us in _MR_MY.Result.objects.create(row("1:23.456")...; show_query = :dict)[:parameters]
+  @test _MR_MY.Result.objects.filter("resultid" => 1).update("fastestlaptime" => v; show_query = :dict)[:parameters] ==
+        Any[us, 1]
+  df = DataFrames.DataFrame(raceid = [1], driverid = [1], grid = [1], points = [0.0], laps = [50], fastestlaptime = [v])
+  bi = _MR_QB.bulk_insert(_MR_MY.Result, df; show_query = :dict)[:parameters]
+  @test us in bi && isempty(texts(bi))
+  @test _MR_QB.bulk_update(_MR_MY.Result, DataFrames.DataFrame(resultid = [1], fastestlaptime = [v]); show_query = :dict)[:parameters] ==
+        Any[1, us]
+  @test_throws PormG.InvalidValueError _MR_MY.Result.objects.filter("resultid" => 1).update("fastestlaptime" => 5; show_query = :dict)
+  # `validate_value` formats as `create` does, for the engine the model is bound to.
+  @test PormG.validate_value(_MR_MY.Result, "fastestlaptime", v) == us
+  @test PormG.validate_value(_MR_SL.Result, "fastestlaptime", v) == "00:01:23.456"
+  # SQLite stores the text, and keeps binding it.
+  @test "00:01:23.456" in _MR_SL.Result.objects.filter("resultid" => 1).update("fastestlaptime" => v; show_query = :dict)[:parameters]
+  @test "00:01:23.456" in _MR_QB.bulk_insert(_MR_SL.Result, df; show_query = :dict)[:parameters]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MySQL's report of a multi-row INSERT, and its duplicate-key errors
 # The OK packet's text after a multi-row INSERT is `Records: N  Duplicates: D  Warnings: W` (measured),
 # in the session's `lc_messages` language and always in that order, so it is read by position; a

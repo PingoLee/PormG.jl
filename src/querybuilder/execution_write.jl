@@ -100,7 +100,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     push!(quoted_field_columns, safe_column_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters — one value, never a collection (#712)
-    formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert")
+    formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert"; conn = connection)
     push!(param_values, add_parameter!(parameters, formatted))
 
   end
@@ -384,7 +384,7 @@ function _run_update_or_create(connection::PormGSQLite, settings, real_obj, mode
     tp = get_parameter(connection)
     set_context!(tp, :where)
     for f in target_fields
-      add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formatter)
+      add_parameter!(tp, real_obj.insert[f] |> _write_formatter(model.fields[f], connection))
     end
     tp
   end
@@ -484,7 +484,7 @@ function _select_by_target(head, real_obj, model, target_fields, safe_table_name
   params = get_parameter(connection)
   set_context!(params, :where)
   where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = " *
-                    "$(add_parameter!(params, real_obj.insert[f] |> model.fields[f].formatter))" for f in target_fields],
+                    "$(add_parameter!(params, real_obj.insert[f] |> _write_formatter(model.fields[f], connection)))" for f in target_fields],
                    " AND ")
   return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1$(lock ? " FOR SHARE" : "");", params)
 end
@@ -1539,7 +1539,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")
+      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update"; conn = connection)
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

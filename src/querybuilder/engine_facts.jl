@@ -96,7 +96,7 @@ function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
   # 0 under the session's `NO_AUTO_VALUE_ON_ZERO`), and then the key is read back by the value the INSERT
   # bound.
   id = _is_auto_generated_bulk_primary_key(field) ? backend_last_insert_id(conn, result) : 0
-  value = id != 0 ? id : haskey(insert, name) ? _format_single(field, name, insert[name], "insert") : nothing
+  value = id != 0 ? id : haskey(insert, name) ? _format_single(field, name, insert[name], "insert"; conn = conn) : nothing
   value === nothing && return nothing
   params = get_parameter(conn)
   set_context!(params, :where)

@@ -1699,7 +1699,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index) for (j, field) in enumerate(fields_df)]
+        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -2085,9 +2085,10 @@ function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, v
   end
 end
 
-function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer;
+                           conn = nothing)
   try
-    _format_single(f_meta, field, value, op)
+    _format_single(f_meta, field, value, op; conn = conn)
   catch e
     e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
     rethrow()
@@ -2685,7 +2686,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index) for (j, field) in enumerate(joined_columns)]
+        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else

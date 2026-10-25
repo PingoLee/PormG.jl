@@ -378,8 +378,9 @@ path, and (on PostgreSQL) test containment and key existence.
 ### Path lookups (`field__key`, `field__0__key`)
 
 Append the JSON keys to the field name with `__`. A numeric segment is a JSON **array index**.
-The value is extracted as **text** and compared to your filter value. Works on **both** backends
-(PostgreSQL `#>>`, SQLite `json_extract`).
+The value is extracted as **text** and compared to your filter value. Works on **every** backend
+(PostgreSQL `#>>`, SQLite `json_extract`, MySQL `JSON_UNQUOTE(JSON_EXTRACT(…))`). A key that holds
+JSON `null` extracts to NULL, as a missing key does.
 
 Assume `Constructor` has a `metadata` JSONField holding, e.g.,
 `{"principal": "Toto Wolff", "wins": 121, "drivers": [{"name": "Russell"}]}`:
@@ -391,7 +392,8 @@ M.Constructor.objects.filter("metadata__principal" => "Toto Wolff")
 # Array index then key: drivers[0].name
 M.Constructor.objects.filter("metadata__drivers__0__name" => "Russell")
 
-# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively.
+# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively, and
+# MySQL compares the text with the number as a double.
 # The value is a number, or base-10 numeric text ("100"); other text raises InvalidValueError.
 M.Constructor.objects.filter("metadata__wins__@gte" => 100)
 
@@ -406,9 +408,9 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
 A path lookup compares the extracted value against a **value**. A column expression on the right
-(`"metadata__principal" => F("name")`) raises a `FilterError` on both backends. The two engines extract
-different types (PostgreSQL text, SQLite the native JSON type), so no single comparison against a
-column means the same thing on both.
+(`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
+different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison
+against a column means the same thing on all of them.
 
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
@@ -417,7 +419,9 @@ column means the same thing on both.
     `InvalidValueError`.
     Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
     (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
-    (`"metadata__wins" => 121`) works on both backends.
+    (`"metadata__wins" => 121`) works on every backend. A numeric operator against a key that holds
+    text that is not a number (`"metadata__principal__@gte" => 10`) has no portable answer:
+    PostgreSQL raises, SQLite ranks text above every number, and MySQL reads the text as `0`.
 
     A numeric segment is always treated as an **array index**. An object key that is a number
     (e.g. `{"2024": …}`) is therefore not portably addressable: PostgreSQL's `#>>` may still resolve

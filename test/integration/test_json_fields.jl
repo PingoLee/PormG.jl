@@ -26,6 +26,8 @@ end
         "points" => 15,
         "active" => true,
         "standings" => [Dict("name" => "Max"), Dict("name" => "Lewis")],
+        "sponsor" => nothing,
+        "team" => "Mercedes ",
     )
 
     # Clean any stale row, then seed exactly one.
@@ -78,6 +80,21 @@ end
             @test q.count() == 1
             q = base(); q.filter("payload__driver__@isnull" => true)
             @test q.count() == 0     # present key is NOT null
+
+            # A key that HOLDS JSON null extracts to NULL too, on every engine: MySQL's JSON_UNQUOTE
+            # alone reads it as the text 'null' (#1130 phase 5b), which `@isnull` would not match and
+            # an equality with "null" would.
+            q = base(); q.filter("payload__sponsor__@isnull" => true)
+            @test q.count() == 1
+            q = base(); q.filter("payload__sponsor" => "null")
+            @test q.count() == 0
+
+            # A trailing space is part of the text on every engine: MySQL's JSON text pads in its own
+            # `utf8mb4_bin` collation, so `"Mercedes "` equalled "Mercedes" there (#1130 phase 5b).
+            q = base(); q.filter("payload__team" => "Mercedes")
+            @test q.count() == 0
+            q = base(); q.filter("payload__team" => "Mercedes ")
+            @test q.count() == 1
 
             # .values() projection returns the extracted value
             q = base(); q.values("payload__driver")

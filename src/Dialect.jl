@@ -3706,6 +3706,21 @@ function _json_extract_expr(::PormGSQLite, column::String, segments::Vector{Stri
   path = "\$" * join(map(s -> _is_json_array_index(s) ? "[$s]" : ".$s", segments))
   return string("json_extract(", column, ", '", path, "')")
 end
+# MySQL (#1130 phase 5b): the value at the path as TEXT, as PostgreSQL's `#>>` reads it. Keys are
+# double-quoted, as on PostgreSQL, so a key named `null` or `true` is a key (MySQL's unquoted path key
+# must be an ECMAScript identifier); they are pre-validated, so neither `"` nor `\` can reach the
+# literal. `JSON_UNQUOTE` alone reads a JSON `null` as the text `'null'` (measured on 8.4), where
+# PostgreSQL and SQLite read SQL NULL, so `@isnull` would miss a key that holds null: `NULLIF` against
+# JSON's `null` makes it NULL first, and leaves the string `"null"` a string. A missing key is NULL, an
+# object or an array its JSON text. Not `JSON_VALUE`, which returns NULL for a string past 512
+# characters (measured). The text comes back in `utf8mb4_bin`, a PAD SPACE collation, so `"Max "` equalled
+# `'Max'` (measured, #1265's departure); `COLLATE utf8mb4_0900_bin` compares code points with no padding,
+# as the session's own collation does and as PostgreSQL and SQLite compare text.
+function _json_extract_expr(::PormGMySQL, column::String, segments::Vector{String})::String
+  path = "\$" * join(map(s -> _is_json_array_index(s) ? "[$s]" : ".\"$s\"", segments))
+  return string("(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(", column, ", '", path,
+                "'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)")
+end
 
 # #602: every text-lookup renderer below takes `column::AbstractString, value::AbstractString`.
 # Both are RENDERED SQL text — `column` is the quoted column expression and `value` is the bind

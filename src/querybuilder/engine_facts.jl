@@ -346,6 +346,17 @@ _json_document_marker(::PormGMySQL, marker::AbstractString) =
 # casts it to `numeric`. SQLite's `json_extract` keeps the JSON type, so a number stays a number.
 _json_path_extracts_text(::PormGPostgres) = true
 _json_path_extracts_text(::PormGSQLite) = false
+# MySQL reads the value as text too (`Dialect._json_extract_expr`), as PostgreSQL does (#1130 phase 5b).
+_json_path_extracts_text(::PormGMySQL) = true
+
+# What a JSON path lookup's ordering comparison (`@gt`, `@lte`, …) compares with the bound number. As
+# text on PostgreSQL, so it is cast to `numeric`; SQLite's value keeps its JSON type. MySQL compares
+# text with a number as a double (measured on 8.4: `'15' >= 10`, `'2.5' < 10`, a 39-digit integer above
+# it), so its text is compared bare. Outside the meaning, a key that holds non-numeric text: PostgreSQL
+# raises, SQLite ranks text above every number, and MySQL reads the text as 0.
+_json_numeric_operand(::PormGPostgres, column::AbstractString) = "($(column))::numeric"
+_json_numeric_operand(::PormGSQLite, column::AbstractString) = String(column)
+_json_numeric_operand(::PormGMySQL, column::AbstractString) = String(column)
 
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
 _inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)

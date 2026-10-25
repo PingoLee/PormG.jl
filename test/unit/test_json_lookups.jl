@@ -111,6 +111,35 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # MySQL (#1130 phase 5b): the value at the path as text, as PostgreSQL reads it
+  # `JSON_EXTRACT` with every key double-quoted (so a key named `null` is a key), `JSON_UNQUOTE` for the
+  # text, and `NULLIF` against JSON's `null` first, because `JSON_UNQUOTE` alone reads a JSON null as
+  # the text 'null' (measured), which `@isnull` would not match; and a code-point collation, because the
+  # text's own `utf8mb4_bin` pads trailing spaces (`"Max "` equalled `'Max'`). Equality binds text, as on
+  # PostgreSQL; an ordering compares the text with the bound number, which MySQL does as a double, so
+  # it has no cast. Before phase 5b every path lookup was a `MethodError` on MySQL.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "MySQL: the value at the path as text, a JSON null as NULL" begin
+    mk(f) = (q = JL.Json_scratch.objects; f(q); q.values("id"); q)
+    x(path) = "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '$(path)'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
+    r = _sql(mk(q -> q.filter("payload__nome" => "hamilton")); conn = _JL_MY)
+    @test occursin("WHERE $(x("\$.\"nome\"")) = ?", r[:sql_text]) && r[:parameters] == ["hamilton"]
+    @test _sql(mk(q -> q.filter("payload__count" => 5)); conn = _JL_MY)[:parameters] == ["5"]
+    @test occursin(x("\$.\"standings\"[0].\"name\""),
+                   _sql(mk(q -> q.filter("payload__standings__0__name" => "Max")); conn = _JL_MY)[:sql_text])
+    r = _sql(mk(q -> q.filter("payload__count__@gte" => 5)); conn = _JL_MY)
+    @test occursin("WHERE $(x("\$.\"count\"")) >= ?", r[:sql_text]) && r[:parameters] == [5]
+    @test occursin("$(x("\$.\"missing\"")) IS NULL", _sql(mk(q -> q.filter("payload__missing__@isnull" => true)); conn = _JL_MY)[:sql_text])
+    @test occursin("'\$.\"null\"'", _sql(mk(q -> q.filter("payload__null" => "x")); conn = _JL_MY)[:sql_text])
+    @test PormG.Dialect._json_extract_expr(_JL_MY, "`c`", ["a", "0", "b"]) ==
+          "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`c`, '\$.\"a\"[0].\"b\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
+    # The projection and the ordering read the same text.
+    q = JL.Json_scratch.objects; q.values("id", "payload__nome"); q.order_by("payload__nome")
+    sql = _sql(q; conn = _JL_MY)[:sql_text]
+    @test occursin("$(x("\$.\"nome\"")) as `payload__nome`", sql)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # #1091: a non-finite float is refused on a JSON path, under every operator.
   # `_json_numeric_rhs` refused text that overflows to `Inf` but passed a float through, so `Inf` and
   # `NaN` were bound. The engines then disagree on the row set: PostgreSQL's `numeric` orders `NaN`

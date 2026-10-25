@@ -3,7 +3,7 @@ using DataFrames
 using PormG
 import PormG.ConnectionPool: fetch
 using PormG.QueryBuilder: explain_query, inspect_query
-import PormG.QueryBuilder: _explain_facts_postgres, _explain_facts_sqlite
+import PormG.QueryBuilder: _explain_facts_postgres, _explain_facts_sqlite, _explain_facts_mysql
 
 # ─────────────────────────────────────────────────────────────────────────────
 # explain_query / .explain() (#48)
@@ -46,6 +46,19 @@ const SQLITE_PLAN_ROWS = [
   (id = 17, parent = 0, notused = 0, detail = "SCAN TABLE Tb_5"),   # SQLite before 3.36
 ]
 
+# MySQL's `EXPLAIN FORMAT=JSON` for the joined Senna query on db_my (#1130 phase 5b), trimmed: a full
+# scan of the driver (alias `Tb_1`, `access_type` `ALL`) driving an index lookup of the result, inside
+# an ordering step, with the cost stated as text.
+struct MockMySQLExplain <: PormG.PormGMySQL end
+const MYSQL_PLAN_JSON = """
+{"query_block": {"select_id": 1, "cost_info": {"query_cost": "118.23"},
+  "ordering_operation": {"using_filesort": true, "nested_loop": [
+    {"table": {"table_name": "Tb_1", "access_type": "ALL", "possible_keys": ["PRIMARY"],
+               "rows_examined_per_scan": 861, "rows_produced_per_join": 86}},
+    {"table": {"table_name": "Tb", "access_type": "ref", "possible_keys": ["result_driverid_idx"],
+               "key": "result_driverid_idx", "rows_examined_per_scan": 1, "rows_produced_per_join": 86}}]}}}
+"""
+
 # Every statement and parameter object the mocks are handed, newest last.
 const EXPLAIN_CALLS = Tuple{String, Any}[]
 
@@ -62,11 +75,17 @@ function fetch(connection::MockSqliteExplain, sql::String; conn = nothing, param
   push!(EXPLAIN_CALLS, (sql, params))
   return DataFrame(SQLITE_PLAN_ROWS)
 end
+function fetch(connection::MockMySQLExplain, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false)
+  push!(EXPLAIN_CALLS, (sql, params))
+  return DataFrame("EXPLAIN" => [MYSQL_PLAN_JSON])
+end
 
 PormG.config["explain_pg"] = PormG.Configuration.Settings(
   connections = MockPgExplain(), change_data = true, db_def_folder = "explain_pg")
 PormG.config["explain_sqlite"] = PormG.Configuration.Settings(
   connections = MockSqliteExplain(), change_data = true, db_def_folder = "explain_sqlite")
+PormG.config["explain_mysql"] = PormG.Configuration.Settings(
+  connections = MockMySQLExplain(), change_data = true, db_def_folder = "explain_mysql")
 
 const EXPLAIN_MODELS = quote
   import PormG
@@ -79,10 +98,13 @@ const EXPLAIN_MODELS = quote
 end
 module ExplainPG end
 module ExplainSL end
+module ExplainMY end
 Core.eval(ExplainPG, EXPLAIN_MODELS)
 Core.eval(ExplainSL, EXPLAIN_MODELS)
+Core.eval(ExplainMY, EXPLAIN_MODELS)
 PormG.Models.set_models(ExplainPG, "explain_pg")
 PormG.Models.set_models(ExplainSL, "explain_sqlite")
+PormG.Models.set_models(ExplainMY, "explain_mysql")
 
 # The inspection keys every explain result carries, and the plan facts it adds — the same set on both
 # engines, so a caller never branches on which keys exist.
@@ -128,6 +150,61 @@ end
   @test facts[:seq_scans] == ["Tb_1", "Tb_5"]           # a covering-index SCAN is not a table scan
   @test all(facts[k] === nothing for k in (:total_cost, :estimated_rows, :planning_time_ms, :execution_time_ms))
   @test facts[:plan][2] == Dict(:id => 8, :parent => 0, :detail => "SEARCH Tb USING INDEX result_driverid_idx (driverid=?)")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# explain: MySQL plan facts (#1130 phase 5b)
+# Every table object at any depth (under `nested_loop`, inside the ordering step): its `key` is an index
+# used, `access_type` `ALL` a full scan of its alias. The cost is the query block's, stated as text;
+# the row estimate is what the block's last table produces. No timings without ANALYZE.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "explain: MySQL plan facts" begin
+  facts = _explain_facts_mysql(MYSQL_PLAN_JSON)
+  @test facts[:indexes_used] == ["result_driverid_idx"]
+  @test facts[:seq_scans] == ["Tb_1"]                   # the alias, as on SQLite
+  @test facts[:total_cost] === 118.23
+  @test facts[:estimated_rows] === 86
+  @test facts[:planning_time_ms] === nothing && facts[:execution_time_ms] === nothing
+  @test facts[:plan]["query_block"]["select_id"] == 1
+  # A primary-key lookup names the key; a table read with no key is not a scan unless it is `ALL`.
+  pk = _explain_facts_mysql("""{"query_block": {"cost_info": {"query_cost": "1.00"}, "table": {"table_name": "Tb",
+    "access_type": "const", "key": "PRIMARY", "rows_produced_per_join": 1}}}""")
+  @test pk[:indexes_used] == ["PRIMARY"] && isempty(pk[:seq_scans]) && pk[:estimated_rows] === 1 && pk[:total_cost] === 1.0
+  # A derived table MySQL made for the statement is no scan of a table, and the index it built on one is
+  # transient, as SQLite's automatic index is reported.
+  derived = _explain_facts_mysql("""{"query_block": {"cost_info": {"query_cost": "9.50"}, "nested_loop": [
+    {"table": {"table_name": "Tb", "access_type": "ALL", "rows_produced_per_join": 5}},
+    {"table": {"table_name": "<derived2>", "access_type": "ref", "key": "<auto_key0>", "rows_produced_per_join": 5,
+               "materialized_from_subquery": {"query_block": {"table": {"table_name": "Tb_1", "access_type": "ALL"}}}}}]}}""")
+  @test derived[:seq_scans] == ["Tb", "Tb_1"] && derived[:indexes_used] == ["AUTOMATIC INDEX"]
+  @test _explain_facts_mysql(Vector{UInt8}(MYSQL_PLAN_JSON))[:seq_scans] == ["Tb_1"]   # the cell as bytes
+  # Another shape of the document (a server set to explain_json_format_version = 2) is refused, typed.
+  @test_throws PormG.QueryBuildError _explain_facts_mysql("""{"query_plan": {}}""")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# explain: the statement sent on MySQL, and the options it refuses
+# `EXPLAIN FORMAT=JSON` over the SELECT show_query renders, with the query's own parameter object
+# bound. MySQL's EXPLAIN ANALYZE prints a text tree only and it has no BUFFERS or VERBOSE, so each option
+# is a BackendCapabilityError before anything is fetched, as on SQLite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "explain: MySQL statement and refusals" begin
+  q = ExplainMY.Driver.objects.filter("nationality" => "Brazilian").values("surname")
+  empty!(EXPLAIN_CALLS)
+  res = q.explain()
+  explain_sql, params = only(EXPLAIN_CALLS)
+  @test explain_sql == "EXPLAIN FORMAT=JSON " * show_query(q, :sql)
+  @test params isa PormG.PormGMySQLParam && params.parameters == ["Brazilian"]
+  @test Set(keys(res)) == EXPLAIN_KEYS
+  @test res[:dialect] === :mysql && res[:analyze] === false
+  @test res[:seq_scans] == ["Tb_1"]
+  for opt in (:analyze, :buffers, :verbose)
+    empty!(EXPLAIN_CALLS)
+    err = try q.explain(; opt => true); nothing catch e; e end
+    @test err isa PormG.BackendCapabilityError
+    @test occursin("$(opt) = true", sprint(showerror, err)) && occursin("MySQL", sprint(showerror, err))
+    @test isempty(EXPLAIN_CALLS)
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

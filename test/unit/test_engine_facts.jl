@@ -123,7 +123,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # ... and the text a pattern lookup reads from a non-text column.
                                :_pattern_text_operand,
                                # ... and JSON path lookups, read as text.
-                               :_json_extract_expr, :_json_path_extracts_text, :_json_numeric_operand])
+                               :_json_extract_expr, :_json_path_extracts_text, :_json_numeric_operand,
+                               # ... and explain(): EXPLAIN FORMAT=JSON, read as its facts.
+                               :_explain_sql, :_explain_facts])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

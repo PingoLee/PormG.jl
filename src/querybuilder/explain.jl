@@ -81,15 +81,81 @@ function _explain_facts_sqlite(rows)
   )
 end
 
-# The EXPLAIN statement for `sql`. Every option is a fixed keyword chosen by a `Bool` — nothing the
-# caller passes is ever spliced into the SQL.
-function _explain_sql(connection::PormGSQLite, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
-  if analyze || buffers || verbose
-    requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
-    throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
-                             why = "Call explain() without them for the plan this backend gives."))
+# The facts of one `EXPLAIN FORMAT=JSON` document (MySQL, #1130 phase 5b). Each table the plan reads is
+# an object with a `table_name` — the query's alias, as on SQLite — and an `access_type`: its `key` is the
+# index it reads through (`PRIMARY` for the primary key), and `ALL` is a full scan (measured on 8.4).
+# Tables sit under a query block's `table` or `nested_loop`, and inside subqueries and the ordering and
+# grouping steps, so the walk visits every object. The block's `query_cost` is the total cost, which
+# MySQL states as text; the row estimate is what the top block's last table produces. MySQL reports no
+# planning or execution time without ANALYZE, which PormG does not run there (`:explain_options`).
+# A name in angle brackets is one MySQL made for the statement — a derived table or a materialized
+# subquery (`<derived2>`, `<subquery2>`, `<union1,2>`), or an index it built on one (`<auto_key0>`,
+# `<auto_distinct_key>`) — never a table or an index of the schema: such a table is not a scan of one,
+# and such an index is reported as SQLite's transient one is, `"AUTOMATIC INDEX"`.
+function _explain_walk_mysql!(node, indexes::Vector{String}, seq_scans::Vector{String})
+  if node isa AbstractDict
+    if haskey(node, "table_name") && haskey(node, "access_type")
+      key = get(node, "key", nothing)
+      key === nothing || push!(indexes, startswith(String(key), "<") ? "AUTOMATIC INDEX" : String(key))
+      name = String(node["table_name"])
+      node["access_type"] == "ALL" && !startswith(name, "<") && push!(seq_scans, name)
+    end
+    foreach(v -> _explain_walk_mysql!(v, indexes, seq_scans), values(node))
+  elseif node isa AbstractVector
+    foreach(v -> _explain_walk_mysql!(v, indexes, seq_scans), node)
   end
+  return nothing
+end
+function _explain_block_rows_mysql(block)
+  for step in ("ordering_operation", "grouping_operation", "duplicates_removal")
+    haskey(block, step) && return _explain_block_rows_mysql(block[step])
+  end
+  haskey(block, "table") && return get(block["table"], "rows_produced_per_join", nothing)
+  haskey(block, "nested_loop") && return get(get(last(block["nested_loop"]), "table", Dict()), "rows_produced_per_join", nothing)
+  return nothing
+end
+function _explain_facts_mysql(raw)
+  raw isa AbstractVector{UInt8} && (raw = String(raw))
+  doc = raw isa AbstractString ? JSON.parse(raw) : raw
+  # Version 1 of MySQL's JSON plan, the default; a server set to `explain_json_format_version = 2` (8.3+)
+  # writes another shape, which PormG does not read.
+  (doc isa AbstractDict && haskey(doc, "query_block")) || throw(QueryBuildError(
+    "explain() on MySQL reads the version 1 shape of EXPLAIN FORMAT=JSON (a query_block), and this " *
+    "server returned another; set explain_json_format_version = 1 for the session to read the plan."))
+  block = doc["query_block"]
+  indexes, seq_scans = String[], String[]
+  _explain_walk_mysql!(block, indexes, seq_scans)
+  cost = get(get(block, "cost_info", Dict()), "query_cost", nothing)
+  rows = _explain_block_rows_mysql(block)
+  return Dict{Symbol, Any}(
+    :plan => doc,
+    :indexes_used => unique(indexes),
+    :seq_scans => unique(seq_scans),
+    :total_cost => cost isa AbstractString ? tryparse(Float64, cost) : _explain_float(cost),
+    :estimated_rows => rows === nothing ? nothing : Int(rows),
+    :planning_time_ms => nothing,
+    :execution_time_ms => nothing,
+  )
+end
+
+# The EXPLAIN statement for `sql`. Every option is a fixed keyword chosen by a `Bool` — nothing the
+# caller passes is ever spliced into the SQL. A backend without `:explain_options` refuses each of them
+# rather than ignoring it.
+function _refuse_explain_options(connection, analyze::Bool, buffers::Bool, verbose::Bool)
+  (analyze || buffers || verbose) || return nothing
+  requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
+  throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
+                           why = "Call explain() without them for the plan this backend gives."))
+end
+function _explain_sql(connection::PormGSQLite, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
+  _refuse_explain_options(connection, analyze, buffers, verbose)
   return "EXPLAIN QUERY PLAN " * sql
+end
+# MySQL's plan as a JSON document. Its `EXPLAIN ANALYZE` prints a text tree with no other format, and
+# MySQL has no BUFFERS or VERBOSE, so the capability table gives MySQL no `:explain_options`.
+function _explain_sql(connection::PormGMySQL, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
+  _refuse_explain_options(connection, analyze, buffers, verbose)
+  return "EXPLAIN FORMAT=JSON " * sql
 end
 function _explain_sql(connection::PormGPostgres, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
   options = ["FORMAT JSON"]
@@ -110,25 +176,26 @@ terminals (`.update()`, `.delete()`, `.create()`), not something a handler can b
 
 The result is the [`inspect_query`](@ref) `Dict` — `:sql_text`, `:parameters`, `:dialect`, … — plus:
 
-| Key | PostgreSQL | SQLite |
-|-----|------------|--------|
-| `:explain_sql` | the `EXPLAIN (FORMAT JSON …)` statement run | the `EXPLAIN QUERY PLAN` statement run |
-| `:plan` | the parsed JSON plan document | `Vector{Dict}` of `:id`, `:parent`, `:detail` rows |
-| `:indexes_used` | every `Index Name` in the plan tree | each `USING [COVERING] INDEX` name; `"INTEGER PRIMARY KEY"` / `"PRIMARY KEY"` for a key lookup; `"AUTOMATIC INDEX"` for a transient index SQLite builds for the statement |
-| `:seq_scans` | each relation read by a `Seq Scan` | each `SCAN` step that uses no index |
-| `:total_cost`, `:estimated_rows` | the root node's estimates | `nothing` |
-| `:planning_time_ms`, `:execution_time_ms` | measured, with `analyze = true` | `nothing` |
-| `:analyze` | whether the query was executed | always `false` |
+| Key | PostgreSQL | SQLite | MySQL |
+|-----|------------|--------|-------|
+| `:explain_sql` | the `EXPLAIN (FORMAT JSON …)` statement run | the `EXPLAIN QUERY PLAN` statement run | the `EXPLAIN FORMAT=JSON` statement run |
+| `:plan` | the parsed JSON plan document | `Vector{Dict}` of `:id`, `:parent`, `:detail` rows | the parsed JSON plan document |
+| `:indexes_used` | every `Index Name` in the plan tree | each `USING [COVERING] INDEX` name; `"INTEGER PRIMARY KEY"` / `"PRIMARY KEY"` for a key lookup; `"AUTOMATIC INDEX"` for a transient index SQLite builds for the statement | every table's `key`; `"PRIMARY"` for the primary key |
+| `:seq_scans` | each relation read by a `Seq Scan` | each `SCAN` step that uses no index | each table read in full (`access_type` `ALL`) |
+| `:total_cost`, `:estimated_rows` | the root node's estimates | `nothing` | the query block's cost, and the rows its last table produces |
+| `:planning_time_ms`, `:execution_time_ms` | measured, with `analyze = true` | `nothing` | `nothing` |
+| `:analyze` | whether the query was executed | always `false` | always `false` |
 
 The facts are what the plan states. PormG does not guess whether an index is *missing*: a sequential
 scan of a small table is the right plan.
 
 - `analyze = true` **executes the query** (`EXPLAIN ANALYZE`) to measure real timing.
-- A `select_for_update()` query needs a transaction to be explained at all, on either engine — with or
+- A `select_for_update()` query needs a transaction to be explained at all, on every engine — with or
   without `analyze` — exactly as it does to run.
 - `buffers` / `verbose` add PostgreSQL's `BUFFERS` / `VERBOSE` detail to `:plan`.
-- SQLite has only `EXPLAIN QUERY PLAN`: any of the three options raises `BackendCapabilityError`
-  there. SQLite names a table in `:seq_scans` / `:plan` by the alias the query gives it.
+- SQLite has only `EXPLAIN QUERY PLAN`, and MySQL's `EXPLAIN ANALYZE` has no format PormG reads: any
+  of the three options raises `BackendCapabilityError` on both. Each names a table in `:seq_scans` /
+  `:plan` by the alias the query gives it.
 
 ```julia
 plan = M.Result.objects.
@@ -146,7 +213,7 @@ A joined query must still select its columns with `.values(...)` — `explain()`
 statement `.list()` would run, and refuses the same shapes.
 """
 function explain_query(q::SQLObjectHandler; analyze::Bool = false, buffers::Bool = false, verbose::Bool = false,
-                       connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
+                       connection::Union{Nothing, _SQLEngine} = nothing)
   # #43: never mutate the caller — `query()` writes the bound parameters back onto the handler.
   q = deepcopy(q)
   _, conn, _ = get_settings(q, connection = connection)
@@ -171,3 +238,4 @@ explain_query(; kwargs...) = (objct) -> explain_query(objct; kwargs...)
 # The plan's facts, read from the rows each engine's EXPLAIN returns.
 _explain_facts(::PormGPostgres, rows) = _explain_facts_postgres(Base.first(values(Base.first(rows))))
 _explain_facts(::PormGSQLite, rows) = _explain_facts_sqlite(rows)
+_explain_facts(::PormGMySQL, rows) = _explain_facts_mysql(Base.first(values(Base.first(rows))))

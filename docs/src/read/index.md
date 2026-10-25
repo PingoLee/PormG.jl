@@ -683,7 +683,9 @@ On PostgreSQL, `explain(analyze = true)` **executes the query** and adds measure
 (`:execution_time_ms`, `:planning_time_ms`); `buffers = true` and `verbose = true` add PostgreSQL's
 detail to `:plan`. SQLite has only `EXPLAIN QUERY PLAN` — it reports the indexes and scans, names
 tables by the query's alias (`Tb_1` rather than `driver`), has no cost or timing, and raises
-`BackendCapabilityError` for any of the three options.
+`BackendCapabilityError` for any of the three options. MySQL runs `EXPLAIN FORMAT=JSON`: it reports the
+indexes (`"PRIMARY"` for the primary key), the full scans by alias, a cost, and a row estimate where the plan states one, with
+no timing, and raises `BackendCapabilityError` for the three options too.
 
 PormG reports what the plan states and does not guess at missing indexes: a full scan of a small
 table is the plan a database should choose. The [API reference](../api.md#explain_query) lists every

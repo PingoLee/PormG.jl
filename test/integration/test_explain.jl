@@ -25,18 +25,18 @@ import PormG.Functions: Count
     by_pk = M.Driver.objects.filter("driverid" => 102).explain()
     @test by_pk[:operation] === :select
     @test by_pk[:analyze] === false
-    # PostgreSQL names the primary-key index; SQLite reports the rowid lookup.
-    @test by_pk[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"])
+    # PostgreSQL names the primary-key index, MySQL its `PRIMARY` key; SQLite reports the rowid lookup.
+    @test by_pk[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"], mysql = ["PRIMARY"])
     @test isempty(by_pk[:seq_scans])
 
     # Every result row: nothing to search by, so the table is scanned.
     everything = M.Result.objects.explain()
-    @test everything[:seq_scans] == by_engine(postgres = ["result"], sqlite = ["Tb"])
+    @test everything[:seq_scans] == by_engine(postgres = ["result"], sqlite = ["Tb"], mysql = ["Tb"])
     @test isempty(everything[:indexes_used])
 
-    # Whether the plan carries estimates is the engine's plan format: PostgreSQL's root node has a
-    # cost and a row estimate, SQLite's EXPLAIN QUERY PLAN has neither.
-    if by_engine(postgres = true, sqlite = false)
+    # Whether the plan carries estimates is the engine's plan format: PostgreSQL's root node and
+    # MySQL's query block have a cost and a row estimate, SQLite's EXPLAIN QUERY PLAN has neither.
+    if by_engine(postgres = true, sqlite = false, mysql = true)
         # Estimates come from the root plan node: a cost and a row estimate near the table's size.
         @test everything[:total_cost] isa Float64 && everything[:total_cost] > 0
         @test everything[:estimated_rows] > 1000
@@ -91,14 +91,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "explain: inside run_in_transaction" begin
     # Asked of the table directly, not through `requires`: this testset runs on every backend, and
-    # only picks the query it explains. (Row locking is not a table row yet; today the backends
-    # with EXPLAIN options are the ones with `select_for_update`.)
+    # only picks how it explains. A locked read is explained on each, with ANALYZE where the backend
+    # has it; MySQL explains the `FOR UPDATE` statement itself.
     analyze = PormG.Kernel._supports(PormG.config[PORMG_DB_FOLDER].connections, :explain_options)
     plan = PormG.run_in_transaction(PORMG_DB_FOLDER) do
         q = M.Driver.objects.filter("driverid" => 102).values("surname")
-        analyze ? q.select_for_update().explain(analyze = true) : q.explain()
+        q.select_for_update().explain(analyze = analyze)
     end
-    @test plan[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"])
+    @test plan[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"], mysql = ["PRIMARY"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

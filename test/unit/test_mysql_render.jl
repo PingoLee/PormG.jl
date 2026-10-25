@@ -140,7 +140,10 @@ end
   @test _MR_QB.add_parameter!(params, [1, 2, 3]) == "?, ?, ?"
   u = UUID("123e4567-e89b-12d3-a456-426614174000")
   @test _MR_QB.add_parameter!(params, u) == "?"
-  @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "?"
+  # Bytes state their type: in a derived table's row beside text, a bare `?` was utf8mb4 (1366, #1130 phase 5).
+  @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "CAST(? AS BINARY)"
+  @test _MR_QB.add_parameter!(_MR_QB.get_parameter(MrMockMySQL()), [PormG.PormGBytes(UInt8[0x01]), PormG.PormGBytes(UInt8[0x02])]) ==
+        "CAST(? AS BINARY), CAST(? AS BINARY)"
   @test _MR_QB.add_parameter!(params, Decimal(0, 255, -1)) == "CAST(? AS DECIMAL(3,1))"   # #1130 2c-1: its own DECIMAL
   @test params.parameters == Any[1, 2, 3, "123e4567-e89b-12d3-a456-426614174000", UInt8[0x00, 0xff], Decimal(0, 255, -1)]
   _MR_QB.add_parameter!(params, Hour(1))

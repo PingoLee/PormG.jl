@@ -133,8 +133,11 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # counts the rows: on the F1 fixture `EXISTS (SELECT DISTINCT nationality FROM driver LIMIT 1
   # OFFSET 43)` is true though the same SELECT returns no row. A derived table it cannot rewrite.
   # `OuterRef` still correlates from inside it, on both engines, since it names an enclosing query.
-  print(io, keep_values ? "EXISTS (SELECT 1 FROM (SELECT " * _exists_projection(q.object, instruction, true) * "\n" :
-                          "EXISTS (SELECT 1\n")
+  # An unprojected `distinct()` past an offset is probed the same way, over the model's own columns
+  # (`DISTINCT "Tb".*`, #1359), so the offset skips rows and not one per related row, as `exists()` does.
+  derived = keep_values || (q.object.distinct && offset > 0)
+  print(io, derived ? "EXISTS (SELECT 1 FROM (SELECT " * _exists_projection(q.object, instruction, keep_values) * "\n" :
+                      "EXISTS (SELECT 1\n")
   print(io, "FROM ", safe_table_name, " as ", safe_alias, "\n")
 
   for join_sql in instruction.join
@@ -164,7 +167,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   end
 
   isempty(instruction.order) || print(io, "ORDER BY ", join(instruction.order, ", "), "\n")
-  keep_values && print(io, ") as ", quote_identifier("__pormg_exists", instruction.connection), "\n")
+  derived && print(io, ") as ", quote_identifier("__pormg_exists", instruction.connection), "\n")
   print(io, probe_limit == 0 ? "LIMIT 0" : "LIMIT 1")
   isempty(offset_clause) || print(io, " ", offset_clause)
   print(io, ")")

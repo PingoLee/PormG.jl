@@ -421,7 +421,7 @@ end
     @test model.objects.limit(0).count(show_query = :params) == [0]
     # distinct: the slice applies after DISTINCT, so it goes inside the same subquery.
     sql_d = model.objects.limit(5).count(distinct = true, show_query = :sql)
-    @test occursin(Regex("SELECT DISTINCT \\*[\\s\\S]*LIMIT \\Q$(m(1))\\E\\s*\\) as \"__pormg_distinct_count\""), sql_d)
+    @test occursin(Regex("SELECT DISTINCT \"Tb\"\\.\\*[\\s\\S]*LIMIT \\Q$(m(1))\\E\\s*\\) as \"__pormg_distinct_count\""), sql_d)
     # An unsliced count() is the plain COUNT(*), no subquery.
     @test !occursin("FROM (", model.objects.count(show_query = :sql))
     @test isempty(model.objects.count(show_query = :params))
@@ -481,8 +481,9 @@ end
     sql_d = model.objects.values("code").distinct().count(show_query = :sql)
     @test occursin("SELECT DISTINCT \"Tb\".\"code\" as \"code\"\n", sql_d)
     @test occursin("SELECT DISTINCT \"Tb\".\"code\"", model.objects.values("code").count(distinct = true, show_query = :sql))
-    # No projection is still `SELECT DISTINCT *`, and a plain column list still the plain COUNT(*).
-    @test occursin("SELECT DISTINCT *", model.objects.distinct().count(show_query = :sql))
+    # No projection counts the model's rows (`SELECT DISTINCT "Tb".*`, so a join adds no columns), and a
+    # plain column list is still the plain COUNT(*).
+    @test occursin("SELECT DISTINCT \"Tb\".*", model.objects.distinct().count(show_query = :sql))
     @test !occursin("FROM (", model.objects.values("code").count(show_query = :sql))
 
     # A projected value binds where its text sits — under SELECT, ahead of WHERE and the slice —
@@ -589,9 +590,14 @@ end
     @test occursin("EXISTS (SELECT 1\nFROM \"goc_driver\" as \"R1\"", sql_x)
     @test !occursin("__pormg_exists", sql_x) && !occursin("COUNT(", sql_x)
     # distinct(), a slice and an order_by() on the alias leave it one row, so Exists(sub) clears it too.
-    for variant in (() -> deg().distinct(), () -> deg().distinct().offset(2), () -> deg().order_by("n"))
+    for variant in (() -> deg().distinct(), () -> deg().order_by("n"))
       @test occursin("EXISTS (SELECT 1\n", model.objects.filter(Exists(variant())).list(show_query = :sql))
     end
+    # A distinct with an offset skips distinct model rows (#1359), so it probes them through a derived
+    # table; the aggregate is still cleared.
+    sql_do = model.objects.filter(Exists(deg().distinct().offset(2))).list(show_query = :sql)
+    @test occursin("EXISTS (SELECT 1 FROM (SELECT DISTINCT \"R1\".*\n", sql_do)
+    @test !occursin("COUNT(", sql_do)
     # A window beside the aggregate can group by its OVER terms, so it is never treated as degenerate:
     # list() groups by the window's order column, and count() counts those groups.
     win = () -> model.objects.values("x" => Rank(over = WindowOver(order_by = ["points"])) + Sum("id"))

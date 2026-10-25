@@ -269,6 +269,32 @@ const _MR_QUOTE_SHAPES = [
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# distinct().count() across a join: the model's rows, on every engine
+# An unprojected `distinct()` counts the model's rows, as Django's does. Its derived table used to be
+# `SELECT DISTINCT *`, which takes the joined table's columns too, so across a to-many join every
+# (driver, result) pair was distinct: the F1 data's drivers with a pole counted 1136, not 110, on
+# PostgreSQL and SQLite alike, and on MySQL two `driverid` columns in a derived table are error 1060.
+# Expected: the inner select is the base alias's columns only, on each engine, joins and all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "distinct().count() across a to-many join counts the model's rows, on every engine" begin
+  for (M, q) in ((_MR_PG, '"'), (_MR_SL, '"'), (_MR_MY, '`'))
+    sql = M.Driver.objects.filter("result__grid" => 1).distinct().count(show_query = :sql)
+    @test occursin("SELECT COUNT(*) FROM (\nSELECT DISTINCT $(q)Tb$(q).*\nFROM $(q)driver$(q) as $(q)Tb$(q)\n", sql)
+    @test occursin("JOIN $(q)result$(q) AS $(q)Tb_1$(q)", sql)
+    @test !occursin("DISTINCT *", sql)
+    # `exists()` past an offset skips the same rows: the model's, not one per related row.
+    probe = M.Driver.objects.filter("result__grid" => 1).distinct().offset(110).exists(show_query = :sql)
+    @test startswith(probe, "SELECT DISTINCT $(q)Tb$(q).*\nFROM $(q)driver$(q) as $(q)Tb$(q)")
+    @test startswith(M.Driver.objects.filter("result__grid" => 1).distinct().exists(show_query = :sql), "SELECT 1\n")
+    # ... and so does `Exists(...)`, through the derived table it probes a kept projection with.
+    ex = _mr_inspect(M.Race.objects.filter(Exists(M.Driver.objects.filter("result__grid" => 1).distinct().offset(110))))[:sql_text]
+    @test occursin(Regex("EXISTS \\(SELECT 1 FROM \\(SELECT DISTINCT $(q)\\w+$(q)\\.\\*\\n"), ex)
+    @test occursin("as $(q)__pormg_exists$(q)\nLIMIT 1 OFFSET", ex)
+    @test occursin("EXISTS (SELECT 1\n", _mr_inspect(M.Race.objects.filter(Exists(M.Driver.objects.filter("result__grid" => 1).distinct())))[:sql_text])
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MySQL pattern lookups: LIKE keeps case, the i* lookups fold with LOWER
 # #1265: a column PormG creates compares code points, so `LIKE` keeps case; MySQL has no ILIKE, and a
 # `_ci` collation would also drop accents, so the case-insensitive lookups fold both sides with LOWER.

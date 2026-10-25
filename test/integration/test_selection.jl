@@ -893,11 +893,29 @@ end
     @test M.Driver.objects.filter("nationality" => "British").distinct().count() ==
           M.Driver.objects.filter("nationality" => "British").count()
 
-    # With a JOIN (FK-traversal filter): the inner `SELECT DISTINCT *` now spans
-    # multiple tables, which can surface duplicate column names in the subquery —
-    # engines differ, so exercise it live on both backends.
+    # With a JOIN (FK-traversal filter): the derived table selects the result's own columns
+    # (`"Tb".*`), never the joined driver's, so no two of its columns share a name (MySQL refuses
+    # that, error 1060).
     @test M.Result.objects.filter("driverid__surname" => "Senna").distinct().count() ==
           M.Result.objects.filter("driverid__surname" => "Senna").count()
+
+    # Across a to-many join, distinct() counts each matching driver once: `SELECT DISTINCT *` took
+    # the result's columns too, so every (driver, result) pair was a distinct row and the count was
+    # the pairs'. The oracle is the drivers with a pole, read from `result` and collapsed in Julia;
+    # the pair count beside it proves the join repeats drivers, or the case proves nothing.
+    poles = [r[:driverid] for r in M.Result.objects.filter("grid" => 1).values("driverid").list(:dict)]
+    @test length(unique(poles)) < length(poles)
+    @test M.Driver.objects.filter("result__grid" => 1).distinct().count() == length(unique(poles))
+    # exists() past an offset skips the same rows: there is a 110th driver, and no 111th.
+    n = length(unique(poles))
+    @test M.Driver.objects.filter("result__grid" => 1).distinct().offset(n - 1).exists()
+    @test !M.Driver.objects.filter("result__grid" => 1).distinct().offset(n).exists()
+    # Exists(...) over the same rows agrees: status 1 is kept while a 110th driver exists, and dropped
+    # past it.
+    with_exists(k) = M.Status.objects.filter("statusid" => 1,
+                                             Exists(M.Driver.objects.filter("result__grid" => 1).distinct().offset(k))).count()
+    @test with_exists(n - 1) == 1
+    @test with_exists(n) == 0
   end
 
   @testset "count(column, distinct=true) counts distinct column values" begin

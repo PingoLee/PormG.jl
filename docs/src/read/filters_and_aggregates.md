@@ -874,9 +874,12 @@ M.Driver.objects.latest("dob")     # youngest driver
 # Total rows
 M.Driver.objects.count()                                 # SELECT COUNT(*)
 
-# Distinct rows — dedupes the rows list() returns: whole rows, or the values() projection when there is one
+# Distinct rows — dedupes the model's rows, or the values() projection when there is one
 M.Driver.objects.distinct().count()                      # same as:
 M.Driver.objects.count(distinct=true)
+
+# Across a to-many filter, each matching driver counts once (110 drivers with a pole, not their 1136 poles)
+M.Driver.objects.filter("result__grid" => 1).distinct().count()
 
 # Non-null values of one column
 M.Driver.objects.count("nationality")                    # SELECT COUNT("nationality")

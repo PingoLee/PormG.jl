@@ -283,7 +283,45 @@ _parse_sqlite_bool(v::Any) = v
 # MySQL (#1130): a DATETIME carries no zone, and the extension pins every session to UTC (`time_zone =
 # '+00:00'`), which is also the zone a `ZonedDateTime` is bound in. Fail-open like every parser here.
 _parse_mysql_utc_datetime(v::DateTime) = ZonedDateTime(v, tz"UTC")
+_parse_mysql_utc_datetime(v::AbstractString) = (d = _parse_mysql_datetime(v); d isa DateTime ? ZonedDateTime(d, tz"UTC") : d)
 _parse_mysql_utc_datetime(v::Any) = v
+
+# MySQL (#1130 phase 5b): a temporal MySQL computed as TEXT, back into what MySQL.jl decodes the column
+# as. MySQL types `NULLIF` over a DATE, a DATETIME or a TIME as a string (measured on 8.4:
+# `"2009-03-29"`, `"2009-03-29 10:00:00.000"`, `"10:30:00.000000"`), where `COALESCE`, `IF` and `CASE`
+# keep the type. Fail-open like every parser here: a decoded `Date`, `DateTime` or `Time`, or text in
+# any other shape, is returned unchanged. A DATE is SQLite's text exactly (`_parse_sqlite_date`); a TIME
+# carries six fractional digits (`TIME(6)`, a `TimeField`), which a `Time` holds to the microsecond; a
+# DATETIME keeps them only to the millisecond a `DateTime` holds, and text with digits below it passes
+# unchanged, as the column read refuses such a value (`_read_value`, #1270).
+const _MYSQL_DATETIME_TEXT = r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$"
+const _MYSQL_TIME_TEXT = r"^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$"
+_mysql_fraction_us(digits) = digits === nothing ? 0 : parse(Int, rpad(digits, 6, '0'))
+function _parse_mysql_datetime(v::Any)
+    v isa AbstractString || return v
+    m = match(_MYSQL_DATETIME_TEXT, v)
+    m === nothing && return v
+    us = _mysql_fraction_us(m[5])
+    us % 1000 == 0 || return v
+    try
+      return DateTime(Date(m[1]), Time(parse(Int, m[2]), parse(Int, m[3]), parse(Int, m[4]), div(us, 1000)))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # a well-shaped but impossible value
+    end
+end
+function _parse_mysql_time(v::Any)
+    v isa AbstractString || return v
+    m = match(_MYSQL_TIME_TEXT, v)
+    m === nothing && return v
+    us = _mysql_fraction_us(m[4])
+    try
+      return Time(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]), div(us, 1000), rem(us, 1000))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # past a day (MySQL's TIME runs to 838:59:59)
+    end
+end
 
 # MySQL (#1130): a `DurationField` is a BIGINT of microseconds, Django's choice there — exact, with no
 # range below a BIGINT's (MySQL's `TIME` stops at 838:59:59). The WRITE half: a duration in any form

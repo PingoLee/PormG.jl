@@ -302,6 +302,13 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     for k in (:c, :g, :n, :p, :f)
       @test row[k] isa Date && row[k] == _VRI_RACE_DATE
     end
+    # `NullIf` over a TIMESTAMP and a TIME reads back as the column too. MySQL types NULLIF over any
+    # temporal as text (measured on 8.4), so before #1130 phase 5b these were Strings there, as `:n`
+    # above was. Each NullIf is its first operand: a day later never equals it, and Race 1 has no FP1.
+    row = _vri_race().values("t" => NullIf("start_at", F("start_at") + Day(1)),
+                             "h" => NullIf("time", "fp1_time")).list(:dict)[1]
+    @test vr_observed_text(:timestamp, row[:t]) == Models.format_timezone_sql(_VRI_RACE_START)
+    @test row[:h] isa Time && row[:h] == _VRI_RACE_TIME
     # A DATE beside a TIMESTAMP named no single type: PostgreSQL resolved the common one (`start_at` is
     # a TIMESTAMPTZ, so a `ZonedDateTime`), SQLite handed back its own text (#1179 recorded the split).
     # The query does not say which type it means, so since #1200 it is refused when it is built, on

@@ -586,10 +586,12 @@ end
 # MySQL read parsers: what MySQL.jl delivers, turned into what the kind means
 # #1270: the wire has no boolean (a `TINYINT(1)` reads as `Int8`, a comparison as `Int64`); a
 # DATETIME has no zone and the session is UTC; `AVG` over an integer is a DECIMAL that means a float
-# (#1121); a `DurationField` is a BIGINT of microseconds (#1130). Expected: those four parsed — the
-# interval into the `CompoundPeriod` SQLite reads, in the same units — every parser fail-open on a value
-# it does not recognize, and no parser for the kinds MySQL.jl already delivers typed (a date, a time, a
-# naive datetime, a decimal column).
+# (#1121); a `DurationField` is a BIGINT of microseconds (#1130); and MySQL computes `NULLIF` over a
+# DATE, a DATETIME or a TIME as text (measured on 8.4, phase 5b). Expected: those parsed — the interval
+# into the `CompoundPeriod` SQLite reads, in the same units; the temporal text into the `Date`,
+# `DateTime` or `Time` MySQL.jl decodes the column as, a `Time` to the microsecond — every parser
+# fail-open on a value it does not recognize (a value MySQL.jl decoded passes unchanged), and no parser
+# for text or an integer.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL read parsers: what MySQL.jl delivers, turned into what the kind means" begin
   my = MrMockMySQL()
@@ -599,7 +601,22 @@ end
   parse_ts = PormG.value_parser(PormG.CDateTime(true), my)
   @test parse_ts(DateTime(1991, 3, 10, 14, 0, 0, 125)) == ZonedDateTime(DateTime(1991, 3, 10, 14, 0, 0, 125), tz"UTC")
   @test parse_ts(missing) === missing
-  @test PormG.value_parser(PormG.CDateTime(false), my) === nothing
+  @test parse_ts("1991-03-10 14:00:00.125") == ZonedDateTime(DateTime(1991, 3, 10, 14, 0, 0, 125), tz"UTC")
+  # MySQL's temporal text, as `NULLIF` over each type returns it, back into the decoded type.
+  parse_naive = PormG.value_parser(PormG.CDateTime(false), my)
+  @test parse_naive("1991-03-10 14:00:00.125") === DateTime(1991, 3, 10, 14, 0, 0, 125)
+  @test parse_naive("1991-03-10 14:00:00") === DateTime(1991, 3, 10, 14)
+  @test parse_naive(DateTime(1991, 3, 10)) === DateTime(1991, 3, 10)
+  @test parse_naive("1991-03-10 14:00:00.000001") == "1991-03-10 14:00:00.000001"   # below a DateTime's millisecond
+  @test parse_naive("1991-02-30 14:00:00") == "1991-02-30 14:00:00" && parse_naive("x") == "x"
+  parse_date = PormG.value_parser(PormG.CDate(), my)
+  @test parse_date("2009-03-29") === Date(2009, 3, 29) && parse_date(Date(2009, 3, 29)) === Date(2009, 3, 29)
+  @test parse_date("2009-03-29 10:00:00") == "2009-03-29 10:00:00" && parse_date(missing) === missing
+  parse_time = PormG.value_parser(PormG.CTime(), my)
+  @test parse_time("10:30:00.000000") === Time(10, 30)
+  @test parse_time("23:59:59.999999") === Time(23, 59, 59, 999, 999)
+  @test parse_time("10:30:00") === Time(10, 30) && parse_time(Time(10, 30)) === Time(10, 30)
+  @test parse_time("25:00:00") == "25:00:00" && parse_time("-01:00:00") == "-01:00:00"
   parse_float = PormG.value_parser(PormG.CFloat64(), my)
   @test parse_float(Decimal(0, 16666666666666666666666666666667, -31)) === 1.6666666666666667
   @test parse_float(2.5) === 2.5
@@ -614,7 +631,7 @@ end
   @test parse_interval(Decimal(0, 805, 5)) == parse_interval(80_500_000)
   @test parse_interval(Decimal(0, 25, -1)) == parse_interval(3) && parse_interval(Decimal(1, 25, -1)) == parse_interval(-3)
   @test parse_interval(missing) === missing && parse_interval("00:01:20") == "00:01:20"
-  for kind in (PormG.CDate(), PormG.CTime(), PormG.CText(), PormG.CInt64())
+  for kind in (PormG.CText(), PormG.CInt64())
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
   # #1110: a declared decimal's parser applies its width; a value that fits passes unchanged.

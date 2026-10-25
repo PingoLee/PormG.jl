@@ -151,25 +151,25 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("path date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | after_when", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | after_when", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | after_when", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("path date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("path date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("path date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | alone", :sqlite) =>
@@ -199,49 +199,49 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("path time | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | alone", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | after_when", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | after_when", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | after_when", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("path time | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("path time | cte", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("path time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | subquery", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | after_when", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | after_when", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | after_when", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("hop date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | alone", :sqlite) =>
@@ -271,43 +271,43 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("hop time | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | alone", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | after_when", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | after_when", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | after_when", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("hop time | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("hop time | cte", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("hop time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | subquery", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Joined date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Joined date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Joined date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Joined date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | alone", :sqlite) =>
@@ -331,19 +331,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max Joined date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @year | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | alone", :sqlite) =>
@@ -367,7 +367,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("transform @date | cte", :sqlite) =>
@@ -379,7 +379,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @hour | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | alone", :sqlite) =>
@@ -457,19 +457,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F bare hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F int + int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | alone", :sqlite) =>
@@ -529,7 +529,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Day(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | cte", :sqlite) =>
@@ -541,7 +541,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Day(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :sqlite) =>
@@ -601,7 +601,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Hour(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | cte", :sqlite) =>
@@ -613,7 +613,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Hour(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :sqlite) =>
@@ -637,7 +637,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | cte", :sqlite) =>
@@ -649,13 +649,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | cte", :sqlite) =>
@@ -667,13 +667,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | cte", :sqlite) =>
@@ -685,7 +685,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F interval + interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | alone", :sqlite) =>
@@ -763,7 +763,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop date + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | alone", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop date + interval | cte", :sqlite) =>
@@ -775,7 +775,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop date + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :sqlite) =>
@@ -907,7 +907,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Date, whose type PormG does not infer. Name the type the column "),
   ("Value date | cte", :sqlite) =>
@@ -919,7 +919,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Value text | alone", :sqlite) =>
@@ -961,7 +961,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value datetime | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | alone", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type DateTime, whose type PormG does not infer. Name the type the col"),
   ("Value datetime | cte", :sqlite) =>
@@ -973,7 +973,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | subquery", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Value interval | alone", :sqlite) =>
@@ -1033,19 +1033,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast datetime to date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | alone", :sqlite) =>
@@ -1087,19 +1087,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case declared date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case untyped bool | alone", :sqlite) =>
@@ -1177,19 +1177,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped zoned col | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col | alone", :sqlite) =>
@@ -1213,19 +1213,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped time col | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | alone", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | cte", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | subquery", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped decimal col | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | alone", :sqlite) =>
@@ -1249,19 +1249,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast datetime to timestamp | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
   ("Cast datetime to timestamp | alone", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
   ("Cast datetime to timestamp | cte", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
   ("Cast datetime to timestamp | subquery", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | alone", :sqlite) =>
@@ -1285,19 +1285,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast datetime to time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast datetime to time | alone", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast datetime to time | cte", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast datetime to time | subquery", :mysql) =>
-    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast interval to interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Cast interval to interval | alone", :sqlite) =>
@@ -1357,19 +1357,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce declared timestamp | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
   ("Coalesce declared timestamp | alone", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
   ("Coalesce declared timestamp | cte", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
   ("Coalesce declared timestamp | subquery", :mysql) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Lag interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | alone", :sqlite) =>
@@ -1429,7 +1429,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col + 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("Case untyped date col + 1 | cte", :sqlite) =>
@@ -1441,7 +1441,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col + 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col - date | alone", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | alone", :sqlite) =>
@@ -1627,19 +1627,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | alone", :sqlite) =>
@@ -1717,7 +1717,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce date date | cte", :sqlite) =>
@@ -1729,7 +1729,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce float int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | alone", :sqlite) =>
@@ -1825,7 +1825,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("NullIf date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("NullIf date | cte", :sqlite) =>
@@ -1837,25 +1837,25 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("NullIf date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | alone", :sqlite) =>
@@ -1879,19 +1879,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag date default date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("FirstValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | alone", :sqlite) =>
@@ -1933,19 +1933,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lead hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("LastValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | alone", :sqlite) =>
@@ -3463,7 +3463,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date Date(zoned) | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce date Date(zoned) | cte", :sqlite) =>
@@ -3475,7 +3475,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date Date(zoned) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce zoned zoned | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | alone", :sqlite) =>
@@ -3499,19 +3499,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date zoned output date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | alone", :sqlite) =>
@@ -3841,19 +3841,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case date output date default text | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | alone", :sqlite) =>
@@ -4795,7 +4795,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Max hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Max hop date | cte", :sqlite) =>
@@ -4807,7 +4807,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Max hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Avg float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | alone", :sqlite) =>
@@ -4957,64 +4957,6 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
 # above; pinned so the measurement itself is reviewable, and iterated by the integration read-back.
 const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}}}(
-  ("path date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("path date | after_when", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("path date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("path date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("path time | alone", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("path time | after_when", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("path time | cte", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("path time | subquery", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("hop date | after_when", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("hop date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("hop time | alone", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("hop time | after_when", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("hop time | cte", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("hop time | subquery", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Joined date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Joined date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Joined date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Max Joined date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Max Joined date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Max Joined date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("transform @date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("transform @date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F bare hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F bare hop date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F bare hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date + Day(1) | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date + Day(1) | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
   ("F date - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :sqlite) =>
@@ -5027,80 +4969,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("F date + Hour(1) | alone", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("F date + Hour(1) | subquery", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("F date + 1 | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date + 1 | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date + int col | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date + int col | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date - int col | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F date - int col | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("F hop date + interval | alone", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("F hop date + interval | subquery", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Value date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Value date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Value datetime | alone", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Value datetime | subquery", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Cast datetime to date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Cast datetime to date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Cast datetime to date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case declared date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case declared date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case declared date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case untyped date col | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case untyped date col | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case untyped date col | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case untyped time col | alone", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Case untyped time col | cte", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Case untyped time col | subquery", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Cast datetime to timestamp | alone", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Cast datetime to timestamp | cte", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Cast datetime to timestamp | subquery", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Cast datetime to time | alone", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Cast datetime to time | cte", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Cast datetime to time | subquery", :mysql) =>
-    [(:unparsed, "read=time has no MySQL read parser")],
-  ("Coalesce declared timestamp | alone", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Coalesce declared timestamp | cte", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Coalesce declared timestamp | subquery", :mysql) =>
-    [(:unparsed, "read=datetime has no MySQL read parser")],
-  ("Case untyped date col + 1 | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case untyped date col + 1 | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>
@@ -5113,38 +4981,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("Max hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Max hop date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Max hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("NullIf date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("NullIf date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag hop date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag date default date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag date default date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lag date default date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lead hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lead hop date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Lead hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
@@ -5157,26 +4993,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
-  ("Coalesce date Date(zoned) | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date Date(zoned) | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date zoned output date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date zoned output date | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Coalesce date zoned output date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case date output date default text | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case date output date default text | cte", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Case date output date default text | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Subquery Max hop date | alone", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
-  ("Subquery Max hop date | subquery", :mysql) =>
-    [(:unparsed, "read=date has no MySQL read parser")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

@@ -355,6 +355,22 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         end
     end
 
+    # What: a statement with more parameters than MySQL.jl binds in one is refused before it is sent,
+    # and the pool's connections keep working.
+    # SQL: `SELECT 1 WHERE 1 IN (?, …)` with 5000 markers is never sent: QueryBuildError counts them.
+    # Why: MySQL.jl refuses it with a ProtocolError that closes the connection and reads as a lost one,
+    # "may succeed on retry", though it never can (#84, #1130).
+    @testset "a statement past MySQL.jl's parameter limit is refused before it is sent" begin
+        n = 5000
+        sql = "SELECT 1 AS one WHERE 1 IN ($(join(fill("?", n), ", ")))"
+        e = try; PormG.fetch(pool, sql; params = collect(1:n)); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("binds $(n) parameters", sprint(showerror, e)) &&
+              occursin("at most 4096", sprint(showerror, e))
+        @test rows("SELECT 1 AS one").one == [1]   # nothing was sent, nothing was lost
+        limit = PormG.backend_mysql_parameter_limit(pool)
+        @test rows("SELECT 1 AS one WHERE 1 IN ($(join(fill("?", limit), ", ")))"; params = collect(1:limit)).one == [1]
+    end
+
     for t in (_MY_CHILD, _MY_PARENT, _MY_T)
         run("DROP TABLE IF EXISTS $(t)")
     end

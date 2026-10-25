@@ -1742,7 +1742,7 @@ import DataFrames
   d = _MR_QB.bulk_insert(MrMyUp.Constructor, df; show_query = :dict)
   @test d[:parameters] == Any["mclaren", "British", "brabham", "British", "ligier", "French"]
   @test length(bulk(MrMyUp.Constructor, df; chunk_size = 2)) == 2
-  @test _MR_QB._backend_parameter_limit(MrMockMySQL()) == 65535
+  @test _MR_QB._backend_parameter_limit(MrMockMySQL()) == 65535   # the protocol's; a real pool answers MySQL.jl's 4096 (test_mysql_ext.jl)
   @test _MR_QB._bulk_chunk_rows(MrMockMySQL(), 100_000, 2, 0, :bulk_insert) == 32767
   @test !_MR_QB._bulk_binds_column_arrays(MrMockMySQL()) && !_MR_QB._overrides_generated_identity(MrMockMySQL())
   # DO NOTHING writes nothing, on a column that is not AUTO_INCREMENT even when the id comes first.

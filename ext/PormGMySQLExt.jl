@@ -207,6 +207,11 @@ end
 # Asked through `fetch`, never by leasing a connection here: inside a transaction `fetch` uses the
 # transaction's own connection, where a lease would wait for a second slot (and time out on a pool of
 # one). `VERSION()` can carry a suffix (`8.4.11-log`); the three numbers lead it.
+# #84: the most parameters MySQL.jl binds in one prepared statement, its `max_columns` limit: it refuses a
+# statement past it with a `ProtocolError` before sending it. PormG connects without that option, so the
+# driver's default applies, read from MySQL.jl itself rather than written down here.
+PormG.backend_mysql_parameter_limit(::_Pool)::Int = min(65535, MySQL.Protocol.Limits().max_columns)
+
 function PormG.backend_mysql_version(pool::_Pool)::Int
   text = only(collect(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v")))[1]
   m = match(r"^(\d+)\.(\d+)\.(\d+)", String(text))
@@ -225,9 +230,19 @@ _bind_value(v::Decimals.Decimal) = PormG.Models._pg_decimal_text(v)
 _bind_value(v::TimeZones.ZonedDateTime) = DateTime(TimeZones.astimezone(v, TimeZones.tz"UTC"))
 _bind_value(v) = v
 
-function _bind(params)
+# A statement past the driver's parameter limit is refused here, before anything is sent: MySQL.jl would
+# refuse it with a `ProtocolError`, which closes the connection and reads as a lost one, "may succeed on
+# retry", though it never can. The bulk writers chunk under the limit; anything else (a long `__@in`
+# list) is the caller's to split. The message counts the parameters and never shows one (#971).
+function _bind(pool::_Pool, params)
   resolved = params isa AbstractPormGParam ? params.parameters : params
   (resolved === nothing || isempty(resolved)) && return nothing
+  limit = PormG.backend_mysql_parameter_limit(pool)
+  length(resolved) <= limit || throw(QueryBuildError(
+    "This statement binds $(length(resolved)) parameters, and MySQL.jl binds at most $(limit) in one " *
+    "statement. Split the work into smaller statements (a long `__@in` list into several filters, a " *
+    "many-to-many `remove` or `set` of that many rows into batches), or select the values with a " *
+    "subquery; bulk_insert and bulk_update split themselves."))
   return Any[_bind_value(v) for v in resolved]
 end
 
@@ -394,12 +409,12 @@ function _run(conn::MySQL.Connection, sql::String, bound)
 end
 
 PormG.backend_execute(pool::_Pool, conn::MySQL.Connection, sql::String, params) =
-  _run(conn, sql, _bind(params))
+  _run(conn, sql, _bind(pool, params))
 
 # The async handle is a plain Task, as the other extensions' are: core only `fetch`es and `wait`s it.
 # A MySQL.jl connection serializes concurrent use on its own lock.
 function PormG.backend_execute_async(pool::_Pool, conn::MySQL.Connection, sql::String, params)
-  bound = _bind(params)
+  bound = _bind(pool, params)
   return Threads.@spawn _run(conn, sql, bound)
 end
 

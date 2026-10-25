@@ -289,6 +289,29 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
             end
             @test only(DataFrame(run("SELECT COUNT(*) AS n FROM `p3k_plain_join`")).n) == 1
         end
+
+        # What: a bulk write with more parameters than MySQL.jl binds in one statement is chunked under
+        # its limit, and every row is written.
+        # SQL: INSERT INTO `p3k_stint` (…) VALUES (?, ?, ?, ?), … in chunks of at most 1024 rows (4096 ÷ 4),
+        #      though `chunk_size` asks for all 2100; bulk_update's `VALUES ROW(?, ?)` source in chunks of at
+        #      most 2048.
+        # Why: MySQL.jl refuses a statement past its `max_columns` (4096) with a ProtocolError before
+        #      sending it, though the protocol counts up to 65535 (#84): seeding 861 nine-column rows failed.
+        @testset "a bulk write past MySQL.jl's parameter limit is chunked under it (#84)" begin
+            n = 2100
+            day = DateTime(1999, 1, 1)
+            df = DataFrame(time = Float64.(1:n), pitted = fill(true, n), at = fill(day, n),
+                           fee = [Decimals.Decimal(0, i, -2) for i in 1:n])
+            bulk_insert(K.Stint, df; chunk_size = n)
+            rows = K.Stint.objects.filter("at" => day).values("id", "time").order_by("time").list()
+            @test length(rows) == n && [r[:time] for r in rows] == Float64.(1:n)
+            ids = [r[:id] for r in rows]
+            fees = [Decimals.Decimal(0, 10 * i, -2) for i in 1:n]
+            res = bulk_update(K.Stint, DataFrame(id = ids, fee = fees); chunk_size = n)
+            @test res.count == n
+            stored = K.Stint.objects.filter("at" => day).values("fee").order_by("time").list()
+            @test [r[:fee] for r in stored] == fees
+        end
     finally
         run("DROP TABLE IF EXISTS `$(rel.through_table)`")
         for t in _MYK_TABLES

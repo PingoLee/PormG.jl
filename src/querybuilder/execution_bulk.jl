@@ -1179,8 +1179,10 @@ _sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766
 # count in the wire-protocol Bind message). SQLite: probed from the library version.
 _backend_parameter_limit(::PormGPostgres) = 65535
 _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite_version(conn))
-# MySQL: 65535, the 2-byte parameter count of a prepared statement (COM_STMT_PREPARE).
-_backend_parameter_limit(::PormGMySQL) = 65535
+# MySQL: what its driver binds in one statement (`backend_mysql_parameter_limit`). The protocol's 2-byte
+# count (COM_STMT_PREPARE) allows 65535, but MySQL.jl refuses a statement past its own `max_columns`
+# (4096 by default) with a `ProtocolError` before sending it: a bulk write of 861 nine-column rows failed.
+_backend_parameter_limit(conn::PormGMySQL) = backend_mysql_parameter_limit(conn)
 
 # Cap the requested chunk so that `fixed + effective × per_row` never exceeds `limit` (#84).
 # `per_row` is the parameters each row binds; `fixed` is the per-statement constant params

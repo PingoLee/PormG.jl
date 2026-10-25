@@ -95,6 +95,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
+#   backend_mysql_parameter_limit(pool)                 -> Int parameters one prepared statement binds (below, not in the loop)
 #
 # `backend_cancel_query!` and `backend_drain_connection!` are the abandoned-await pair (#315) —
 # named rather than positioned, because this list grows. A Ctrl-C leaves the driver mid-operation, and
@@ -126,6 +127,13 @@ end
 Kernel._server_version(pool::PormGSQLite)::Int = backend_sqlite_version(pool)
 # MySQL's is the server's, as announced in its greeting; the extension asks a pooled connection.
 Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
+
+# The most parameters one MySQL prepared statement binds (#84, #1130). The protocol counts them in two
+# bytes (COM_STMT_PREPARE), which is this fallback's answer and what a pool without its driver renders
+# by (`show_query`). The MySQL extension answers its driver's own limit, which is lower: MySQL.jl refuses
+# a statement past it before sending it. Not in the loop above: rendering never needs the driver.
+function backend_mysql_parameter_limit end
+backend_mysql_parameter_limit(::PormGMySQL)::Int = 65535
 
 """
     backend_classify_error(pool, e) -> Symbol

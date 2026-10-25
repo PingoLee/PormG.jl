@@ -24,8 +24,10 @@ using PormG.QueryBuilder: Subquery, OuterRef, F, CTE
 # shared key would let another file's settings decide this file's dialect.
 struct PncMockSQLite <: PormG.PormGSQLite end
 struct PncMockPostgres <: PormG.PormGPostgres end
+struct PncMockMySQL <: PormG.PormGMySQL end
 const _PNC_SL = PncMockSQLite()
 const _PNC_PG = PncMockPostgres()
+const _PNC_MY = PncMockMySQL()
 PormG.backend_sqlite_version(::PncMockSQLite) = 3045000
 
 PormG.config["pnc_mock"] = PormG.Configuration.Settings(
@@ -98,6 +100,24 @@ _pnc_read(col, conn) = conn isa PormG.PormGPostgres ? "CAST($(col) AS text)" : c
       @test !occursin("CAST", sql)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL (#1130 phase 5b): an integer column reads as its digits, `CAST(… AS CHAR)`, the text PostgreSQL's
+# cast gives, and a float or a decimal is refused there as on every engine. Before phase 5b MySQL had no
+# method for the read, so the lookup was a `MethodError`. Expected SQL: `CAST(`Tb`.`grid` AS CHAR) LIKE ?`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1168 on MySQL: an integer column reads its digits, a fraction is refused" begin
+  for col in ("grid", "milliseconds", "driverid")
+    @test occursin("WHERE CAST(`Tb`.`$(col)` AS CHAR) LIKE ?", _pnc_sql(q -> q.filter("$(col)__@contains" => "x"), _PNC_MY))
+    @test _pnc_params(q -> q.filter("$(col)__@contains" => "x"), _PNC_MY) == ["%x%"]
+  end
+  @test occursin("CAST(`Tb`.`grid` AS CHAR)", _pnc_sql(q -> q.filter("grid__@iendswith" => "1"), _PNC_MY))
+  for col in ("fastestlapspeed", "points")
+    @test (col, _pnc_refusal(q -> q.filter("$(col)__@contains" => "2"), _PNC_MY) isa PormG.FilterError) == (col, true)
+  end
+  # A non-pattern lookup still compares the number itself.
+  @test occursin("WHERE `Tb`.`grid` = ?", _pnc_sql(q -> q.filter("grid" => 1), _PNC_MY))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

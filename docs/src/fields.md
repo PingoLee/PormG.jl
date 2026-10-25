@@ -196,8 +196,8 @@ Access_token = Models.Model(
 **Querying**: equality and `@in` take a whole UUID in any case (`"550E8400-…"` matches
 `"550e8400-…"`); a malformed one raises `InvalidValueError`. The pattern lookups (`@contains`, `@startswith`,
 `@endswith`, their `i`/`n` variants and `@regex`) take a **fragment** and match it against the UUID's
-lowercase, hyphenated text, the form both engines store or print. On PostgreSQL the column is read as
-`CAST(token AS text)`.
+lowercase, hyphenated text, the form every engine stores or prints. On PostgreSQL the column is read
+as `CAST(token AS text)`; on SQLite and MySQL it is stored as that text.
 
 ```julia
 # Tokens issued from the same prefix, hyphen included.

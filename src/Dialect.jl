@@ -3935,6 +3935,28 @@ _pattern_text_operand(::PormGPostgres, ::Val{:time}, column::AbstractString)::St
 # that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
 # there rather than rendering a `LIKE` the server rejects.
 _pattern_text_operand(::PormGSQLite, ::Val, column::AbstractString)::String = String(column)
+# MySQL (#1130 phase 5b), one method per kind it reads, so a kind added later raises a `MethodError`
+# here too. Each gives PostgreSQL's text, so a pattern matches the same rows (measured on 8.4):
+# - an integer: its digits, `CAST(… AS CHAR)`;
+# - a date: `YYYY-MM-DD`, which MySQL prints whatever the session (it has no `DateStyle`);
+# - a time: a `TimeField` is `TIME(6)`, whose cast prints six fractional digits (`10:30:00.000000`), so
+#   `@contains ".000"` would match every whole-second time. `TIME_FORMAT`'s `%f` always prints them,
+#   and trimming the trailing zeros and then a bare `.` gives `10:30:00` and `10:30:00.25`, as
+#   PostgreSQL's cast and Julia's `string(::Time)` write them. The column is named once;
+# - a uuid: the `CHAR(36)` column as written, lowercase and hyphenated, as on SQLite (#902).
+_pattern_text_operand(::PormGMySQL, ::Val{:integer}, column::AbstractString)::String =
+  "CAST($(column) AS CHAR)"
+_pattern_text_operand(::PormGMySQL, ::Val{:date}, column::AbstractString)::String =
+  "CAST($(column) AS CHAR)"
+_pattern_text_operand(::PormGMySQL, ::Val{:time}, column::AbstractString)::String =
+  "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM TIME_FORMAT($(column), '%H:%i:%s.%f')))"
+_pattern_text_operand(::PormGMySQL, ::Val{:uuid}, column::AbstractString)::String = String(column)
+# A network column is a feature MySQL lacks (`:network_types`): a model that declares one and is queried
+# without a migration reaches here, and gets the refusal every other network lookup gives on MySQL.
+_pattern_text_operand(conn::PormGMySQL, ::Val{:inet}, column::AbstractString)::String =
+  throw(_capability_error(conn, :network_types, "A pattern lookup on an inet column"))
+_pattern_text_operand(conn::PormGMySQL, ::Val{:cidr}, column::AbstractString)::String =
+  throw(_capability_error(conn, :network_types, "A pattern lookup on a cidr column"))
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

@@ -180,17 +180,19 @@ The value is a **fragment of the column's text**, not a whole value of the colum
 bound as text whatever the column holds, as in Django. `"date__@startswith" => "2009"` matches every
 race in 2009, and so does `"date__@yyyy_mm__@startswith" => "2009"`, though an exact `@yyyy_mm`
 needs a whole `"2009-03"`. A date column, or a transform that yields a date (`@date`), is matched
-as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an `Extract`) as its
+as its `YYYY-MM-DD` text on every backend, and a date part (`@year`, `@hour`, an `Extract`) as its
 digits: `"date__@year__@startswith" => "200"` selects the 2000s. An integer column, a relation's
 key included, is matched as its digits too: `"grid__@startswith" => "1"` selects grid slots 1 and
-10–19 on both backends. So is an integer alias, CTE column or `Subquery` (a `Count`, a
+10–19 on every backend. So is an integer alias, CTE column or `Subquery` (a `Count`, a
 `Max("grid")`), an integer `Case` alias with no `output_field`, a `Value(1)` alias, arithmetic over a
 date part (`F("date__@year") + 1`) and a day count (`F("date") - F("date")`), and a date shifted by
 whole days (`F("date") + Day(1)`) is matched as its `YYYY-MM-DD` text. A time column is matched as its `HH:MM:SS` text, with a
 fraction only when the time has one: `"time__@startswith" => "14:"` selects the races that start
-at 14:00 to 14:59 on both backends.
+at 14:00 to 14:59 on every backend. On MySQL a `TimeField` is a `TIME(6)`, which the server prints
+with six fractional digits (`14:00:00.000000`); PormG trims the trailing zeros there, so the text is
+`14:00:00`, or `14:00:00.25`, as on the other backends.
 
-A float or decimal column raises a `FilterError` on both backends, because each engine prints it
+A float or decimal column raises a `FilterError` on every backend, because each engine prints it
 differently: `2.0` is `2` on PostgreSQL and `2.0` on SQLite, so one fragment would select different
 rows. So does an alias, a CTE column or a `Subquery` whose value is not an integer (an `Avg`, a
 `Sum` over a decimal), and a number whose type PormG cannot name, whose text it cannot vouch
@@ -199,7 +201,7 @@ text explicitly through a cast: `values("t" => Cast("fastestlapspeed", "text"));
 filter("t__@startswith" => "2")`. A `Case` alias with a float `default`, and a `Value(2.5)` alias,
 raise the same way.
 
-A timestamp, duration, boolean or binary column raises a `FilterError` on both backends, and so
+A timestamp, duration, boolean or binary column raises a `FilterError` on every backend, and so
 does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`, a duration such as
 `F("start_at") - F("start_at")` or `F("fastestlaptime") * 2`, a timestamp such as `F("date") + Hour(1)`). Their text differs per engine: a
 timestamp prints in the session's time zone on PostgreSQL and as PormG's UTC text on SQLite, a

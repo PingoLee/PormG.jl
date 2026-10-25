@@ -30,6 +30,8 @@ struct _MockPgUuid902 <: PormG.PormGPostgres end
 struct _MockSlUuid902 <: PormG.PormGSQLite end
 PormG.config["uuid902_pg"] = PormG.Configuration.Settings(connections = _MockPgUuid902(), change_data = true)
 PormG.config["uuid902_sl"] = PormG.Configuration.Settings(connections = _MockSlUuid902(), change_data = true)
+struct _MockMyUuid902 <: PormG.PormGMySQL end
+PormG.config["uuid902_my"] = PormG.Configuration.Settings(connections = _MockMyUuid902(), change_data = true)
 
 # A car's telemetry token, and the laps that reference the car — the joined path reads the token
 # through the foreign key.
@@ -43,6 +45,7 @@ function _uuid902_models(key::String)
 end
 const _CAR_PG, _LAP_PG = _uuid902_models("uuid902_pg")
 const _CAR_SL, _LAP_SL = _uuid902_models("uuid902_sl")
+const _CAR_MY, _LAP_MY = _uuid902_models("uuid902_my")
 
 const _TOKEN902 = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -67,6 +70,19 @@ _sql902(q) = q.list(show_query = :dict)
     @test occursin("WHERE \"Tb\".\"token\" LIKE ?", res_sl[:sql_text])
     @test !occursin("CAST(", res_sl[:sql_text])
     @test res_sl[:parameters] == ["550e%"]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # MySQL (#1130 phase 5b): the `CHAR(36)` column is the text, lowercase and hyphenated, as on SQLite
+  # Before phase 5b MySQL had no read for a uuid column, so the lookup was a `MethodError`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a fragment on the column, on MySQL" begin
+    q = _CAR_MY.objects.filter("token__@startswith" => "550e")
+    q.values("id")
+    res = _sql902(q)
+    @test occursin("WHERE `Tb`.`token` LIKE ?", res[:sql_text])
+    @test !occursin("CAST(", res[:sql_text])
+    @test res[:parameters] == ["550e%"]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

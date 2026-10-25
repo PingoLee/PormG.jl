@@ -1310,6 +1310,13 @@ end
   @test got(M.Race.objects.filter("time__@startswith" => "14:").values("raceid")) == want
   want_30 = sort([r[:raceid] for r in rows if occursin(":30", string(r[:time]))])
   @test got(M.Race.objects.filter("time__@contains" => ":30").values("raceid")) == want_30
+  # The end of the text: a whole-second time ends in its seconds, never in a fraction. MySQL's TIME(6)
+  # casts to `14:30:00.000000` (#1130 phase 5b), so with a bare cast there `@endswith "30:00"` matched no
+  # race and `@contains ".0"` every one. The races' times are whole seconds, so `".0"` matches none.
+  want_end = sort([r[:raceid] for r in rows if endswith(string(r[:time]), "30:00")])
+  @test !isempty(want_end) && length(want_end) < length(rows)
+  @test got(M.Race.objects.filter("time__@endswith" => "30:00").values("raceid")) == want_end
+  @test isempty(got(M.Race.objects.filter("time__@contains" => ".0").values("raceid")))
 
   grid_rows = M.Result.objects.filter("raceid" => 1).values("resultid", "grid").list(:dict)
   want_one = sort([r[:resultid] for r in grid_rows if r[:grid] == 1])

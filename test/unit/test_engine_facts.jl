@@ -51,7 +51,8 @@ const _EF_FACTS = vcat(
    (_EF_QB, :_explain_sql),                         # the EXPLAIN statement
    (_EF_QB, :_explain_facts),                       # the facts read from its rows
    (_EF_QB, :_affected_row_count),                  # the rows a DELETE / bulk UPDATE matched
-   (_EF_QB, :_computed_kind)],                      # the type a function computes (#1034, beside each constructor)
+   (_EF_QB, :_computed_kind),                       # the type a function computes (#1034, beside each constructor)
+   (PormG.Dialect, :_pattern_text_operand)],        # the text a pattern lookup reads from a non-text column
 )
 
 # The engine a method parameter names: `:postgres`, `:sqlite`, `:mysql`, or `nothing` for a non-engine one.
@@ -117,7 +118,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_inspectdb_id_pk,
                                # Phase 5b: the bitwise operators as signed 64-bit integers, and a
                                # whole JSON document compared as JSON.
-                               :_bitwise_sql, :_bitwise_not_sql, :_xor_sql, :_json_document_marker])
+                               :_bitwise_sql, :_bitwise_not_sql, :_xor_sql, :_json_document_marker,
+                               # ... and the text a pattern lookup reads from a non-text column.
+                               :_pattern_text_operand])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

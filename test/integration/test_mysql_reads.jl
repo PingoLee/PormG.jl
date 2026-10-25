@@ -9,9 +9,13 @@
 # `utf8mb4_0900_bin`, a `DateTimeField` as `DATETIME(3)`, a boolean as `TINYINT(1)`, a `DurationField`
 # as a BIGINT of microseconds (#1130) — and the tables
 # are dropped at the end. On another engine the whole file is skipped (`only_on`).
+#
+# The tables are the F1 ones, by name, so the file first empties the database: after the migration
+# bootstrap the full F1 schema is there, and InnoDB refuses to drop a table another one references.
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
+isdefined(Main, :reset_database!) || include("common_migration_setup.jl")
 using Test, Dates, TimeZones, Decimals, DataFrames
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs,
     Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract, ToChar, Upper, Lower, Length, Trim, Replace, LPad,
@@ -28,9 +32,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
     msg(e) = sprint(showerror, e)
     @test Tuple(PormG.Models.model_table_name(m) for m in (M.Result, M.New_join_position, M.Race, M.Circuit, M.Driver)) ==
           _MYR_TABLES
-    for t in _MYR_TABLES
-        run("DROP TABLE IF EXISTS `$(t)`")
-    end
+    reset_database!(PormG.config[PORMG_DB_FOLDER])
     try
         # ── Schema: what a PormG column is on MySQL (#1265, #1270) ─────────────────────────────
         tail = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"

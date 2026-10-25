@@ -82,6 +82,17 @@ Cdc_plain = Models.Model("cdc_plain",
   note = Models.CharField(null = true),
 )
 
+# A physical name holding the quote character and a dot, reached through a ForeignKey: a CTE joined on
+# a path through it must keep the whole name (#1130 phase 5b).
+Cdc_odd = Models.Model("cdc_odd",
+  id   = Models.IDField(),
+  code = Models.CharField(db_column = "odd.\"code\""),
+)
+Cdc_odd_child = Models.Model("cdc_odd_child",
+  id  = Models.IDField(),
+  odd = Models.ForeignKey(Cdc_odd, on_delete = "CASCADE", null = true),
+)
+
 PormG.Models.set_models(@__MODULE__, "cte_dbcol_mock")
 end
 
@@ -120,6 +131,38 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
     @test occursin("\"Tb\".\"product_sku\" as \"sku\"", sql)
     @test _cdc_hits(sql, "product_sku") == 1
     @test insp[:parameters] == ["ABC"]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A CTE joined on a path: the main side is the joined model's physical column, whole
+  # `join_field = "odd__code" => "code"` joins on the column the path reaches through the ForeignKey.
+  # The cached selector is split back into its alias and its column in the engine's own quote, with a
+  # doubled quote undone (#1130 phase 5b). Stripping `"` and splitting on the first `.` turned
+  # `"Tb_1"."odd.""code"""` into a column named `odd`, which the table does not have (and on MySQL left
+  # the backticks in the alias, which the alias check refused).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a CTE joined on a path keeps a physical name holding a quote and a dot" begin
+    cte = (c = CDC.Cdc_odd.objects; c.values("id", "code"); c)
+    q = CDC.Cdc_odd_child.objects
+    q.with("ev" => cte, join_field = "odd__code" => "code")
+    q.values("id", "c" => CTE("ev", "id"))
+    for conn in (_CDC_PG, _CDC_SL)
+      sql = inspect_query(q; connection = conn)[:sql_text]
+      @test occursin("LEFT JOIN \"ev\" AS \"R1_2\" ON \"R1_1\".\"odd.\"\"code\"\"\" = \"R1_2\".\"code\"", sql)
+    end
+    # A path that resolves to an expression has no column to join on: refused, not split on a dot — through
+    # a query (a JSON path on the parent) and asked of the helper directly.
+    qj = CDC.Cdc_child.objects
+    qj.with("ev" => (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c), join_field = "parent__meta__k" => "sku")
+    qj.values("id", "c" => CTE("ev", "id"))
+    for conn in (_CDC_PG, _CDC_SL)
+      err = try inspect_query(qj; connection = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("join_field on the path 'parent__meta__k' must name a column", sprint(showerror, err))
+    end
+    @test_throws PormG.QueryBuildError PormG.QueryBuilder._split_qualified_column("LOWER(\"Tb_1\".\"x\")", "a__b", _CDC_PG)
+    @test PormG.QueryBuilder._split_qualified_column("\"Tb_1\".\"odd.\"\"code\"\"\"", "odd__code", _CDC_SL) ==
+          ("Tb_1", "odd.\"code\"")
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

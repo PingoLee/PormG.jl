@@ -242,6 +242,11 @@ const _MR_QUOTE_SHAPES = [
            join_field = "driverid" => "driverid")
     _mr_inspect(q.values("points", "br_surname" => CTE("br", "surname")))[:sql_text]
   end,
+  "a CTE joined on a path through a ForeignKey" => M -> begin
+    q = M.Result.objects
+    q.with("dl" => M.Driver.objects.values("driverid", "surname"), join_field = "driverid__surname" => "surname")
+    _mr_inspect(q.values("points", "dl_id" => CTE("dl", "driverid")))[:sql_text]
+  end,
   "cjoin_on" => M -> begin
     q = M.Result.objects.values("points", "d_surname" => Joined("d", "surname"))
     q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
@@ -266,6 +271,11 @@ const _MR_QUOTE_SHAPES = [
   # The derived-table aliases are quoted the engine's way, on every engine.
   @test occursin("as `__pormg_distinct_count`", _MR_QUOTE_SHAPES[3].second(_MR_MY))
   @test occursin("as \"__pormg_distinct_count\"", _MR_QUOTE_SHAPES[3].second(_MR_PG))
+  # A CTE joined on a path joins on the joined driver's own column (#1130 phase 5b): the alias was the
+  # cached selector with `"` stripped, which left MySQL's backticks in it and failed the alias check.
+  by_path = Dict(_MR_QUOTE_SHAPES)["a CTE joined on a path through a ForeignKey"]
+  @test occursin("LEFT JOIN `dl` AS `R1_2` ON `R1_1`.`surname` = `R1_2`.`surname`", by_path(_MR_MY))
+  @test occursin("LEFT JOIN \"dl\" AS \"R1_2\" ON \"R1_1\".\"surname\" = \"R1_2\".\"surname\"", by_path(_MR_PG))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

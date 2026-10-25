@@ -182,7 +182,7 @@ function _open_connection(pool::_Pool)::MySQL.Connection
     try; close(conn); catch; end
     rethrow()
   end
-  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, writes and migrations work; inspectdb does not yet" maxlog = 1
+  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, writes, migrations and inspectdb work; the full test suite does not run there yet" maxlog = 1
   return conn
 end
 

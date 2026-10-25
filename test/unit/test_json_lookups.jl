@@ -23,8 +23,10 @@ using PormG.Models
 
 struct JsonLookupMockSQLite <: PormG.PormGSQLite end
 struct JsonLookupMockPostgres <: PormG.PormGPostgres end
+struct JsonLookupMockMySQL <: PormG.PormGMySQL end
 const _JL_SL = JsonLookupMockSQLite()
 const _JL_PG = JsonLookupMockPostgres()
+const _JL_MY = JsonLookupMockMySQL()
 
 PormG.config["json_lookup_mock"] = PormG.Configuration.Settings(
   connections = _JL_SL, change_data = true, db_def_folder = "json_lookup_mock",
@@ -299,6 +301,38 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test insp[:parameters] == ["hamilton"]
     @test insp[:parameter_buckets][:where] == ["hamilton"]
     @test insp[:parameter_buckets][:select] == []   # the SELECT extraction bound no parameter
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A whole document compared with the column: JSON on every engine (#1130 phase 5b)
+  # MySQL compares a JSON column with a string as a JSON string scalar, so `payload = ?` matched no
+  # stored document (measured on 8.4), and get_or_create's hit read missed into an INSERT. Expected SQL:
+  # MySQL parses the bound text, `CAST(? AS JSON)`, one per element of a list; PostgreSQL and SQLite
+  # bind the bare marker, the text the write stored. A pattern lookup on the column binds text as before.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a whole JSON document: CAST(? AS JSON) on MySQL, the bare marker elsewhere" begin
+    doc = "{\"driver\":\"hamilton\"}"
+    mkq() = (q = JL.Json_scratch.objects; q.filter("payload" => doc); q.values("id"); q)
+    my = _sql(mkq(); conn = _JL_MY)
+    @test occursin("WHERE `Tb`.`payload` = CAST(? AS JSON)", my[:sql_text])
+    @test my[:parameters] == Any[doc]
+    @test occursin("WHERE \"Tb\".\"payload\" = \$1\n", _sql(mkq(); conn = _JL_PG)[:sql_text])
+    @test occursin("WHERE \"Tb\".\"payload\" = ?\n", _sql(mkq(); conn = _JL_SL)[:sql_text])
+    ne = (q = JL.Json_scratch.objects; q.filter("payload__@ne" => doc); q.values("id"); q)
+    @test occursin(r"`Tb`.`payload` (<>|!=) CAST\(\? AS JSON\)", _sql(ne; conn = _JL_MY)[:sql_text])   # the marker, whichever spelling
+    other = "{\"driver\":\"max\"}"
+    inq = (q = JL.Json_scratch.objects; q.filter("payload__@in" => [doc, other]); q.values("id"); q)
+    my_in = _sql(inq; conn = _JL_MY)
+    @test occursin("IN (CAST(? AS JSON), CAST(? AS JSON))", my_in[:sql_text]) && my_in[:parameters] == Any[doc, other]
+    # A pattern lookup binds text, a LIKE or a verbatim one alike: no JSON marker.
+    for lookup in ("@contains", "@iexact", "@niexact")
+      like = (q = JL.Json_scratch.objects; q.filter("payload__$(lookup)" => "hamilton"); q.values("id"); q)
+      @test (lookup, occursin("AS JSON", _sql(like; conn = _JL_MY)[:sql_text])) == (lookup, false)
+    end
+    # An empty list is the membership that matches nothing, as on every engine, not `CAST( AS JSON)`.
+    none = (q = JL.Json_scratch.objects; q.filter("payload__@in" => String[]); q.values("id"); q)
+    @test !occursin("AS JSON", _sql(none; conn = _JL_MY)[:sql_text])
+    @test _sql(none; conn = _JL_MY)[:sql_text] == replace(_sql(none; conn = _JL_SL)[:sql_text], '"' => '`')
   end
 
 end

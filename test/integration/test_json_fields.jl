@@ -105,6 +105,16 @@ end
             @test row.slug == slug
         end
 
+        # A plain filter on the whole document matches its row, and a different document does not
+        # (#1130 phase 5b): on MySQL the bare marker compared the JSON column with a JSON string, so
+        # no document matched even its own text, and get_or_create above missed into an INSERT.
+        @testset "a whole JSON document matches its own row" begin
+            q = base(); q.filter("payload" => PormG.Models.format_json_sql(seeded))
+            @test q.count() == 1
+            q = base(); q.filter("payload" => PormG.Models.format_json_sql(merge(seeded, Dict("points" => 16))))
+            @test q.count() == 0
+        end
+
         # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.
         # Before, PostgreSQL's jsonb rejected the `\u0000` escape on the server (a StatementError,
         # under LibPQ and Postgres.jl alike) while SQLite stored it — so this is the one place a real

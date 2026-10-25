@@ -483,9 +483,12 @@ end
 function _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock::Bool = false)
   params = get_parameter(connection)
   set_context!(params, :where)
-  where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = " *
-                    "$(add_parameter!(params, real_obj.insert[f] |> _write_formatter(model.fields[f], connection)))" for f in target_fields],
-                   " AND ")
+  # A JSON column's document compares as JSON (`_json_document_marker`): on MySQL a bare marker is a
+  # JSON string, which no stored document equals.
+  marker(f) = (ph = add_parameter!(params, real_obj.insert[f] |> _write_formatter(model.fields[f], connection));
+               _is_json_field(model.fields[f]) ? _json_document_marker(connection, ph) : ph)
+  where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = $(marker(f))"
+                    for f in target_fields], " AND ")
   return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1$(lock ? " FOR SHARE" : "");", params)
 end
 

@@ -1349,6 +1349,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       placeholders = add_parameter!(instruc,
         _guarded_format(_lookup_formatter(_f_meta, v.operator), v.values, v.operator, v.column.field, _f_meta.type),
         contains=is_like_op, operator=v.operator)
+      # A whole JSON document is compared as JSON, on every engine (`_json_document_marker`); a pattern
+      # lookup's value is text (`@contains`, `@iexact`), and stays a bare marker.
+      !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_f_meta) &&
+        (placeholders = _json_document_marker(instruc.connection, placeholders))
       # Why the conversion exists at all, kept from #411's `catch` body:
       #
       # it used to string-match `"The date"` && `"is invalid"`. That fired for exactly one case —
@@ -1383,6 +1387,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
         _guarded_format(_lookup_formatter(_vc_field, v.operator), v.values, v.operator,
                         memo_key(v.column)[2], _vc_field.type),
         contains=is_like_op, operator=v.operator)
+      !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_vc_field) &&
+        (placeholders = _json_document_marker(instruc.connection, placeholders))
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS

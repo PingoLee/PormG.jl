@@ -330,6 +330,18 @@ _binds_list_as_array(::PormGPostgres) = true
 _binds_list_as_array(::PormGSQLite) = false
 _binds_list_as_array(::PormGMySQL) = false   # no array binding: one `?` per element
 
+# A whole JSON document compared with a JSON column (`filter("payload" => doc)`, get_or_create's and
+# update_or_create's lookups): the marker the bound document text takes. PostgreSQL types the untyped `$1`
+# from the `jsonb` column, and SQLite compares the text the write stored. MySQL compares a JSON column
+# with a string as a JSON string scalar, so no document ever equalled its own text (measured on 8.4:
+# `CAST(doc AS JSON) = ?` is 0 over the same text); `CAST(? AS JSON)` parses it, and then the two compare
+# as `jsonb` does, whatever the key order or `1` against `1.0` (measured, `IN` and `NOT IN` too). A list
+# (`__@in`) is one marker per element, and an empty list stays empty, the membership that matches nothing.
+_json_document_marker(::PormGPostgres, marker::AbstractString) = String(marker)
+_json_document_marker(::PormGSQLite, marker::AbstractString) = String(marker)
+_json_document_marker(::PormGMySQL, marker::AbstractString) =
+  isempty(marker) ? "" : join(("CAST($(m) AS JSON)" for m in split(marker, ", ")), ", ")
+
 # A JSON path lookup extracts TEXT (`#>>`), so a value compared with it binds as text and an ordering
 # casts it to `numeric`. SQLite's `json_extract` keeps the JSON type, so a number stays a number.
 _json_path_extracts_text(::PormGPostgres) = true

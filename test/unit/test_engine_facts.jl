@@ -115,8 +115,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # timestamp types.
                                :_text_key_is_uuid, :_declares_bigint, :_declares_naive_timestamp,
                                :_inspectdb_id_pk,
-                               # Phase 5b: the bitwise operators as signed 64-bit integers.
-                               :_bitwise_sql, :_bitwise_not_sql, :_xor_sql])
+                               # Phase 5b: the bitwise operators as signed 64-bit integers, and a
+                               # whole JSON document compared as JSON.
+                               :_bitwise_sql, :_bitwise_not_sql, :_xor_sql, :_json_document_marker])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

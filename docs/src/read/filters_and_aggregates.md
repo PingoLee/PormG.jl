@@ -422,6 +422,19 @@ column means the same thing on both.
     it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
     avoid numeric object keys in a `__` path.
 
+### A whole document (`field => document`)
+
+A filter on the column itself compares the whole stored document, and `get_or_create` and
+`update_or_create` find their row the same way:
+
+```julia
+M.Constructor.objects.filter("metadata" => """{"principal": "Toto Wolff", "wins": 121}""")
+```
+
+PostgreSQL compares `jsonb` values, so key order and spacing do not matter, and MySQL compares JSON
+values too (PormG binds the document as `CAST(? AS JSON)` there). SQLite compares the stored text, so
+it matches a document written from the same value.
+
 ### Containment and key-existence operators (PostgreSQL only)
 
 These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).

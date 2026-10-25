@@ -52,11 +52,15 @@ Season = Models.Model("p3k_season",
   id = Models.IDField(),
   year = Models.IntegerField(),
   sponsors = Models.ManyToManyField(Sponsor, related_name = "seasons"))
+Kit = Models.Model("p3k_kit",
+  id = Models.IDField(),
+  slug = Models.CharField(unique = true),
+  blob = Models.BinaryField(null = true))
 end
 
 # The tables, in drop order (children first).
 const _MYK_TABLES = ("p3k_car", "p3k_team", "p3k_status", "p3k_season", "p3k_sponsor", "p3k_stint", "p3k_plain_join",
-                     "p3k_garage")
+                     "p3k_garage", "p3k_kit")
 
 @testset "MySQL backend, phase 3c: bulk writes and the many-to-many manager (#1130)" begin
 if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
@@ -86,6 +90,8 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
             "`name` VARCHAR(255) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci")
         run("CREATE TABLE `p3k_sponsor` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL)" * tail)
         run("CREATE TABLE `p3k_season` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `year` INT NOT NULL)" * tail)
+        run("CREATE TABLE `p3k_kit` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `slug` VARCHAR(255) NOT NULL UNIQUE, " *
+            "`blob` LONGBLOB NULL)" * tail)
         o, r = rel.owner_column, rel.related_column
         run("CREATE TABLE `$(rel.through_table)` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `$(o)` BIGINT NOT NULL, " *
             "`$(r)` BIGINT NOT NULL, UNIQUE KEY `$(rel.through_table)_uq` (`$(o)`, `$(r)`), " *
@@ -288,6 +294,46 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
                 QB._m2m_add!(pool, PormG.config["p3k_my"], "`p3k_plain_join`", "`o`", "`r`", season.id, [marlboro])
             end
             @test only(DataFrame(run("SELECT COUNT(*) AS n FROM `p3k_plain_join`")).n) == 1
+        end
+
+        # What: a bulk write with more parameters than MySQL.jl binds in one statement is chunked under
+        # its limit, and every row is written.
+        # SQL: INSERT INTO `p3k_stint` (…) VALUES (?, ?, ?, ?), … in chunks of at most 1024 rows (4096 ÷ 4),
+        #      though `chunk_size` asks for all 2100; bulk_update's `VALUES ROW(?, ?)` source in chunks of at
+        #      most 2048.
+        # Why: MySQL.jl refuses a statement past its `max_columns` (4096) with a ProtocolError before
+        #      sending it, though the protocol counts up to 65535 (#84): seeding 861 nine-column rows failed.
+        @testset "a bulk write past MySQL.jl's parameter limit is chunked under it (#84)" begin
+            n = 2100
+            day = DateTime(1999, 1, 1)
+            df = DataFrame(time = Float64.(1:n), pitted = fill(true, n), at = fill(day, n),
+                           fee = [Decimals.Decimal(0, i, -2) for i in 1:n])
+            bulk_insert(K.Stint, df; chunk_size = n)
+            rows = K.Stint.objects.filter("at" => day).values("id", "time").order_by("time").list()
+            @test length(rows) == n && [r[:time] for r in rows] == Float64.(1:n)
+            ids = [r[:id] for r in rows]
+            fees = [Decimals.Decimal(0, 10 * i, -2) for i in 1:n]
+            res = bulk_update(K.Stint, DataFrame(id = ids, fee = fees); chunk_size = n)
+            @test res.count == n
+            stored = K.Stint.objects.filter("at" => day).values("fee").order_by("time").list()
+            @test [r[:fee] for r in stored] == fees
+        end
+
+        # What: bytes with high values and a NUL round-trip through bulk_insert and bulk_update.
+        # SQL: bulk_update's `UPDATE `p3k_kit` AS `Tb`, (VALUES ROW(?, ?)) AS source (`blob`, `slug`) SET
+        #      `Tb`.`blob` = source.`blob` WHERE `Tb`.`slug` = source.`slug``, the bytes bound as bytes.
+        # Why: the derived table's column must stay binary: as text in the connection's utf8mb4, MySQL
+        #      refuses a byte sequence that is not UTF-8 (1366).
+        @testset "bulk_insert and bulk_update write bytes as bytes" begin
+            payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
+            updated = UInt8[0x00, 0x01, 0xFE, 0xFF, 0x00]
+            blob(slug) = collect(only(K.Kit.objects.filter("slug" => slug).values("blob").list())[:blob])
+            bulk_insert(K.Kit, DataFrame(slug = ["k1", "k2"], blob = Union{Vector{UInt8}, Missing}[payload, missing]))
+            @test blob("k1") == payload
+            res = bulk_update(K.Kit, DataFrame(slug = ["k1", "k2"], blob = [updated, payload]);
+                              columns = ["blob", "slug"], match_on = ["slug"])
+            @test res.count == 2
+            @test blob("k1") == updated && blob("k2") == payload
         end
     finally
         run("DROP TABLE IF EXISTS `$(rel.through_table)`")

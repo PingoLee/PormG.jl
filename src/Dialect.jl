@@ -512,15 +512,35 @@ function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int, label = nothi
         iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
         c, q = _canonical_coefficient(c, -scale)
     end
-    ndigits(c) + q <= precision - scale || throw(_decimal_overflow_error(precision, scale, label))
+    _fits_decimal_width(c, q, precision, scale) || throw(_decimal_overflow_error(precision, scale, label))
     return Decimals.Decimal(neg ? 1 : 0, c, q)
 end
 
+# #1110 on MySQL (#1130): the READ half of a declared `numeric(p, s)`, which MySQL computes at
+# `DECIMAL(65, s)` (`cast_type_sql`). MySQL's own `DECIMAL(p, s)` clamps a value too wide for it to the
+# largest the type holds, with only a warning (`CAST(100 AS DECIMAL(2,0))` is `99`); computed wide, the
+# value arrives whole, already rounded to `s`, and this raises PostgreSQL's 22003 for it on that row, as
+# `_parse_sqlite_decimal` does. The extension delivers a DECIMAL as a `Decimals.Decimal`; anything else
+# (`missing`) is returned unchanged.
+function _parse_mysql_declared_decimal(v::Any, precision::Int, scale::Int, label = nothing)
+    v isa Decimals.Decimal || return v
+    iszero(v.c) && return v
+    _fits_decimal_width(BigInt(v.c), Int(v.q), precision, scale) ||
+        throw(_decimal_overflow_error(precision, scale, label; adapter = "MySQL"))
+    return v
+end
+
+# Whether `c × 10^q` needs at most `precision - scale` digits before the point. `ndigits(c) + q` is that
+# count whatever trailing zeros `c` keeps (dropping one lowers `ndigits` by one and raises `q` by one), so
+# it needs no canonical form.
+_fits_decimal_width(c::BigInt, q::Int, precision::Int, scale::Int)::Bool = ndigits(c) + q <= precision - scale
+
 # #1110: what PostgreSQL raises for a value too wide for its `numeric(p, s)` — SQLSTATE 22003, a
-# `StatementError` — built for the row SQLite returned unchecked. Never the value (#971).
-function _decimal_overflow_error(precision::Int, scale::Int, label)
+# `StatementError` — built for the row SQLite returned unchecked, or MySQL computed wide (`adapter`).
+# Never the value (#971).
+function _decimal_overflow_error(precision::Int, scale::Int, label; adapter::String = "SQLite")
     where_ = label === nothing ? "a value" : "a value of `$(label)`"
-    return StatementError("SQLite",
+    return StatementError(adapter,
         "numeric field overflow: $(where_) needs more than $(precision - scale) digits before the " *
         "point, so it does not fit its declared type numeric($(precision), $(scale))";
         sqlstate = "22003")
@@ -964,6 +984,15 @@ function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::Abstract
     throw(UnsupportedConnectionError(
       "$(context): a cast to $(repr(name * suffix)) is not rendered for MySQL yet: MySQL's CAST has no " *
       "target that holds its meaning, and PormG passes no type name through unmapped (#1130)."))
+  end
+  # #1110: a sized `numeric(p, s)` is computed at `DECIMAL(65, s)`, MySQL's widest, and the read path
+  # applies `p` (`_unapplied_decimal_width`, `_parse_mysql_declared_decimal`): `DECIMAL(p, s)` would round
+  # to `s` the same, but clamp a value too wide for `p` instead of overflowing. A `p` past 65 (or past an
+  # `Int`) is left as written, which MySQL refuses.
+  if target == "DECIMAL" && !isempty(size)
+    m = match(r"^\((\d+)(?:,(\d+))?\)$", size)
+    p = m === nothing ? nothing : tryparse(Int, m.captures[1])
+    p !== nothing && p <= 65 && return "DECIMAL(65,$(something(m.captures[2], "0")))"
   end
   isempty(size) || return target * size
   # PostgreSQL's unsized `char` is `char(1)`, which keeps one character; MySQL's unsized CHAR keeps all.

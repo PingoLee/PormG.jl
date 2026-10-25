@@ -26,16 +26,18 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         run("DROP TABLE IF EXISTS $(t)")
     end
 
-    # What: every connection runs against a MySQL 8.4+ server, in UTC, under 8.4's default sql_mode.
+    # What: every connection runs against a MySQL 8.4+ server, in UTC, under 8.4's default sql_mode plus
+    # NO_AUTO_VALUE_ON_ZERO.
     # SQL: `SELECT @@time_zone, @@sql_mode, @@character_set_client` on a pooled connection.
     # Why: a TIMESTAMP shifts with the session time zone, and a server's global sql_mode (ANSI_QUOTES,
     # PIPES_AS_CONCAT) would change what `"x"` and `||` mean; the extension pins both at connect, and
-    # the #1264 floor is checked on the server's own version.
-    @testset "a connection is MySQL 8.4+, in UTC, under 8.4's sql_mode" begin
+    # the #1264 floor is checked on the server's own version. Without NO_AUTO_VALUE_ON_ZERO a written 0
+    # key is replaced by a generated one (test_mysql_writes.jl pins the write).
+    @testset "a connection is MySQL 8.4+, in UTC, under 8.4's sql_mode and NO_AUTO_VALUE_ON_ZERO" begin
         r = rows("SELECT @@time_zone AS tz, @@sql_mode AS sm, @@character_set_client AS cs")
         @test r.tz[1] == "+00:00"
-        @test r.sm[1] == "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE," *
-                         "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"
+        @test r.sm[1] == "ONLY_FULL_GROUP_BY,NO_AUTO_VALUE_ON_ZERO,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE," *
+                         "NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"
         @test r.cs[1] == "utf8mb4"
         v = PormG._server_version(pool)
         @test v >= 80_400
@@ -351,6 +353,22 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
             mine = DataFrame(PormG.fetch(_SUITE_LOCK_POOL[], "SELECT CONNECTION_ID() AS id")).id[1]
             @test id == mine
         end
+    end
+
+    # What: a statement with more parameters than MySQL.jl binds in one is refused before it is sent,
+    # and the pool's connections keep working.
+    # SQL: `SELECT 1 WHERE 1 IN (?, …)` with 5000 markers is never sent: QueryBuildError counts them.
+    # Why: MySQL.jl refuses it with a ProtocolError that closes the connection and reads as a lost one,
+    # "may succeed on retry", though it never can (#84, #1130).
+    @testset "a statement past MySQL.jl's parameter limit is refused before it is sent" begin
+        n = 5000
+        sql = "SELECT 1 AS one WHERE 1 IN ($(join(fill("?", n), ", ")))"
+        e = try; PormG.fetch(pool, sql; params = collect(1:n)); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("binds $(n) parameters", sprint(showerror, e)) &&
+              occursin("at most 4096", sprint(showerror, e))
+        @test rows("SELECT 1 AS one").one == [1]   # nothing was sent, nothing was lost
+        limit = PormG.backend_mysql_parameter_limit(pool)
+        @test rows("SELECT 1 AS one WHERE 1 IN ($(join(fill("?", limit), ", ")))"; params = collect(1:limit)).one == [1]
     end
 
     for t in (_MY_CHILD, _MY_PARENT, _MY_T)

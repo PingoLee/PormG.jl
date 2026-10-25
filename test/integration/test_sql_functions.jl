@@ -2074,9 +2074,12 @@ end
 # `Cast("driverid", "numeric(2,0)")` holds drivers 1–99 and overflows from 100. PostgreSQL raises
 # "numeric field overflow" (SQLSTATE 22003) when the query runs; SQLite returned 100, 101, … as they
 # were, and now raises the same `StatementError` as it reads the row (`Dialect._parse_sqlite_decimal`).
+# MySQL's `DECIMAL(2,0)` clamps them to 99 with only a warning, so it computes the cast at `DECIMAL(65,0)`
+# and raises the same error as it reads the row (`Dialect._parse_mysql_declared_decimal`, #1130).
 # Projected alone, under a CTE and in a `Subquery`, through `list()` and `DataFrame`. The drivers below
-# 100 read the same `Decimal` on both engines, checked against the `driverid` column itself.
-# Expected SQL, PostgreSQL: ("Tb"."driverid")::numeric(2,0); SQLite: CAST("Tb"."driverid" AS NUMERIC(2,0)).
+# 100 read the same `Decimal` on every engine, checked against the `driverid` column itself.
+# Expected SQL, PostgreSQL: ("Tb"."driverid")::numeric(2,0); SQLite: CAST("Tb"."driverid" AS NUMERIC(2,0));
+# MySQL: CAST(`Tb`.`driverid` AS DECIMAL(65,0)).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1110: a numeric(p, s) cast that overflows on a row raises 22003 on every engine" begin
     cast() = Cast("driverid", "numeric(2,0)")

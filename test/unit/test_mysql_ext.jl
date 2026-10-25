@@ -393,4 +393,25 @@ end
   @test occursin("collation_connection = 'utf8mb4_0900_bin'", sql)
   @test occursin("div_precision_increment = 30", sql)
   @test occursin("time_zone = '+00:00'", sql) && !occursin("ANSI_QUOTES", sql) && !occursin("PIPES_AS_CONCAT", sql)
+  # A written 0 key is stored as 0, as on PostgreSQL and SQLite, not replaced by a generated id.
+  @test occursin("NO_AUTO_VALUE_ON_ZERO", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A bulk statement stays under MySQL.jl's parameter limit (#84, #1130)
+# MySQL.jl refuses a prepared statement with more parameters than its `max_columns` (4096 by default)
+# before sending it, with a `ProtocolError`, though the protocol counts up to 65535. Expected: a MySQL pool
+# answers the driver's limit, read from MySQL.jl, and a bulk write of nine-column rows takes 455 a chunk;
+# a pool the extension does not serve (a mock, `show_query` only) answers the protocol's 65535.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a MySQL bulk statement stays under MySQL.jl's parameter limit (#84, #1130)" begin
+  pool = _my_pool()
+  @test PormG.backend_mysql_parameter_limit(pool) == _MyP.Limits().max_columns == 4096
+  @test PormG.QueryBuilder._backend_parameter_limit(pool) == 4096
+  @test PormG.QueryBuilder._bulk_chunk_rows(pool, 100_000, 9, 0, :bulk_insert) == 455
+  # Any other statement past it is refused before it is sent, counting the parameters, never showing one.
+  @test _MyExt._bind(pool, collect(1:4096)) == collect(1:4096)
+  e = try; _MyExt._bind(pool, fill(424242, 4097)); nothing; catch err; err; end
+  @test e isa PormG.QueryBuildError && occursin("binds 4097 parameters", sprint(showerror, e))
+  @test !occursin("424242", sprint(showerror, e))
 end

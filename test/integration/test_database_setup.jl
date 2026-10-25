@@ -2,27 +2,29 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-_bulk_update_fixture_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER")   # a row per engine (#1179)
+# A row per engine (#1179). MySQL's is INT, as the INTEGER foreign-key columns below: InnoDB refuses a
+# foreign key between columns of different integer types (3780).
+_bulk_update_fixture_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER", mysql = "INT AUTO_INCREMENT")
 
 function _ensure_bulk_update_fixture_schema!()
   pool = PormG.config[PORMG_DB_FOLDER].connections
   id_type = _bulk_update_fixture_id_type(pool)
 
-  PormG.ConnectionPool.fetch(pool, """
+  PormG.ConnectionPool.fetch(pool, engine_sql("""
   CREATE TABLE IF NOT EXISTS \"bulk_update_required_parent_scratch\" (
     \"id\" $id_type PRIMARY KEY,
     \"label\" TEXT NOT NULL
   );
-  """)
+  """))
 
-  PormG.ConnectionPool.fetch(pool, """
+  PormG.ConnectionPool.fetch(pool, engine_sql("""
   CREATE TABLE IF NOT EXISTS \"bulk_update_optional_parent_scratch\" (
     \"id\" $id_type PRIMARY KEY,
     \"label\" TEXT NOT NULL
   );
-  """)
+  """))
 
-  PormG.ConnectionPool.fetch(pool, """
+  PormG.ConnectionPool.fetch(pool, engine_sql("""
   CREATE TABLE IF NOT EXISTS \"bulk_update_payload_scratch\" (
     \"id\" $id_type PRIMARY KEY,
     \"label\" TEXT NOT NULL,
@@ -33,7 +35,7 @@ function _ensure_bulk_update_fixture_schema!()
     \"event_time\" TIMESTAMP,
     \"nullable_int\" INTEGER
   );
-  """)
+  """))
 
   # Add new columns to any pre-existing table that was created before event_time / nullable_int
   # were introduced. PostgreSQL supports ADD COLUMN IF NOT EXISTS directly. SQLite 3.37+ does

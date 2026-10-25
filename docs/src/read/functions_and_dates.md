@@ -1012,16 +1012,18 @@ What each row covers:
 - **an overflow**: only a literal is certain to overflow, so only a literal is refused when the query
   is built (#1087). A column or a computed value overflows on the rows that hold a large value and
   not on the others. PostgreSQL raises "numeric field overflow" on such a row when the query runs.
-  SQLite returns the value as it is, so PormG raises the same error as it reads the row (#1110):
-  `StatementError` with `e.sqlstate == "22003"` on both engines, whose message names the projection
-  and the declared type but never the value. The literal of a `Coalesce`, `Greatest`, `Least` or
-  `Case` with an `output_field` is not refused when the query is built, because it is one candidate
-  value among the operands. A row whose value overflows raises like any other. Three limits:
-  - a cast used only in a filter, an `ORDER BY` or a `GROUP BY` is never read back, so SQLite
-    compares the value as it is there;
-  - SQLite checks a declaration of at most 15 digits, the width it stores exactly;
-  - MySQL clamps an overflowing value to the largest one the type holds, with only a warning
-    ([Backends](../backends.md)).
+  SQLite returns the value as it is, and MySQL's `DECIMAL(p, s)` clamps it to the largest value the
+  type holds with only a warning (`99` for `numeric(2,0)`). So PormG raises the same error as it
+  reads the row (#1110): on MySQL it computes the cast at `DECIMAL(65, s)`, which rounds to the same
+  scale, and applies `p` as the row is read. Every engine raises `StatementError` with
+  `e.sqlstate == "22003"`, whose message names the projection and the declared type but never the
+  value. The literal of a `Coalesce`, `Greatest`, `Least` or `Case` with an `output_field` is not
+  refused when the query is built, because it is one candidate value among the operands. A row whose
+  value overflows raises like any other. Two limits:
+  - a cast used only in a filter, an `ORDER BY` or a `GROUP BY` is never read back, and one composed
+    into arithmetic or an aggregate (`Cast(x, "numeric(2,0)") + 1`, `Max(Cast(…))`) reads as the
+    computed number it means, so neither is checked: SQLite and MySQL use the value as it is there;
+  - SQLite checks a declaration of at most 15 digits, the width it stores exactly.
 
 A `Case` with no `output_field` is read branch by branch, each `then` and its default as an operand
 of its own, since its value on a row is one of them (#1151, #1187):

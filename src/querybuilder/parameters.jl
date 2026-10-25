@@ -485,11 +485,17 @@ function _mysql_placeholder(v::Decimals.Decimal)::String
   return "CAST(? AS DECIMAL($(precision),$(scale)))"
 end
 _mysql_placeholder(::Any) = "?"
+# #1130 phase 5: bytes bind as bytes, but MySQL types a `?` in a derived table's row by the statement
+# around it: in bulk_update's `(VALUES ROW(?, ?)) AS source (blob, slug)` beside a text column it was a
+# string in the connection's utf8mb4, and a byte sequence that is not UTF-8 was refused (measured: 1366,
+# `Incorrect string value: '\xFE\xFF\x00'`). The marker states the binary type, as a Decimal's does.
 function add_parameter!(sq::PormGMySQLParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && throw(FilterError("Contains option is not supported for binary parameters"))
   push!(_current_bucket(sq), value.bytes)
-  return "?"
+  return _mysql_placeholder(value)
 end
+# A list's element too (`__@in` over bytes), whose marker the list arm above asks for.
+_mysql_placeholder(::PormGBytes) = "CAST(? AS BINARY)"
 # MySQL has no array type either (#1270): refused, as on SQLite, with no connection at hand.
 function add_parameter!(sq::PormGMySQLParam, value::PormGArrayLiteral; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   throw(BackendCapabilityError("An ArrayField value cannot be bound on MySQL: MySQL has no array type, and PormG does not emulate one. Run this model on PostgreSQL."))

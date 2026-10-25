@@ -100,7 +100,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     push!(quoted_field_columns, safe_column_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters — one value, never a collection (#712)
-    formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert")
+    formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert"; conn = connection)
     push!(param_values, add_parameter!(parameters, formatted))
 
   end
@@ -384,7 +384,7 @@ function _run_update_or_create(connection::PormGSQLite, settings, real_obj, mode
     tp = get_parameter(connection)
     set_context!(tp, :where)
     for f in target_fields
-      add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formatter)
+      add_parameter!(tp, real_obj.insert[f] |> _write_formatter(model.fields[f], connection))
     end
     tp
   end
@@ -426,7 +426,10 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
     return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
   end
   pk = get_model_pk_field(model)
-  counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)])
+  # A row that writes 0 into the AUTO_INCREMENT key stores 0 (the session's `NO_AUTO_VALUE_ON_ZERO`), and
+  # the OK packet's id is then 0 for the insert too, so the reads decide, as without AUTO_INCREMENT.
+  counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)]) &&
+                  !_writes_zero_key(real_obj.insert, model, String(pk))
   do_upsert = () -> begin
     existed = counts_insert ? false :
       !isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
@@ -464,6 +467,16 @@ end
 _odku_created(counts_insert::Bool, existed::Bool, count::Integer, id::Integer)::Bool =
   counts_insert ? (count == 1 && id != 0) : (!existed && count != 2)
 
+# Whether the row writes 0 into its key `name`, as the INSERT binds it: a number, or text that reads as
+# one (`"00"` stores 0, measured through update_or_create).
+function _writes_zero_key(insert, model, name::String)::Bool
+  haskey(insert, name) || return false
+  bound = _format_single(model.fields[name], name, insert[name], "insert")
+  bound isa Number && return iszero(bound)
+  number = bound isa AbstractString ? tryparse(Float64, strip(bound)) : nothing
+  return number !== nothing && iszero(number)
+end
+
 # `<head> FROM <table> WHERE <target> = <the value the INSERT bound> … LIMIT 1`, on a fresh parameter
 # object each call: a statement's parameters are never reused across fetches. `lock` makes it a
 # locking read (`FOR SHARE`), which reads the latest committed row rather than the snapshot.
@@ -471,7 +484,7 @@ function _select_by_target(head, real_obj, model, target_fields, safe_table_name
   params = get_parameter(connection)
   set_context!(params, :where)
   where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = " *
-                    "$(add_parameter!(params, real_obj.insert[f] |> model.fields[f].formatter))" for f in target_fields],
+                    "$(add_parameter!(params, real_obj.insert[f] |> _write_formatter(model.fields[f], connection)))" for f in target_fields],
                    " AND ")
   return ("$(head) FROM $(safe_table_name) WHERE $(where_sql) LIMIT 1$(lock ? " FOR SHARE" : "");", params)
 end
@@ -1526,7 +1539,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")
+      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update"; conn = connection)
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

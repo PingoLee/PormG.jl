@@ -3283,9 +3283,6 @@ end  # @testset "Migration Engine Edge Cases"
   @test M.Circuit.objects.count() == 0
 
   @info "Selected integration DB rebuilt after edge-case migration tests" adapter=adapter_name db=PORMG_DB_FOLDER fallback=edge_db_reuses_selected_db[]
-  # MySQL: the full suite does not run there yet (`runtests.jl`), and its own files create and drop their
-  # tables — `test_mysql_reads.jl` the F1 ones by name — so the rebuilt schema is not left behind.
-  by_engine(postgres = () -> nothing, sqlite = () -> nothing, mysql = () -> reset_database!(PormG.config[PORMG_DB_FOLDER]))()
 end
 
 # ── SQLite table-rebuild: preserve secondary indexes + FK-integrity gate (#82) ──

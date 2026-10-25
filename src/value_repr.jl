@@ -334,11 +334,15 @@ type the call means: a `Decimal` to a `Float64`, a double to a `Decimal` of 15 s
 column records their kinds (a width-less `CDecimal`, a `CFloat64`), so they never run on a stored
 value.
 
-**One stated exception (#1110):** SQLite's declared-decimal parser (`CDecimal(p, s)`,
-`Dialect._parse_sqlite_decimal`) applies the declaration SQLite ignored. It rounds to `s` places, and
-a value that then needs more than `p - s` digits before the point raises `StatementError` with
-`sqlstate = "22003"`, the error PostgreSQL raises for that row. It recognises the value and refuses
-it, rather than failing to recognise it.
+**One stated exception (#1110):** the declared-decimal parsers (`CDecimal(p, s)`) of SQLite
+(`Dialect._parse_sqlite_decimal`) and MySQL (`Dialect._parse_mysql_declared_decimal`) apply the
+declaration the engine did not. SQLite's rounds to `s` places (MySQL has rounded a cast already,
+computing it at `DECIMAL(65, s)`; a hand-made column of a wider scale keeps its digits), and a value
+that then needs more than `p - s` digits before the point
+raises `StatementError` with `sqlstate = "22003"`, the error PostgreSQL raises for that row. They
+recognise the value and refuse it, rather than failing to recognise it. A `DecimalField` column
+records the same kind, so a column's value too wide for its field raises too: one the live column
+holds only when it is wider than the field (made by hand, or not migrated yet).
 """
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
 # #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
@@ -403,8 +407,17 @@ value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysq
 value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
 # A computed number that means a decimal (#1121, phase 2c-2): MySQL computes `Sqrt`/`Power`/`Exp`/`Ln`
 # over a decimal as a DOUBLE and `Floor`/`Ceil` over one as a `BIGINT`, so a width-less decimal reads
-# through SQLite's computed-decimal parser (15 significant digits; a `Decimal` passes unchanged). A
-# declared width is MySQL's own to apply (`_unapplied_decimal_width`), so it gets no parser.
-value_parser(k::CDecimal, ::PormGMySQL) =
-  k.precision === nothing && k.scale === nothing ? Dialect._parse_sqlite_computed_decimal : nothing
+# through SQLite's computed-decimal parser (15 significant digits; a `Decimal` passes unchanged).
+#
+# #1110: a declared `numeric(p, s)` is computed at `DECIMAL(65, s)` (`Dialect.cast_type_sql`), so the
+# read applies `p`: a value too wide raises `StatementError` (SQLSTATE 22003) on that row, naming
+# `label`, where MySQL's `DECIMAL(p, s)` would have clamped it. A `DecimalField` column records the
+# same kind, and its values pass unchanged while the live column is as declared; a value from a wider
+# live column (one made by hand) that its field cannot hold raises, as on SQLite.
+function value_parser(k::CDecimal, ::PormGMySQL, label = nothing)
+  k.precision === nothing && k.scale === nothing && return Dialect._parse_sqlite_computed_decimal
+  (k.precision === nothing || k.scale === nothing) && return nothing
+  p, s = k.precision, k.scale
+  return v -> Dialect._parse_mysql_declared_decimal(v, p, s, label)
+end
 value_parser(::CanonicalType, ::PormGBackend) = nothing

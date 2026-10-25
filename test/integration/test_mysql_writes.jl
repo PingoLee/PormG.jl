@@ -69,11 +69,16 @@ Season = Models.Model("p3w_season",
   year = Models.IntegerField(unique = true),
   url = Models.CharField(),
   updated = Models.DateTimeField(auto_now = true))
+# A duration column (#1348): a BIGINT of microseconds on MySQL.
+Lap = Models.Model("p3w_lap",
+  id = Models.IDField(),
+  ref = Models.CharField(unique = true),
+  best = Models.DurationField(null = true))
 end
 
 # The tables, in drop order (children first).
 const _MYW_TABLES = ("p3w_note", "p3w_guard", "p3w_driver", "p3w_team", "p3w_token", "p3w_plain", "p3w_node",
-                     "p3w_constructor", "p3w_circuit", "p3w_season")
+                     "p3w_constructor", "p3w_circuit", "p3w_season", "p3w_lap")
 
 @testset "MySQL backend, phases 3a and 3b: single-row writes, deletes and upserts (#1130)" begin
 if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
@@ -111,6 +116,8 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             "`name` VARCHAR(255) NOT NULL UNIQUE)" * tail)
         run("CREATE TABLE `p3w_season` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `year` INT NOT NULL UNIQUE, " *
             "`url` VARCHAR(255) NOT NULL, `updated` DATETIME(3) NOT NULL)" * tail)
+        run("CREATE TABLE `p3w_lap` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `ref` VARCHAR(255) NOT NULL UNIQUE, " *
+            "`best` BIGINT NULL)" * tail)
 
         # What: `create` returns the row the database wrote, read back on the same connection.
         # SQL: INSERT INTO `p3w_team` (…) VALUES (?, …), then SELECT * FROM `p3w_team` WHERE `id` = ?, bound
@@ -316,6 +323,70 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             sleep(0.05)
             again, created = W.Season.objects.update_or_create("year" => 1988; defaults = ["url" => "u1988"])
             @test !created && again.id == first_row.id && again.updated > first_row.updated
+        end
+
+        # What: a 0 written into an AUTO_INCREMENT key is stored as 0, through create, bulk_insert and
+        # update_or_create, and update_or_create says `created` for it exactly once.
+        # SQL: INSERT INTO `p3w_team` (`id`, …) VALUES (?, …) bound to 0, under the session's
+        #      NO_AUTO_VALUE_ON_ZERO. update_or_create's OK packet then reports id 0 for the insert as for an
+        #      unchanged duplicate, so the pre-check and a plain read by the lookup decide `created`.
+        # Why: without the mode MySQL reads a written 0 as "generate one": the row was stored under the next
+        #      id with no error (measured: 340003), where PostgreSQL and SQLite store 0.
+        @testset "an explicit zero key is stored as zero" begin
+            zero = W.Team.objects.create("id" => 0, "name" => "Zero")
+            @test zero.id == 0
+            @test only(W.Team.objects.filter("name" => "Zero").values("id").list())[:id] == 0
+            W.Team.objects.filter("id" => 0).delete()
+            bulk_insert(W.Team.objects, DataFrame(id = [0], name = ["Bulk zero"], country = ["BR"]))
+            @test only(W.Team.objects.filter("name" => "Bulk zero").values("id").list())[:id] == 0
+            W.Team.objects.filter("id" => 0).delete()
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero"])
+            @test created && (row.id, row.name) == (0, "Upsert zero")
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero"])
+            @test !created && row.id == 0
+            row, created = W.Team.objects.update_or_create("id" => 0; defaults = ["name" => "Upsert zero 2"])
+            @test !created && (row.id, row.name) == (0, "Upsert zero 2")
+            @test W.Team.objects.filter("id" => 0).count() == 1
+            W.Team.objects.filter("id" => 0).delete()
+            # A zero spelled as text is the same 0, for MySQL and for `created`.
+            row, created = W.Team.objects.update_or_create("id" => "00"; defaults = ["name" => "Text zero"])
+            @test created && (row.id, row.name) == (0, "Text zero")
+            W.Team.objects.filter("id" => 0).delete()
+        end
+
+        # What: a duration written through every write path reads back as the same duration.
+        # SQL: each write binds the duration's microseconds (`83456000` for `Millisecond(83456)`) into the
+        #      BIGINT column, as a filter binds it.
+        # Why: the writes bound the field's `HH:MM:SS` text, which MySQL refuses for a BIGINT (1265, #1348),
+        #      while a filter on the same column bound microseconds.
+        @testset "a duration written through every write path reads back the same (#1348)" begin
+            stored(ref) = only(W.Lap.objects.filter("ref" => ref).values("best").list())[:best]
+            same(ref, p) = Dates.toms(stored(ref)) == Dates.toms(p)
+            lap = W.Lap.objects.create("ref" => "create", "best" => Millisecond(83456))
+            @test same("create", Millisecond(83456))
+            @test only(W.Lap.objects.filter("best" => Millisecond(83456)).values("ref").list())[:ref] == "create"
+            W.Lap.objects.create("ref" => "text", "best" => "1:27.452")
+            @test same("text", Millisecond(87452))
+            W.Lap.objects.filter("ref" => "create").update("best" => Second(90) + Millisecond(5))
+            @test same("create", Millisecond(90005))
+            row = W.Lap.objects.filter("ref" => "create").get()
+            row.best = Minute(2)
+            row.save()
+            @test same("create", Minute(2))
+            got, created = W.Lap.objects.get_or_create("ref" => "goc"; defaults = ["best" => Millisecond(61000)])
+            @test created && same("goc", Millisecond(61000))
+            upd, created = W.Lap.objects.update_or_create("ref" => "uoc"; defaults = ["best" => Millisecond(70250)])
+            @test created && same("uoc", Millisecond(70250))
+            upd, created = W.Lap.objects.update_or_create("ref" => "uoc"; defaults = ["best" => Millisecond(70500)])
+            @test !created && same("uoc", Millisecond(70500))
+            bulk_insert(W.Lap.objects, DataFrame(ref = ["bulk1", "bulk2"], best = [Millisecond(81000), missing]))
+            @test same("bulk1", Millisecond(81000)) && ismissing(stored("bulk2"))
+            ids = Dict(r[:ref] => r[:id] for r in W.Lap.objects.filter("ref__@in" => ["bulk1", "bulk2"]).values("id", "ref").list())
+            bulk_update(W.Lap.objects, DataFrame(id = [ids["bulk1"], ids["bulk2"]], best = [Millisecond(82500), Second(85)]))
+            @test same("bulk1", Millisecond(82500)) && same("bulk2", Second(85))
+            # The column holds the microseconds themselves.
+            raw = only(sql_rows("SELECT `best` FROM `p3w_lap` WHERE `ref` = 'bulk1'").best)
+            @test raw == 82_500_000
         end
 
         # What: get_or_create finds the row by its lookup, or inserts it with a plain INSERT.

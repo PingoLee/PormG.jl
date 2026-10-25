@@ -140,7 +140,10 @@ end
   @test _MR_QB.add_parameter!(params, [1, 2, 3]) == "?, ?, ?"
   u = UUID("123e4567-e89b-12d3-a456-426614174000")
   @test _MR_QB.add_parameter!(params, u) == "?"
-  @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "?"
+  # Bytes state their type: in a derived table's row beside text, a bare `?` was utf8mb4 (1366, #1130 phase 5).
+  @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "CAST(? AS BINARY)"
+  @test _MR_QB.add_parameter!(_MR_QB.get_parameter(MrMockMySQL()), [PormG.PormGBytes(UInt8[0x01]), PormG.PormGBytes(UInt8[0x02])]) ==
+        "CAST(? AS BINARY), CAST(? AS BINARY)"
   @test _MR_QB.add_parameter!(params, Decimal(0, 255, -1)) == "CAST(? AS DECIMAL(3,1))"   # #1130 2c-1: its own DECIMAL
   @test params.parameters == Any[1, 2, 3, "123e4567-e89b-12d3-a456-426614174000", UInt8[0x00, 0xff], Decimal(0, 255, -1)]
   _MR_QB.add_parameter!(params, Hour(1))
@@ -585,9 +588,11 @@ end
   @test parse_interval(Decimal(0, 805, 5)) == parse_interval(80_500_000)
   @test parse_interval(Decimal(0, 25, -1)) == parse_interval(3) && parse_interval(Decimal(1, 25, -1)) == parse_interval(-3)
   @test parse_interval(missing) === missing && parse_interval("00:01:20") == "00:01:20"
-  for kind in (PormG.CDate(), PormG.CTime(), PormG.CDecimal(10, 2), PormG.CText(), PormG.CInt64())
+  for kind in (PormG.CDate(), PormG.CTime(), PormG.CText(), PormG.CInt64())
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
+  # #1110: a declared decimal's parser applies its width; a value that fits passes unchanged.
+  @test PormG.value_parser(PormG.CDecimal(10, 2), my)(Decimal(0, 123456, -2)) == Decimal(0, 123456, -2)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -634,8 +639,9 @@ end
   # PostgreSQL's unsized `char` is `char(1)`: one character, not the whole value.
   @test [t(x) for x in ("char", "character", "char(3)")] == ["CHAR(1)", "CHAR(1)", "CHAR(3)"]
   @test [t(x) for x in ("integer", "int", "int4", "smallint", "bigint", "int8", "INTEGER UNSIGNED")] == fill("SIGNED", 7)
+  # A sized numeric is computed at the widest precision with its own scale (#1110: the read applies `p`).
   @test [t(x) for x in ("numeric", "decimal", "dec", "numeric(10,2)", "numeric(5)")] ==
-        ["DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(10,2)", "DECIMAL(5)"]
+        ["DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,2)", "DECIMAL(65,0)"]
   @test [t(x) for x in ("real", "float4", "float", "float8", "double precision", "float(24)", "float(53)")] ==
         ["FLOAT", "FLOAT", "DOUBLE", "DOUBLE", "DOUBLE", "FLOAT(24)", "FLOAT(53)"]
   @test [t(x) for x in ("date", "timestamp", "timestamptz", "TIMESTAMPTZ", "timestamp with time zone",
@@ -654,7 +660,22 @@ end
   # The rendered cast, through the public `Cast`.
   sel(f) = _mr_inspect(_MR_MY.Result.objects.values("c" => f))[:sql_text]
   @test occursin("CAST(`Tb`.`grid` AS CHAR) as `c`", sel(PormG.QueryBuilder.Cast("grid", "text")))
-  @test occursin("CAST(`Tb`.`points` AS DECIMAL(10,2)) as `c`", sel(PormG.QueryBuilder.Cast("points", "numeric(10,2)")))
+  @test occursin("CAST(`Tb`.`points` AS DECIMAL(65,2)) as `c`", sel(PormG.QueryBuilder.Cast("points", "numeric(10,2)")))
+  # #1110: a sized numeric is computed at MySQL's widest DECIMAL with its scale, so a value too wide for
+  # `p` is not clamped (`DECIMAL(2,0)` makes 100 into 99), and the read applies `p`. Past 65, as written.
+  @test occursin("CAST(`Tb`.`grid` AS DECIMAL(65,0)) as `c`", sel(PormG.QueryBuilder.Cast("grid", "numeric(2,0)")))
+  @test occursin("CAST(`Tb`.`grid` AS DECIMAL(65,0)) as `c`", sel(PormG.QueryBuilder.Cast("grid", "numeric(7)")))
+  @test occursin("CAST(`Tb`.`grid` AS DECIMAL(70,2)) as `c`", sel(PormG.QueryBuilder.Cast("grid", "numeric(70,2)")))
+  # A precision no Int holds is left as written too, never a bare OverflowError (MySQL refuses it).
+  @test PormG.Dialect.cast_type_sql("numeric(99999999999999999999,2)", MrMockMySQL()) == "DECIMAL(99999999999999999999,2)"
+  parse_2_0 = PormG.value_parser(PormG.Kernel.CDecimal(2, 0), MrMockMySQL(), "c")
+  @test parse_2_0(Decimal(0, 99, 0)) == Decimal(0, 99, 0) && ismissing(parse_2_0(missing))
+  overflow = try; parse_2_0(Decimal(0, 100, 0)); nothing; catch e; e; end
+  @test overflow isa PormG.StatementError && overflow.sqlstate == "22003" && overflow.adapter == "MySQL"
+  @test occursin("numeric(2, 0)", sprint(showerror, overflow)) && !occursin("100", sprint(showerror, overflow))   # #971
+  parse_4_2 = PormG.value_parser(PormG.Kernel.CDecimal(4, 2), MrMockMySQL(), "c")
+  @test parse_4_2(Decimal(1, 9999, -2)) == Decimal(1, 9999, -2)                       # -99.99 fits
+  @test (try; parse_4_2(Decimal(0, 10000, -2)); false; catch e; e isa PormG.StatementError; end)   # 100.00 does not
   # The departures still refuse first: a date's cast to a number is MySQL's departure (#1260).
   err = try; sel(PormG.QueryBuilder.Cast("raceid__date", "integer")); nothing; catch e; e; end
   @test err isa PormG.QueryBuildError && occursin("MySQL computes its digits read as one number", sprint(showerror, err))
@@ -906,7 +927,7 @@ end
   @test proj(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = "back"), default = "front"))) ==
         ("CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END", Any[5, "back", "front"])
   @test proj(() -> R.objects.values("v" => QB.Coalesce("position", 0; output_field = "numeric(10,2)"))) ==
-        ("CAST(COALESCE(`Tb`.`position`, ?) AS DECIMAL(10,2))", Any[0])
+        ("CAST(COALESCE(`Tb`.`position`, ?) AS DECIMAL(65,2))", Any[0])
   @test proj(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 1), default = 0; output_field = "text"))) ==
         ("CAST(CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END AS CHAR)", Any[5, 1, 0])
   # SQLite keeps its `MAX`, PostgreSQL its native NULL-skipping GREATEST: unchanged.
@@ -1075,9 +1096,9 @@ end
   @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(2.5)))) == ("ROUND(CAST(? AS DECIMAL(65,30)), ?)", Any[2.5, 0])
   @test proj(() -> R.objects.values("v" => QB.Round("points", -1))) == ("ROUND(CAST(`Tb`.`points` AS DECIMAL(65,30)), ?)", Any[-1])
   @test proj(() -> R.objects.values("v" => QB.Round(QB.Sqrt(dec()), 2))) ==
-        ("ROUND(CAST(SQRT(CAST(`Tb`.`grid` AS DECIMAL(10,2))) AS DECIMAL(65,30)), ?)", Any[2])
-  @test proj(() -> R.objects.values("v" => QB.Round(dec(), 1))) == ("ROUND(CAST(`Tb`.`grid` AS DECIMAL(10,2)), ?)", Any[1])
-  @test proj(() -> R.objects.values("v" => QB.Round(QB.Sum(dec()), 1))) == ("ROUND(SUM(CAST(`Tb`.`grid` AS DECIMAL(10,2))), ?)", Any[1])
+        ("ROUND(CAST(SQRT(CAST(`Tb`.`grid` AS DECIMAL(65,2))) AS DECIMAL(65,30)), ?)", Any[2])
+  @test proj(() -> R.objects.values("v" => QB.Round(dec(), 1))) == ("ROUND(CAST(`Tb`.`grid` AS DECIMAL(65,2)), ?)", Any[1])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Sum(dec()), 1))) == ("ROUND(SUM(CAST(`Tb`.`grid` AS DECIMAL(65,2))), ?)", Any[1])
   @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(parse(Decimal, "2.5"))))) ==
         ("ROUND(CAST(? AS DECIMAL(2,1)), ?)", Any[parse(Decimal, "2.5"), 0])
   @test occursin("ROUND((\"Tb\".\"points\")::numeric, \$1::integer)",
@@ -1119,7 +1140,8 @@ end
   @test parse_dec(-3) == Decimal(1, 3, 0)
   d = parse(Decimal, "2.55")
   @test parse_dec(d) === d && parse_dec(missing) === missing
-  @test PormG.value_parser(PormG.CDecimal(10, 2), my) === nothing
+  # A declared width is applied, not turned into 15 digits: a value that fits is the value itself.
+  @test PormG.value_parser(PormG.CDecimal(10, 2), my)(d) === d
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1380,9 +1402,13 @@ PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
   # The read-back: an AUTO_INCREMENT pk by the OK packet's id, a generated or supplied one alike.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(42), "`driver`")
   @test rb[1] == "SELECT * FROM `driver` WHERE `driverid` = ?" && rb[2].select_params == Any[] && rb[2].where_params == Any[42]
-  # The stored id, not the bound one: a supplied 0 makes MySQL generate the id the packet reports.
-  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 0), MrInsertResult(501), "`driver`")
+  # The stored id first: the packet's id is what the row holds.
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 7), MrInsertResult(501), "`driver`")
   @test rb[2].where_params == Any[501]
+  # A supplied 0 is stored as 0 (the session's NO_AUTO_VALUE_ON_ZERO), the packet reports 0, and the key
+  # is read back by the value bound.
+  rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 0), MrInsertResult(0), "`driver`")
+  @test rb[2].where_params == Any[0]
   # A table without AUTO_INCREMENT reports 0: the supplied key is read back by the value bound.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 500), MrInsertResult(0), "`driver`")
   @test rb[2].where_params == Any[500]
@@ -1719,7 +1745,7 @@ import DataFrames
   d = _MR_QB.bulk_insert(MrMyUp.Constructor, df; show_query = :dict)
   @test d[:parameters] == Any["mclaren", "British", "brabham", "British", "ligier", "French"]
   @test length(bulk(MrMyUp.Constructor, df; chunk_size = 2)) == 2
-  @test _MR_QB._backend_parameter_limit(MrMockMySQL()) == 65535
+  @test _MR_QB._backend_parameter_limit(MrMockMySQL()) == 65535   # the protocol's; a real pool answers MySQL.jl's 4096 (test_mysql_ext.jl)
   @test _MR_QB._bulk_chunk_rows(MrMockMySQL(), 100_000, 2, 0, :bulk_insert) == 32767
   @test !_MR_QB._bulk_binds_column_arrays(MrMockMySQL()) && !_MR_QB._overrides_generated_identity(MrMockMySQL())
   # DO NOTHING writes nothing, on a column that is not AUTO_INCREMENT even when the id comes first.
@@ -1852,6 +1878,37 @@ end
   my_add = which(_MR_QB._m2m_add!, Tuple{MrMockMySQL, Any, Any, Any, Any, Any, Any})
   @test my_add === which(_MR_QB._m2m_add!, Tuple{MrMockPostgres, Any, Any, Any, Any, Any, Any})
   @test my_add !== which(_MR_QB._m2m_add!, Tuple{MrMockSQLite, Any, Any, Any, Any, Any, Any})
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL DurationField writes bind the microseconds a filter binds (#1348)
+# A `DurationField` is a BIGINT of microseconds on MySQL (#1130 phase 2b). Expected: `create`, `update`,
+# `bulk_insert` and `bulk_update` bind `Millisecond(83456)` as `83456000`, never the `"00:01:23.456"`
+# text MySQL rejects (1265); a duration string the field parses binds the same number; a value that is
+# no duration raises the field's own refusal; SQLite keeps the text it stores.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL DurationField writes: every write path binds the microseconds (#1348)" begin
+  v = Millisecond(83456)
+  us = 83_456_000
+  row(t) = ("raceid" => 1, "driverid" => 1, "grid" => 1, "points" => 0.0, "laps" => 50, "fastestlaptime" => t)
+  texts(params) = filter(p -> p isa AbstractString && occursin(':', p), params)
+  ins = _MR_MY.Result.objects.create(row(v)...; show_query = :dict)
+  @test us in ins[:parameters] && isempty(texts(ins[:parameters]))
+  @test us in _MR_MY.Result.objects.create(row("1:23.456")...; show_query = :dict)[:parameters]
+  @test _MR_MY.Result.objects.filter("resultid" => 1).update("fastestlaptime" => v; show_query = :dict)[:parameters] ==
+        Any[us, 1]
+  df = DataFrames.DataFrame(raceid = [1], driverid = [1], grid = [1], points = [0.0], laps = [50], fastestlaptime = [v])
+  bi = _MR_QB.bulk_insert(_MR_MY.Result, df; show_query = :dict)[:parameters]
+  @test us in bi && isempty(texts(bi))
+  @test _MR_QB.bulk_update(_MR_MY.Result, DataFrames.DataFrame(resultid = [1], fastestlaptime = [v]); show_query = :dict)[:parameters] ==
+        Any[1, us]
+  @test_throws PormG.InvalidValueError _MR_MY.Result.objects.filter("resultid" => 1).update("fastestlaptime" => 5; show_query = :dict)
+  # `validate_value` formats as `create` does, for the engine the model is bound to.
+  @test PormG.validate_value(_MR_MY.Result, "fastestlaptime", v) == us
+  @test PormG.validate_value(_MR_SL.Result, "fastestlaptime", v) == "00:01:23.456"
+  # SQLite stores the text, and keeps binding it.
+  @test "00:01:23.456" in _MR_SL.Result.objects.filter("resultid" => 1).update("fastestlaptime" => v; show_query = :dict)[:parameters]
+  @test "00:01:23.456" in _MR_QB.bulk_insert(_MR_SL.Result, df; show_query = :dict)[:parameters]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -54,6 +54,7 @@ import PormG: backend_num_affected_rows  # PG matched-row count (driver body in 
 import PormG: backend_last_insert_id     # MySQL: the AUTO_INCREMENT value an INSERT wrote (#1266)
 import PormG: backend_insert_report, backend_is_duplicate_key   # MySQL: a bulk INSERT's skips (#1267)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
+import PormG: backend_mysql_parameter_limit   # MySQL: the driver's bind-parameter limit (#84, #1130)
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
 import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind

@@ -9,9 +9,13 @@
 # `utf8mb4_0900_bin`, a `DateTimeField` as `DATETIME(3)`, a boolean as `TINYINT(1)`, a `DurationField`
 # as a BIGINT of microseconds (#1130) — and the tables
 # are dropped at the end. On another engine the whole file is skipped (`only_on`).
+#
+# The tables are the F1 ones, by name, so the file first empties the database: after the migration
+# bootstrap the full F1 schema is there, and InnoDB refuses to drop a table another one references.
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
+isdefined(Main, :reset_database!) || include("common_migration_setup.jl")
 using Test, Dates, TimeZones, Decimals, DataFrames
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs,
     Round, Floor, Ceil, Sqrt, Power, Ln, Exp, Mod, Extract, ToChar, Upper, Lower, Length, Trim, Replace, LPad,
@@ -28,9 +32,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
     msg(e) = sprint(showerror, e)
     @test Tuple(PormG.Models.model_table_name(m) for m in (M.Result, M.New_join_position, M.Race, M.Circuit, M.Driver)) ==
           _MYR_TABLES
-    for t in _MYR_TABLES
-        run("DROP TABLE IF EXISTS `$(t)`")
-    end
+    reset_database!(PormG.config[PORMG_DB_FOLDER])
     try
         # ── Schema: what a PormG column is on MySQL (#1265, #1270) ─────────────────────────────
         tail = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"
@@ -371,7 +373,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
 
         # What: `Cast` reads back as the type it names, and a cast MySQL computes another value for is
         # refused before any SQL.
-        # SQL: `CAST(`Tb`.`grid` AS CHAR)`, `CAST(… AS DECIMAL(10,2))`, `CAST(… AS SIGNED)`, `CAST(… AS FLOAT)`,
+        # SQL: `CAST(`Tb`.`grid` AS CHAR)`, `CAST(… AS DECIMAL(65,2))` (#1110: `p` applied on read), `CAST(… AS SIGNED)`, `CAST(… AS FLOAT)`,
         #      `CAST(`Tb`.`start_at` AS DATE)`, `CAST(… AS DATETIME(3))`, `CAST(… AS DECIMAL(65,30))`.
         # Why: MySQL's CAST takes a closed set of targets, so each type name is mapped to the one that
         # holds its meaning (#1271): checked here against the value each type means in Julia.
@@ -406,6 +408,22 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # `integer::boolean` reads it (#1130 phase 2c-1).
             flags = M.Result.objects.values("resultid", "grid", "b" => Cast(F("grid") - 1, "boolean")).order_by("resultid").list()
             @test all(r -> r[:b] === (r[:grid] - 1 != 0), flags)
+        end
+
+        # What: a cast to `numeric(p, s)` that a row's value overflows raises 22003 on that row, as
+        # PostgreSQL's does, and a value that fits reads as itself.
+        # SQL: `CAST(`Tb`.`points` AS DECIMAL(65,2))`, `CAST((`Tb`.`points` * ?) AS DECIMAL(65,0))`; the read
+        #      applies `p` (#1110).
+        # Why: MySQL's own `DECIMAL(2,2)` reads 9 as `0.99`, and `DECIMAL(1,0)` reads 18 as `9`, with only a
+        #      warning: a silent wrong value where the cast means an error.
+        @testset "a numeric(p, s) cast that a row overflows raises 22003, never clamps" begin
+            overflow(f) = (e = try; f(); nothing; catch err; err; end; e isa PormG.StatementError && e.sqlstate == "22003")
+            in_range = only(M.Result.objects.filter("resultid" => 2).values("x" => Cast("points", "numeric(3,2)")).list())
+            @test in_range[:x] isa Decimals.Decimal && in_range[:x] == Decimals.Decimal(9)
+            @test overflow(() -> M.Result.objects.filter("resultid" => 2).values("x" => Cast("points", "numeric(2,2)")).list())
+            @test overflow(() -> M.Result.objects.filter("resultid" => 2).values("x" => Cast(F("points") * 2, "numeric(1,0)")) |> DataFrame)
+            e = try; M.Result.objects.filter("resultid" => 2).values("x" => Cast("points", "numeric(2,2)")).list(); nothing; catch err; err; end
+            @test !occursin("9", sprint(showerror, e))   # #971: the message never carries the value
         end
 
         # What: `Concat` joins its operands' text and skips a NULL one, as it means on every engine.
@@ -522,7 +540,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         # What: the conditionals answer as their meaning, each value checked against Julia over the same rows.
         # SQL: `COALESCE(`Tb`.`position`, ?)`; `GREATEST(COALESCE(a, b), COALESCE(b, a))` (MySQL's GREATEST
         #      is NULL on any NULL, so the operands are the #844 rotations); `NULLIF(…)`; `CASE WHEN … THEN ?
-        #      ELSE ? END`; a Decimal branch bound as `CAST(? AS DECIMAL(p,s))`; `CAST(… AS DECIMAL(10,2))`;
+        #      ELSE ? END`; a Decimal branch bound as `CAST(? AS DECIMAL(p,s))`; `CAST(… AS DECIMAL(65,2))`;
         #      a boolean declaration as `((…) <> 0)`; an interval declared as text through its `HH:MM:SS`.
         # Why: MySQL has each function natively, but a Decimal bound as text made a CASE a VARCHAR that
         #      ordered as text, a boolean has no cast target there, and an interval is its microseconds

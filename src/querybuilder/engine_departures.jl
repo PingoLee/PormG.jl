@@ -82,13 +82,14 @@ const _MEANING_DEPARTURES = (
    fix = (_, declared) -> "Round it to the scale first (\e[32mCast(Round(x, $(something(_numeric_cast_scale(declared), 0))), \"$(declared)\")\e[0m, #1061), or cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value."),
   # #1087: a literal the declared type cannot hold overflows: the cast is an error. SQLite stores it as it is,
   # a silent different answer (the tie-breaker: an error on one engine is left to raise when the
-  # engines that answer give the meaning; SQLite does not). Nor does MySQL: in a `SELECT` it clamps the
-  # value to the largest the type holds, with only a warning (measured: `CAST(123456 AS DECIMAL(4,2))` is
-  # `99.99`, warning 1264).
+  # engines that answer give the meaning; SQLite does not). Nor does MySQL: in a `SELECT` its own
+  # `DECIMAL(p, s)` clamps the value to the largest the type holds, with only a warning (measured:
+  # `CAST(123456 AS DECIMAL(4,2))` is `99.99`, warning 1264), so PormG computes the cast at
+  # `DECIMAL(65, s)` (#1110), and there the value is what it is wherever the cast is not read back.
   (targets = (:precision,), kinds = (:overflow,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1087",
    meaning = declared -> "a numeric field overflow, since $(declared) cannot hold it",
    computes = (PormGSQLite => _ -> "the value as it is",
-               PormGMySQL => _ -> "the largest value the type holds (`99.99` for `numeric(4, 2)`)"),
+               PormGMySQL => _ -> "the value as it is wherever the cast is not read back"),
    fix = (_, declared) -> "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(something(_numeric_cast_scale(declared), 0)))\")\e[0m with a larger p), or cast to an unscaled \e[32m\"numeric\"\e[0m."),
   # #1215: a single-precision float (`real`, `float4`, `float(p)` for p ≤ 24) is the value rounded to a
   # 4-byte float, which reads back as a `Float32`. SQLite has no 4-byte REAL: its cast keeps the

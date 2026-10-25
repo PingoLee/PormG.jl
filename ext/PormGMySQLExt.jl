@@ -132,6 +132,11 @@ end
 # is MySQL 8.4's default, written out: it keeps `||` a logical OR and `"x"` a string (no `ANSI_QUOTES`,
 # no `PIPES_AS_CONCAT`), which the MySQL dialect (#1271) renders against: backticks, `CONCAT`.
 #
+# Plus `NO_AUTO_VALUE_ON_ZERO`: without it an `AUTO_INCREMENT` column reads a written 0 as "generate one",
+# so `create("statusid" => 0)` stored the next id with no error (measured: 340003), where PostgreSQL and
+# SQLite store 0. PormG never writes 0 to ask for a key: it leaves the column out. The mode
+# also keeps an `ALTER` that makes a column `AUTO_INCREMENT` from renumbering its rows that hold 0.
+#
 # #1265: a text comparison compares code points. A column PormG creates declares `utf8mb4_0900_bin`
 # (`NO PAD`, so `'Senna'` and `'Senna '` differ, as on PostgreSQL; `utf8mb4_bin` would pad), and the
 # connection collation is the same, so a parameter compared with a parameter or a literal does not
@@ -142,7 +147,8 @@ end
 # plus this many digits, and the default 4 makes `AVG` of `1, 2, 2` read `1.6667`. Thirty digits are
 # more than a `Float64` holds, so the mean reads as the nearest double, as on PostgreSQL (#1121).
 const _SESSION_SQL = "SET time_zone = '+00:00', sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES," *
-                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION', " *
+                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION," *
+                     "NO_AUTO_VALUE_ON_ZERO', " *
                      "collation_connection = 'utf8mb4_0900_bin', div_precision_increment = 30"
 
 # `major * 10000 + minor * 100 + patch`, the number the capability table's MySQL rows use.
@@ -176,7 +182,7 @@ function _open_connection(pool::_Pool)::MySQL.Connection
     try; close(conn); catch; end
     rethrow()
   end
-  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, writes and migrations work; inspectdb does not yet" maxlog = 1
+  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, writes, migrations and inspectdb work; the full test suite does not run there yet" maxlog = 1
   return conn
 end
 
@@ -201,6 +207,11 @@ end
 # Asked through `fetch`, never by leasing a connection here: inside a transaction `fetch` uses the
 # transaction's own connection, where a lease would wait for a second slot (and time out on a pool of
 # one). `VERSION()` can carry a suffix (`8.4.11-log`); the three numbers lead it.
+# #84: the most parameters MySQL.jl binds in one prepared statement, its `max_columns` limit: it refuses a
+# statement past it with a `ProtocolError` before sending it. PormG connects without that option, so the
+# driver's default applies, read from MySQL.jl itself rather than written down here.
+PormG.backend_mysql_parameter_limit(::_Pool)::Int = min(65535, MySQL.Protocol.Limits().max_columns)
+
 function PormG.backend_mysql_version(pool::_Pool)::Int
   text = only(collect(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v")))[1]
   m = match(r"^(\d+)\.(\d+)\.(\d+)", String(text))
@@ -219,9 +230,19 @@ _bind_value(v::Decimals.Decimal) = PormG.Models._pg_decimal_text(v)
 _bind_value(v::TimeZones.ZonedDateTime) = DateTime(TimeZones.astimezone(v, TimeZones.tz"UTC"))
 _bind_value(v) = v
 
-function _bind(params)
+# A statement past the driver's parameter limit is refused here, before anything is sent: MySQL.jl would
+# refuse it with a `ProtocolError`, which closes the connection and reads as a lost one, "may succeed on
+# retry", though it never can. The bulk writers chunk under the limit; anything else (a long `__@in`
+# list) is the caller's to split. The message counts the parameters and never shows one (#971).
+function _bind(pool::_Pool, params)
   resolved = params isa AbstractPormGParam ? params.parameters : params
   (resolved === nothing || isempty(resolved)) && return nothing
+  limit = PormG.backend_mysql_parameter_limit(pool)
+  length(resolved) <= limit || throw(QueryBuildError(
+    "This statement binds $(length(resolved)) parameters, and MySQL.jl binds at most $(limit) in one " *
+    "statement. Split the work into smaller statements (a long `__@in` list into several filters, a " *
+    "many-to-many `remove` or `set` of that many rows into batches), or select the values with a " *
+    "subquery; bulk_insert and bulk_update split themselves."))
   return Any[_bind_value(v) for v in resolved]
 end
 
@@ -388,21 +409,22 @@ function _run(conn::MySQL.Connection, sql::String, bound)
 end
 
 PormG.backend_execute(pool::_Pool, conn::MySQL.Connection, sql::String, params) =
-  _run(conn, sql, _bind(params))
+  _run(conn, sql, _bind(pool, params))
 
 # The async handle is a plain Task, as the other extensions' are: core only `fetch`es and `wait`s it.
 # A MySQL.jl connection serializes concurrent use on its own lock.
 function PormG.backend_execute_async(pool::_Pool, conn::MySQL.Connection, sql::String, params)
-  bound = _bind(params)
+  bound = _bind(pool, params)
   return Threads.@spawn _run(conn, sql, bound)
 end
 
 PormG.backend_num_rows(pool::_Pool, result::MySQLResult) = result.nrows
 PormG.backend_num_affected_rows(pool::_Pool, result::MySQLResult) = result.rows_affected
 # The AUTO_INCREMENT value the INSERT wrote, from its OK packet: the generated id, or the one the
-# statement supplied (measured on 8.4: a supplied 100 reports 100, a supplied 0 the id it generated),
-# and 0 for a table without AUTO_INCREMENT. `LAST_INSERT_ID()` is not the same thing: it changes only
-# when the server generates the value, so after a supplied id it still holds an older one (#1266).
+# statement supplied (measured on 8.4: a supplied 100 reports 100, and a supplied 0 reports 0, since the
+# session's `NO_AUTO_VALUE_ON_ZERO` stores it as 0), and 0 for a table without AUTO_INCREMENT.
+# `LAST_INSERT_ID()` is not the same thing: it changes only when the server generates the value, so after
+# a supplied id it still holds an older one (#1266).
 PormG.backend_last_insert_id(pool::_Pool, result::MySQLResult) = Int(result.last_insert_id)
 
 # What a multi-row INSERT reported (#1267): how many rows it carried and how many met a duplicate key,

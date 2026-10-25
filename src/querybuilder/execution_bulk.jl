@@ -1179,8 +1179,10 @@ _sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766
 # count in the wire-protocol Bind message). SQLite: probed from the library version.
 _backend_parameter_limit(::PormGPostgres) = 65535
 _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite_version(conn))
-# MySQL: 65535, the 2-byte parameter count of a prepared statement (COM_STMT_PREPARE).
-_backend_parameter_limit(::PormGMySQL) = 65535
+# MySQL: what its driver binds in one statement (`backend_mysql_parameter_limit`). The protocol's 2-byte
+# count (COM_STMT_PREPARE) allows 65535, but MySQL.jl refuses a statement past its own `max_columns`
+# (4096 by default) with a `ProtocolError` before sending it: a bulk write of 861 nine-column rows failed.
+_backend_parameter_limit(conn::PormGMySQL) = backend_mysql_parameter_limit(conn)
 
 # Cap the requested chunk so that `fixed + effective × per_row` never exceeds `limit` (#84).
 # `per_row` is the parameters each row binds; `fixed` is the per-statement constant params
@@ -1699,7 +1701,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index) for (j, field) in enumerate(fields_df)]
+        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -2085,9 +2087,10 @@ function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, v
   end
 end
 
-function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer;
+                           conn = nothing)
   try
-    _format_single(f_meta, field, value, op)
+    _format_single(f_meta, field, value, op; conn = conn)
   catch e
     e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
     rethrow()
@@ -2685,7 +2688,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index) for (j, field) in enumerate(joined_columns)]
+        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else

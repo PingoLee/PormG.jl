@@ -661,15 +661,12 @@ end
     # Preferred mutation inspection pattern: show_query=:dict
     insp_raw = q.delete(show_query=:dict)
 
-    # If cascaded deletes are present, find the one for "results"
-    insp = if insp_raw isa Vector
-        idx = findfirst(i -> i[:model] == "result", insp_raw)
-        insp_raw[idx]
-    else
-        insp_raw
-    end
-
-    @test insp[:operation] == :delete
+    # Result has dependents to cascade to, so the filter renders in the key read that comes first
+    # (#1342, #1370), and the root's DELETE is scoped by the keys it returns: on this mock pool there
+    # are none, so `WHERE (1 = 0)` with nothing bound.
+    @test insp_raw isa Vector
+    insp = insp_raw[1]
+    @test insp[:operation] == :select && insp[:model] == "result"
     @test insp[:dialect] == :sqlite
     @test insp[:bucketing] == :positional
 
@@ -678,9 +675,13 @@ end
     @test insp[:parameters] == [999]
 
     # Verify SQL shape
-    @test contains(insp[:sql_text], "DELETE FROM")
-    @test contains(insp[:sql_text], "WHERE")
+    @test startswith(insp[:sql_text], "SELECT \"Tb\".\"resultid\" FROM \"result\" AS \"Tb\" WHERE")
     @test count(==('?'), insp[:sql_text]) == 1
+
+    root = insp_raw[end]
+    @test root[:operation] == :delete && root[:model] == "result"
+    @test root[:sql_text] == "DELETE FROM \"result\" AS \"Tb\" WHERE (1 = 0)"
+    @test isempty(root[:parameters])
 end
 
 @testset "Alignment Verification - F() Expression in Filter" begin
@@ -1411,11 +1412,13 @@ end
     @test contains(root_step[:sql_text], "DELETE")
     @test contains(lowercase(root_step[:model]), "result")
 
-    # Every step must carry valid metadata
+    # Every step must carry valid metadata. The first reads the root's keys (#1342, #1370), and every
+    # later step is scoped by them.
+    @test insp[1][:operation] == :select
     for step in insp
         @test haskey(step, :operation)
         @test haskey(step, :sql_text)
-        @test step[:operation] in (:delete, :update)
+        @test step[:operation] in (:select, :delete, :update)
 
         # #452: every step binds exactly one value per rendered marker.
         #
@@ -1429,8 +1432,21 @@ end
         # Counted inline rather than through helper_marker_alignment.jl: this file predates that
         # helper and does not include it, and the helper's own header says not to retrofit the
         # hand-written counts already here.
+        #
+        # Since #1370 only the key read binds a value on this mock: the root's filter renders there,
+        # and every later step is scoped by the keys, which a mock reads none of (`(1 = 0)`). So the
+        # count below is 0 == 0 after the key read, and the two-path shape is pinned by its text.
         @test count(==('?'), step[:sql_text]) == length(step[:parameters])
     end
+    @test insp[1][:parameters] == [5]
+    # Two top-level arms, one per foreign key to Result, on the multi-path statement: a dropped or
+    # doubled path changes the count (`(?:WHERE|OR) ("Tb"."<fk>" IN`).
+    # One statement for that model: a path emitted as a second statement would hide behind the arm
+    # count of the first.
+    @test count(s -> s[:model] == "just_a_test_deletion" && s[:operation] == :delete, insp) == 1
+    jatd = insp[findfirst(s -> s[:model] == "just_a_test_deletion" && s[:operation] == :delete, insp)]
+    arms = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR) \(\"Tb\"\.\"(\w+)\" IN", jatd[:sql_text])]
+    @test Set(arms) == Set(["test_result", "test_result2"]) && length(arms) == 2
 end
 
 @testset "Alignment Verification - INSERT Inspection" begin

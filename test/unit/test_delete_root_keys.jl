@@ -12,7 +12,8 @@ the time the root's own DELETE ran: the results were gone and the race stayed, w
   2. every statement after it scoped by `"<pk>__@in" => keys`, nothing re-reading the filter;
   3. on SQLite and MySQL, which bind a list one value at a time, one plan per chunk of keys.
 
-A filter on the root's own columns, and a root with nothing to cascade to, keep the SQL they had.
+A root with nothing to cascade to keeps the SQL it had. Since #1370 a filter on the root's own columns
+is resolved to keys too, whenever the root has something to cascade to (test_delete_root_own_table.jl).
 
 The shapes use mock pools; the rows are executed on a temp SQLite file, where the defect reproduces
 (it is not PostgreSQL-specific: the order of the statements is the same on every engine). The
@@ -204,18 +205,23 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Which deletes resolve keys, and which keep their SQL
-# Only a root filter that reads another table AND a root with a dependent the cascade writes
-# (CASCADE / SET_NULL / SET_DEFAULT). Everything else must render exactly as before #1342.
+# Every filtered root with a dependent the cascade writes (CASCADE / SET_NULL / SET_DEFAULT): since
+# #1370 a filter on the root's own columns too, because a SET_NULL / SET_DEFAULT statement can write
+# the root's table (test_delete_root_own_table.jl). A root with nothing to cascade to renders exactly
+# as before #1342.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a filter on the root's own columns, or nothing to cascade, takes no key read (#1342)" begin
+@testset "a filter on the root's own columns reads keys; nothing to cascade takes no key read (#1342, #1370)" begin
   for conn in (RkMockSQLite(), RkMockPostgres())
-    # Own columns: the cascade cannot change what it matches.
+    # Own columns: `SELECT "Tb"."id" FROM "rk_race" AS "Tb" WHERE "Tb"."name" = ?` first, then
+    # statements scoped by the keys (none on this mock).
     q = RK.Rk_race.objects
     q.filter("name" => "Monaco")
     steps = _rk_steps(q, conn)
-    @test !any(s -> s[:operation] == :select, steps)
-    @test last(steps)[:sql_text] == "DELETE FROM \"rk_race\" AS \"Tb\" WHERE \"Tb\".\"name\" = " *
-      (conn isa PormG.PormGPostgres ? "\$1" : "?")
+    @test steps[1][:operation] == (conn isa PormG.PormGPostgres ? :lock : :select)
+    @test startswith(steps[1][:sql_text], "SELECT \"Tb\".\"id\" FROM \"rk_race\" AS \"Tb\" WHERE \"Tb\".\"name\" = " *
+      (conn isa PormG.PormGPostgres ? "\$1" : "?"))
+    @test steps[1][:parameters] == ["Monaco"]
+    @test !any(s -> occursin("name", s[:sql_text]), steps[2:end])
 
     # A joined root whose only dependent is DO_NOTHING: one statement, its own fenced predicate.
     q = RK.Rk_circuit.objects

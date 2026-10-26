@@ -15,10 +15,14 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "just_a_test_deletion" AS "Tb" 
-WHERE "Tb"."test_result" = $1
+SELECT "Tb"."id" FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."test_result" = $1 FOR UPDATE
 -- Parameters: [10]
+DELETE FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."id" = ANY($1)
+-- Parameters: [<the keys the SELECT returned>]
 ```
+
+`just_a_test_deletion` has a `CASCADE` dependent, so its keys are read first (see
+[A filtered delete that cascades reads its keys first](#A-filtered-delete-that-cascades-reads-its-keys-first)).
 
 **Return Value:**
 The function returns a tuple containing the total count of deleted rows and a dictionary of counts per table (useful when cascades are involved):
@@ -49,19 +53,27 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "just_a_test_deletion" AS "Tb"
-WHERE "Tb"."test_result" = ANY($1) AND "Tb"."test_result2" IS NULL
--- Parameters: [[11, 12]]   (SQLite and MySQL render IN (?, ?) with two values)
+SELECT "Tb"."id" FROM "just_a_test_deletion" AS "Tb"
+WHERE "Tb"."test_result" = ANY($1) AND "Tb"."test_result2" IS NULL FOR UPDATE
+-- Parameters: [[11, 12]]   (SQLite and MySQL render IN (?, ?) with two values; SQLite takes no FOR UPDATE)
+DELETE FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."id" = ANY($1)
+-- Parameters: [<the keys the SELECT returned>]
 ```
+
+`just_a_test_deletion` has a `CASCADE` dependent, so the filter is read once, by the key read, and the
+`DELETE` (with every statement of the cascade) is scoped by the keys it returns; see
+[A filtered delete that cascades reads its keys first](#A-filtered-delete-that-cascades-reads-its-keys-first).
+A model with nothing to cascade to is deleted by one statement that carries the filter itself.
 
 Using `show_query=:sql` reveals the statements without executing them — a `String` for a single
-statement, a `Vector{String}` when the delete cascades:
+statement, a `Vector` of `String`s when the delete cascades:
 ```julia
 sql = delete(query, show_query=:sql)
-# "DELETE FROM \"just_a_test_deletion\" AS \"Tb\" WHERE \"Tb\".\"test_result\" = ANY(\$1) AND \"Tb\".\"test_result2\" IS NULL"
+# ["SELECT \"Tb\".\"id\" FROM \"just_a_test_deletion\" AS \"Tb\" WHERE \"Tb\".\"test_result\" = ANY(\$1) AND \"Tb\".\"test_result2\" IS NULL FOR UPDATE",
+#  "DELETE FROM \"just_a_test_deletion\" AS \"Tb\" WHERE \"Tb\".\"id\" = ANY(\$1)"]
 ```
 
-The filters always land on the row being deleted, as above — never only in a `pk IN (SELECT …)`
+The filters always land on the row they select, as above — never only in a `pk IN (SELECT …)`
 subquery (a filter that crosses a relation adds one for the index, beside the fence; see below).
 That is what makes a filter a guard you can rely on under concurrency; see
 [Filters are a fence](#Filters-are-a-fence-on-PostgreSQL).
@@ -129,18 +141,22 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "result" AS "Tb"
+SELECT "Tb"."resultid" FROM "result" AS "Tb"
 WHERE "Tb"."resultid" IN (SELECT DISTINCT "Tb"."resultid"
   FROM "result" as "Tb"
   INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
   WHERE "Tb_1"."year" < $1)
   AND EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor"
   INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
-  WHERE "Tb_1"."year" < $2)
+  WHERE "Tb_1"."year" < $2) FOR UPDATE
 -- Parameters: [1960, 1960]
+DELETE FROM "result" AS "Tb" WHERE "Tb"."resultid" = ANY($1)
+-- (plus a DELETE or UPDATE per dependent table with rows, scoped by the same keys)
 ```
 
-A filter that crosses a relation renders twice, and both halves matter. The `IN (…)` selects the rows
+`result` has dependents to cascade to, so the filter renders in the key read. On a model with nothing
+to cascade to it renders the same way in the `DELETE` itself. A filter that crosses a relation renders
+twice, and both halves matter. The `IN (…)` selects the rows
 through the primary key, which is what the planner uses an index for. The correlated `EXISTS` puts
 the same filter on the row being deleted, which is what PostgreSQL re-checks if that row changes
 while the delete waits on its lock (see
@@ -187,10 +203,11 @@ delete(query)
 **Generated SQL (PostgreSQL):**
 ```sql
 DELETE FROM "race" AS "Tb" 
-WHERE "Tb"."name" = $1
--- Note: dependent rows in "result" are removed by PormG's deletion collector, which emits their
+WHERE "Tb"."raceid" = ANY($1)
+-- Note: the race's keys are read first, `SELECT "Tb"."raceid" FROM "race" AS "Tb"
+-- WHERE "Tb"."name" = $1 FOR UPDATE` with ["Cancelled Grand Prix"], and this DELETE binds them.
+-- Dependent rows in "result" are removed by PormG's deletion collector, which emits their
 -- DELETE separately in the same transaction (see the counts in the returned per-table Dict)
--- Parameters: ["Cancelled Grand Prix"]
 ```
 
 !!! warning "A cascade descends at most 50 levels"
@@ -202,6 +219,16 @@ WHERE "Tb"."name" = $1
 
     A genuinely acyclic hierarchy more than 50 levels deep hits the same ceiling; there is no way to
     raise it, so delete such a graph in stages, from the far end inward.
+
+!!! note "A delete whose rows reference each other is refused"
+    When the rows a delete reaches reference rows of a model already in the cascade — a
+    self-referencing foreign key with dependent rows (`PROTECT` / `RESTRICT` raise `ProtectedError`
+    first; every other `on_delete` reaches this check), or a team whose favourite driver races for a
+    team being deleted — no order of statements is valid, and the delete raises
+    `QueryBuildError` ("Circular dependency detected in model relationships") while it plans, before
+    anything is written, on every engine. Delete such rows in stages: clear the references first
+    (`update("predecessor" => nothing)`), then delete. The check reads the rows, so the same schema
+    deletes a row that nothing references.
 
 ### Filters are a fence on PostgreSQL
 
@@ -218,7 +245,9 @@ another transaction waits, and when that transaction commits it **re-checks the 
 against the statement's own `WHERE`. Because PormG puts every filter on the row being deleted —
 directly, or through a correlated `EXISTS` when the filter crosses a relation — that re-check sees
 all of them. If the other transaction changed `statusid`, the row no longer matches and is left
-alone; the delete reports 0 rows.
+alone; the delete reports 0 rows. When the model has rows to cascade to, the statement that waits is
+the key read, `SELECT … WHERE <filters> FOR UPDATE`, and its lock re-checks the row the same way: a
+row that stopped matching is not among the keys, and nothing of it is deleted.
 
 The fence covers the filters themselves, not the contents of a subquery you pass *into* one. In
 `filter("resultid__@in" => M.Result.objects.filter("points" => 0).values("resultid"))` the outer
@@ -237,11 +266,11 @@ for `update()`, joined filters included.
     was deleted anyway. The joined path of `update()` had the same shape. SQLite was never affected —
     its writers are serialized, so no statement waits on another writer's uncommitted row.
 
-### A filter that reads another table is resolved to keys first
+### A filtered delete that cascades reads its keys first
 
 The cascade deletes children before their parent, and each statement picks its rows when it runs. A
-root filter that reads the rows the cascade deletes would then match something different in each
-statement:
+root filter read again by every statement could match something different in each one, because the
+statements before it have written rows. A filter that reads the rows the cascade deletes is one case:
 
 ```julia
 # Delete every race where someone started from pole, with its results, laps and standings
@@ -249,10 +278,13 @@ M.Race.objects.filter("result__grid" => 1).delete()
 ```
 
 Read three times, `result.grid = 1` matches the races in the first statement, and nothing in the
-last one, the race's own `DELETE`: its results are already gone. So when a root filter reads another
-table, and the root has something to cascade to, `delete()` first reads the **root's primary keys**,
-once, before it writes anything. Every statement after that is scoped by those keys, and nothing reads
-the filter again:
+last one, the race's own `DELETE`: its results are already gone. A filter on the root's own columns
+is the other: every `SET_NULL` / `SET_DEFAULT` update runs before any `DELETE`, and when one of them
+writes the root's table, the root's `DELETE` would match the rows it had just re-pointed.
+
+So whenever the root has something to cascade to (a `CASCADE`, `SET_NULL` or `SET_DEFAULT` relation),
+`delete()` first reads the **root's primary keys**, once, before it writes anything. Every statement
+after that is scoped by those keys, and nothing reads the filter again:
 
 ```julia
 steps = M.Race.objects.filter("year" => 2009, "result__grid" => 1).delete(show_query = :dict)
@@ -275,11 +307,19 @@ last(steps)[:sql_text]
 # DELETE FROM "race" AS "Tb" WHERE "Tb"."raceid" = ANY($1)
 ```
 
-"Reads another table" means a filter across a relation (a `__` path, either direction, or a `cjoin`)
-or a filter that holds a query (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`). The same
-applies to the rows a `SET_NULL` or `SET_DEFAULT` re-points and to a second cascade path that runs
-after the first one. A filter on the root's own columns, or a root with nothing to cascade to, keeps
-the statements shown above.
+It does not matter what the filter reads: a filter across a relation (a `__` path, either direction,
+or a `cjoin`), a filter that holds a query (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`)
+and a filter on the root's own columns are all read once. The key read also covers the rows a
+`SET_NULL` or `SET_DEFAULT` re-points and a second cascade path that runs after the first one. Two
+deletes keep a single statement: a root with nothing to cascade to, and an unfiltered delete
+(`allow_delete_all = true`), whose `DELETE` takes every row whatever the cascade wrote.
+
+!!! note "Before #1370 a filter on the root's own columns was read again"
+    The key read used to run only for a filter that reads another table. An own-column filter was
+    read again by the root's `DELETE`, which deleted rows the cascade had only meant to update when a
+    `SET_NULL` / `SET_DEFAULT` statement wrote the root's table. The collector's cycle check refuses
+    that statement when it targets the root's own model (a self-referencing key), but not when a
+    second model mapped to the same table declares the foreign key.
 
 - **The key read is the root's lock** on PostgreSQL and MySQL (`SELECT … FOR UPDATE`, below). Where
   the cascade has rows to write below the root, it replaces the root's own lock statement. Where it
@@ -311,8 +351,8 @@ down, with `SELECT … FOR UPDATE`. Each lock uses the same predicate as that mo
 locked parent row cannot change until the delete commits, so children are selected from parents
 whose own columns stay fixed. If another session already changed a parent while the lock was
 waiting, PostgreSQL re-checks the new version: the parent is not locked, and none of its children
-are deleted. A root filter that reads another table is locked through its key read instead; see
-[A filter that reads another table is resolved to keys first](#A-filter-that-reads-another-table-is-resolved-to-keys-first).
+are deleted. A filtered root is locked through its key read; see
+[A filtered delete that cascades reads its keys first](#A-filtered-delete-that-cascades-reads-its-keys-first).
 
 This applies at every depth. Deleting a circuit locks the circuit and then its races. A race moved
 to another circuit mid-delete is therefore neither deleted nor stripped of its results.
@@ -322,22 +362,23 @@ The locks are part of what runs, so the inspection shows them as `:lock` steps a
 ```julia
 steps = M.Race.objects.filter("name" => "Monaco Grand Prix", "year" => 2009).delete(show_query = :dict)
 [(s[:operation], s[:model]) for s in steps]
-# (:lock, "race")
+# (:lock, "race")                      — the race's key read, which is its lock
 # (:delete, "driver_standings")
+# (:delete, "lap_times")
 # (:delete, "constructor_results")
+# (:delete, "result")
 # (:delete, "qualifying")
 # (:delete, "constructor_standings")
-# (:delete, "result")
-# (:delete, "lap_times")
 # (:delete, "race")
 
 steps[1][:sql_text]
-# SELECT count(*) FROM (SELECT 1 FROM "race" AS "Tb"
-#   WHERE "Tb"."name" = $1 AND "Tb"."year" = $2 FOR UPDATE) AS "__pormg_lock"
+# SELECT "Tb"."raceid" FROM "race" AS "Tb" WHERE "Tb"."name" = $1 AND "Tb"."year" = $2 FOR UPDATE
 ```
 
 `result` has no lock here because none of its dependent rows exist, so no statement reads it as a
-parent. The child tables' order follows the collector and may vary between runs; the locks always
+parent. A parent below the root is locked by its own `SELECT count(*) FROM (SELECT 1 … FOR UPDATE)`
+over the predicate its `DELETE` renders, and an unfiltered root (`allow_delete_all`) is locked that
+way too. The child tables' order follows the collector and may vary between runs; the locks always
 come first, root first.
 
 What this costs and what it doesn't:
@@ -356,9 +397,10 @@ What this costs and what it doesn't:
 - **SQLite takes no locks.** Its writers are serialized for the whole delete transaction, so no
   parent can change under a cascade there.
 
-One case remains unpinned: **a parent set that grows.** A row that starts matching a filter on the
-root's own columns mid-cascade can be deleted without the children an earlier statement already
-passed over. The database's foreign keys catch this wherever one exists (see *Concurrency* below).
+One case remains unpinned: **a parent set that grows.** A filtered root's set cannot, since its keys
+are read once (#1370), but an unfiltered root, or a parent below the root, can gain a row that another
+session commits mid-cascade, and that row can be deleted without the children an earlier statement
+already passed over. The database's foreign keys catch this wherever one exists (see *Concurrency* below).
 Where that decides which parents go, pin the table yourself, for example with
 [`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction. Or serialize the two
 writers with an [advisory lock](../advisory_lock.md).
@@ -388,13 +430,15 @@ So on PostgreSQL (and MySQL) two sessions can interleave like this:
 depends on the action:
 
 - **`CASCADE` / `SET_NULL` / `SET_DEFAULT`** — the three that emit statements. PostgreSQL performs
-  the skipped action itself at `COMMIT` (these constraints are `DEFERRABLE INITIALLY DEFERRED`), so
-  the row is removed, nulled or defaulted anyway and the delete succeeds. What you lose is the
-  **accounting**, not the rows: the per-table counts in the returned `(total, Dict)` tally only
-  statements PormG issued, so work the database did on a pruned path is not counted. Treat those
-  counts as a report of what the ORM did, not an audit of the transaction. MySQL performs
-  `CASCADE` and `SET NULL` at the parent's `DELETE` rather than at `COMMIT`, and enforces
-  `SET DEFAULT` as `RESTRICT`, so there a row on a pruned `SET_DEFAULT` path fails the delete
+  the skipped action itself when PormG deletes the parent row (a referential action other than
+  `NO ACTION` is not deferred, even on these `DEFERRABLE INITIALLY DEFERRED` constraints), so the row
+  is removed, nulled or defaulted anyway and the delete succeeds. A filtered root's own `DELETE` is
+  scoped by the keys it read first, so a row such an action re-points is not deleted on its
+  account. What you lose is the **accounting**, not the rows: the per-table counts in the returned
+  `(total, Dict)` tally only statements PormG issued, so work the database did on a pruned path is
+  not counted. Treat those counts as a report of what the ORM did, not an audit of the transaction.
+  MySQL also performs `CASCADE` and `SET NULL` at the parent's `DELETE`, but enforces `SET DEFAULT`
+  as `RESTRICT`, so there a row on a pruned `SET_DEFAULT` path fails the delete
   ([MySQL Guide](../mysql.md#Migrations)).
 - **`PROTECT` / `RESTRICT`** — pruning applies here too, because the probe runs for *every* reverse
   relation before PormG looks at the action at all; that is what makes `PROTECT` existence-driven.

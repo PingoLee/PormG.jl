@@ -88,15 +88,17 @@ correlated `EXISTS` on the row. That makes a filter a **fence** on PostgreSQL: i
 transaction changes a row so it no longer matches while the delete waits on its lock, the row is left
 alone (#765). See *Filters are a fence on PostgreSQL* in [Deleting Records](write/delete.md).
 
-A root filter that reads another table — across a relation (`"result__grid" => 1`,
-`"circuitid__name" => …`), or through a subquery or `Exists` — is resolved to the root's primary keys
-before anything is written, when the root has a dependent to cascade to: one
+When the root has a dependent to cascade to (`CASCADE`, `SET_NULL` or `SET_DEFAULT`), a filtered
+delete resolves the root's primary keys before anything is written: one
 `SELECT "Tb"."<pk>" … WHERE <filter>` (`FOR UPDATE` on PostgreSQL and MySQL), and every statement
-after it is scoped by those keys (#1342). Without that, the statements after the first would re-read
-a filter whose rows the cascade had already deleted or re-pointed, and the root could survive its own
-children. On SQLite and MySQL, which bind a list one value at a time, a large key set runs the
-cascade in chunks inside the same transaction. A filter on the root's own columns is not resolved:
-nothing the cascade writes can change what it matches.
+after it is scoped by those keys (#1342, #1370). Without that, the statements after the first would
+re-read a filter that the cascade had already changed. A filter that reads another table
+(`"result__grid" => 1`, a subquery, an `Exists`) would see rows the cascade had deleted or
+re-pointed, and the root could survive its own children. A filter on the root's own columns would
+see a `SET_NULL` / `SET_DEFAULT` update that wrote the root's table, and delete rows the cascade
+only meant to update. On SQLite and MySQL, which bind a list one value at a time, a large key set
+runs the cascade in chunks inside the same transaction. A delete with nothing to cascade, and an
+unfiltered one (`allow_delete_all`), keep their single statements.
 
 On PostgreSQL and MySQL, before any child statement runs, every collected model that is the parent of
 an emitted `DELETE` or `UPDATE` is locked top-down with `SELECT … FOR UPDATE` over the same predicate
@@ -273,10 +275,12 @@ function delete(objct::SQLObjectHandler;
     # `lap_times.raceid` is `ON DELETE CASCADE`, `lap_times.driverid` is `ON DELETE RESTRICT`.
     #
     # INFERRED, not measured (no PostgreSQL was available): that the database then performs the
-    # skipped CASCADE / SET NULL / SET DEFAULT at COMMIT. That is PostgreSQL's documented
-    # deferred-referential-action behavior, and it is the half worth re-checking on a live two-session
-    # setup before anyone leans further on it. If it holds, a pruned path costs only the per-table
-    # count in the return value, which tallies statements PormG itself issued.
+    # skipped CASCADE / SET NULL / SET DEFAULT itself. Not at COMMIT, as this comment first said:
+    # PostgreSQL documents that a referential action other than NO ACTION is not deferred, even on a
+    # DEFERRABLE constraint, so it runs when PormG deletes the parent row. It is the half worth
+    # re-checking on a live two-session setup before anyone leans further on it. If it holds, a pruned
+    # path costs only the per-table count in the return value, which tallies statements PormG itself
+    # issued (a filtered root's DELETE is scoped by its keys, so such an action cannot widen it, #1370).
     #
     # Note pruning is NOT limited to the actions that emit statements. The `_exists` probe below runs
     # for EVERY reverse relation, before `handle_on_delete!` sees the action — that is exactly what
@@ -303,8 +307,8 @@ function delete(objct::SQLObjectHandler;
     # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
     # BEGIN + ROLLBACK instead of throwing before any transaction existed.
     #
-    # #1342: a root filter that reads another table is resolved to its primary keys FIRST, and the
-    # cascade is planned from those keys. See `_root_key_plan`.
+    # #1342, #1370: a filtered root with something to cascade to is resolved to its primary keys
+    # FIRST, and the cascade is planned from those keys. See `_root_key_plan`.
     key_plan = _root_key_plan(connection, model, objct)
     if key_plan === nothing
       run_plan(conn, plan(deepcopy(objct)), false)
@@ -338,11 +342,12 @@ function delete(objct::SQLObjectHandler;
     # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
     # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
     #
-    # A root filter that reads another table never reaches this loop as such: it was resolved to keys
-    # first (#1342), and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
+    # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
+    # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
     # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
     # The root is locked here anyway when a self-referential cascade added entries of its own model:
-    # those rows are parents the key step did not lock.
+    # those rows are parents the key step did not lock. (Unreached while `topological_sort` refuses
+    # such a cycle, #1272; kept so lifting that refusal does not silently drop the lock.)
     if _locks_cascade_parents(connection)
       for lock_model in _models_to_lock(collector)
         root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
@@ -452,32 +457,40 @@ end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A root filter that reads another table is resolved to keys first (#1342)
+# Every filtered root with something to cascade is resolved to keys first (#1342, #1370)
 #
 # The collector runs children first and the root last, and every statement re-reads the root's
-# filter: a child is scoped by `"<fk>__@in" => <root query>`, the root by its own predicate. When that
-# filter reads rows the cascade writes — `M.Race.objects.filter("result__grid" => 1)`, or an `Exists`
-# over a child — each statement after the first sees a different set. The root's own DELETE ran after
-# its results were gone, matched nothing, and the race survived without its results; a sibling path
-# that ran after another one, or a SET_NULL child re-pointed earlier, lost rows the same way. No error
-# on any engine.
+# filter: a child is scoped by `"<fk>__@in" => <root query>`, the root by its own predicate. When the
+# cascade writes rows that filter reads, each statement after the first sees a different set:
 #
-# So the root's keys are read ONCE, before any write, and the cascade is planned from
-# `"<pk>__@in" => keys` — Django's `Collector` evaluates the queryset for the same reason. On
-# PostgreSQL and MySQL the read is the root's `FOR UPDATE` lock (#770): it returns the keys instead of
-# a count, and a row that changed while it waited is re-checked against the filter, as the #765 fence
-# re-checks it. That also closes, for this shape, two gaps #770/#771 documented: a filter that reads a
-# table through a subquery, and a root set that grows mid-cascade — nothing re-reads the filter after
-# the key step.
+#   - a filter that reads another table — `M.Race.objects.filter("result__grid" => 1)`, or an `Exists`
+#     over a child (#1342). The root's own DELETE ran after its results were gone, matched nothing,
+#     and the race survived without its results; a sibling path that ran after another one, or a
+#     SET_NULL child re-pointed earlier, lost rows the same way;
+#   - a filter on the root's own columns, when a SET_NULL / SET_DEFAULT statement writes the root's
+#     table (#1370). The UPDATE runs before the root's DELETE, which then matches the rows it
+#     re-pointed: `filter("favourite_driver__@isnull" => true)` deleted the team whose favourite
+#     driver the cascade had just nulled. The collector's cycle refusal (`topological_sort`) catches
+#     the statement when it targets a model already in the cascade, but not a second model over the
+#     same table (MEASURED: `(4, team => 2, driver => 2)` where Django deletes two rows). INFERRED,
+#     not run: on PostgreSQL and MySQL the database's own ON DELETE SET NULL on a path a probe pruned
+#     (#460's window) writes the root's table the same way, since PostgreSQL does not defer a
+#     referential action other than NO ACTION.
 #
-# Only a filter that reads ANOTHER TABLE, and only when the root has a reverse relation that writes
-# (CASCADE / SET_NULL / SET_DEFAULT). A filter on the root row's own columns cannot be changed by a
-# statement of the cascade, and a delete with nothing to cascade is one statement; both keep the SQL
-# they had. "Reads another table" is read off the rendered row predicate, which holds a SELECT exactly
-# when it does: a join renders inside the predicate's `IN (SELECT …)` / `EXISTS (SELECT …)` (#765),
-# and every nested query — an `__@in` handler, `Subquery`, `Exists` — renders one. Values are bound,
-# never in the text, so a filter VALUE cannot fake one; a quoted identifier spelled `SELECT` could, and
-# that only resolves keys a delete did not need — never a wrong row.
+# No error on any engine. So the root's keys are read ONCE, before any write, and the cascade is
+# planned from `"<pk>__@in" => keys` — Django's `Collector` evaluates the queryset for the same
+# reason. On PostgreSQL and MySQL the read is the root's `FOR UPDATE` lock (#770): it returns the keys
+# instead of a count, and a row that changed while it waited is re-checked against the filter, as the
+# #765 fence re-checks it. That also closes two gaps #770/#771 documented: a filter that reads a table
+# through a subquery, and a root set that grows mid-cascade — nothing re-reads the filter after the
+# key step.
+#
+# Whenever the root has a reverse relation that writes (CASCADE / SET_NULL / SET_DEFAULT), whatever
+# the filter reads: the shapes above are not told apart by the filter's text. #1342 first resolved
+# only a predicate holding a SELECT, which an own-column filter never does. What keeps its SQL: a
+# delete with nothing to cascade (one statement, nothing to re-read) and an unfiltered root
+# (`allow_delete_all`, whose DELETE takes every row whatever the cascade wrote). A keyless root has
+# nothing to resolve to.
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
@@ -495,7 +508,7 @@ end
 
 """
 `nothing` when the delete keeps its own filter; otherwise the root's entry with its rendered row
-predicate, ready for the key step (#1342).
+predicate, ready for the key step (#1342, #1370).
 """
 function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObjectHandler)
   _cascade_writes(model) || return nothing
@@ -504,12 +517,14 @@ function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObj
   get_model_pk_field(model) === nothing && return nothing
   # Decided on the rendered predicate, not on `filter`: a `cjoin` / `cjoin_on` join reads another
   # table with no filter at all (`allow_delete_all`), and renders inside the predicate all the same.
+  # Only an EMPTY predicate keeps its SQL: an unfiltered delete takes every row, which no statement of
+  # the cascade can change.
   key = resolve_delete_key(model)
   root = deepcopy(objct)
   root.values(key)
   entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => root)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
-  occursin(r"\bSELECT\b", where_sql) || return nothing
+  isempty(where_sql) && return nothing
   return (entry = entry, where_sql = where_sql, parameters = parameters, alias = alias)
 end
 
@@ -700,8 +715,10 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
   # A DEPTH CAP, deliberately, and not the obvious "this model is already on the path" test:
   #
   #   - A self-referential CASCADE foreign key (category tree, org chart) is a legitimate Django
-  #     shape that PormG supports today, and it puts the same model on the path at every level. A
-  #     membership test refuses it outright.
+  #     shape, and it puts the same model on the path at every level. A membership test refuses it
+  #     outright. PormG deletes a row of one that nothing references; where the probes read rows, one
+  #     with dependent rows is refused after the walk, by `topological_sort` (#1272), a refusal that
+  #     is not this guard's.
   #   - A membership test is not sufficient either. Termination is a property of the DATA, not the
   #     schema: cyclic rows keep every `_exists` probe non-empty while the nested subquery grows
   #     without bound, so even the probing path needs a ceiling.
@@ -1058,8 +1075,8 @@ end
 #     child-then-parent can now deadlock against a delete, which PostgreSQL detects and raises rather
 #     than hangs on.
 #
-# This lock pins the parent's OWN row. A root filter that reads another table (a join, a subquery) is
-# not re-read at all: it is resolved to keys before the cascade (#1342, `_root_key_plan`), which
+# This lock pins the parent's OWN row. The root's filter (a join, a subquery, its own columns) is not
+# re-read at all: it is resolved to keys before the cascade (#1342, #1370, `_root_key_plan`), which
 # replaced #771's `FOR SHARE` on each joined table: those locks pinned what every later statement
 # re-read, and after the key step nothing re-reads it. A path the planner probed and pruned is still
 # #460's residue, as the planning comment in `delete()` says.

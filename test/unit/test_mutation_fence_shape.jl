@@ -104,10 +104,11 @@ end
 
 """
 The WRITE step (`DELETE` / `UPDATE`) whose `:model` is `name`, skipping a #770 `:lock` step for the
-same model. Fails loudly rather than returning `nothing`.
+same model and a key read (#1342, #1370: `:lock` on PostgreSQL, `:select` on SQLite). Fails loudly
+rather than returning `nothing`.
 """
 function _mf_step(steps, name::String)
-  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
+  idx = findfirst(s -> s[:model] == name && s[:operation] in (:delete, :update), steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -133,22 +134,39 @@ _mf_self_subquery(sql::AbstractString, table::String) = occursin("FROM \"$(table
 # `filter("id" => k, "status__@in" => terminal).delete()` must put both predicates on the row being
 # deleted. Pre-#765: `DELETE FROM "mf_task" WHERE "id" IN (SELECT "Tb"."id" FROM "mf_task" as "Tb"
 # WHERE …)`, which PostgreSQL never re-checks.
+#
+# A task has notes to null, so since #1370 the filter renders in the key read that comes first,
+# `SELECT "Tb"."id" FROM "mf_task" AS "Tb" WHERE "Tb"."id" = $1 AND "Tb"."status" = ANY($2)
+# FOR UPDATE` on PostgreSQL, whose lock re-checks the row as the DELETE's WHERE did, and the DELETE is
+# scoped by the keys. A note, with nothing to cascade to, keeps its filters on its own DELETE.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a root delete filters the target row itself (#765)" begin
   for (backend, conn, kind) in _MF_BACKENDS
     @testset "$backend" begin
       q = MF.Mf_task.objects
       q.filter("id" => 7, "status__@in" => ["COMPLETED", "FAILED"])
-      root = _mf_step(_mf_steps(q, conn), "mf_task")
-      sql = root[:sql_text]
+      key_read = first(_mf_steps(q, conn))
+      sql = key_read[:sql_text]
+      prefix = "SELECT \"Tb\".\"id\" FROM \"mf_task\" AS \"Tb\" WHERE "
+      predicate = sql[ncodeunits(prefix)+1:end]
 
-      @test startswith(sql, "DELETE FROM \"mf_task\" AS \"Tb\" WHERE \"Tb\".\"id\" = ")
+      @test key_read[:model] == "mf_task" && key_read[:operation] == (kind === :sqlite ? :select : :lock)
+      @test startswith(sql, prefix * "\"Tb\".\"id\" = ")
       # `__@in` is `IN (?, ?)` on SQLite and `= ANY($2)` with one array value on PostgreSQL.
-      @test occursin(" AND \"Tb\".\"status\" ", sql)
+      @test occursin(" AND \"Tb\".\"status\" ", predicate)
       @test !_mf_self_subquery(sql, "mf_task")
-      @test !occursin("SELECT", sql)
-      @test root[:parameters] == (kind === :sqlite ? [7, "COMPLETED", "FAILED"] : [7, ["COMPLETED", "FAILED"]])
-      assert_marker_count(root, kind)
+      @test !occursin("SELECT", predicate)
+      @test endswith(sql, " FOR UPDATE") == (kind === :postgres)
+      @test key_read[:parameters] == (kind === :sqlite ? [7, "COMPLETED", "FAILED"] : [7, ["COMPLETED", "FAILED"]])
+      assert_marker_count(key_read, kind)
+
+      q = MF.Mf_note.objects
+      q.filter("id" => 3, "body" => "stale")
+      root = only(_mf_steps(q, conn))
+      @test startswith(root[:sql_text], "DELETE FROM \"mf_note\" AS \"Tb\" WHERE \"Tb\".\"id\" = ")
+      @test occursin(" AND \"Tb\".\"body\" = ", root[:sql_text])
+      @test !occursin("SELECT", root[:sql_text])
+      @test root[:parameters] == [3, "stale"]
     end
   end
 end
@@ -174,15 +192,20 @@ end
       @test note[:operation] == :update
       @test startswith(note[:sql_text], "UPDATE \"mf_note\" AS \"Tb\" SET \"task\" = NULL WHERE \"Tb\".\"task\" IN (SELECT")
 
+      # The run's own filter renders once, in the key read (#1370); its DELETE is scoped by the keys,
+      # which this mock reads none of.
+      @test startswith(steps[1][:sql_text], "SELECT \"Tb\".\"id\" FROM \"mf_run\" AS \"Tb\" WHERE \"Tb\".\"status\" = ")
+      @test steps[1][:parameters] == ["GONE"]
       run = _mf_step(steps, "mf_run")
-      @test startswith(run[:sql_text], "DELETE FROM \"mf_run\" AS \"Tb\" WHERE \"Tb\".\"status\" = ")
+      @test run[:sql_text] == (kind === :sqlite ? "DELETE FROM \"mf_run\" AS \"Tb\" WHERE (1 = 0)" :
+                                                  "DELETE FROM \"mf_run\" AS \"Tb\" WHERE \"Tb\".\"id\" = ANY(\$1)")
 
       # No statement scans its own table: the discriminator against the pre-#765 renderer.
       for s in steps
         @test !_mf_self_subquery(s[:sql_text], s[:model])
-        @test s[:parameters] == ["GONE"]
         assert_marker_count(s, kind)
       end
+      @test all(s -> !("GONE" in s[:parameters]), steps[2:end])      # nothing re-reads the filter
     end
   end
 end
@@ -220,12 +243,16 @@ _mf_ops(steps) = [(s[:operation], s[:model]) for s in steps]
     @test count(s -> s[:operation] == :lock, steps) == 2
     @test last(_mf_ops(steps)) == (:delete, "mf_run")
 
-    for table in ("mf_run", "mf_task")
-      lock = steps[findfirst(s -> s[:operation] == :lock && s[:model] == table, steps)]
-      write = _mf_step(steps, table)
-      @test lock[:sql_text] == _mf_lock_sql(table, _mf_predicate(write, table))
-      @test lock[:parameters] == write[:parameters] == ["GONE"]
-      assert_marker_count(lock, :postgres)
+    # The root's lock is its key read (#1342, #1370), on the user's filter; the task's is #770's own,
+    # on the predicate its DELETE renders, scoped by the root's keys.
+    @test steps[1][:sql_text] == "SELECT \"Tb\".\"id\" FROM \"mf_run\" AS \"Tb\" WHERE \"Tb\".\"status\" = \$1 FOR UPDATE"
+    @test steps[1][:parameters] == ["GONE"]
+    lock = steps[2]
+    write = _mf_step(steps, "mf_task")
+    @test lock[:sql_text] == _mf_lock_sql("mf_task", _mf_predicate(write, "mf_task"))
+    @test lock[:parameters] == write[:parameters] == [Int[]]          # the mock reads no keys
+    for s in steps[1:2]
+      assert_marker_count(s, :postgres)
     end
   end
 

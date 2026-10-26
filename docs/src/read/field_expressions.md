@@ -693,7 +693,11 @@ they store (SQLite on a date's or an interval's text, MySQL on the number a date
 `'00:01:30'` and read `0`. Every spelling of the ordering is checked: `F(…) > F(…)`, a filter pair
 (`"date__@gt" => F(…)`), a filter on a projected alias, `Q(…)`, a `When` condition, and an `update()`
 value. PostgreSQL types the operands itself, so it builds these shapes, and raises at the server when
-they have no common type, as that one does. A time of day (`TimeField`) is not covered by this check.
+they have no common type, as that one does. A time of day (`TimeField`) counts as a date does here
+(#1323): SQLite compares its `HH:MM:SS` text and MySQL the number its digits spell. Where the values
+of a `Case` or `Coalesce` are of two types PormG can name, such as a duration and `0`, the function
+is refused before any arithmetic, on every engine
+([Mixed date, time, text and number operands](functions_and_dates.md#Mixed-date,-time,-text-and-number-operands)).
 
 State the type instead: give every value of the `Case` or `Coalesce` the one type and do the arithmetic
 inside each branch, or, where a date is at stake, cast the value (`Cast(…, "date")`). A duration has no
@@ -709,6 +713,20 @@ query.values("driverid__surname",
 
 A value that holds no date or duration is not checked beside a number, and equality and `@in` are not
 checked at all: a JSON key times `2`, or compared for equality with a date, builds on every engine.
+
+#### Arithmetic on a time of day
+
+`+`, `-`, `*` and `/` over a `TimeField`, with a number or with another time, raise `QueryBuildError`
+on SQLite and MySQL (#1323). SQLite stores a time as its `HH:MM:SS` text and computes on the leading
+digits, so on the 2009 Australian Grand Prix (`06:00:00`) `F("time") + 1` was `7`; MySQL reads a time
+as the number its digits spell. PostgreSQL has no `time + integer` either and fails at the server.
+PormG has no spelling for arithmetic on a time of day on SQLite or MySQL. Comparing a time with a time
+builds on every engine, since the `HH:MM:SS` text sorts in time order:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009, "time__@lt" => Time(12))   # the races that started before noon
+```
 
 ### When NOT to Use F
 

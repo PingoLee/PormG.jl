@@ -1608,14 +1608,32 @@ function _refuse_unnamed_temporal(pending, instruc::SQLInstruction)
   isempty(pending) && return nothing
   found = _memo_kind(pending, instruc, :unnamed_temporal) do
     for (left, right, op) in pending
+      time = _time_arithmetic_side(left, right, op, instruc)
+      time === nothing || return (time, CTime(), op, true)
       hit = _unnamed_temporal_side(left, right, instruc)
-      hit === nothing || return (hit..., op)
+      hit === nothing || return (hit..., op, false)
     end
     return nothing
   end
   found === nothing && return nothing
-  side, kind, op = found
+  side, kind, op, time = found
+  time && throw(_time_arithmetic_refusal(instruc.connection, op, _unnamed_side_label(side)))
   throw(_unnamed_temporal_refusal(instruc.connection, op, _unnamed_side_label(side), kind))
+end
+
+# #1323 — arithmetic on a time of day, or with one beside it. A `TimeField` is no left of a day shift
+# and no interval (#568), so `+ - * /` over it fell to the generic `(l op r)`: SQLite computes on its
+# `HH:MM:SS` text, reading the leading digits (`06:00:00 + 1` is `7`), and MySQL on the number its
+# digits spell. PostgreSQL has no `time ± integer` and says so at the server. What arithmetic on a time
+# of day means (`time ± interval`, wrapping at midnight) is a feature of its own, not rendered here, so
+# the refusal names no spelling. The side the walk names a time, or `nothing`.
+function _time_arithmetic_side(left, right, op, instruc::SQLInstruction)
+  op in _ARITHMETIC_OPERATIONS || return nothing
+  for side in (left, right)
+    _is_null_literal(side isa SQLText ? side.field : side) && continue
+    _side_walk_kind(side, instruc) isa CTime && return side
+  end
+  return nothing
 end
 # The side as the caller wrote it: a function by its name, a handle by its spelling, a field path by
 # itself. Never a literal: a literal is always named (`_side_walk_kind`), so it is never the unnamed side.
@@ -1631,6 +1649,8 @@ _unnamed_side_label(::Any) = "a value"
 # The spellings that state the type, from what is at stake and what the engine can cast to: an interval
 # has no cast on either engine, a timestamp none on SQLite (#822).
 function _unnamed_temporal_remedy(conn, kind)
+  kind isa CTime && return "give every value of a `Case` or `Coalesce` the one type (then = F(\"time\"), " *
+                           "default = Time(0)), and compare a time with a time (a Time literal)"
   values = "give every value of a `Case` or `Coalesce` the one type, and do the arithmetic inside each " *
            "branch"
   kind isa CInterval && return values * " (then = F(\"fastestlaptime\") * 2, default = Second(0))"
@@ -1639,16 +1659,30 @@ function _unnamed_temporal_remedy(conn, kind)
 end
 _timestamp_remedy(::PormGSQLite) = " (then = F(\"start_at\") + Hour(1))"
 _timestamp_remedy(::PormGMySQL) = ", or cast the value to a timestamp (Cast(…, \"timestamp\"))"
+# #1323: beside a time of day, the message names that, not the three kinds #1310 covered.
+_temporal_beside(kind) = kind isa CTime ? "a time of day" : "a date, a timestamp or an interval"
 _unnamed_temporal_refusal(conn::PormGSQLite, op, label, kind) =
-  QueryBuildError("`$(op)` beside a date, a timestamp or an interval, with $(label) on one side, is not " *
+  QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on SQLite: PormG cannot type $(label), and the SQL depends on the type, since a " *
-                  "date is text there and an interval is its `HH:MM:SS` text. State the type: " *
-                  _unnamed_temporal_remedy(conn, kind) * ".")
+                  (kind isa CTime ? "time is its `HH:MM:SS` text there" :
+                                    "date is text there and an interval is its `HH:MM:SS` text") *
+                  ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
 _unnamed_temporal_refusal(conn::PormGMySQL, op, label, kind) =
-  QueryBuildError("`$(op)` beside a date, a timestamp or an interval, with $(label) on one side, is not " *
+  QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on MySQL: PormG cannot type $(label), and the SQL depends on the type, since " *
-                  "MySQL reads a date there as the number its digits spell (2009-03-29 is 20090329). State " *
-                  "the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
+                  (kind isa CTime ? "MySQL reads a time there as the number its digits spell (06:00:00 is 60000)" :
+                                    "MySQL reads a date there as the number its digits spell (2009-03-29 is 20090329)") *
+                  ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
+_time_arithmetic_refusal(::PormGSQLite, op, label) =
+  QueryBuildError("`$(op)` on a time of day ($(label)) is not supported on SQLite: a time is its `HH:MM:SS` " *
+                  "text there, and `$(op)` computes on the number its leading digits spell (06:00:00 + 1 is 7). " *
+                  "SQLite has no spelling for arithmetic on a time of day: compare a time with a time (a Time " *
+                  "literal), or compute it in Julia.")
+_time_arithmetic_refusal(::PormGMySQL, op, label) =
+  QueryBuildError("`$(op)` on a time of day ($(label)) is not supported on MySQL: MySQL reads a time there as " *
+                  "the number its digits spell (06:00:00 is 60000), and `$(op)` computes on that number. PormG " *
+                  "has no spelling for arithmetic on a time of day on MySQL: compare a time with a time (a Time " *
+                  "literal), or compute it in Julia.")
 
 function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing

@@ -6349,30 +6349,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
-  ("F time + 1 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(`Tb`.`time` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time + 1 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F time + 1 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F time + 1 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` + ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time + 1 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" + \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F time + 1 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" + ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F time * 2 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(`Tb`.`time` * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("F time * 2 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
-  ("F time * 2 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
-  ("F time * 2 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` * ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time * 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F time * 2 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time > Time literal | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F time > Time literal | alone", :mysql, "v__@gt", "bool true") =>

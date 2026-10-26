@@ -5099,39 +5099,39 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F time + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F time + 1 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
   ("F time + 1 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F time + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
   ("F time + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F time + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
   ("F time + 1 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F time * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
   ("F time * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F time * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
   ("F time * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time * 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F time * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
   ("F time * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Case time int + 1 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | alone", :sqlite) =>

@@ -262,7 +262,7 @@ function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Uni
   return x isa SQLTypeFunction ? _side_kind(x, instruc) : nothing
 end
 
-# ── #1310: an operand the walk cannot name, beside a date, a timestamp or an interval ────────────────
+# ── #1310: an operand the walk cannot name, beside a date, a timestamp, a time or an interval ─────────
 # `_expression_kind` answers `nothing` for a value it cannot name: a JSON key lookup, a `Case` or a
 # `Coalesce` whose values disagree, a function with no stated rule. Where the value only passes —
 # projected, compared for equality, beside another number — that is harmless. Where the engine computes
@@ -277,7 +277,7 @@ end
 _side_walk_kind(x::Bool, ::SQLInstruction) = CBool()
 _side_walk_kind(x::Union{Integer,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _literal_kind(x, _AllKinds())
 _side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval()
-_side_walk_kind(x::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(x)
+_side_walk_kind(x::Union{_TemporalLiteral,Dates.Time}, ::SQLInstruction) = literal_canonical_kind(x)   # #1323: a Time too
 _side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
   x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
 # An `OuterRef` is the outer query's column, typed on the outer instruction, which rendered it when the
@@ -291,7 +291,9 @@ _side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
 # not the scalar the lookup returns, whose type is the data's (#1034 phase 4 lists it).
 _unnamed_side(x, instruc::SQLInstruction) =
   !_is_null_literal(x isa SQLText ? x.field : x) && (k = _side_walk_kind(x, instruc); k === nothing || k isa CJSON)
-_is_temporal_kind(k) = k isa Union{CDate,CDateTime,CInterval}
+# #1323: a time of day too. SQLite holds it as its `HH:MM:SS` text and MySQL reads its digits as a
+# number, so an unnamed value beside one, or holding one, is the same question as beside a date.
+_is_temporal_kind(k) = k isa Union{CDate,CDateTime,CTime,CInterval}
 
 """
     _unnamed_temporal_side(left, right, instruc) -> Union{Nothing, Tuple{Any, CanonicalType}}

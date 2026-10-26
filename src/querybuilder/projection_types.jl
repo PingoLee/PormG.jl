@@ -636,7 +636,13 @@ end
 # #1321 — and a number beside a date, a time, an interval or a UUID. PostgreSQL has no common type for
 # them and fails at the server; SQLite returns whichever operand is not NULL, so `update("grid" =>
 # Coalesce("grid", "racedate"))` stored the date's text in the INTEGER column. Every two classes that
-# differ are a mix, as Django's `Expression contains mixed types` holds for any two field types.
+# differ are a mix, as Django's `Expression contains mixed types` holds for any two field types, with
+# one exception: a UUID beside text. SQLite and MySQL hold a UUID as its text and type a cast to `uuid`
+# as text, so there the explicit spelling, `Coalesce("token", Cast(x, "uuid"))`, is text beside a
+# UUID column; refusing the pair would refuse it on those engines only. They answer the UUID's text,
+# its meaning, and PostgreSQL raises at the server for a text column beside one (the #1087
+# tie-breaker). A boolean and a JSON value have no class here: a boolean beside a number is its own
+# meaning question (#1147), and a JSON key's type is the data's.
 #
 # Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
 # and a kind of any other family are let through, and a conflict between two typed operands is refused
@@ -653,8 +659,9 @@ _temporal_mix_class(::CUUID) = :uuid
 _temporal_mix_class(::Any) = nothing
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
 
-# The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321).
-_is_mix(a::Symbol, b::Symbol) = a !== b
+# The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321), except a UUID beside
+# text (above).
+_is_mix(a::Symbol, b::Symbol) = a !== b && !(a in (:uuid, :text) && b in (:uuid, :text))
 # #1327 — a declared `output_field` casts the value OUTSIDE the function (#852), so the engine still
 # meets both operands inside it: PostgreSQL raises, MySQL's `GREATEST('10', 9)` compares as strings
 # before the cast. It lifts the #1200 pairs, as it did; a pair with a number or a UUID side (#1321) is

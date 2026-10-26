@@ -374,12 +374,9 @@ end
   refused(Fn.Case(Fn.When("number" => 1, then = F("date")), default = 0), "Case", _DATE, "a number (an Int64 literal)")
   refused(Fn.Coalesce("number", "token"), "Coalesce", number, token)
   refused(Fn.Coalesce("token", "date"), "Coalesce", token, _DATE)
-  # A UUID beside text: cast the other operand to text, as for a date beside text.
-  refused(Fn.Coalesce("token", "name"), "Coalesce", token, "text (`name`)"; fix = _TMX_TEXT)
   # An `output_field` does not lift a pair with a number or a UUID side.
   refused(Fn.Coalesce("number", "date"; output_field = "date"), "Coalesce", number, _DATE; declared = true)
-  refused(Fn.Coalesce("token", "name"; output_field = "text"), "Coalesce", token, "text (`name`)";
-          fix = _TMX_TEXT, declared = true)
+  refused(Fn.Coalesce("token", "date"; output_field = "text"), "Coalesce", token, _DATE; declared = true)
   # A window `default` of another class than the operand.
   refused(Fn.Lag("number"; default = Date(2021, 1, 1), over = _tmx_over()), "Lag", number,
           "a date (a Date literal)"; engines = _TMX_ENGINES)
@@ -388,13 +385,21 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #1321: one class, or a spelling that states one, builds on every engine
 # Two UUIDs, a number beside the year of a date (an integer), a date cast to text beside text, and the
-# #1200 date/timestamp pair under an `output_field`, which it still lifts. Expected SQL: as before.
+# #1200 date/timestamp pair under an `output_field`, which it still lifts. A UUID beside text is not a
+# mix: SQLite and MySQL type a cast to `uuid` as text, so refusing it would refuse the explicit
+# spelling there only. A boolean beside a number is no class this rule reads (#1147's question).
+# Expected SQL on PostgreSQL: COALESCE("Tb"."token", ("Tb"."name")::uuid).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1321: one class, and the spellings that state one, build" begin
   for expr in (Fn.Coalesce("token", "token"),
                Fn.Coalesce("number", Fn.Extract("date", "year")),
                Fn.Coalesce(Fn.Cast("date", "text"), "name"),
-               Fn.Coalesce("date", "start_at"; output_field = "date"))
+               Fn.Coalesce("date", "start_at"; output_field = "date"),
+               Fn.Coalesce("token", Fn.Cast("name", "uuid")),
+               Fn.Coalesce("token", "name"),
+               Fn.Case(Fn.When("number" => 1, then = 1), default = true))
     @test _tmx_builds_all(expr)
   end
+  @test occursin("COALESCE(\"Tb\".\"token\", (\"Tb\".\"name\")::uuid) as \"x\"",
+                 _tmx_render(Fn.Coalesce("token", Fn.Cast("name", "uuid")); conn = _TMX_PG))
 end

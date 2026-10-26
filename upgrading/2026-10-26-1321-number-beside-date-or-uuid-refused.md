@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1321 ; `src/querybuilder/projection_types.jl` (`_temporal_mix_class`, `_is_mix`, `_declaration_lifts`), `src/querybuilder/functions.jl` (`_temporal_mix_refusal`)
 - **Recorded**: 2026-10-26
-- **Severity**: behavior change. On SQLite, a `Coalesce`, `Greatest`, `Least`, `NullIf`, `Case`, or a `Lag`/`Lead` with a `default`, whose values include both a number and a date, a timestamp, a time, an interval or a UUID used to build. So did one whose values include a UUID and any other type. Each now raises `QueryBuildError` when the query is built, in a projection, a filter or an `update`. On PostgreSQL the same query used to fail at the server and now fails at build time.
+- **Severity**: behavior change. On SQLite, a `Coalesce`, `Greatest`, `Least`, `NullIf`, `Case`, or a `Lag`/`Lead` with a `default`, whose values include both a number and a date, a timestamp, a time, an interval or a UUID used to build. So did one whose values include a UUID and a date, a timestamp, a time or an interval. Each now raises `QueryBuildError` when the query is built, in a projection, a filter or an `update`. On PostgreSQL the same query used to fail at the server and now fails at build time.
 
 ### What changed
 
@@ -21,9 +21,9 @@ q.update("grid" => Coalesce("grid", "raceid__date"))   # SQLite: the date's text
 That `Coalesce` has no one type, so the type walk left it untyped, and the guard that refuses a date
 written into a number field (#1297) did not see it.
 
-The rule that refuses a date beside text (#1200) and text beside a number (#1327) now refuses any two
-operands of different types. A number is one type here (an integer, a float and a decimal), and a
-UUID is another. The message names both operands. No common type exists, so it names none. A
+The rule that refuses a date beside text (#1200) and text beside a number (#1327) now refuses two
+operands of different types among text, a number, a date, a timestamp, a time, an interval and a UUID.
+A number is one type here (an integer, a float and a decimal), and a UUID is another. The message names both operands. No common type exists, so it names none. A
 declared `output_field` does not lift the refusal when one side is a number or a UUID: it casts the
 result outside the call, and the engine still meets both types inside it.
 
@@ -39,6 +39,9 @@ result outside the call, and the engine still meets both types inside it.
 These keep building:
 
 - an integer beside a float or a decimal;
+- a UUID beside text: SQLite and MySQL hold a UUID as its text (a cast to `uuid` is text there), and
+  PostgreSQL raises at the server for a text column beside a UUID, as before;
+- a boolean or a JSON value beside another type, which this rule does not classify;
 - an operand PormG cannot type (raw SQL, a JSON key lookup) beside anything;
 - a `NULL` operand;
 - a date beside a timestamp under an `output_field`, as since #1200.

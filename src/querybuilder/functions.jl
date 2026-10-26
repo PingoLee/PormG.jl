@@ -936,7 +936,7 @@ end
 # #1327 — text beside a number: a cast of either operand says which comparison and which type is
 # meant, so both are named. An `output_field` is refused with the pair (`_declaration_lifts`), and the
 # message says why when one was declared. #1321 — a number beside a date, a time, an interval or a
-# UUID, and a UUID beside anything but text: no common type, as for a time beside a date.
+# UUID, and a UUID beside a date, a time or an interval: no common type, as for a time beside a date.
 const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
   :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text",
   :number => "a number", :uuid => "a UUID")

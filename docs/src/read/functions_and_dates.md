@@ -769,7 +769,7 @@ on every engine (#824) when every argument is of one type: `Coalesce("date", Dat
 `Greatest("date", "fp1_date")` give a `Date`, and `NullIf` takes its first argument's type. A
 `Subquery(...)` argument counts as its one column (#888). When the
 argument types differ (two temporal types, a temporal type and text, a number beside text, a temporal
-type or a UUID, or a UUID beside anything else), PormG does not guess: the call is refused on every engine (see [Mixed date, time, text and number operands](#Mixed-date,-time,-text-and-number-operands)).
+type or a UUID, or a UUID beside a temporal type), PormG does not guess: the call is refused on every engine (see [Mixed date, time, text and number operands](#Mixed-date,-time,-text-and-number-operands)).
 
 ### `Coalesce` — First Non-Null Value
 
@@ -904,11 +904,16 @@ M.Result.objects.values("pos" => Coalesce(Cast("positiontext", "integer"), 0))  
 An `output_field` does not lift this refusal. It casts the result after the engine has already met
 text and a number inside the function, so PostgreSQL still raises and MySQL still compares as strings.
 
-**A number beside a date, a time, an interval or a UUID**, and a UUID beside any other type, is
-refused the same way (#1321). PostgreSQL has no common type for them, and SQLite returns whichever
+**A number beside a date, a time, an interval or a UUID**, and a UUID beside a date, a time or an
+interval, is refused the same way (#1321). PostgreSQL has no common type for them, and SQLite returns whichever
 operand is not `NULL`: `update("grid" => Coalesce("grid", "racedate"))` stored the date's text in the
 integer column on the rows where `grid` was `NULL`. Say which value you mean, for example the date's
 year, `Coalesce("grid", Extract("racedate", "year"))`. An `output_field` does not lift this one either.
+
+Two pairs are not checked. A UUID beside text builds: SQLite and MySQL hold a UUID as its text, so
+`Coalesce("token", Cast("name", "uuid"))` is that text there, and PostgreSQL raises at the server for
+a text column beside a UUID. A boolean or a JSON value beside another type builds as written: a
+boolean is not classed as a number here, and a JSON key's type is the data's.
 
 ### `Cast` — Type Conversion
 

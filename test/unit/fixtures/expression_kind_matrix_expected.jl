@@ -435,11 +435,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract year | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract quarter | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract quarter | cte", :sqlite) =>
@@ -447,47 +447,47 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract quarter | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract quarter | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract quarter | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Sum Extract quarter | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Sum Extract quarter | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract quarter | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Sum Extract quarter | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is EXTRACT(…), whose result type PormG does not infer. Name the type the co"),
   ("Extract quarter / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is EXTRACT(…), whose result type PormG does not infer. Name the type the co"),
   ("Extract quarter / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F bare float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | alone", :sqlite) =>

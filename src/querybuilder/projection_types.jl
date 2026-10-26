@@ -1303,15 +1303,17 @@ end
 # #1135 — a date part both engines compute as an integer, whatever its operand's type: `Dialect`
 # renders `EXTRACT(… FROM x)::integer` (`trunc(…)::integer` for `SECOND`) on PostgreSQL and
 # `CAST(strftime(…) AS INTEGER)` or integer arithmetic on SQLite, and `QUARTER`, `QUADRIMESTER` and
-# `WEEK_DAY` are integer arithmetic on both. Only the parts BOTH engines render: one SQLite cannot
-# (`CENTURY`, `TIMEZONE_HOUR`, an `EXTRACT` `QUARTER`, `@len`) raises `BackendCapabilityError` there,
-# so it has no SQLite answer to split from, and refusing it on PostgreSQL would be a false refusal.
+# `WEEK_DAY` are integer arithmetic on both. A part SQLite cannot render (`CENTURY`, `TIMEZONE_HOUR`,
+# `@len`) raises `BackendCapabilityError` there; it is listed only where every engine that renders it
+# answers an integer, since the list types the value, not a comparison between engines (#1147). #1337:
+# an `EXTRACT` `QUARTER` is one, `EXTRACT(QUARTER FROM x)::integer` on PostgreSQL and MySQL's
+# `QUARTER(x)` an INT, as the `@quarter` transform already was.
 # `EPOCH` and the sub-second parts are fractional on PostgreSQL besides. Stated here because
 # `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
 # this list belongs once it does.
 const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
 const _INTEGER_EXTRACT_PARTS = ("YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "DOW", "DOY",
-                                "WEEK", "ISOYEAR", "ISODOW")
+                                "WEEK", "ISOYEAR", "ISODOW", "QUARTER")
 function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   p.function_name in _INTEGER_TRANSFORMS && return true
   p.function_name == "EXTRACT" || return false

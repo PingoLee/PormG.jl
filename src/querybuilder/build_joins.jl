@@ -640,6 +640,11 @@ function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String;
   alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
   # #169: `alias` is the dedup SURVIVOR's, so every spelling of one relation maps to the row emitted.
   cte || _record_join_alias!(instruct, key, alias)
+  if join_type_override !== nothing   # #1367: a stated join type is never promoted
+    stated = instruct.stated_join_types
+    stated === nothing && (stated = instruct.stated_join_types = Set{String}())
+    push!(stated, alias)
+  end
   # #1002: a reverse hop always (it repeats the parent, or — a reverse OneToOne — can drop it), a
   # forward one only when it is to-many (a link to a non-unique column).
   if reach !== nothing && (reach[1] === :reverse || _to_many(row))
@@ -662,12 +667,13 @@ function _record_join_reach!(instruct::SQLInstruction, alias::String, key::Strin
     reaches[alias] = JoinReach(key = key, path = path, kind = kind, target = target, binding = binding, repeats = repeats,
                                introducer = declares ? :none : intro, declared = declares,
                                cjoin_on = intro === :cjoin_on, ordered = intro === :order_by,
-                               link = link, outer_column = outer_column)
+                               link = link, outer_column = outer_column, outer = instruct.scope.outer)
   else
     existing.declared |= declares
     existing.repeats |= repeats
     existing.cjoin_on |= intro === :cjoin_on
     existing.ordered |= intro === :order_by
+    existing.outer |= instruct.scope.outer
     (existing.introducer === :none && !declares) && (existing.introducer = intro)
   end
   return nothing
@@ -681,6 +687,58 @@ _declare_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> 
 # recorded at the reach, because an ordering on a path a filter already joined resolves through the
 # cache and reaches no hop at all.
 _order_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> (r.ordered = true), instruct, key)
+
+# #1367: an OR arm or an `__@isnull => true` column that reuses a memoized path builds no hop, so it
+# marks the hops along the path here — `_order_join_key!`'s move, for the same reason.
+_outer_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> (r.outer = true), instruct, key)
+
+# #1367: a reverse or ManyToMany hop that a WHERE leaf needing the parent with NO row there reached
+# (`JoinReach.outer`) is joined LEFT. Its derived type comes from the CHILD's key: NOT NULL gives INNER,
+# which says whether a child can lack a parent, never whether a parent can lack children, and an INNER
+# join drops every childless parent before the OR arm or the anti-join is evaluated. Run once, after
+# every row exists and before any renders, so a row a projection or an earlier filter built — the dedup
+# survivor the leaf reached — is promoted too.
+#
+# The hops after a promoted one follow it, as a LEFT parent makes a LEFT child at build
+# (`_determine_join_type`): an INNER join on a NULL-extended row would drop the parent again. A join type
+# `on(path, join_type = …)` stated is kept as stated, here as at build (`_with_config` applies it last).
+# A plain AND filter never reaches this: it matches only a parent that has the row, so INNER keeps its
+# plan. A CTE-rooted hop records no reach and keeps its declared type.
+function _promote_outer_joins!(instruct::SQLInstruction)
+  reaches = instruct.join_reaches
+  outer_hop(r) = r.outer && (r.kind === :reverse || r.kind === :many_to_many)
+  (reaches === nothing || !any(outer_hop, values(reaches))) && return nothing   # #41: allocate nothing
+  rows = instruct.row_join
+  stated = instruct.stated_join_types
+  is_stated(alias) = stated !== nothing && alias in stated
+  promoted = Set{String}()
+  promote!(i) = begin
+    row = rows[i]
+    if row isa ModelJoin && !is_stated(row.alias_b)
+      row.how == "LEFT" || (rows[i] = _with_how(row, "LEFT"))
+      push!(promoted, row.alias_b)
+    end
+  end
+  for (alias, r) in reaches
+    outer_hop(r) || continue
+    i = findfirst(row -> row.alias_b == alias, rows)
+    i === nothing && continue
+    # A ManyToMany hop is two rows, and the reach names the related one: the through-table row before it
+    # is the join that drops the parent.
+    if r.kind === :many_to_many
+      j = findfirst(row -> row.alias_b == rows[i].alias_a, rows)
+      j === nothing || promote!(j)
+    end
+    promote!(i)
+  end
+  isempty(promoted) && return nothing
+  # Rows are inserted parent before child, so one forward pass carries LEFT down every chain.
+  for i in eachindex(rows)
+    row = rows[i]
+    row isa ModelJoin && row.alias_a in promoted && promote!(i)
+  end
+  return nothing
+end
 
 # The reaches a canonical path passes through: the path itself, or a prefix of it.
 function _each_reach_on(f::Function, instruct::SQLInstruction, key::String)

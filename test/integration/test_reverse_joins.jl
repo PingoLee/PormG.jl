@@ -383,3 +383,36 @@ end
     cleanup_del2.filter("id" => nested_del_id)
     cleanup_del2.delete()
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1367: a reverse relation over a NOT NULL key, read by `__@isnull => true` or a Qor arm
+# Pit stops are recorded from 2011 on, so every 2010 race has none and every 2011 race has some.
+# `Pit_stops.raceid` is NOT NULL, which made `pit_stops` an INNER join: the anti-join returned no race,
+# and the OR lost the 2010 opener, which matches `round = 1` and has no pit stop. Now the join is
+# `LEFT JOIN "pit_stops"`. The expected sets are computed from the two tables separately, never
+# through the join under test. Read-only.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Reverse join under __@isnull => true or a Qor arm keeps the race with no pit stop (#1367)" begin
+    years = [2010, 2011]
+    races = M.Race.objects.filter("year__@in" => years).values("raceid", "round").list()
+    with_stop = Set(r[:raceid] for r in M.Pit_stops.objects.filter("raceid__year__@in" => years).values("raceid").list())
+    fourth_stop = Set(r[:raceid] for r in M.Pit_stops.objects.filter("raceid__year__@in" => years, "stop__@gte" => 4).values("raceid").list())
+    no_stop = Set(r[:raceid] for r in races if !(r[:raceid] in with_stop))
+    opener_or_fourth = union(Set(r[:raceid] for r in races if r[:round] == 1), fourth_stop)
+    # The fixture has the shape the test needs: some races with no pit stop, and an opener among them.
+    @test !isempty(no_stop) && !isempty(with_stop)
+    @test !isempty(intersect(no_stop, Set(r[:raceid] for r in races if r[:round] == 1)))
+
+    q = M.Race.objects
+    q.filter("year__@in" => years, "pit_stops__stop__@isnull" => true).values("raceid").distinct()
+    @test Set(r[:raceid] for r in q.list()) == no_stop
+
+    q = M.Race.objects
+    q.filter("year__@in" => years, Qor("round" => 1, "pit_stops__stop__@gte" => 4)).values("raceid").distinct()
+    @test Set(r[:raceid] for r in q.list()) == opener_or_fourth
+
+    # Control: a plain filter across the relation matches only races that have the row.
+    q = M.Race.objects
+    q.filter("year__@in" => years, "pit_stops__stop__@gte" => 4).values("raceid").distinct()
+    @test Set(r[:raceid] for r in q.list()) == fourth_stop
+end

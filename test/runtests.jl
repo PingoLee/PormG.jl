@@ -136,6 +136,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Field-name Case Preservation (#57)" include("unit/test_field_name_case.jl")
     @testset "Model-name Case (#300)" include("unit/test_model_name_case.jl")
     @testset "Mixed-case Model Binding in Reverse Joins (#343)" include("unit/test_reverse_join_mixed_case_binding.jl")
+    @testset "Reverse and ManyToMany Join Promotion (#1367)" include("unit/test_reverse_join_promotion.jl")
     @testset "db_column Authoritative (#50)" include("unit/test_db_column.jl")
     @testset "db_column Join Keys at Depth ≥ 2 (#68)" include("unit/test_db_column_deep_joins.jl")
     @testset "db_table Authoritative (#59)" include("unit/test_db_table.jl")

@@ -116,7 +116,8 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       if having_part !== nothing
         with_bucket(instruc, :having) do
           push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
-                                           phase = :group, label = _having_subquery_label(string(_having_leaf_label(having_part)))))
+                                           phase = :group, having = true,   # #1367: promotes nothing
+                                           label = _having_subquery_label(string(_having_leaf_label(having_part)))))
         end
       end
     else
@@ -652,7 +653,7 @@ function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
     # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`. The
     # caller set the `:group` phase; this names the alias the predicate compares.
     return with_scope(() -> _get_filter_query(v, instruc), instruc;
-                      phase = :group, label = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
+                      phase = :group, having = true, label = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
   end
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
@@ -662,7 +663,7 @@ _having_subquery_label(alias::AbstractString) = "Subquery(…) in the HAVING fil
 # #932: an alias predicate renders in the phase of the clause it was routed to — HAVING is evaluated
 # after GROUP BY, a row alias's WHERE before it (the caller's `:row` phase stands).
 _in_clause_phase(f, instruc::SQLInstruction, clause::Symbol, alias::AbstractString) =
-  clause === :having ? with_scope(f, instruc; phase = :group, label = _having_subquery_label(alias)) : f()
+  clause === :having ? with_scope(f, instruc; phase = :group, having = true, label = _having_subquery_label(alias)) : f()
 _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
@@ -688,8 +689,10 @@ function _get_where_query(v::SQLTypeOper, instruc::SQLInstruction)::String
 end
 _get_where_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_where_query(v, instruc) for v in q.filters], " AND ") * ")"
+# #1367: every arm of an OR must also see a parent with no row across a relation the arm reads — the
+# other arm may match it — so the arms render under `outer` (`_or_arm`, `_promote_outer_joins!`).
 _get_where_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
-  "(" * join([_get_where_query(v, instruc) for v in q.or], " OR ") * ")"
+  "(" * join([_or_arm(() -> _get_where_query(v, instruc), instruc) for v in q.or], " OR ") * ")"
 _get_where_query(v, instruc::SQLInstruction)::String = _get_filter_query(v, instruc)
 
 # Is a predicate's right-hand side an expression (rendered as SQL) rather than a value (bound)?

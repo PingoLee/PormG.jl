@@ -401,7 +401,7 @@ driver.sponsors.clear()
 
 ## Querying Across Many-To-Many Relations (Multi-hop Joins)
 
-Because PormG understands your relationships, you can use the standard double-underscore `__` syntax to filter across Many-to-Many fields as you would with Foreign Keys. PormG will automatically handle the `INNER JOIN` through the intermediary table.
+Because PormG understands your relationships, you can use the standard double-underscore `__` syntax to filter across Many-to-Many fields as you would with Foreign Keys. PormG will automatically handle the `INNER JOIN` through the intermediary table. Where the path sits in a `Qor` arm or ends in `__@isnull => true`, both joins are `LEFT` instead, so a driver with no sponsor still matches (see [Join Types](read/values_and_joins.md#Join-Types)).
 
 For example, to find all drivers who are endorsed by a sponsor located in Italy:
 

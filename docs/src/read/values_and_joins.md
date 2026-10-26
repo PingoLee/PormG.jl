@@ -352,10 +352,32 @@ PormG selects join types based on your model's field definitions:
 | :--- | :--- |
 | Non-nullable ForeignKey | `INNER JOIN` |
 | Nullable ForeignKey (`null=true`) | `LEFT JOIN` |
+| Reverse relation (another model's ForeignKey to this one) | `INNER JOIN` over a non-nullable key, `LEFT JOIN` over a nullable one |
+| ManyToMany relation | `INNER JOIN` (both the link table and the related table) |
+| A reverse or ManyToMany relation a `Qor` arm or `__@isnull => true` reads | `LEFT JOIN`, and every hop after it on the path |
 | Custom join via `.cjoin()` | `LEFT JOIN` by default (configurable) |
 | Override via `.on()` | Configurable: `"INNER"`, `"LEFT"`, etc. |
 
 The join direction is always inferred from the relation path. For custom join behavior, see [Custom Joins](custom_joins.md).
+
+**Filters that must see a parent with no related row.** An `__@isnull => true` filter through a
+reverse or many-to-many relation asks for the parents with *no* row there, and a `Qor` arm across one
+can be matched by a parent through another arm. Both need the parent with no row, which an `INNER JOIN`
+drops before the `WHERE` clause runs, so PormG joins that relation `LEFT` (#1367). On the F1 data,
+where pit stops are recorded from 2011 on:
+
+```julia
+# Races with no recorded pit stop: every 2010 race
+query = M.Race.objects
+query.filter("year__@in" => [2010, 2011], "pit_stops__stop__@isnull" => true)
+query.values("raceid").distinct()
+# LEFT JOIN "pit_stops" AS "Tb_1" … WHERE … AND "Tb_1"."stop" IS NULL   → 19 races
+```
+
+A plain filter across the relation, and `__@isnull => false`, keep their `INNER JOIN`: they match only
+parents that have the row. A join type stated with `.on(path, join_type = …)` is kept as stated, on a
+hop after the promoted one too, where `"INNER"` drops the parent again. The same filters in `delete()`
+and `update()` reach the same parents.
 
 ---
 

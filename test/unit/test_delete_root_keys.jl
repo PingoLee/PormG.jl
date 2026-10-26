@@ -145,16 +145,15 @@ end
 
 # An OR of an own-column arm and an arm that reads a child: before #1342 only the own-column race
 # (3, 'Spa') survived the re-read and was deleted — race 1 lost its result and lap and stayed. The
-# key read takes both races at once.
+# key read takes both races at once. Spa has no result: since #1367 the OR arm's join to rk_result is a
+# LEFT join, so Spa matches its own-column arm (before, the INNER join dropped it and this test had to
+# give Spa a result).
 @testset "an OR across own columns and a child deletes every root either arm matched (#1342)" begin
   _rk_reset!()
-  # Spa gets a result of its own: the OR's join to rk_result is an INNER join (the foreign key is
-  # NOT NULL), so a race with no result could not match either arm.
-  fetch(_RK_POOL, "INSERT INTO rk_result (id, race, grid) VALUES (30, 3, 7);")
   q = RK.Rk_race.objects
   q.filter(Qor("name" => "Spa", "results__grid" => 1))
   total, counts = q.delete()
-  @test counts == Dict("rk_race" => 2, "rk_result" => 3, "rk_lap" => 2)
+  @test counts == Dict("rk_race" => 2, "rk_result" => 2, "rk_lap" => 2)
   @test _rk_ids("rk_race") == [2]
   @test _rk_ids("rk_result") == [20]
   @test _rk_ids("rk_lap") == Int[]

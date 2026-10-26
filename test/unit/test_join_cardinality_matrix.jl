@@ -113,6 +113,15 @@ const _JCARD_INTRODUCERS = (
   # The same path projected and filtered: one join, which the projection asked for.
   ("filter + values same path", (p, v) -> (mod -> mod.Driver.objects.filter(p => v).values("driverid", p), _jcard_read)),
   ("filter + Qor", (p, v) -> (mod -> mod.Driver.objects.filter(Qor(p => v, "number" => 7)).values("driverid"), _jcard_read)),
+  # #1367: the shapes that must also match a driver with NO row across the relation — an OR arm and the
+  # `__@isnull => true` anti-join — under a semi-join, so the to-many relations build too. The join type
+  # is what these cells record; `@isnull => false` and a projected path are the controls.
+  ("filter + Qor + exists()", (p, v) -> (mod -> mod.Driver.objects.filter(Qor(p => v, "number" => 7)), q -> q.exists(show_query = :sql))),
+  ("filter + Qor nested in Q + exists()", (p, v) -> (mod -> mod.Driver.objects.filter(Q("code" => "X", Qor(p => v, "number" => 7))),
+                                                     q -> q.exists(show_query = :sql))),
+  ("filter + Qor + values same path", (p, v) -> (mod -> mod.Driver.objects.filter(Qor(p => v, "number" => 7)).values("driverid", p), _jcard_read)),
+  ("filter @isnull true + exists()", (p, v) -> (mod -> mod.Driver.objects.filter("$(p)__@isnull" => true), q -> q.exists(show_query = :sql))),
+  ("filter @isnull false + exists()", (p, v) -> (mod -> mod.Driver.objects.filter("$(p)__@isnull" => false), q -> q.exists(show_query = :sql))),
   ("filter + limit", (p, v) -> (mod -> mod.Driver.objects.filter(p => v).values("driverid").limit(5), _jcard_read)),
   ("count()", (p, v) -> (mod -> mod.Driver.objects.filter(p => v), q -> q.count(show_query = :sql))),
   ("count(distinct = true)", (p, v) -> (mod -> mod.Driver.objects.filter(p => v).values("driverid"),
@@ -140,6 +149,7 @@ const _JCARD_INTRODUCERS = (
   ("update() SET from a join", (p, v) -> (mod -> mod.Result.objects.filter("driverid__$(p)" => v),
                                           q -> q.update("number" => F("driverid__number"), show_query = :sql))),
   ("delete()", (p, v) -> (mod -> mod.Result.objects.filter("driverid__$(p)" => v), q -> q.delete(show_query = :sql))),
+  ("delete() Qor", (p, v) -> (mod -> mod.Result.objects.filter(Qor("driverid__$(p)" => v, "number" => 7)), q -> q.delete(show_query = :sql))),
 )
 
 # `on()` declares its path. Not on a ManyToMany hop, which it refuses (#977) — the matrix records that.
@@ -199,6 +209,13 @@ const _JCARD_SINGLE_CELLS = (
    (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors__drivers"), _jcard_read)),
   ("values, an unknown name before the last segment, after the first hop (#1134)",
    (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__nope__x"), _jcard_read)),
+  # #1367: a forward hop past a reverse one under an OR arm, and the same with an `on()` that states the
+  # reverse join's type.
+  ("filter + Qor + exists(), reverse then forward",
+   (mod -> mod.Driver.objects.filter(Qor("results__driverid__code" => "X", "number" => 7)), q -> q.exists(show_query = :sql))),
+  ("filter + Qor + exists(), on() join_type INNER",
+   (mod -> mod.Driver.objects.on("results", join_type = "INNER").filter(Qor("results__grid" => 1, "number" => 7)),
+    q -> q.exists(show_query = :sql))),
   ("filter, forward not null from Result",
    (mod -> mod.Result.objects.filter("driverid__code" => "X").values("resultid"), _jcard_read)),
   # An `OuterRef` across a to-many path joins the OUTER query.

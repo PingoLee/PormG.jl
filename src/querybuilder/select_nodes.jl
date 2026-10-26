@@ -1103,7 +1103,7 @@ _len_operand_label(::Any) = "this expression"
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
   for v in q.or
-    push!(resp, _get_select_query(v, instruc, _as=_as))
+    push!(resp, _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc))   # #1367
   end
   return "(" * join(resp, " OR ") * ")"
 end

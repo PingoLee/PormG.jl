@@ -243,7 +243,8 @@ function _refuse_nullable_lock_target(instruction::SQLInstruction, name::String,
   uppercase(row.how) == "LEFT" || return nothing
   throw(QueryBuildError(
     "select_for_update(of = …): \"$(name)\" is joined $(uppercase(row.how)) — a nullable foreign " *
-    "key, a hop after one, or an explicit join_type — and PostgreSQL cannot lock the nullable side " *
+    "key, a hop after one, a reverse or ManyToMany relation an OR arm or `__@isnull => true` reads, " *
+    "or an explicit join_type — and PostgreSQL cannot lock the nullable side " *
     "of an outer join. Leave it out of `of` — of = (\"self\",) locks the base rows alone — or lock " *
     "that table with a query of its own."))
 end
@@ -300,7 +301,8 @@ function _refuse_plain_lock_beside_outer_joins(instruction::SQLInstruction)
     label, inner = _lock_join_label(instruction, row)
     throw(QueryBuildError(
       "select_for_update() locks every table the query reads, and $(label) is joined LEFT — a " *
-      "nullable foreign key, a hop after one, or an explicit join_type — so it is on the nullable " *
+      "nullable foreign key, a hop after one, a reverse or ManyToMany relation an OR arm or " *
+      "`__@isnull => true` reads, or an explicit join_type — so it is on the nullable " *
       "side of an outer join, which PostgreSQL cannot lock. Pass of = (\"self\",) to lock the base " *
       "rows alone, leaving that table unlocked$(inner), or lock it with a query of its own."))
   end

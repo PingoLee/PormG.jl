@@ -412,7 +412,7 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   write_lock::ReentrantLock
 end
 
-# #1130 (in progress): a MySQL pool. Its slots behave like PostgreSQL's — all alike, no read/write
+# #1130: a MySQL pool. Its slots behave like PostgreSQL's — all alike, no read/write
 # split — so it shares PostgreSQL's acquire/release/renew methods (typed on both markers below).
 # `connection_string` is a libpq-style conninfo (`host='…' port='…' user='…' password='…'
 # dbname='…'`), built by `Configuration` with the same quoting as PostgreSQL's: one format means

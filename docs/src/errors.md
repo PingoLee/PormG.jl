@@ -242,7 +242,7 @@ caller's fault.
 
 What is **not** inside it: `ProtectedError` (the *data* forbids a delete), `BackendCapabilityError`
 (the backend lacks the feature — a deployment problem, not a bad request),
-`UnsupportedConnectionError` (a PormG bug) and the `DatabaseError` family.
+`UnsupportedConnectionError` (a PormG bug, or on MySQL what has no faithful SQL there) and the `DatabaseError` family.
 
 Most `UsageError`s are raised while the query is built, before anything is sent, but not all: a
 bulk write checks each row as it goes, so a bad later row is refused after earlier chunks were

@@ -3343,9 +3343,8 @@ end
     migrate(connection::PormGBackend, settings; interactive, destructive, name, lock_wait, lock_timeout, statement_timeout, atomic) -> MigrationResult
     migrate(db::String; config, kwargs...) -> MigrationResult
 
-Apply the pending migration plan (`pending_migrations.jl`) to a database (PostgreSQL, SQLite, or MySQL —
-in progress, #1130), and
-return a [`MigrationResult`](@ref) saying what happened. Safe to call at application boot by
+Apply the pending migration plan (`pending_migrations.jl`) to a database (PostgreSQL, SQLite or MySQL),
+and return a [`MigrationResult`](@ref) saying what happened. Safe to call at application boot by
 several instances at once — see the [Deploying](@ref deploying-migrations) guide.
 
 # Lifecycle

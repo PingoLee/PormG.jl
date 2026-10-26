@@ -1,12 +1,12 @@
 # ==============================================================================
-# PormGMySQLExt — MySQL through MySQL.jl 2.0 (#1130, in progress)
+# PormGMySQLExt — MySQL through MySQL.jl 2.0 (#1130)
 #
 # Loaded when the user runs `using MySQL`. Implements the backend generics declared in `src/Backend.jl`
 # for `MySQLConnectionPool` (src/ConnectionPool.jl). MySQL.jl 2.0 is a pure-Julia wire-protocol driver
 # on Reseau, the socket layer Postgres.jl uses, so the shapes here follow `ext/PormGPostgresExt.jl`.
 #
-# Phase 1 of #1130: connections, the pool, statements, transactions, cancellation and error
-# classification. No query is rendered for MySQL yet — that is phase 2.
+# This file is the driver layer: connections, the pool, statements, transactions, cancellation and
+# error classification. Rendering is core's (`src/Dialect.jl`, the engine facts), as for every engine.
 #
 # Every method is typed on the concrete `MySQLConnectionPool`, and the classifiers also on the driver's
 # exception types, so none shadows core's defaults for the unit suite's mock pools (the hazard
@@ -182,7 +182,6 @@ function _open_connection(pool::_Pool)::MySQL.Connection
     try; close(conn); catch; end
     rethrow()
   end
-  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL, model reads, writes, migrations and inspectdb work; the full test suite does not run there yet" maxlog = 1
   return conn
 end
 

@@ -106,7 +106,7 @@ for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :
           :transactional_ddl, :partial_indexes, :unbounded_text_indexes, :statement_timeouts)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
-# MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
+# MySQL (#1130) gained each row in the phase that delivered it. Phase 1 delivered the
 # connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269). Phase 2c-2: `ROUND`
 # takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4). Phase 2c-3b: window functions
 # (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.

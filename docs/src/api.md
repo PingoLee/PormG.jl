@@ -38,7 +38,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 | `.cjoin_on(model; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. `model` is the model object, or its name as a `String`. | `.cjoin_on(M.Driver; alias = "d", on = [...])` |
 | `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
-| `.select_for_update(; nowait, skip_locked, no_key, of)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; no lock clause on SQLite; must run inside a transaction on both). `of` limits it to the named tables. | `.select_for_update(of = ("self",))` |
+| `.select_for_update(; nowait, skip_locked, no_key, of)` | `SELECT … FOR UPDATE` row lock (PostgreSQL and MySQL, where `no_key` raises `BackendCapabilityError`; no lock clause on SQLite; must run inside a transaction on every engine). `of` limits it to the named tables. | `.select_for_update(of = ("self",))` |
 | `.copy()` | Deep-copy the handler to branch a chain without disturbing the original. | `base.copy().filter("year" => 2020)` |
 
 See also: [Custom Joins](read/custom_joins.md) for `.cjoin()` / `.cjoin_on()` / `.on()`, and
@@ -60,7 +60,7 @@ These methods finalize the query and execute it against the database:
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
 | `.list(:json)` | `String` | Returns results as a JSON string. `JSON.json` on the rows from `.list()` produces the same string. A `DurationField` reads as `"00:01:49.088"` and a `DecimalField` as a JSON number carrying its exact digits — see [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON). |
-| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on both engines, as in `.list()`. |
+| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on every engine, as in `.list()`. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
@@ -161,9 +161,9 @@ meta = query.list(show_query=:dict)
 | `:sql_text` | The SQL string — exactly what executes (on PostgreSQL, `create()` includes its `RETURNING *`). |
 | `:parameters` | The bound values, in bucket order. |
 | `:parameter_count` | `length(:parameters)`. |
-| `:parameter_buckets` | SQLite: the values per positional bucket (`:select`, `:where`, `:limit`, …). PostgreSQL: empty. |
-| `:dialect` | `:postgresql` or `:sqlite`. |
-| `:bucketing` | `:numbered` (`$1`, PostgreSQL) or `:positional` (`?`, SQLite). |
+| `:parameter_buckets` | SQLite and MySQL: the values per positional bucket (`:select`, `:where`, `:limit`, …). PostgreSQL: empty. |
+| `:dialect` | `:postgresql`, `:sqlite` or `:mysql`. |
+| `:bucketing` | `:numbered` (`$1`, PostgreSQL) or `:positional` (`?`, SQLite and MySQL). |
 | `:model` | The model / table name. |
 | `:operation` | `:select`, `:insert`, `:update` or `:delete`; a cascading delete also has `:lock` steps on PostgreSQL and MySQL, and a filtered one starts with its key read (`:lock` there, `:select` on SQLite); `bulk_copy` reports `:bulk_copy`. |
 
@@ -181,11 +181,11 @@ inspection = query |> inspect_query()
 println(inspection[:sql_text])   # The generated SQL
 println(inspection[:parameters]) # Bound parameters
 println(inspection[:operation])  # Automatically detects :select
-println(inspection[:dialect])    # :postgresql or :sqlite
+println(inspection[:dialect])    # :postgresql, :sqlite or :mysql
 ```
 
 !!! note
-    `LIMIT` and `OFFSET` values are bound parameters like every other value (#46), so one statement text serves every page size. They come last in `inspection[:parameters]` — LIMIT, then OFFSET — and on SQLite they sit in their own `inspection[:parameter_buckets][:limit]` bucket. An offset with no limit renders `LIMIT -1 OFFSET ?` on SQLite, whose grammar has no standalone `OFFSET`; PostgreSQL keeps the bare `OFFSET $N`.
+    `LIMIT` and `OFFSET` values are bound parameters like every other value (#46), so one statement text serves every page size. They come last in `inspection[:parameters]` — LIMIT, then OFFSET — and on SQLite and MySQL they sit in their own `inspection[:parameter_buckets][:limit]` bucket. An offset with no limit renders `LIMIT -1 OFFSET ?` on SQLite and `LIMIT 18446744073709551615 OFFSET ?` on MySQL, whose grammars have no standalone `OFFSET`; PostgreSQL keeps the bare `OFFSET $N`.
 
 
 ### `explain_query`
@@ -202,7 +202,7 @@ plan = M.Result.objects.
 
 plan[:indexes_used]    # ["result_driverid_lunjedbf_idx"]
 plan[:seq_scans]       # ["driver"]
-plan[:total_cost]      # 167.35   (PostgreSQL's estimate; nothing on SQLite)
+plan[:total_cost]      # 167.35   (the engine's estimate on PostgreSQL and MySQL; nothing on SQLite)
 plan[:estimated_rows]  # 62
 ```
 
@@ -415,7 +415,7 @@ df = M.Result.objects.values(
 | Function | Description |
 | :--- | :--- |
 | `Abs("field")` | Absolute value |
-| `Round("field", precision)` | Round to `precision` places with each engine's own `ROUND`; a decimal tie can differ in its last digit on SQLite (#1061); over an integer it is that integer (#1196). Text raises; a negative precision rounds to tens on PostgreSQL and raises `BackendCapabilityError` on SQLite (#1167) |
+| `Round("field", precision)` | Round to `precision` places with each engine's own `ROUND`; a decimal tie can differ in its last digit on SQLite (#1061); over an integer it is that integer (#1196). Text raises; a negative precision rounds to tens on PostgreSQL and MySQL and raises `BackendCapabilityError` on SQLite (#1167) |
 | `Floor("field")` | Floor |
 | `Ceil("field")` | Ceiling |
 | `Sqrt("field")` | Square root |
@@ -446,14 +446,14 @@ df = M.Result.objects.values(
 | `SearchRank(vector, query; normalization, cover_density, weights)` | `ts_rank` / `ts_rank_cd`, as a `Float64`; `weights` are D, C, B, A | `"rank" => SearchRank(SearchVector("forename", "surname"), "senna")` |
 | `SearchHeadline(field, query; config, start_sel, stop_sel, …)` | `ts_headline`: the text with the matched words marked | `"hl" => SearchHeadline("name", "grand prix"; start_sel = "<b>", stop_sel = "</b>")` |
 
-Each raises `BackendCapabilityError` on SQLite when the query is built. The config, the search types
+Each raises `BackendCapabilityError` on SQLite and MySQL when the query is built. The config, the search types
 and the options are in [Full-Text Search](read/full_text_search.md). To index a search, declare the
 expression with `Models.search_vector_expression(columns...; config)`, which returns the
 `to_tsvector(…)` text the query renders (see *Indexing* on that page). To search several columns,
 project a `SearchVector` under a name and filter it: `values("doc" => SearchVector("forename",
 "surname")).filter("doc__@search" => "lewis")`.
 
-An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built. `Concat` is narrower: a `Bool`, float or `Decimal` operand, as a literal, a column or an expression, raises `QueryBuildError` on every engine too, because the query does not say which text it means (#1027), and so does a timestamp, an interval or a whole JSON document (#1028). Cast such an operand to text first. A cast to text does not refuse them: a float, a decimal, a timestamp, an interval or a JSON document cast to text builds on both engines, written in each engine's own text. A cast is refused only on an engine that would compute a different value from what the cast means (#1147). On SQLite that is a `Bool` cast to text, a float or a decimal cast to an integer unless it is rounded first with `Round`, `Floor` or `Ceil`, and a cast to `numeric(p, s)` of a float, text, a `numeric` function or a decimal with more than `s` places, since SQLite does not round to the scale (#1040). An `output_field` of text, an integer or a scaled numeric on `Coalesce`, `Greatest`, `Least` or `Case` follows the same rules (#1028, #1040), a `Case` branch by branch (#1217). [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) has the full table, including the integer quotient PostgreSQL refuses (#1111).
+An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built. `Concat` is narrower: a `Bool`, float or `Decimal` operand, as a literal, a column or an expression, raises `QueryBuildError` on every engine too, because the query does not say which text it means (#1027), and so does a timestamp, an interval or a whole JSON document (#1028). Cast such an operand to text first. A cast to text does not refuse them: a float, a decimal, a timestamp, an interval or a JSON document cast to text builds on every engine, written in each engine's own text. A cast is refused only on an engine that would compute a different value from what the cast means (#1147). On SQLite that is a `Bool` cast to text, a float or a decimal cast to an integer unless it is rounded first with `Round`, `Floor` or `Ceil`, and a cast to `numeric(p, s)` of a float, text, a `numeric` function or a decimal with more than `s` places, since SQLite does not round to the scale (#1040). On MySQL it is a `Bool` cast to text, a date, a timestamp, a time or an interval cast to a number, and a literal a `numeric(p, s)` cannot hold ([MySQL Guide](mysql.md#Reads)). An `output_field` of text, an integer or a scaled numeric on `Coalesce`, `Greatest`, `Least` or `Case` follows the same rules (#1028, #1040), a `Case` branch by branch (#1217). [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) has the full table, including the integer quotient PostgreSQL refuses (#1111).
 
 ### Case Expressions
 
@@ -544,7 +544,7 @@ df = DataFrame([
 result = bulk_insert(M.Driver, df)
 ```
 
-Duplicates can be skipped or merged instead of erroring with the `on_conflict=` keyword (PostgreSQL and SQLite ≥ 3.24; see [Conflict Handling](write/bulk.md#conflict-handling-on-conflict)):
+Duplicates can be skipped or merged instead of erroring with the `on_conflict=` keyword (PostgreSQL and SQLite ≥ 3.24; MySQL as `ON DUPLICATE KEY UPDATE`, whose target must be the one unique key the rows can conflict on; see [Conflict Handling](write/bulk.md#conflict-handling-on-conflict)):
 
 ```julia
 bulk_insert(M.Status, df, on_conflict = :nothing)                                  # ON CONFLICT DO NOTHING
@@ -625,7 +625,7 @@ See [Transactions](write/transaction.md) for the full reference including savepo
 
 Friendly, Django-flavored alias for `run_in_transaction`. A **nested** `atomic` on the same database
 automatically becomes a `SAVEPOINT`, so a failing inner block rolls back only to its savepoint while the
-outer transaction survives (works identically on PostgreSQL and SQLite):
+outer transaction survives (works identically on every engine):
 
 ```julia
 atomic("db") do
@@ -651,7 +651,7 @@ and `no_key` map to `FOR UPDATE NOWAIT` / `FOR UPDATE SKIP LOCKED` / `FOR NO KEY
 `skip_locked` are mutually exclusive). `of` limits the lock to the named tables — `"self"`, a relation path
 the query joins, or a `cjoin_on` alias — and renders `FOR UPDATE OF "<alias>", …`. Without it PostgreSQL
 locks every table in the query, joined ones included, and a lock without `of` beside an outer join raises
-`QueryBuildError`. It must run inside a transaction on both engines. **On SQLite it renders no lock
+`QueryBuildError`. It must run inside a transaction on every engine. On MySQL it renders the same clause, and `no_key` raises `BackendCapabilityError`. **On SQLite it renders no lock
 clause** (no row-level locking; the transaction serializes writers), though it still checks the `of`
 targets. See
 [Row-Level Locking](write/transaction.md#Row-Level-Locking).
@@ -696,13 +696,13 @@ result = await_result(task)   # returns rows and releases the pooled connection
 ```
 
 Bind user values with a plain array — write the backend-native placeholder (`$1, $2` on
-PostgreSQL, `?` on SQLite); PormG does no translation, and a NULL is `missing`:
+PostgreSQL, `?` on SQLite and MySQL); PormG does no translation, and a NULL is `missing`:
 
 ```julia
 # PostgreSQL
 task = fetch_async(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", ["Brazilian"])
 n    = await_result(task)
-# SQLite: the same call with "... = ?" and the same ["Brazilian"] array
+# SQLite and MySQL: the same call with "... = ?" and the same ["Brazilian"] array
 ```
 
 !!! warning "An un-awaited `FetchTask` leaks its pool connection"
@@ -723,7 +723,7 @@ transaction.
 Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`;
 outside a REPL one of the two is required (#1228).
 
-The adapter's driver package must be loaded first — `using LibPQ` (or `Postgres`) / `using SQLite` —
+The adapter's driver package must be loaded first — `using LibPQ` (or `Postgres`) / `using SQLite` / `using MySQL` —
 or `load` raises `MissingConfigurationError` naming it, at boot rather than on the first query
 (#1232). `before_connect = (key, settings) -> Bool` gives this key its own hook, run before a
 physical connection is opened, in place of the process-wide `set_before_connect_hook`.
@@ -817,7 +817,7 @@ Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline
 ### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`
 
 Registers a connection pool at runtime from a connection string — see
-[Dynamic & Multi-Tenancy](configuration/dynamic.md). The environment the entry records, which
+[Dynamic & Multi-Tenancy](configuration/dynamic.md). `adapter = "MySQL"` raises `InvalidConfigurationError`: a MySQL connection is configured by its keys in `connection.yml`, through `load`. The environment the entry records, which
 `env(key)` and `status(key)` report, follows `load`'s rule (#1228, #1256): `env =` when passed, else a
 non-blank `PORMG_ENV`, else — in an interactive session only — `"dev"` with an `@info`. A service, a
 test or a script that states neither gets `InvalidConfigurationError`, before any pool is built or
@@ -859,7 +859,7 @@ Creates `model`'s table on `key` if it does not exist and returns `:created`, `:
 `:disabled` on a `change_db: false` connection (#1230). The DDL is what a migration emits for a new
 model — table, foreign keys, indexes (a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`
 included), unique constraints and CHECKs — in one transaction, under the migration advisory lock on
-PostgreSQL. It never alters an existing table. For infrastructure tables kept out of
+PostgreSQL. On MySQL it runs under the migration's `GET_LOCK` on one connection, with no transaction, and drops the table again when a statement after its `CREATE TABLE` fails. It never alters an existing table. For infrastructure tables kept out of
 `makemigrations` with `register_ignore_tables!`:
 
 ```julia
@@ -905,7 +905,7 @@ For the full configuration guide, see [Configuration](configuration/index.md).
 
 ### `with_advisory_lock`
 
-Acquires a PostgreSQL advisory lock for distributed coordination:
+Acquires a PostgreSQL advisory lock, or a MySQL named lock (`GET_LOCK`), for distributed coordination:
 
 ```julia
 PormG.with_advisory_lock("db", "rebuild_driver_standings"; wait=true, timeout_ms=10000) do
@@ -918,7 +918,7 @@ end
 
 **Strategies:**
 - `:poll` (default) — Client-side polling with interval
-- `:block` — Server-side blocking via `pg_advisory_lock`
+- `:block` — Server-side blocking via `pg_advisory_lock` (PostgreSQL) or `GET_LOCK` with a timeout (MySQL)
 
 SQLite: no-op — the block executes without locking. It warns once per lock key;
 `on_missing_lock=:ignore` accepts that silently, `on_missing_lock=:error` raises
@@ -980,7 +980,7 @@ catch the `UsageError` umbrella rather than the concrete refusal (#1238):
     always before anything is sent. [`DatabaseError`](#database-errors) reports what the
     **database itself** refused once a statement got there — a constraint violation, SQL the backend rejects, a connection dropped
     mid-query — so `catch PormGError` really does cover both, and an app never has to name
-    `SQLite.SQLiteException` / `LibPQ.Errors.*` (which would mean depending on the driver package
+    `SQLite.SQLiteException` / `LibPQ.Errors.*` / `MySQL.MySQLError` (which would mean depending on the driver package
     just to spell the type). The driver's own exception stays reachable on `.cause` (#268).
 
 !!! warning "These are not `ArgumentError`s"
@@ -1023,10 +1023,10 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter, or an `update()`/`delete()`/`bulk_update()` on another unsafe shape. |
 | `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
-| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`, the `regex` family), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. Change the query or the backend. |
+| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`, the `regex` family), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. On MySQL: the regex, JSONB, `iunaccent_*` and full-text lookups, `select_for_update(no_key = true)`, a `GROUPS` or `EXCLUDE` window frame, a partial index, `migrate` of several statements without `atomic = false`, or a server older than 8.4. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on a filter, an insert or an update — the message names where, never the value, and `kind`/`field`/`row` carry it as data (#971) — an identifier failed the safety check, an interval/duration could not be parsed, or a piece of SQL grammar PormG must write itself — a `Cast` type name, an `Extract` part, a window `frame=` — is outside the grammar it accepts. |
 | `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
-| `UnsupportedConnectionError` | A connection object that is none of PormG's engine pools reached an execution path — an internal PormG dispatch bug; please report it. On MySQL it is also the refusal of what has no faithful SQL there: a `Cast` to a type with no MySQL target (`boolean`, `interval`, `bytea`), or a default on a binary column. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
+| `UnsupportedConnectionError` | A connection object that is none of PormG's engine pools reached an execution path — an internal PormG dispatch bug; please report it. On MySQL it is also the refusal of what has no faithful SQL there: a `Cast` to a type with no MySQL target (`interval`, `bytea`), or a default on a binary column. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
 | `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. |
 
 **Defining models**
@@ -1059,7 +1059,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 
 `UsageError` above reports PormG refusing the call — almost always before a statement leaves the
 process (its docstring names the calls that refuse later). These report what the **database**
-refused once a statement got there. Each carries `adapter` (`"PostgreSQL"` / `"SQLite"`) and
+refused once a statement got there. Each carries `adapter` (`"PostgreSQL"` / `"SQLite"` / `"MySQL"`) and
 `cause` — the driver's own exception, kept so SQLSTATE-level detail stays reachable — instead of a
 `msg`, so read them with `error_message`.
 
@@ -1069,7 +1069,7 @@ refused once a statement got there. Each carries `adapter` (`"PostgreSQL"` / `"S
 | `IntegrityError` | A constraint said no — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion constraint. The one database failure applications routinely *handle* rather than propagate. |
 | `OperationalError` | Transient, and retrying may succeed — the connection dropped mid-query, a deadlock, a serialization failure, or a lock that could not be acquired (including a `with_advisory_lock` timeout). After a dropped connection a write may already have committed, so repeat only work that is safe to run twice ([Dropped connections](configuration/advanced.md)). |
 | `StatementError` | The statement could not be executed — invalid SQL, unknown table/column, a rejected type, or insufficient privileges. Also the landing type for anything the backend could not classify, so the umbrella has no holes. |
-| `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` or `without_foreign_keys` nested inside an open transaction on the same database, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
+| `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` or `without_foreign_keys` (PostgreSQL and SQLite; MySQL refuses it with `BackendCapabilityError`) nested inside an open transaction on the same database, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
 
 ```julia
 try
@@ -1081,11 +1081,11 @@ catch e
 end
 ```
 
-!!! note "Classification is exact on PostgreSQL, message-based on SQLite"
+!!! note "Classification is exact on PostgreSQL and MySQL, message-based on SQLite"
     LibPQ parameterizes its exception type on the SQLSTATE, so on PostgreSQL the kind is read
     straight off the error code. `SQLite.SQLiteException` carries only a message, so on SQLite the
     kind comes from SQLite's own literal constraint strings (`"UNIQUE constraint failed"`, …) —
-    stable, but not a code. Treat `IntegrityError` as reliable on both; `.cause` is there when you
+    stable, but not a code. On MySQL the kind is read off MySQL's error number. Treat `IntegrityError` as reliable on every engine; `.cause` is there when you
     need more than PormG's three kinds.
 
 !!! note "The reason is data, and the text is safe to show"

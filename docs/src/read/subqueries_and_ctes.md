@@ -96,7 +96,7 @@ query = M.Driver.objects
 query.filter("driverid__@in" => inner)     # QueryBuildError: names "fast"
 ```
 
-A nested CTE renders inside the subquery's parentheses, but its bind values are collected into the `:cte` parameter bucket, which is flattened *ahead of* `:select` and `:where`. On a backend that binds parameters by position (SQLite) that puts them in front of any value whose text comes earlier in the statement, and the query then matches the wrong rows with no error at all. Until PormG binds those values in text order, it refuses the shape on every backend.
+A nested CTE renders inside the subquery's parentheses, but its bind values are collected into the `:cte` parameter bucket, which is flattened *ahead of* `:select` and `:where`. On a backend that binds parameters by position (SQLite, MySQL) that puts them in front of any value whose text comes earlier in the statement, and the query then matches the wrong rows with no error at all. Until PormG binds those values in text order, it refuses the shape on every backend.
 
 **Instead**, fold the CTE's predicate into the subquery's own `filter(...)`:
 
@@ -180,7 +180,7 @@ query.values(
 df = query |> DataFrame
 ```
 
-Generated SQL (PostgreSQL; SQLite renders `?` placeholders):
+Generated SQL (PostgreSQL; SQLite renders `?` placeholders, and MySQL `?` placeholders and backtick-quoted names):
 
 ```sql
 SELECT
@@ -197,7 +197,7 @@ LIMIT 1) as "has_standings"
 FROM "driver" as "Tb"
 ```
 
-`OuterRef("driverid")` binds the inner query's filter to the **outer** query's column — that is the correlation. `Exists(...)` (already familiar from [filters](filters_and_aggregates.md)) can likewise be projected as a per-row boolean column, which reads back as a `Bool` on both engines.
+`OuterRef("driverid")` binds the inner query's filter to the **outer** query's column — that is the correlation. `Exists(...)` (already familiar from [filters](filters_and_aggregates.md)) can likewise be projected as a per-row boolean column, which reads back as a `Bool` on every engine.
 
 ### Why: the fan-out-safe aggregate
 
@@ -277,7 +277,7 @@ df = query |> DataFrame
 
 An aggregate cannot wrap a subquery: `Max(Subquery(latest))` raises `QueryBuildError` when it is built. The subquery is already one value per row, so put the aggregate **inside** it, as *Why: the fan-out-safe aggregate* above shows.
 
-A subquery reads back as its one column does, on both engines (#888). When that column is one of a model column's own values (the column itself, or `Max`/`Min` over it), the result has the column's Julia type: a `DateField` gives a `Date`, where SQLite alone would hand back the stored text. Each driver's most recent race date:
+A subquery reads back as its one column does, on every engine (#888). When that column is one of a model column's own values (the column itself, or `Max`/`Min` over it), the result has the column's Julia type: a `DateField` gives a `Date`, where SQLite alone would hand back the stored text. Each driver's most recent race date:
 
 ```julia
 using PormG.Functions: Max
@@ -289,10 +289,10 @@ last_race.values("t" => Max("raceid__date"))
 query = M.Driver.objects
 query.filter("driverid__@lte" => 3)
 query.values("surname", "last_race" => Subquery(last_race))
-df = query |> DataFrame   # df.last_race holds Dates.Date values on PostgreSQL and SQLite
+df = query |> DataFrame   # df.last_race holds Dates.Date values on every engine
 ```
 
-A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner number over a float or a decimal (`Avg`, `Sum`, `Round`, arithmetic), and an `Avg` over integers, reads back as the type it means, the same on both engines: a `Float64` or a `Decimal` (see [The type of a computed number](index.md#The-type-of-a-computed-number), #1121). Any other computed inner column comes back as the engine delivers it; wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
+A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner number over a float or a decimal (`Avg`, `Sum`, `Round`, arithmetic), and an `Avg` over integers, reads back as the type it means, the same on every engine: a `Float64` or a `Decimal` (see [The type of a computed number](index.md#The-type-of-a-computed-number), #1121). Any other computed inner column comes back as the engine delivers it; wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
 
 ### A subquery as a filter value
 
@@ -344,7 +344,7 @@ The same subquery works in every place a filter value goes:
 
 - **An `F` comparison:** `query.filter(F("milliseconds") == Subquery(fastest))` renders the same predicate as the pair, and so does a function or a `Joined(...)` handle on the left.
 - **Inside `Q(...)`/`Qor(...)`, and in a `When` condition.**
-- **A join condition:** a pair in `cjoin_on(...; on = [...])`, `on(...)` or `cjoin(...; filters = [...])`. Its values bind in the join's place in the statement, so it is safe on SQLite's positional parameters too.
+- **A join condition:** a pair in `cjoin_on(...; on = [...])`, `on(...)` or `cjoin(...; filters = [...])`. Its values bind in the join's place in the statement, so it is safe on SQLite's and MySQL's positional parameters too.
 - **An alias:** `values("best" => Max("grid")); filter("best__@gt" => Subquery(...))` compares in `HAVING`.
 
 The rules are those of a projected scalar subquery (below), with two differences:
@@ -389,7 +389,7 @@ The rules are those of a projected scalar subquery (below), with two differences
   ```
 - **Correlate on base columns.** `OuterRef("driverid")` against a plain outer column is the canonical, supported case. A joined-path `OuterRef` (e.g. `OuterRef("constructorid__name")`) adds a join to the query it binds and is not part of the validated #92 surface.
 - **`OuterRef` inside an expression.** An outer column may be wrapped in a scalar function or a window column inside the correlated query — `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"), over = …)` — and resolves against the outer row exactly as a bare `OuterRef` does. Outside a correlated build (a top-level `values()` or `filter()`) an `OuterRef` raises `QueryBuildError`, wrapped or not.
-- **Outer `GROUP BY` — guarded at build time (#194).** When the outer query aggregates and a correlated `Subquery`/`Exists` that is evaluated **after** grouping — in the `SELECT` list, `HAVING` or `ORDER BY` — correlates on a column that is **not** in the group set, PormG raises a `QueryBuildError` naming the ungrouped column. The query does not say which row of the group to correlate against, so PormG refuses it on every engine, before any SQL runs. (Left to the database, PostgreSQL refuses it — `subquery uses ungrouped column … from outer query` — while SQLite evaluates the subquery against an arbitrary row of each group and returns a plausible-looking wrong number.) The legitimate shape is unaffected: group by `driverid` and correlate on `OuterRef("driverid")` and the query builds silently on both backends. Three notes on the edges: a whole-table aggregate (`values("n" => Count(...), "s" => Subquery(...))`, no `GROUP BY` at all) is refused too, because it is the same shape with an empty group set; a column that reaches the group set only through `order_by` counts as grouped, because it genuinely is; and a subquery evaluated **before** grouping is not guarded, because correlating it on an ungrouped column is legal on both engines. That covers three places (#932):
+- **Outer `GROUP BY` — guarded at build time (#194).** When the outer query aggregates and a correlated `Subquery`/`Exists` that is evaluated **after** grouping — in the `SELECT` list, `HAVING` or `ORDER BY` — correlates on a column that is **not** in the group set, PormG raises a `QueryBuildError` naming the ungrouped column. The query does not say which row of the group to correlate against, so PormG refuses it on every engine, before any SQL runs. (Left to the database, PostgreSQL refuses it — `subquery uses ungrouped column … from outer query` — and so does MySQL, while SQLite evaluates the subquery against an arbitrary row of each group and returns a plausible-looking wrong number.) The legitimate shape is unaffected: group by `driverid` and correlate on `OuterRef("driverid")` and the query builds silently on every backend. Three notes on the edges: a whole-table aggregate (`values("n" => Count(...), "s" => Subquery(...))`, no `GROUP BY` at all) is refused too, because it is the same shape with an empty group set; a column that reaches the group set only through `order_by` counts as grouped, because it genuinely is; and a subquery evaluated **before** grouping is not guarded, because correlating it on an ungrouped column is legal on every engine. That covers three places (#932):
     - a `WHERE` filter or a join condition;
     - the argument of an aggregate, which is evaluated once per input row. Conditional aggregation is the usual case: `values("constructorid", "poles" => Sum(Case([When("grid" => Subquery(…), then = 1)], default = 0)))`, where the subquery is the race's smallest positive grid, and `aggregate(...)` over the same `Sum`;
     - a projection or an `order_by` term that the query groups by whole, such as a `Case` with no aggregate in it, or `Coalesce(Subquery(…), 0)`. The subquery is evaluated per input row to form the group key.
@@ -398,9 +398,9 @@ The rules are those of a projected scalar subquery (below), with two differences
 
     One deliberate strictness: PostgreSQL also accepts correlating on *any* column of a table whose **primary key** is grouped (every column is then functionally dependent on it), but PormG does not infer that dependency: it asks the query to name the column it groups by, on every engine — add the correlated column to `values(...)` if you hit it.
 - **A CTE and a subquery.** Declare CTEs on the outermost query; a subquery can neither declare one nor see one.
-    - A `Subquery`, `Exists` or `__@in`/`__@nin` subquery that declares its own `.with(...)` raises a `QueryBuildError` naming the CTE (#433). A nested CTE would render inside the subquery's parentheses while its values bind in the statement's leading CTE slot, which on a backend that binds parameters by position (SQLite) matches the wrong rows. PormG refuses it on every backend until it binds those values in text order. Fold the CTE's predicate into the subquery's own `.filter(...)` instead.
+    - A `Subquery`, `Exists` or `__@in`/`__@nin` subquery that declares its own `.with(...)` raises a `QueryBuildError` naming the CTE (#433). A nested CTE would render inside the subquery's parentheses while its values bind in the statement's leading CTE slot, which on a backend that binds parameters by position (SQLite, MySQL) matches the wrong rows. PormG refuses it on every backend until it binds those values in text order. Fold the CTE's predicate into the subquery's own `.filter(...)` instead.
     - A subquery has its own CTE namespace, so it cannot reference a CTE its *enclosing* query declares — `CTE("ev", "status")` and `"ev__status"` inside it both raise an `UnknownFieldError` that says the CTE belongs to the enclosing query (#444). Put that condition in the enclosing query's `filter(...)`.
-    - A CTE declared on the outer query **beside** a projected subquery that does not reference it is ordinary and builds on both backends.
+    - A CTE declared on the outer query **beside** a projected subquery that does not reference it is ordinary and builds on every backend.
     - A CTE declared inside another CTE's **body** is also legal: it renders in the leading `WITH`, where its values bind in text order.
 
 ### CTE-aggregate vs scalar `Subquery`
@@ -616,7 +616,7 @@ q.values("resultid", "raceid")
 df = q |> DataFrame
 ```
 
-renders (SQLite shown; PostgreSQL uses `$N` placeholders):
+renders (SQLite shown; PostgreSQL uses `$N` placeholders, and MySQL backtick-quoted names):
 
 ```sql
 WITH "r91" AS (SELECT "raceid" FROM "race" WHERE "year" = ?)
@@ -661,8 +661,8 @@ Notes:
   `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
   many-to-many join table ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). This one is
   SQL's rule, not PormG's:
-  a `WITH` name hides any real table of the same name for the whole statement (PostgreSQL and
-  SQLite alike, and SQLite additionally rejects a CTE body that reads its own name as a circular
+  a `WITH` name hides any real table of the same name for the whole statement (PostgreSQL, SQLite
+  and MySQL alike, and SQLite additionally rejects a CTE body that reads its own name as a circular
   reference). PormG generates its joins unqualified from `db_table`, so such a CTE would silently
   redirect every generated join to that table. Pick a name that is not a table.
 - **`join_type` is validated at the call.** `.with(..., join_type = "CROSS")` — or any string
@@ -707,7 +707,7 @@ df = query |> DataFrame
 
 The outer query treats each CTE column as a field, and that field's type decides how a value
 compared with the column is bound. PormG derives the type from what the body's projection means, the
-same on PostgreSQL and SQLite, so a `Period` compared with a summed duration binds as a duration and a
+same on every engine, so a `Period` compared with a summed duration binds as a duration and a
 boolean compared with a comparison binds as a boolean (#1034):
 
 | Projection in the CTE body | Column type |
@@ -734,11 +734,11 @@ projected in the body raises `QueryBuildError` too; wrap it in `Cast` to name it
 This type is for **binding** a value compared with the column, and for a function over the column in
 the outer query, which treats it as a column of that type: `Sum(CTE("r", "ahead"))` over a comparison
 is refused as a `Sum` over a `BooleanField` is, and `Extract(CTE("r", "fast"), "EPOCH")` over a summed
-duration reads it as a duration (on PostgreSQL; SQLite has no `EPOCH` part). **Reading** the column back is a
+duration reads it as a duration (on PostgreSQL and MySQL; SQLite has no `EPOCH` part). **Reading** the column back is a
 separate question, and the answer is the body's own. A column the body selects, such as
 `"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
-it (a `Date` on both engines). A number the body computes, such as `Avg("points")` or `F` arithmetic,
-reads back as the type it means on both engines, a `Float64` or a `Decimal` (#1121); the table above
+it (a `Date` on every engine). A number the body computes, such as `Avg("points")` or `F` arithmetic,
+reads back as the type it means on every engine, a `Float64` or a `Decimal` (#1121); the table above
 binds it as the same type, though an `Avg` of a `DecimalField` keeps that field's declared width there. This is the same rule `values(...)` follows
 outside a CTE (see [The type of a computed number](index.md#The-type-of-a-computed-number)).
 
@@ -749,9 +749,12 @@ refused there, and it refuses the cast to a time, timestamp, interval or `bytea`
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A single-precision float (`real`, `float4`) is refused on SQLite, which has no
-4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). A declared type is also what the SQL casts the value to, on both engines: a `date` on
+4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). MySQL casts `uuid` to
+`CHAR(36)` text, so a CTE column declared as one is refused there too; it refuses `inet` and `cidr`
+with `BackendCapabilityError` and the cast to an `interval`, `bytea` or `blob` type itself, while a
+time or timestamp type casts to `TIME(6)` or `DATETIME(3)` ([MySQL Guide](../mysql.md#Reads)). A declared type is also what the SQL casts the value to, on every engine (a boolean is `((x) <> 0)` on MySQL): a `date` on
 `Cast`, `Case`, `Coalesce`, `Greatest` or `Least` renders `date(…)` on SQLite. `Concat` only
-takes a text type, on both engines (see
+takes a text type, on every engine (see
 [Functions and Dates](functions_and_dates.md)).
 
 A `Case` column takes its `output_field` when you pass one. Otherwise PormG types it from its

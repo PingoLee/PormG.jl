@@ -9,13 +9,13 @@
 | Feature | Description |
 | :--- | :--- |
 | **Django-Style Query Builder** | Familiar syntax using `filter`, `values`, `order_by`, and chainable methods. Join traversal with `__` notation. |
-| **Async-First Execution** | On PostgreSQL, non-blocking I/O via `LibPQ.async_execute`; on SQLite, one process-wide worker runs every statement in turn, and the calling task yields while it waits. Synchronous helpers are thin wrappers — the event loop is never blocked. |
+| **Async-First Execution** | On PostgreSQL, non-blocking I/O via `LibPQ.async_execute`; on MySQL, each statement on a task of its own, in parallel across connections; on SQLite, one process-wide worker runs every statement in turn, and the calling task yields while it waits. Synchronous helpers are thin wrappers — the event loop is never blocked. |
 | **Cross-Database Support** | PostgreSQL (LibPQ.jl) for production and SQLite (SQLite.jl) for development and tests, with automatic connection pooling and dialect adaptation, and MySQL 8.4 or newer (MySQL.jl). What differs per backend is in [Backend Capabilities](backends.md) and the [MySQL Guide](mysql.md). |
 | **Multi-Database & Multi-Tenancy** | Switch databases at runtime with `.db("tenant_id")`. Lazy connection resolution via resolver functions. |
 | **F-Expressions & Aggregations** | Column arithmetic, field-to-field comparisons, `Count`, `Sum`, `Avg`, `Max`, `Min` with automatic `GROUP BY` / `HAVING`. |
 | **Migrations** | State-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table. |
 | **Transactions** | `run_in_transaction` with async context propagation, savepoint support, and automatic rollback on error. |
-| **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes (PostgreSQL; on SQLite the body runs unlocked, with a warning). |
+| **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes (PostgreSQL, and MySQL through `GET_LOCK`; on SQLite the body runs unlocked, with a warning). |
 
 ---
 
@@ -47,20 +47,21 @@ Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 
 ### Install a database driver
 
-PormG does **not** pull in a SQL driver automatically — `LibPQ` (PostgreSQL) and `SQLite` are
+PormG does **not** pull in a SQL driver automatically — `LibPQ` (PostgreSQL), `SQLite` and `MySQL` are
 weak dependencies, so each app installs and loads the one it uses as a direct dependency:
 
 ```julia
 using Pkg
 Pkg.add("LibPQ")     # PostgreSQL backend
 Pkg.add("SQLite")    # SQLite backend
+Pkg.add("MySQL")     # MySQL backend (MySQL 8.4 or newer)
 ```
 
 PostgreSQL can also run on the pure-Julia [Postgres.jl](https://github.com/JuliaDatabases/Postgres.jl) driver, as an
 **experimental** opt-in: install `Postgres`, load it with `using PormG, Postgres`, and set
 `postgres_driver: Postgres` — see [Choosing the PostgreSQL driver](configuration/connection_yml.md#Choosing-the-PostgreSQL-driver).
 
-Load the driver alongside PormG (`using PormG, LibPQ` or `using PormG, SQLite`). A bare
+Load the driver alongside PormG (`using PormG, LibPQ`, `using PormG, SQLite` or `using PormG, MySQL`). A bare
 `using PormG` loads the ORM but no backend, so `Configuration.load` raises a clear error
 (`MissingConfigurationError`) telling you which driver to load:
 
@@ -113,6 +114,8 @@ dev:
     change_db: true      # allow schema migrations
     change_data: true    # allow data mutations
 ```
+
+For MySQL, see [Using MySQL](@ref).
 
 !!! warning
     **Implicit Defaults & The Omitted `config:` Gotcha:**
@@ -276,7 +279,7 @@ M.Driver.objects.filter("surname" => "TestDriver").delete()
 
 ## Django Data-Type & Compatibility Contract
 
-PormG is designed to be fully wire-format compatible with tables managed by Django. It guarantees identical column serialization and mutation semantics across both **PostgreSQL** and **SQLite** backends:
+PormG is designed to be fully wire-format compatible with tables managed by Django. It guarantees identical column serialization and mutation semantics on the **PostgreSQL** and **SQLite** backends. On **MySQL**, a `DateTimeField` is `DATETIME(3)`, so a Django `DATETIME(6)` column holding sub-millisecond digits raises `InvalidValueError` when read ([MySQL Guide](mysql.md#Reads)):
 
 *   **TIMESTAMPTZ Contract**: Naive `DateTime` values are treated as UTC, while timezone-aware `ZonedDateTime` values preserve the exact UTC instant across backends. (SQLite stores ISO 8601 strings and normalizes on read).
 *   **DateField Truncation**: Temporal inputs like `DateTime` or `ZonedDateTime` are automatically truncated to their calendar date portion when saved into a `DateField`, matching Django's silent truncation behavior instead of throwing errors.
@@ -295,8 +298,8 @@ PormG is structured into five distinct, decoupled layers, ensuring a clean separ
 | :--- | :--- | :--- |
 | **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Models.jl) |
 | **2. Query Builder** | Fluent chaining API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/QueryBuilder.jl) |
-| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Dialect.jl) |
-| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/ConnectionPool.jl) |
+| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL, SQLite and MySQL translation<br>• [Dialect.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Dialect.jl) |
+| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`, MySQL.jl<br>• [ConnectionPool.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/ConnectionPool.jl) |
 | **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Configuration.jl) |
 
 ---

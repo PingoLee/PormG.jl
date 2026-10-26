@@ -403,7 +403,7 @@ query.values(
 
 ### Mixed-Case and Unicode Aliases
 
-All aliases are quoted in the generated SQL (`AS "alias"`), so the exact name you provide is preserved — including uppercase letters and Unicode characters:
+All aliases are quoted in the generated SQL (`AS "alias"`, with backticks on MySQL), so the exact name you provide is preserved — including uppercase letters and Unicode characters:
 
 ```julia
 df = M.Driver.objects.filter("driverref" => "hamilton").
@@ -452,7 +452,7 @@ query.order_by("driverid__surname")     # ORDER BY "Tb_1"."surname" ASC NULLS LA
     query.order_by("-grid")        # sorts by POINTS (the projected value), not by the grid column
     ```
 
-    That is what both PostgreSQL and SQLite do with a `SELECT` alias in `ORDER BY`, and it keeps the
+    That is what PostgreSQL, SQLite and MySQL do with a `SELECT` alias in `ORDER BY`, and it keeps the
     sort consistent with the column the query actually returns. If you meant the underlying column,
     name it explicitly (`order_by("-points")`) or choose an alias that shadows nothing.
 
@@ -462,8 +462,8 @@ query.order_by("driverid__surname")     # ORDER BY "Tb_1"."surname" ASC NULLS LA
 
 !!! note "Two projections may not share an output name"
     `.values("x" => "grid", "x" => "points")` raises `QueryBuildError` at the `values()` call — two
-    columns under one name are indistinguishable to whatever reads the result, and on SQLite the
-    second one's placeholders desynchronize every parameter after it. Give the two projections
+    columns under one name are indistinguishable to whatever reads the result, and on SQLite and
+    MySQL the second one's placeholders desynchronize every parameter after it. Give the two projections
     distinct names.
 
     The rule is on the **output** name, so `"*"` counts as the physical columns the database expands

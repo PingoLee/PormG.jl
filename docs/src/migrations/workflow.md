@@ -67,7 +67,7 @@ The candidates are **ranked**, and each one says why:
   Is the field "status_id" from table "result" the same as one of the following fields: 1 - statusid (INTEGER, FK → status), 2 - positiontext (TEXT(250); renaming also changes: type, reference)? …
   ```
 
-  The type is spelled the way the database reports it, so this is SQLite. PostgreSQL shows its own names, such as `bigint` or `character varying(250)`. Nothing is filtered out. Choosing a candidate that changes more than its name plans the rename and the change together, in one migration.
+  The type is spelled the way the database reports it, so this is SQLite. PostgreSQL and MySQL show their own names, such as `bigint` or `character varying(250)` (`varchar(250)` on MySQL). Nothing is filtered out. Choosing a candidate that changes more than its name plans the rename and the change together, in one migration.
 
 The models are asked about in **table-name order** and their fields in declaration order, so the same models file asks the same questions in the same order on every run. Each table is numbered from `1`.
 
@@ -109,7 +109,7 @@ result = PormG.Migrations.check("db")
 println(result)
 ```
 
-It is read-only, works on both engines, and needs no migration history — so it is also useful before
+It is read-only, works on every engine, and needs no migration history — so it is also useful before
 you have run `makemigrations` even once. By default it reports columns whose `DEFAULT` is a SQL
 expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`). Those columns import as
 `db_default=` carrying exactly the text it prints, so its output is what you paste into the model —
@@ -156,10 +156,10 @@ the built-in entry under
 [`unignore_defaults:`](../configuration/connection_yml.md#Switching-a-built-in-entry-off) does,
 for that connection, because `check` and `makemigrations` then both read the table.
 
-A column whose definition changes reads differently per engine. PostgreSQL reports
+A column whose definition changes reads differently per engine. PostgreSQL and MySQL report
 `"Alter field: <column>"`. SQLite rebuilds the table, so its finding is `"Alter table: <table>"` and
 names no column. Added and removed columns keep their `"Add field: …"` and `"Remove field: …"`
-labels on both engines.
+labels on every engine.
 
 ### Finding Invalid Indexes
 
@@ -182,7 +182,7 @@ the message offers it. The exception is a `<name>_ccnew` or `<name>_ccold` copy 
 the copy and do not re-create it. Reindexing it would make a valid duplicate. `check`
 only reports; what to run is your call. An index being built `CONCURRENTLY` at that moment reads as
 invalid too, until the build finishes. The class can sit in the same `kinds` list as
-`:schema_drift`. On SQLite, which has no invalid-index state, it is accepted and always reports
+`:schema_drift`. On SQLite and MySQL, which have no invalid-index state (an InnoDB index build completes or is rolled back), it is accepted and always reports
 nothing.
 
 
@@ -289,7 +289,7 @@ live tables for that last check, it does not throw: it adds a `Drift detection f
 naming the error type rather than reporting nothing, since a check that could not look is not a
 clean one. A failed attempt that a later run
 resolved by applying the same plan is listed under `superseded`, not `failed`, and raises no
-warning: on PostgreSQL and SQLite a plan runs in one transaction, so the failure wrote nothing ([what that rests on](../backends.md#Guarantees-that-rest-on-an-engine-feature)). `data_steps` lists the
+warning: on PostgreSQL and SQLite a plan runs in one transaction, so the failure wrote nothing ([what that rests on](../backends.md#Guarantees-that-rest-on-an-engine-feature)). On MySQL a failed plan leaves the statements before the failing one applied, and `makemigrations` plans what is still missing. `data_steps` lists the
 [`run_once`](advanced.md#Data-Migrations) steps already applied. It is read-only, and it does not
 compare the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
 [Checking the Database Against the Models](#Checking-the-Database-Against-the-Models)).
@@ -355,9 +355,9 @@ line per column or constraint). `dry_run()` lists them, and `migrate()` acts on 
 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
-| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples (a partial one: among the rows its condition matches; a functional one is left to the database, which rolls the migration back); a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID, JSON, an IP address or network, or an `ArrayField` over values that do not parse as the new type; on PostgreSQL, an `ArrayField` whose element changes other than by widening (`BigIntegerField` → `IntegerField`, a shorter `max_length`) over elements the new element type cannot read; on PostgreSQL, `GenericIPAddressField` → `CIDRField` over an address with bits set right of its mask (`10.0.0.1/24`) | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
-| **Changes existing values** | fewer `decimal_places` (values round — an `ArrayField`'s elements too); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`); on PostgreSQL, one of the text, boolean or IP-address conversions above (`GenericIPAddressField` → text or `CIDRField` included) on a column with a database default the model does not declare as a `db_default` — the conversion has to drop it | Needs `destructive = true`, exactly like a `DROP`. |
-| **Cannot run as planned** | a plan written by an older PormG that changes text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL; an `ArrayField` ↔ a column that is neither text nor an array; any column → `SearchVectorField`, and a `SearchVectorField` → anything but text | Refused: PostgreSQL has no automatic cast between these, and that plan carries no `USING` clause. For an older plan, run `makemigrations()` again; current plans write the `USING`. For an array, change the column in two migrations, through a `TextField`. For a `SearchVectorField`, add a new column and fill it with `update(… => SearchVector(…))`: `CAST(text AS tsvector)` would read the text as a document literal, not as words. |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL and MySQL); a new `UniqueConstraint` over duplicate tuples (a partial one: among the rows its condition matches; a functional one is left to the database, which rolls the migration back (on MySQL, after the statements before it committed)); a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID, JSON, an IP address or network, or an `ArrayField` over values that do not parse as the new type; on MySQL, text → a number, a date, a time, JSON or a UUID over values that do not convert, and a shorter `max_length` over values with trailing spaces; on PostgreSQL, an `ArrayField` whose element changes other than by widening (`BigIntegerField` → `IntegerField`, a shorter `max_length`) over elements the new element type cannot read; on PostgreSQL, `GenericIPAddressField` → `CIDRField` over an address with bits set right of its mask (`10.0.0.1/24`) | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Changes existing values** | fewer `decimal_places` (values round — an `ArrayField`'s elements too); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`); on PostgreSQL, one of the text, boolean or IP-address conversions above (`GenericIPAddressField` → text or `CIDRField` included) on a column with a database default the model does not declare as a `db_default` — the conversion has to drop it; on MySQL, a retype of a column with an expression default the model does not declare, which the retype drops | Needs `destructive = true`, exactly like a `DROP`. |
+| **Cannot run as planned** | a plan written by an older PormG that changes text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL; an `ArrayField` ↔ a column that is neither text nor an array; any column → `SearchVectorField`, and a `SearchVectorField` → anything but text | Refused (on MySQL too: a date or a time into a number, JSON or the other of the two, a number or a boolean into a date or a time, anything but text into a UUID, a boolean into JSON, binary to or from anything but text, and JSON or a UUID into anything but text, each of which MySQL would apply by a rule that changes every value): PostgreSQL has no automatic cast between these, and that plan carries no `USING` clause. For an older plan, run `makemigrations()` again; current plans write the `USING`. For an array, change the column in two migrations, through a `TextField`. For a `SearchVectorField`, add a new column and fill it with `update(… => SearchVector(…))`: `CAST(text AS tsvector)` would read the text as a document literal, not as words. |
 
 For the first kind, `destructive = true` does **not** get the plan through — no opt-in can make a
 `NULL` fit a `NOT NULL` column. Fix the data, then run `migrate()` again (the same plan counts again),
@@ -370,7 +370,7 @@ A new `NOT NULL` column has nothing to put in the rows already there, so for it 
 fix: declare a `default` (or `db_default`), which fills them, or add the column with `null = true`,
 fill it, and make it `NOT NULL` in a later migration — that second step is the ordinary
 `null = true` → `false` change above, counted the same way. An empty table takes the column as
-declared, on both engines.
+declared, on every engine.
 In a non-interactive context a refused plan throws `PormG.Migrations.MigrationPrecheckError`, which
 carries the same findings; at a terminal the findings are logged and `migrate()` returns `:declined`.
 
@@ -378,18 +378,18 @@ A few things to know:
 
 - **The row count reads the database.** It is one `SELECT COUNT(*)` per such column, run before
   `migrate()` takes its lock. It is advisory: rows written between the count and the `ALTER` can
-  still make the `ALTER` fail, and then the whole migration rolls back as it always did.
-- **PostgreSQL and SQLite differ.** SQLite enforces no `VARCHAR` length, no integer width and no
+  still make the `ALTER` fail, and then the whole migration rolls back as it always did (on MySQL, the statements before it stay applied).
+- **The engines differ.** SQLite enforces no `VARCHAR` length, no integer width and no
   decimal scale, so a narrowing there changes nothing and is not reported. What SQLite does enforce
   is `NOT NULL`, a `CHECK`, `UNIQUE` and a foreign key, and what it does change is text moved into a numeric column: `'0042'`
   is stored as `42`. That last case needs `destructive = true` — which every SQLite column change
-  already does, because SQLite rebuilds the table to apply it.
+  already does, because SQLite rebuilds the table to apply it. MySQL's strict `sql_mode` enforces what PostgreSQL does, plus trailing spaces under a shorter `VARCHAR`, which PostgreSQL trims and MySQL refuses. Text MySQL would round into an integer (`'12.5'`) counts as failing.
 - **Text into another type is parsed by the server.** On PostgreSQL the plan converts with
   `USING CAST(col AS <type>)`, and the count asks the server's own parser (`pg_input_is_valid`)
   which values would not convert, so a value too large for the new type counts too. That function
   is PostgreSQL 16+. An older server checks numbers, booleans and UUIDs by their input grammar, and
   cannot check dates, timestamps or JSON at all: there every non-`NULL` value counts as failing, so
-  such a change over a populated table needs PostgreSQL 16, or a hand-written step. A boolean
+  such a change over a populated table needs PostgreSQL 16, or a hand-written step. On MySQL the count covers text into a number, a date, a time, JSON or a UUID. A boolean
   becomes a number as `1` / `0`, which loses nothing and is not reported.
 - **An array element changes through its text.** On PostgreSQL an `ArrayField` whose element only
   widens (`IntegerField` → `BigIntegerField`, a longer `max_length`, more digits) is a plain `ALTER`.
@@ -405,7 +405,7 @@ A few things to know:
 - **Constraints are counted the way the database enforces them.** A `NULL` is never a duplicate, and
   a `CheckConstraint` whose condition is `NULL` passes, so neither is counted.
 - **What is not checked.** A constraint the count cannot evaluate before the plan runs is left to the
-  database, which refuses it inside the migration and rolls back: a `CheckConstraint` over a column
+  database, which refuses it inside the migration and rolls back (on MySQL, after the statements before it committed): a `CheckConstraint` over a column
   the same plan adds, renames or retypes; a `UniqueConstraint` over a column it adds; and a foreign
   key whose parent table (or key column) the same plan creates or renames, or whose column it retypes. Likewise the
   `>= 0` `CHECK` of a `PositiveIntegerField` converted from text or a boolean, since the column still

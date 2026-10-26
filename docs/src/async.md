@@ -10,14 +10,14 @@ t = Threads.@spawn M.Driver.objects.filter("nationality" => "Brazilian").list()
 rows = fetch(t)          # Base.fetch on a Task — same Vector{PormGRow} as calling list() directly
 ```
 
-This is the same contract Elixir's Ecto (`Task.async`) and Go's `database/sql` (goroutines) chose, and it is guaranteed by regression tests on both PostgreSQL and SQLite: a task-wrapped query returns exactly what the sync call returns.
+This is the same contract Elixir's Ecto (`Task.async`) and Go's `database/sql` (goroutines) chose, and it is guaranteed by regression tests on PostgreSQL, SQLite and MySQL: a task-wrapped query returns exactly what the sync call returns.
 
 !!! note "Two `fetch`es"
     `fetch(t)` above is `Base.fetch` on a `Task`. PormG's low-level `fetch(settings, sql)` escape hatch is *also* a method of `Base.fetch` — same name, different arguments. Application code rarely needs the latter; prefer the fluent terminals.
 
 ## How it works
 
-`list()` → `fetch()` → `fetch_async()` → `await_result()`. On PostgreSQL the round-trip is real non-blocking I/O (`LibPQ.async_execute`); on SQLite every statement is funnelled through one serialized worker task. Both paths *yield* while waiting, so concurrency is always safe — but only PostgreSQL executes queries in parallel across connections. See the [Architecture](architecture.md) guide's *"Async-first" is backend-specific* note for the full picture.
+`list()` → `fetch()` → `fetch_async()` → `await_result()`. On PostgreSQL the round-trip is real non-blocking I/O (`LibPQ.async_execute`); on MySQL each statement runs on a task of its own; on SQLite every statement is funnelled through one serialized worker task. Every path *yields* while waiting, so concurrency is always safe — but only PostgreSQL and MySQL execute queries in parallel across connections. See the [Architecture](architecture.md) guide's *"Async-first" is backend-specific* note for the full picture.
 
 ## `@async` vs `Threads.@spawn`
 
@@ -82,14 +82,14 @@ result = await_result(task)                                   # rows; releases t
 
 ### Binding values — a manual-params array
 
-The hatch **does** bind parameters: pass a plain values array (or tuple) and write the placeholder your backend uses. PormG performs **no** placeholder translation — you write `$1, $2, …` on PostgreSQL and `?` on SQLite — the same low-level convention as Go's `database/sql`, Python's DB-API, and Julia's `DBInterface`:
+The hatch **does** bind parameters: pass a plain values array (or tuple) and write the placeholder your backend uses. PormG performs **no** placeholder translation — you write `$1, $2, …` on PostgreSQL and `?` on SQLite and MySQL — the same low-level convention as Go's `database/sql`, Python's DB-API, and Julia's `DBInterface`:
 
 ```julia
 # PostgreSQL — numbered placeholders
 task = fetch_async(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", ["Brazilian"])
 n    = await_result(task)
 
-# SQLite — positional placeholders (same values array, backend-native marker)
+# SQLite and MySQL — positional placeholders (same values array, backend-native marker)
 rows = fetch(settings, "SELECT * FROM driver WHERE nationality = ?", ["Brazilian"])
 ```
 
@@ -102,7 +102,7 @@ Because the placeholder style is backend-native, a manual-params string is **not
 !!! danger "Never interpolate user input into the SQL string"
     `fetch_async(settings, "... $uservalue ...")` is a SQL-injection hole. Pass user values as the
     `params` **array** instead — `fetch_async(settings, "... = \$1", [uservalue])` on PostgreSQL,
-    `"... = ?"` with `[uservalue]` on SQLite — so the driver binds them as data. Never build the SQL
+    `"... = ?"` with `[uservalue]` on SQLite and MySQL — so the driver binds them as data. Never build the SQL
     string from user input, even with the values-array path available.
 
 !!! warning "An un-awaited `FetchTask` holds a pool connection"
@@ -115,7 +115,7 @@ Interrupting a running query in the REPL is safe: PormG asks the database to aba
 !!! note "Recovery runs in the background"
     Control returns to the REPL immediately; the cancel-and-clean happens on its own task, and the pool slot stays checked out while it does — so a query issued in the meantime may be served by a different connection. If the database never releases the connection, the slot is dropped from the pool anyway after a few seconds and the next query opens a fresh one. Under `julia -t 1` the driver's cancel and reconnect calls block the single worker thread while they run, so a heavily-loaded single-threaded session may pause briefly — start Julia with `-t auto` if that matters.
 
-The same recovery covers an interrupt while a transaction is being **opened** (`run_in_transaction` / `atomic`), and an interrupt during a `with_advisory_lock` lock or unlock query, with one difference: those connections are **renewed rather than reused**, even when they come back looking clean. PormG cannot tell from the connection whether the `BEGIN` landed before the interrupt, and an open transaction or a held advisory lock is invisible to the check that a plain query's connection passes. Replacing the connection settles both — a PostgreSQL advisory lock is bound to the session, so reconnecting is what releases it. The cost is one reconnect per interrupted transaction; the alternative is a pooled connection that silently belongs to a transaction nobody will ever finish.
+The same recovery covers an interrupt while a transaction is being **opened** (`run_in_transaction` / `atomic`), and an interrupt during a `with_advisory_lock` lock or unlock query, with one difference: those connections are **renewed rather than reused**, even when they come back looking clean. PormG cannot tell from the connection whether the `BEGIN` landed before the interrupt, and an open transaction or a held advisory lock is invisible to the check that a plain query's connection passes. Replacing the connection settles both — a PostgreSQL advisory lock or a MySQL named lock is bound to the session, so reconnecting is what releases it. The cost is one reconnect per interrupted transaction; the alternative is a pooled connection that silently belongs to a transaction nobody will ever finish.
 
 !!! warning "Interrupting a query *inside* an open transaction does not return promptly"
     A `Ctrl+C` while a query is in flight **within** a `run_in_transaction` body behaves differently. Every query inside the block on that database runs on the transaction's single pinned connection, whose lifecycle the transaction owns rather than the query — so the background recovery above deliberately does not run for it. Instead the cleanup `ROLLBACK` is issued on that same connection and waits behind the very query you interrupted: on PostgreSQL it blocks on the driver's per-connection lock, on SQLite it queues on the single worker. **Control comes back only once the interrupted query finishes on its own** — measured on PostgreSQL as almost exactly the query's remaining runtime.
@@ -134,7 +134,7 @@ The transaction context is a `ScopedValue`, so tasks spawned **inside** `run_in_
 It is **not** a way to speed anything up:
 
 - All statements on one connection execute one at a time — fan-out inside a transaction **serializes** and buys zero concurrency.
-- The serialization currently relies on driver-internal locking (LibPQ's per-connection lock, SQLite's global worker). It is safe today on both backends, but it is a property of the drivers, not a PormG contract — concurrent statements on one connection are a driver error class (e.g. PostgreSQL's *"another command is already in progress"*) that PormG does not promise to absorb.
+- The serialization currently relies on driver-internal locking (LibPQ's per-connection lock, MySQL.jl's per-connection lock, SQLite's global worker). It is safe today on every backend, but it is a property of the drivers, not a PormG contract — concurrent statements on one connection are a driver error class (e.g. PostgreSQL's *"another command is already in progress"*) that PormG does not promise to absorb.
 
 !!! warning "Fan out transactions, not queries inside one"
     For concurrent transactional work, spawn the *whole transaction* — each task pins its own pooled connection:

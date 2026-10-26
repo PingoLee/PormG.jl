@@ -30,7 +30,7 @@ The `.cjoin()` method allows you to add custom conditions to JOIN clauses at que
 The `.cjoin()` method is built into the query builder handler, meaning no special function imports are required once you have loaded PormG:
 
 ```julia
-using PormG, LibPQ   # load SQLite instead for a SQLite app
+using PormG, LibPQ   # load SQLite or MySQL instead for a SQLite or MySQL app
 # Q, Qor, and F are automatically exported by PormG
 ```
 
@@ -424,7 +424,7 @@ query.cjoin_on(M.Lap; alias="b2", join_type="INNER", on=[
 query.values("id")
 ```
 
-**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)::integer`**):**
+**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)::integer`, MySQL backtick-quoted names and `EXTRACT(YEAR FROM …)`**):**
 
 ```sql
 SELECT "Tb"."id" as "id"
@@ -676,7 +676,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     **`join_type = "CROSS"` is not the way to ask for this.** It raises `QueryBuildError` on
     `cjoin`, `cjoin_on`, `on()` and `.with()` alike. Every one of those renders
     `<join_type> JOIN <table> AS <alias> ON <clause>`, so a `CROSS` there could only ever build
-    `CROSS JOIN … ON …`, which PostgreSQL and SQLite both reject — and on `cjoin_on`, where at
+    `CROSS JOIN … ON …`, which PostgreSQL and SQLite both reject and MySQL reads as an inner join — and on `cjoin_on`, where at
     least one `ON` predicate is required (#448), the alternative would have been to discard the
     predicates you wrote. The unkeyed-and-referenced `.with(...)` above is the supported spelling
     ([#474](https://github.com/PingoLee/PormG.jl/issues/474)).
@@ -785,7 +785,7 @@ query = M.Result.objects.
 
 A join condition cannot contain an aggregate (`Count`, `Sum`, `Max`, …) or a window function
 (`Rank`, `Lag`, …), on either side of the comparison: SQL joins rows before it groups them and
-evaluates windows after the join. Both engines reject such a query, so PormG refuses it when the
+evaluates windows after the join. PostgreSQL and SQLite reject such a query, and PormG refuses it on every engine when the
 query is built, with a `QueryBuildError`. That holds for all three spellings: `.cjoin_on(...; on=...)`,
 `.cjoin(...; filters=...)` and `.on(...)`
 ([#917](https://github.com/PingoLee/PormG.jl/issues/917)).

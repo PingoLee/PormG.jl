@@ -45,6 +45,8 @@ PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01"; e
 PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite", env = "prod")
 ```
 
+A MySQL connection cannot be registered this way: `adapter = "MySQL"` raises `InvalidConfigurationError`, since MySQL is configured by its keys in `connection.yml`, through `load`.
+
 !!! note "The environment is stated, not guessed (#1256)"
     The entry records an environment — what `Configuration.env(key)` and `status(key)` report —
     chosen the way [`load` chooses one](connection_yml.md): `env =` when passed, else a non-blank

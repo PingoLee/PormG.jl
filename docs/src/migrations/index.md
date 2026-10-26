@@ -1,6 +1,6 @@
 # Database Migrations in PormG
 
-PormG provides a structured way to manage database schema changes through migrations, inspired by Django but tailored for Julia and PostgreSQL/SQLite workflows.
+PormG provides a structured way to manage database schema changes through migrations, inspired by Django but tailored for Julia and PostgreSQL, SQLite and MySQL workflows.
 
 ## What Are Migrations?
 Migrations are version-controlled scripts that describe changes to your database schema. They allow you to:
@@ -33,7 +33,7 @@ Because every plan is a fresh diff between your models and the **live database**
     Because the live side is read as facts, a column that no declaration could produce shows up as a **one-time plan** rather than being silently equated with the nearest field type — after it is applied, the schema converges:
 
     - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`. Only a CHECK of exactly `col >= 0` (the one PormG writes) counts as that CHECK: a range such as `CHECK (grid >= 0 AND grid <= 30)` is read as your own constraint, is never planned away, and does not stand in for it;
-    - a `bytea` / `BLOB` column's byte bound is read the same way: only a CHECK of exactly `octet_length(col) <= n` (`length(col) <= n` on SQLite), the one `BinaryField(max_length = n)` writes, counts as that bound — and only up to 1 GiB, the largest `max_length` a `BinaryField` accepts; a CHECK above that constrains nothing and is left unread. A compound check such as `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` on a `BinaryField()` is your own constraint and is never planned away. On a `BinaryField(max_length = n)` column it does not stand in for the bound, which plans `ADD CHECK` once;
+    - a `bytea` / `BLOB` column's byte bound is read the same way: only a CHECK of exactly `octet_length(col) <= n` (`length(col) <= n` on SQLite and MySQL), the one `BinaryField(max_length = n)` writes, counts as that bound — and only up to 1 GiB, the largest `max_length` a `BinaryField` accepts; a CHECK above that constrains nothing and is left unread. A compound check such as `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` on a `BinaryField()` is your own constraint and is never planned away. On a `BinaryField(max_length = n)` column it does not stand in for the bound, which plans `ADD CHECK` once;
     - a foreign-key column with no index plans `CREATE INDEX` once against a `ForeignKey` (which declares `db_index = true` by default) — declare `db_index = false` if you do not want one;
     - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
     - a column type PormG has no field for (`macaddr`, `citext`, an array of `smallint` or `jsonb`, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.
@@ -59,15 +59,15 @@ database falls into one of the groups below. "Destructive" means `dry_run()` lis
 
 | What is in the database | What `makemigrations` does |
 | :--- | :--- |
-| Views and materialized views; functions and procedures; sequences; types, enums and domains; extensions; `EXCLUDE` constraints; tables in a PostgreSQL schema other than `public`; table comments, and column comments other than PormG's own marker | **Never reads them, so never drops or alters them.** A column comment is read only for the `pormg:default:` marker PormG stamps when it applies an expression [`db_default`](../schema_conventions.md#Column-defaults) on PostgreSQL. Re-stamping replaces that marker and keeps the rest of the comment. |
+| Views and materialized views; functions and procedures; sequences; types, enums and domains; extensions; `EXCLUDE` constraints; tables in a PostgreSQL schema other than `public`; table comments, and column comments other than PormG's own marker | **Never reads them, so never drops or alters them.** A column comment is read only for the `pormg:default:` marker PormG stamps when it applies an expression [`db_default`](../schema_conventions.md#Column-defaults) on PostgreSQL and MySQL. Re-stamping replaces that marker and keeps the rest of the comment. |
 | PostgreSQL partitions of a partitioned table, and tables an extension owns (PostGIS's `spatial_ref_sys`); SQLite virtual tables (`fts5`, `rtree`) and their shadow tables | **Never reads them**, whatever `ignore_table` says. |
 | Tables listed in a connection's [`ignore_tables:`](../configuration/connection_yml.md#Tables-PormG-leaves-alone), in [`register_ignore_tables!`](../extending.md#Extension-points), or in the backend's [built-in list](../configuration/connection_yml.md#The-built-in-list) (less the connection's [`unignore_defaults:`](../configuration/connection_yml.md#Switching-a-built-in-entry-off)) | **Never reads them.** A *managed* model on an ignored table is refused with `InvalidConfigurationError`. |
 | Tables of [unmanaged models](../models.md#Unmanaged-models) | **Never creates, alters, renames or drops them.** They are still read, so that the plan's index names and SQLite views can be checked against them. |
 | A table no model declares | Plans `DROP TABLE`, **destructive**. Refused with `InvalidMigrationError` while a view or trigger still reads it (see [Deleting a Model](#Deleting-a-Model)). |
 | A column, a plain index or a `UNIQUE` constraint the model does not declare | Plans its removal, **destructive**. See [Changing composites on an existing table](../models.md#Changing-composites-on-an-existing-table) for indexes. |
-| A non-unique index with an access method (GIN, GiST, BRIN, hash, SP-GiST), a `DESC` column or an operator class — the shapes [`Models.Index`](../models.md#Methods,-operator-classes-and-descending-columns) can declare — or an expression, an explicit collation, a `NULLS` placement other than the direction's default or a `WHERE` clause, which it declares as [SQL text](../models.md#Expression-and-partial-indexes) | Reads it. **Plans its removal only when it carries PormG's `pormg:index` marker**, i.e. PormG created it; one written by hand is never planned away, and a declaration of the same shape adopts it — for an expression or partial one, a declaration of its own text as the database spells it. A method or an operator class is PostgreSQL-only. |
+| A non-unique index with an access method (GIN, GiST, BRIN, hash, SP-GiST), a `DESC` column or an operator class — the shapes [`Models.Index`](../models.md#Methods,-operator-classes-and-descending-columns) can declare — or an expression, an explicit collation, a `NULLS` placement other than the direction's default or a `WHERE` clause, which it declares as [SQL text](../models.md#Expression-and-partial-indexes) | Reads it. **Plans its removal only when it carries PormG's `pormg:index` marker**, i.e. PormG created it; one written by hand is never planned away, and a declaration of the same shape adopts it — for an expression or partial one, a declaration of its own text as the database spells it. A method or an operator class is PostgreSQL-only. On MySQL a declaration of the same shape adopts a hand-made index without marking it, and a hand-made expression index matches no declaration, since MySQL re-prints it with backtick-quoted names ([Changing composites](../models.md#Changing-composites-on-an-existing-table)). A hand-made MySQL `FULLTEXT` index is not left alone yet: it reads as a plain index, and `makemigrations` plans to drop it, destructive ([#1369](https://github.com/PingoLee/PormG.jl/issues/1369)). |
 | A `CHECK` you wrote by hand | Reads it but **never plans it away**. On SQLite, a rebuild of the table loses it, with a warning (see below). A [`CheckConstraint`](../models.md#Check-Constraints) the model no longer declares *is* planned away. |
-| An index that a model cannot declare, over several columns or a non-unique one over one column: an extension's access method (`bloom`), on SQLite a collation declared on the column rather than in the index (any but `BINARY`), or a unique index with a method, direction, operator class or `INCLUDE` (a unique expression or `WHERE` clause is a declarable `UniqueConstraint`, and is read). On PostgreSQL, also any **invalid** index, whatever its shape (a failed `CREATE INDEX CONCURRENTLY`) | **Never reads it, so never drops it.** An invalid one is reported by `check("db"; kinds = [:invalid_index])` (see [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)), and dropping or rebuilding it is left to you. On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. A field that declares `db_index = true` on a column carrying only such an index gets PormG's own index beside it on PostgreSQL. On SQLite, a non-unique index that lists the column itself is taken as satisfying it and nothing is created, unless that index is partial, has an expression member or carries PormG's `pormg:index` marker; otherwise PormG's own index is created there too. |
+| An index that a model cannot declare, over several columns or a non-unique one over one column: an extension's access method (`bloom`), on SQLite a collation declared on the column rather than in the index (any but `BINARY`), or a unique index with a method, direction, operator class or `INCLUDE` (a unique expression or `WHERE` clause is a declarable `UniqueConstraint`, and is read). On PostgreSQL, also any **invalid** index, whatever its shape (a failed `CREATE INDEX CONCURRENTLY`) | **Never reads it, so never drops it.** An invalid one is reported by `check("db"; kinds = [:invalid_index])` (see [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)), and dropping or rebuilding it is left to you. On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. A field that declares `db_index = true` on a column carrying only such an index gets PormG's own index beside it on PostgreSQL, and on MySQL, where such an index is one with a prefix length (`surname(10)`) or one mixing columns and expressions. On SQLite, a non-unique index that lists the column itself is taken as satisfying it and nothing is created, unless that index is partial, has an expression member or carries PormG's `pormg:index` marker; otherwise PormG's own index is created there too. |
 | Views and triggers on a table SQLite has to rebuild | Dropped and **re-created** around the rebuild. Refused when one would come back stale (see [Triggers and views across a rebuild](#SQLite:-Table-Recreation)). |
 | Table clauses no model can express, on a table SQLite rebuilds: a hand-written `CHECK`, `STRICT`, `WITHOUT ROWID`, a column `COLLATE`, a generated column, `ON CONFLICT`, a composite foreign key, a key's `ON UPDATE` / `DEFERRABLE` / `MATCH` | **Lost**, with one warning per table quoting them (see [SQLite: Table Recreation](#SQLite:-Table-Recreation)). SQL comments inside the `CREATE TABLE` text are lost too, without a warning. |
 | A column whose type PormG has no field for (`macaddr`, `citext`, an array of `smallint` or `jsonb`, a custom type) | Plans a retype to the declared type, converting the column, unless you exclude the table (see *Adopting a schema PormG did not create*, above). |
@@ -144,16 +144,16 @@ ALTER TABLE "result" ADD CONSTRAINT "result_statusid_zmidlrtp_fk" FOREIGN KEY ("
 
 The dropped constraint is named from the live catalog; the new one gets a fresh random suffix, so the two never collide.
 
-On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recreation) described below, which re-renders the whole `FOREIGN KEY ... REFERENCES ... ON DELETE` clause from your model. The two backends therefore agree on the outcome; only the DDL differs.
+On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recreation) described below, which re-renders the whole `FOREIGN KEY ... REFERENCES ... ON DELETE` clause from your model. MySQL drops and adds the key, as PostgreSQL does (`DROP FOREIGN KEY`, then `ADD CONSTRAINT`). The backends therefore agree on the outcome; only the DDL differs.
 
 !!! warning "Re-pointing a foreign key needs `destructive = true`"
-    The PostgreSQL plan contains `DROP CONSTRAINT`, so `dry_run()` classifies the migration as destructive and `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`. Nothing is dropped except the constraint itself — no column, no data.
+    The PostgreSQL plan contains `DROP CONSTRAINT`, and MySQL's `DROP FOREIGN KEY`, so `dry_run()` classifies the migration as destructive and `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`. Nothing is dropped except the constraint itself — no column, no data.
 
-    The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model.
+    The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model. On MySQL, which checks a key at each statement, `migrate` counts the rows with no parent before the plan runs and refuses it with `MigrationPrecheckError`.
 
 ### Renaming a field
 
-**A rename plans the rename.** Both backends carry a column's own baggage across
+**A rename plans the rename.** PostgreSQL and SQLite carry a column's own baggage across
 `ALTER TABLE ... RENAME COLUMN` — its indexes, its `UNIQUE` constraint, its `PRIMARY KEY`, and its
 `FOREIGN KEY` — so when nothing else about the field changed, that one statement is the whole plan.
 Renaming `Result.statusid` to `Result.racestatusid`, with everything else about the key unchanged:
@@ -162,7 +162,7 @@ Renaming `Result.statusid` to `Result.racestatusid`, with everything else about 
 ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
 ```
 
-That is all, on both engines, and it holds for a plain field, an indexed field
+MySQL renames in one `ALTER TABLE` that also renames the column's own unique index, and drops and re-adds the CHECKs MySQL will not let a column take along (error 3959). That drop makes the rename destructive ([MySQL Guide](../mysql.md#Migrations)). That is all, on PostgreSQL and SQLite, and it holds for a plain field, an indexed field
 (`ForeignKey` sets `db_index = true` by default), a `unique = true` field, and one that is both.
 
 The **index keeps its old name**. PormG names indexes with a random suffix it cannot re-derive, so an
@@ -200,27 +200,31 @@ Two renames on the same table in one migration are fine, and so is a rename alon
 
 ### Renaming a field that also changes `db_index`
 
-Turning `db_index` on or off *in the same change as the rename* is planned in that migration, on both backends — a `CREATE INDEX` on the new column name, or a `DROP INDEX` of the live index. Leaving `db_index` alone plans nothing at all about the index: `RENAME COLUMN` carries an index with it on both engines, so the index keeps covering the column and only its *name* still mentions the old one. That stale name is deliberate — re-creating the index on every rename would rewrite a potentially large index to fix a string.
+Turning `db_index` on or off *in the same change as the rename* is planned in that migration, on every backend — a `CREATE INDEX` on the new column name, or a `DROP INDEX` of the live index. Leaving `db_index` alone plans nothing at all about the index: `RENAME COLUMN` carries an index with it on every engine, so the index keeps covering the column and only its *name* still mentions the old one. That stale name is deliberate — re-creating the index on every rename would rewrite a potentially large index to fix a string.
 
 !!! warning "A rename that DROPS a constraint needs `destructive = true`"
     Renaming a field is not destructive. But if the same change also removes a `UNIQUE` constraint or
-    a `PRIMARY KEY`, the plan contains `DROP CONSTRAINT` (PostgreSQL) or a table rebuild whose
-    `DROP TABLE` is part of the recreation (SQLite) — and `dry_run()` classifies either as
-    destructive, so `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`.
+    a `PRIMARY KEY`, the plan contains `DROP CONSTRAINT` (PostgreSQL), `DROP INDEX` or `DROP PRIMARY KEY`
+    (MySQL), or a table rebuild whose `DROP TABLE` is part of the recreation (SQLite) — and `dry_run()`
+    classifies each as destructive, so `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`.
 
     On **SQLite** the opt-in is needed for *any* rename that also changes the column — a retype, a
     nullability change, a re-pointed key — because SQLite alters a column by recreating the table.
     The recreation copies every row; no column and no data are lost, but `DROP TABLE` is what the
     classifier sees. On **PostgreSQL** the same changes are in-place
-    `ALTER COLUMN` statements and need no opt-in unless a constraint is genuinely being dropped.
+    `ALTER COLUMN` statements and need no opt-in unless a constraint is genuinely being dropped, and so
+    are they on **MySQL** (`RENAME COLUMN`, then `MODIFY COLUMN`). MySQL will not let a column take its
+    CHECK along (error 3959), so a rename there drops the CHECK and adds it back in the same statement:
+    renaming a field that carries one of PormG's column CHECKs (a `PositiveIntegerField`'s `>= 0`, a
+    `BinaryField(max_length = …)` bound) needs the opt-in even when nothing else changes.
 
     Measured per shape (`dry_run().statements` through `Migrations.is_destructive`):
 
-    | the rename also… | PostgreSQL | SQLite |
-    |---|---|---|
-    | …changes nothing else | not destructive | not destructive |
-    | …retypes the column, or changes `null` | not destructive | **destructive** |
-    | …drops a `UNIQUE` or `PRIMARY KEY` | **destructive** | **destructive** |
+    | the rename also… | PostgreSQL | SQLite | MySQL |
+    |---|---|---|---|
+    | …changes nothing else | not destructive | not destructive | not destructive, unless the column carries one of PormG's column CHECKs |
+    | …retypes the column, or changes `null` | not destructive | **destructive** | not destructive |
+    | …drops a `UNIQUE` or `PRIMARY KEY` | **destructive** | **destructive** | **destructive** |
 
 !!! warning "Repairing a `UNIQUE` constraint dropped by an older PormG"
     Before this behavior was fixed, renaming a `unique = true` field **destroyed the constraint on PostgreSQL** and **aborted the migration on SQLite**. The plan dropped the index backing the constraint, and on PostgreSQL that meant dropping the constraint first — successfully, and with nothing to put it back.
@@ -293,13 +297,14 @@ What counts as reading the table depends on the engine, because each one would l
 
 - **PostgreSQL** drops a table with `CASCADE`, which PormG keeps for the foreign keys that point at it (see [Statement Ordering](#Statement-Ordering)). `CASCADE` would also remove everything else that depends on the table, without the plan saying so. PormG checks what PostgreSQL records as depending on the table: views and materialized views (and views built on those), rules on other tables, policies, functions with a SQL-standard body, a column of another table whose type is this table's row type (or an array of it), and another table's default that draws on this table's sequence. Two things are not seen. The first is a function whose body is a string, which covers PL/pgSQL (typically a trigger function) and `LANGUAGE sql AS '…'`. PostgreSQL records no dependency for such a body, so the function survives the drop and fails when it next runs. The second is an object created after `makemigrations` and before `migrate`: `CASCADE` still takes that one.
 - **SQLite** would keep the objects, naming a table that no longer exists. Every later `ALTER TABLE … RENAME` in the database would then fail on them, and every table rebuild ends in one. PormG checks views that read the table, views built on those, `INSTEAD OF` triggers on them, and triggers on other tables that name any of them. It reads names, as the rebuild check below does, so a view with a *column* that shares the dropped table's name is refused too.
+- **MySQL** has no `CASCADE`: PormG drops the table with the session's foreign-key checks off, so the keys of children the same plan alters dangle until their own steps drop them. PormG checks the views that read the table (`information_schema.VIEW_TABLE_USAGE`), and refuses a foreign key to it from a table the plan does not manage — an ignored table, an unmanaged model's, or one in another database.
 
 Triggers **on** the dropped table go with it, on both engines, and never block the drop.
 
 To get through, drop the listed views and triggers yourself and run `makemigrations` again. Re-create them against the new schema afterwards if you still need them. If you meant to rename the model rather than delete it, run `makemigrations` interactively and answer its rename question: a rename on its own keeps its views and triggers on both engines. On SQLite, a rename in the same migration as a table rebuild is refused when a view or trigger that rebuild carries names the renamed table (see the rebuild check below); apply the rename as a migration of its own first. With `interactive = false`, name the rename with `renames = ["old_table" => "new_table"]` instead (see [Automation & CI/CD](workflow.md#Automation-and-CI/CD)). Without a hint it plans the drop, unless the new model's columns match the old table's exactly, in which case it refuses to guess.
 
 !!! tip "Coming from Django?"
-    Django's `DeleteModel` drops the table with `CASCADE` on PostgreSQL, so a view that reads it disappears along with it. PormG refuses instead, on both engines, so dropping an object it did not create is always your explicit step.
+    Django's `DeleteModel` drops the table with `CASCADE` on PostgreSQL, so a view that reads it disappears along with it. PormG refuses instead, on every engine, so dropping an object it did not create is always your explicit step.
 
 ## Statement Ordering
 
@@ -316,9 +321,10 @@ Within a bucket the order is stable but arbitrary — effectively alphabetical b
 
 That is safe rather than lucky, and it rests on three properties the test suite pins:
 
-- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 5, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
+- **PostgreSQL and MySQL never inline a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 5, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
 - **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken. Those foreign keys are all the `CASCADE` is left to take: `makemigrations` refuses to drop a table while anything else depends on it (see [Deleting a Model](#Deleting-a-Model)).
 - **SQLite suspends foreign-key enforcement for the whole migration** (`PRAGMA foreign_keys = OFF`, restored by renewing the connection afterwards). Its inline `REFERENCES` clauses therefore constrain nothing while DDL is running, and SQLite resolves an FK's parent table lazily in any case.
+- **MySQL drops a table with foreign-key checks off** (it has no `CASCADE`), so a parent can be dropped before its children's keys; each child's key is dropped by its own step in the same plan, and `makemigrations` refuses a key to it from a table the plan does not manage.
 
 **A renamed table is renamed before anything else touches it.** When `makemigrations` asks whether a model with no table is a rename and you pick its former name, the plan holds `ALTER TABLE "<old>" RENAME TO "<new>"` in bucket 3, and every column change for that table is written against the **new** name — PormG reads the old table's live constraints and indexes at planning time, when the database still has nothing else. Tables whose foreign key points at the renamed one — including the renamed table itself, if it references itself — get no statement at all: both engines carry the constraint across a rename (PostgreSQL follows the table, SQLite rewrites the `REFERENCES` clause), so a rename on its own is **not** destructive. Because of this, `makemigrations` asks every table-rename question before any field-rename question. The exception is a table that *also* changes its key in the same migration, such as a different `on_delete`: that key is re-pointed at the new name, after the rename, and like any re-point it is destructive (see [Changing a Foreign Key](#Changing-a-Foreign-Key) above).
 
@@ -349,16 +355,16 @@ This process is transparent to the user but may take longer on very large tables
 ALTER TABLE "result" ADD COLUMN "circuitid" INTEGER NULL REFERENCES "circuit"("circuitid") ON DELETE CASCADE;
 ```
 
-Give the column a `default` and SQLite will not take the clause inline — PormG then adds the column and rebuilds the table from your model, which renders the `FOREIGN KEY` clause the same way `CREATE TABLE` does. PostgreSQL is unaffected either way: it adds a separate named constraint with `ADD CONSTRAINT`, as it always has.
+Give the column a `default` and SQLite will not take the clause inline — PormG then adds the column and rebuilds the table from your model, which renders the `FOREIGN KEY` clause the same way `CREATE TABLE` does. PostgreSQL and MySQL are unaffected either way: each adds a separate named constraint with `ADD CONSTRAINT`.
 
 !!! warning "Two column shapes SQLite refuses outright"
     Independently of foreign keys, SQLite will not `ADD COLUMN` a `UNIQUE` column at all, nor a `NOT NULL` column without a default — the refusal is about the column. So adding a **new** `OneToOneField` (which is `unique = true`), or a **new** `null = false` field that ends up with no `DEFAULT`, fails on SQLite when the table already exists. It fails on the `ADD COLUMN` itself, before any rebuild PormG queued behind it, and the migration rolls back rather than doing anything silently.
 
     `DateTimeField` and `DateField` are the exception to the second half: PormG synthesizes a temporary default for those two, adds the column with it, and then rebuilds the table to drop it — so a new required timestamp needs none of the below. That temporary default exists **only** for a `null = false` column with no `default` of its own. A `null = true` `DateTimeField` / `DateField` is added as a plain nullable column and every existing row stays `NULL` — no temporary value, no rebuild — and a column with a declared `default` backfills through that default and keeps it.
 
-    PostgreSQL accepts the `UNIQUE` column, but shares the `NOT NULL` restriction: `ADD COLUMN … NOT NULL` with no default is rejected on a table that already has rows, because the existing rows would violate it.
+    PostgreSQL accepts the `UNIQUE` column, but shares the `NOT NULL` restriction: `ADD COLUMN … NOT NULL` with no default is rejected on a table that already has rows, because the existing rows would violate it. MySQL would fill those rows with `0` or `''` instead, so PormG refuses the plan there before it runs.
 
-    For every other required column, add it in two steps on either backend: declare it nullable with no default, migrate, backfill the values, then tighten it — the tightening is an alteration of an existing column, which takes the table rebuild on SQLite and an `ALTER COLUMN` on PostgreSQL.
+    For every other required column, add it in two steps on any backend: declare it nullable with no default, migrate, backfill the values, then tighten it — the tightening is an alteration of an existing column, which takes the table rebuild on SQLite, an `ALTER COLUMN` on PostgreSQL and a `MODIFY COLUMN` on MySQL.
 
 !!! warning "Deleting an indexed column, and the index shapes PormG cannot re-create"
     SQLite refuses `ALTER TABLE ... DROP COLUMN` for a column **any** index references, so deleting an indexed column takes the table rebuild rather than a plain `DROP COLUMN`. The rebuild drops every index with the old table and re-creates the ones the rebuilt table can still support, so the end state is the same — it just costs a data copy on a large table.
@@ -423,8 +429,8 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     │   clauses = 1-element Vector{String}: …
     ```
 
-!!! warning "Dropping a primary key: PostgreSQL vs SQLite"
-    Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.
+!!! warning "Dropping a primary key: per engine"
+    Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key, and MySQL's does the same (the plan is one `DROP COLUMN`, destructive). SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on SQLite and alters in place on PostgreSQL; on MySQL the key moves inside the column's `ALTER TABLE` (`DROP PRIMARY KEY`, `ADD PRIMARY KEY`).
 
 !!! note "SQLite: serialized by the write lock, not an advisory lock"
     SQLite has no advisory lock. `migrate()` applies the plan inside `BEGIN IMMEDIATE`, and checks
@@ -432,6 +438,12 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     a plan at most once: the second waits for the first, then reports `:already_applied`. The wait is
     SQLite's 30-second busy timeout rather than `lock_wait`, and none of it holds on a network
     filesystem. Details: [Deploying → SQLite](deploying.md#SQLite).
+
+!!! note "MySQL: a named lock"
+    `migrate()` takes MySQL's named lock (`GET_LOCK`) under the same key. MySQL lock names are
+    server-wide, so PormG hashes the database name into it, and two databases on one server
+    migrate independently. Like the advisory lock it is session-level, so the transaction-pooling
+    warning below applies. Details: [Deploying → MySQL](deploying.md#MySQL:-a-named-lock,-and-no-transactional-DDL).
 
 ### PostgreSQL: Advisory Locking
 `migrate()` acquires a PostgreSQL session-level advisory lock before it writes anything — the history table and the configured extensions included — so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to `lock_wait` seconds (default `30`) and then fails with an `OperationalError` naming the process that holds the lock, rather than proceeding unserialized. [`run_once`](advanced.md#Data-Migrations) data steps take the same lock. Running `migrate()` from several instances at boot: [Deploying](deploying.md).
@@ -460,4 +472,4 @@ This is a guarantee about *one database*, not one server: `migrate()` against `a
 
 The distinction between the first two matters because PostgreSQL rejects the wrong one: `ADD GENERATED` on a column that already is an identity fails with `column "id" is already an identity column`. Tightening a live key is therefore `SET GENERATED ALWAYS`, and it changes only the flavour — the sequence keeps its current value and no data is rewritten.
 
-SQLite has no equivalent. Its identity is `INTEGER PRIMARY KEY AUTOINCREMENT`, which has no `ALWAYS`/`BY DEFAULT` distinction and which no `ALTER` can change, so `generated_always` is a no-op there and a change to it correctly plans nothing.
+SQLite and MySQL have no equivalent. SQLite's identity is `INTEGER PRIMARY KEY AUTOINCREMENT`, which no `ALTER` can change, and MySQL's is `AUTO_INCREMENT`. Neither has an `ALWAYS`/`BY DEFAULT` distinction, so `generated_always` is a no-op on both, and a change to it correctly plans nothing.

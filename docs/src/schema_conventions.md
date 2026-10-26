@@ -160,7 +160,7 @@ a physical name is escaped rather than validated.
 
 ### Generated files: the field type is chosen from the column, and says so when it has to guess
 
-`generate_models_from_db` reads each live column into the same canonical description `makemigrations` diffs on, and only then picks the field to write. Where the column says exactly what it is, the choice is mechanical: `varchar(40)` is `CharField(max_length = 40)`, `numeric(8, 3)` is `DecimalField(max_digits = 8, decimal_places = 3)`, a `bytea`/`BLOB` whose CHECK is exactly `octet_length(col) <= n` (`length(col) <= n` on SQLite, the one PormG writes) is `BinaryField(max_length = n)` (a bound above 1 GiB, which no `BinaryField` can declare, is left unread and gives a `BinaryField()`; a compound bound such as `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` is your own constraint and leaves a `BinaryField()`), a `timestamp without time zone` is `DateTimeField(type = "TIMESTAMP")`, an integer whose CHECK is exactly `col >= 0` (the one PormG writes) is a `PositiveIntegerField` (a range such as `CHECK (grid >= 0 AND grid <= 30)` is your own constraint and leaves an `IntegerField`), an integer key is an `IDField`, a foreign key is a `ForeignKey` — or a `OneToOneField` when the column is unique or is the primary key. Every other CHECK is written as a [`CheckConstraint`](models.md#Check-Constraints) carrying the catalog's own condition text, which `makemigrations` accepts as the CHECK it came from — on PostgreSQL every one (PostgreSQL names each CHECK), on SQLite each one written with `CONSTRAINT <name>`, on the table or on a column, on MySQL every one (MySQL names each CHECK), its condition read without the backticks and charset introducers MySQL prints; there the first `makemigrations` re-creates each one with PormG's marker, since MySQL can neither rename nor comment a CHECK.
+`generate_models_from_db` reads each live column into the same canonical description `makemigrations` diffs on, and only then picks the field to write. Where the column says exactly what it is, the choice is mechanical: `varchar(40)` is `CharField(max_length = 40)`, `numeric(8, 3)` is `DecimalField(max_digits = 8, decimal_places = 3)`, a `bytea`/`BLOB`/`LONGBLOB` whose CHECK is exactly `octet_length(col) <= n` (`length(col) <= n` on SQLite and MySQL, the one PormG writes) is `BinaryField(max_length = n)` (a bound above 1 GiB, which no `BinaryField` can declare, is left unread and gives a `BinaryField()`; a compound bound such as `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` is your own constraint and leaves a `BinaryField()`), a `timestamp without time zone` is `DateTimeField(type = "TIMESTAMP")`, an integer whose CHECK is exactly `col >= 0` (the one PormG writes) is a `PositiveIntegerField` (a range such as `CHECK (grid >= 0 AND grid <= 30)` is your own constraint and leaves an `IntegerField`), an integer key is an `IDField`, a foreign key is a `ForeignKey` — or a `OneToOneField` when the column is unique or is the primary key. Every other CHECK is written as a [`CheckConstraint`](models.md#Check-Constraints) carrying the catalog's own condition text, which `makemigrations` accepts as the CHECK it came from — on PostgreSQL every one (PostgreSQL names each CHECK), on SQLite each one written with `CONSTRAINT <name>`, on the table or on a column, on MySQL every one (MySQL names each CHECK), its condition read without the backticks and charset introducers MySQL prints; there the first `makemigrations` re-creates each one with PormG's marker, since MySQL can neither rename nor comment a CHECK.
 
 MySQL spells some fields alike, so `import_models_from_mysql` reads each spelling as one of them: a `BIGINT` is a `BigIntegerField` (so a `DurationField`, its microseconds, reads back as one), a `CHAR(36)` a `UUIDField`, a `TINYINT(1)` a `BooleanField`, a `DATETIME(n)` or `TIMESTAMP` the default `DateTimeField`, a `LONGTEXT` (or `TEXT`) a `TextField`. See the [MySQL Guide](mysql.md#inspectdb) for the types that hold other values.
 
@@ -176,7 +176,7 @@ PormG does not guess one. A `# PormG:` marker above each such model says so. See
 
 ### Generated files: colliding bindings and names are disambiguated
 
-`inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` /
+`inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` / `import_models_from_mysql` /
 `import_models_from_django`) derives both the Julia **binding** and — when the positional name would
 otherwise be empty, e.g. an all-underscore table — the **positional name** from the table name. Two
 tables can independently arrive at the same one: `driver profile` sanitizes to the same binding an
@@ -313,7 +313,7 @@ auto-generated key then collides with the row you inserted by hand.
 
 **PormG repairs this automatically only where drift is produced in bulk** — `bulk_insert` and
 `bulk_copy` resynchronise the sequence afterwards whenever the write supplied explicit primary keys,
-to `MAX(pk) + 1` on PostgreSQL and by rewriting `sqlite_sequence` on SQLite. `bulk_insert` also
+to `MAX(pk) + 1` on PostgreSQL and by rewriting `sqlite_sequence` on SQLite. MySQL needs no repair: an explicit id moves `AUTO_INCREMENT` past it. `bulk_insert` also
 resyncs (once) before retrying an unexpected duplicate-key error.
 
 **Row-level writers — `create`/`insert`, `update_or_create`, `get_or_create` — do NOT auto-resync.**
@@ -323,7 +323,7 @@ row write. Call [`resync_sequences`](#Explicit-repair:-resync_sequences) yoursel
 writes an explicit primary key, if a later auto-generated write to the same table needs to be safe.
 
 **No configuration governs any of this.** The repair is not gated by `change_db` or `django_prefix` on
-either engine. (`change_data: false` is a different matter — it rejects the write itself, long before
+any engine. (`change_data: false` is a different matter — it rejects the write itself, long before
 any resync would run, on both the automatic bulk paths and an explicit `resync_sequences` call.)
 
 ### What differs between the engines
@@ -407,6 +407,7 @@ The `IDField` renders as an auto-incrementing key per backend:
 | :--- | :--- |
 | PostgreSQL | `BIGINT … GENERATED BY DEFAULT AS IDENTITY` (or `GENERATED ALWAYS` when `generated_always=true`) |
 | SQLite | `INTEGER PRIMARY KEY AUTOINCREMENT` |
+| MySQL | `BIGINT NOT NULL AUTO_INCREMENT` (`generated_always` has no effect) |
 
 !!! note "Imported models differ"
     The Django importer **does** auto-add `id = Models.IDField()` when the Django model declares no
@@ -515,7 +516,7 @@ category = Models.ForeignKey("constructor", on_delete=CASCADE)
 ### A foreign key may reference any unique column, not only the key
 
 `pk_field` records the column the constraint actually names, which does not have to be the parent's
-primary key — referencing any column with a `UNIQUE` constraint is legal on both engines, and
+primary key — referencing any column with a `UNIQUE` constraint is legal on every engine, and
 introspection reads it back as declared:
 
 ```julia
@@ -526,7 +527,7 @@ registration = Models.ForeignKey("driver_registry", pk_field="licence_no", on_de
 
 !!! warning "A multi-column foreign key is not read back"
     PormG has no composite-`ForeignKey` field type, so `FOREIGN KEY (a, b) REFERENCES parent(x, y)`
-    is **skipped** by `inspectdb`/`makemigrations` introspection on both PostgreSQL and SQLite: the
+    is **skipped** by `inspectdb`/`makemigrations` introspection on every engine: the
     member columns are imported as ordinary fields with no relation, and the constraint is left
     alone in the database.
 
@@ -601,7 +602,7 @@ is how you say:
 |---|---|
 | `db_default="CURRENT_TIMESTAMP"` | portable — rendered on every engine |
 | `db_default=(postgres="now()",)` | pinned — rendered on PostgreSQL, **raises** on SQLite and MySQL |
-| `db_default=(postgres="now()", sqlite="CURRENT_TIMESTAMP")` | a spelling for each of two engines |
+| `db_default=(postgres="now()", sqlite="CURRENT_TIMESTAMP")` | PostgreSQL and SQLite; **raises** on MySQL |
 | `db_default=(postgres="gen_random_uuid()", mysql="uuid()", sqlite=nothing)` | PostgreSQL and MySQL; no default on SQLite |
 
 A bare string is accepted **only** for the two expressions that round-trip identically through every
@@ -613,7 +614,7 @@ Models.DateTimeField(db_default="now()")     # FieldValidationError: name the en
 
 Migrating a pinned column on an engine it does not name raises `BackendCapabilityError` rather than emitting
 DDL that database would reject. That is deliberate — PormG will not guess a translation — and the
-message names both remedies: add the other engine's spelling, or `sqlite=nothing` to declare that
+message names both remedies: add that engine's spelling, or `<engine>=nothing` (`sqlite=nothing`, `mysql=nothing`) to declare that
 the column simply has no database default there.
 
 !!! note "PostgreSQL re-spells the expression; PormG records what it applied"
@@ -688,7 +689,7 @@ so removing `generated_from` is a change it acts on (#1032).
 
 **For `created_at`, `auto_now_add` is usually still the better answer.** It is the Django-shaped
 one, PormG applies it when the row is inserted, and it never renders into DDL — so it agrees with a
-live `DEFAULT now()` column instead of fighting it, and it works identically on both engines with no
+live `DEFAULT now()` column instead of fighting it, and it works identically on every engine with no
 pin:
 
 ```julia
@@ -710,7 +711,7 @@ PormG never interpolates user input into SQL; every value in a query is a bound 
 it is rendered into DDL exactly as written. PormG does not parse it, validate it as SQL, or escape
 it — a syntactically invalid expression fails at the database.
 
-Introspection may also populate it, from `pg_get_expr` or `PRAGMA table_info` output. That text is
+Introspection may also populate it, from `pg_get_expr`, `PRAGMA table_info` or MySQL's `information_schema.COLUMNS` output (MySQL's with its backticks and charset introducers taken off). That text is
 the catalog's own re-printing of a **parsed** expression, so it cannot smuggle a statement
 terminator or an unterminated literal.
 
@@ -721,11 +722,11 @@ those silently changes the statement *around* it — a `--` comments out every c
 and a `,` adds a column of its own. All of them remain legal inside a string literal, so an
 expression whose string argument holds a `;` or a `,` is fine.
 
-The same check refuses quoting whose end the two engines would find in different places, because
+The same check refuses quoting whose end the engines would find in different places, because
 there a `;` that looks quoted is not: an `E'…'` escape string, a backslash right before a quote
 inside a literal, a dollar quote (`$$…$$`, `$tag$…$tag$`) and a backtick. It also reads the
 text a second time the way SQLite does, where `[…]` is a quoted identifier rather than an array
-subscript, and accepts it only when both readings do. A backslash anywhere else in a literal is fine
+subscript, and accepts it only when both readings do. A backslash anywhere else in a literal is accepted, but MySQL reads it as an escape (its session keeps backslash escapes), so in a `mysql` spelling `'\d'` is `'d'`; otherwise it is fine
 (`code ~ '^\d{3}$'`), and so is an array constructor (`ARRAY['a'::text, 'b'::text]`); a
 two-dimensional one (`ARRAY[ARRAY[1, 2], ARRAY[3, 4]]`) is refused, since SQLite's reading sees a
 top-level `,` in it. The same check applies to a [`CheckConstraint`](models.md#Check-Constraints)
@@ -733,7 +734,7 @@ condition, to an `Index`'s `expressions` and `condition`, and to a `UniqueConstr
 
 ### Literal or expression is decided by the DDL, not by the column type
 
-The rule is uniform: **every** column type reaches the same answer on both engines, and what
+The rule is uniform: **every** column type reaches the same answer on every engine (on MySQL a number or `NULL` in parentheses is an expression, above), and what
 decides it is the shape of the `DEFAULT` in the database — not whether the Julia field type the
 column maps to happens to accept the value as a string.
 
@@ -801,7 +802,7 @@ Schema Check (postgres):
       the DEFAULT is a SQL expression; it imports as `db_default=` with exactly this text. Declare it that way and NOT as `default=`, which would render it as a quoted literal
 ```
 
-`check()` is read-only and works on both engines. **The text it prints is the text to paste** — it
+`check()` is read-only and works on every engine. **The text it prints is the text to paste** — it
 is the catalog's own spelling, which converges as text. That makes it the pre-flight step before
 writing models against an existing database, whose columns carry no ownership marker yet. A column
 PormG applied the default to converges with the spelling you first wrote, through the marker
@@ -809,7 +810,7 @@ described above.
 
 The two things it is telling you about such a column: declare it as `db_default=` and not as
 `default=`, and — unless the expression is `CURRENT_TIMESTAMP` or `CURRENT_DATE` — it is pinned to
-this engine, so a portable app needs a spelling for the other one.
+this engine, so a portable app needs a spelling for each other engine.
 
 `isempty(result)` is true when there is nothing to report; `result.findings` carries a
 `SchemaCheckFinding` per column for programmatic use. It sits alongside `status()` and `dry_run()`
@@ -834,10 +835,11 @@ Driver = Models.Model("driver",
 
 ## Identifier quoting and case
 
-**Table and column** identifiers are emitted with **double quotes** (`"…"`) on **both** PostgreSQL
-and SQLite — no backticks, no backend-specific quoting — in DDL and in queries alike, and they
-**preserve the declared case** (#57), so a field declared `driverId` becomes `"driverId"`. An
-embedded `"` is escaped by doubling it, the standard SQL escape on both backends.
+**Table and column** identifiers are quoted on every engine — **double quotes** (`"…"`) on
+PostgreSQL and SQLite, **backticks** (``` `…` ```) on MySQL, whose session reads a double-quoted name as a
+string — in DDL and in queries alike, and they **preserve the declared case** (#57), so a field
+declared `driverId` becomes `"driverId"`. An embedded quote character is escaped by doubling it
+(`""`, or ``` `` ``` on MySQL).
 
 That uniformity is what makes a `db_table` or `db_column` outside PormG's own naming conventions
 usable. PormG used to apply two different rules to one name: the DDL renderer escaped and accepted
@@ -889,7 +891,7 @@ Declaring lowercase snake_case (the house style) yields all-lowercase identifier
 is the **SQLite** shape, which carries its foreign keys inline in `CREATE TABLE`. PostgreSQL renders
 its own column types (`bigint`, `float`, `… GENERATED BY DEFAULT AS IDENTITY`) and emits **no** inline
 `FOREIGN KEY` — there, foreign keys arrive as separate statements in the migration plan. The
-identifier quoting is identical on both:
+MySQL, like PostgreSQL, adds its foreign keys as separate statements, and quotes identifiers with backticks. On PostgreSQL and SQLite the identifier quoting is identical:
 
 ```sql
 CREATE TABLE IF NOT EXISTS result (
@@ -912,7 +914,7 @@ CREATE TABLE IF NOT EXISTS result (
 | `db_column` | authoritative: maps a field to a differently-named column (default: column == field name) |
 | Default `on_delete` | `NO ACTION` |
 | Timestamps | opt-in `auto_now` / `auto_now_add`; no implicit `created`/`modified` |
-| Quoting | every table and column identifier is double-quoted and `"`-escaped on both backends, in DDL and in queries alike (#394); aliases and CTE names are additionally validated |
+| Quoting | every table and column identifier is quoted and escaped on every backend — `"…"` on PostgreSQL and SQLite, ``` `…` ``` on MySQL — in DDL and in queries alike (#394); aliases and CTE names are additionally validated |
 
 The migration *format* that records these schemas (file layout, checksum, tracking table) is a
 separate frozen contract — see [Migration Format Stability](migrations/stability.md).

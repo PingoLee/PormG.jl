@@ -100,7 +100,7 @@ ORDER BY "raceid" ASC,
 ```
 
 !!! note
-    `?` placeholders are SQLite syntax. On PostgreSQL the same query uses `$1`, `$2`, `$3`.
+    `?` placeholders are SQLite and MySQL syntax (MySQL also quotes names in backticks). On PostgreSQL the same query uses `$1`, `$2`, `$3`.
 
 ---
 
@@ -389,7 +389,7 @@ Result — 34 rows, of which the first and last few:
 ```
 
 Seven of the 34 drivers did not race in 1990 at all, so the `LEFT JOIN` gives them a `NULL`
-`prev_points` — and that is what makes `nulls=:last` load-bearing rather than decorative. **The two
+`prev_points` — and that is what makes `nulls=:last` load-bearing rather than decorative. **The
 backends disagree about where a `NULL` sorts by default**: PostgreSQL treats it as the largest
 value, so `DESC` puts it *first*; SQLite and MySQL treat it as the smallest, so `DESC` puts it *last*. Drop
 the `nulls=:last` from the example above and the same query returns, measured:
@@ -398,8 +398,9 @@ the `nulls=:last` from the example above and the same query returns, measured:
 | :--- | :--- |
 | PostgreSQL | Bailey, Blundell, Brundle, Chaves, Comas, Häkkinen … — the seven **rookies**, all tied at rank 1 |
 | SQLite | Senna, as above |
+| MySQL | Senna, as above |
 
-An explicit placement is how the two are made to agree. This is the same divergence the top-level
+An explicit placement is how they are made to agree. This is the same divergence the top-level
 `order_by()` normalizes for you (see
 [Ordering and NULL Placement](filters_and_aggregates.md#Ordering-and-NULL-Placement)); a window's `ORDER BY` applies no
 default of its own, so inside `OVER (...)` you state it or you inherit the backend's.
@@ -530,7 +531,7 @@ A frame is SQL grammar, not a value, so it cannot travel as a bind parameter the
 
 A bound is `UNBOUNDED PRECEDING`, `<n> PRECEDING`, `CURRENT ROW`, `<n> FOLLOWING` or `UNBOUNDED FOLLOWING`. `<n>` is a non-negative integer; under `RANGE`, where the offset is measured in the `ORDER BY` column's own type, it can also be a decimal (`"RANGE BETWEEN 0.5 PRECEDING AND CURRENT ROW"`) or an interval with a plain unit (`"RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"`). Keywords are case-insensitive and are written back in upper case.
 
-Anything else raises `InvalidValueError` as soon as `WindowOver` is called, on both backends. That includes a frame PostgreSQL would itself refuse — one that starts `UNBOUNDED FOLLOWING`, ends `UNBOUNDED PRECEDING`, or ends before it starts, such as `"ROWS 1 FOLLOWING"`:
+Anything else raises `InvalidValueError` as soon as `WindowOver` is called, on every backend. That includes a frame PostgreSQL would itself refuse — one that starts `UNBOUNDED FOLLOWING`, ends `UNBOUNDED PRECEDING`, or ends before it starts, such as `"ROWS 1 FOLLOWING"`:
 
 ```julia
 WindowOver(order_by=["positionorder"], frame="ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW")
@@ -679,7 +680,7 @@ ORDER BY "lap" ASC
 ```
 
 !!! tip
-    The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite omits them.
+    The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite and MySQL omit them.
 
 The value functions also read a [`Subquery`](subqueries_and_ctes.md), one value per row. Here each 2009 race gets the most laps any driver completed, and the same figure for the previous round:
 
@@ -797,7 +798,7 @@ WHERE "Tb"."raceid" = $1
 ```
 
 !!! note
-    The `n` argument in `NthValue` is rendered as a **SQL literal integer** — notice `NTH_VALUE(..., 2)` above, not `NTH_VALUE(..., $2)`. PostgreSQL and SQLite do not accept a placeholder in that position.
+    The `n` argument in `NthValue` is rendered as a **SQL literal integer** — notice `NTH_VALUE(..., 2)` above, not `NTH_VALUE(..., $2)`. PostgreSQL and SQLite do not accept a placeholder in that position, and PormG writes the literal on MySQL too.
 
 ---
 
@@ -855,7 +856,7 @@ WHERE "Tb"."raceid" = $3
   AND "Tb"."driverid" = $4
 ```
 
-The arithmetic is pushed inside the `SELECT` expression — `(ROW_NUMBER() OVER (...) - $1::bigint)` — so the subtraction happens in the database, not in Julia. The `::bigint` and `::integer` casts are PostgreSQL type-inference artefacts; on SQLite the same query omits them.
+The arithmetic is pushed inside the `SELECT` expression — `(ROW_NUMBER() OVER (...) - $1::bigint)` — so the subtraction happens in the database, not in Julia. The `::bigint` and `::integer` casts are PostgreSQL type-inference artefacts; on SQLite and MySQL the same query omits them (MySQL wraps `ROW_NUMBER()` in `CAST(… AS SIGNED)` instead).
 
 Supported operators: `+`, `-`, `*`, `/`
 
@@ -1268,8 +1269,8 @@ The value functions (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) retur
 column's own values, so they read back as the column does on every engine. For example,
 `Lag("date")` gives a `Date` and `Lag("duration")` a `Dates.CompoundPeriod`, where SQLite alone
 would hand back the stored text. A value function over a computed number, such as
-`Lag(Sum("points"))`, reads back as the type that number means, a `Float64` or a `Decimal`, on both
-engines (#1121); a ranking such as `Rank()` comes back as the engine's integer. A value function over
+`Lag(Sum("points"))`, reads back as the type that number means, a `Float64` or a `Decimal`, on every
+engine (#1121); a ranking such as `Rank()` comes back as the engine's integer. A value function over
 a `Joined(...)` handle reads back as the joined column, and over a `CTE(...)` column as the CTE body
 projected it: typed for a column the body selects, and for a number the body computes as that
 number's type (#824, #1121). Over a `Subquery(...)` it reads back as the subquery's one column does

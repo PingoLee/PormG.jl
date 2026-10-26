@@ -1,6 +1,6 @@
 # PormG Field Types Reference
 
-This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL or SQLite and provides validation, constraints, and formatting capabilities.
+This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL, SQLite or MySQL and provides validation, constraints, and formatting capabilities.
 
 ## Naming Conventions and Considerations
 
@@ -96,6 +96,7 @@ driver = Models.Model("driver",
 **Database Type**: 
 - **PostgreSQL**: `BIGINT` with `GENERATED AS IDENTITY`
 - **SQLite**: `INTEGER PRIMARY KEY AUTOINCREMENT`
+- **MySQL**: `BIGINT AUTO_INCREMENT`
 
 **Use Cases**: Large-scale applications, future-proof primary keys, modern PostgreSQL features.
 
@@ -114,7 +115,7 @@ Result = Models.Model(
 ```
 
 **Key Parameters**:
-- `generated_always::Bool = false`: Use GENERATED ALWAYS AS IDENTITY (stricter mode)
+- `generated_always::Bool = false`: Use GENERATED ALWAYS AS IDENTITY (stricter mode; PostgreSQL only, a no-op on SQLite and MySQL)
 - `primary_key::Bool = true`: Always true for IDField
 - `auto_increment::Bool = true`: Always true for IDField
 
@@ -168,6 +169,7 @@ before `migrate()`; the
 **Database Type**: 
 - **PostgreSQL**: `UUID` (Native type)
 - **SQLite**: `TEXT`
+- **MySQL**: `CHAR(36)`
 
 **Use Cases**: Distributed systems, secure primary keys, session tokens, unique object identifiers.
 
@@ -225,8 +227,8 @@ the same name, so a Django project imports into it unchanged; the second follows
 
 **PostgreSQL only.** SQLite has no type that stores an address with these semantics: it cannot
 compare by network, and it would store each spelling of an address as different text. PormG refuses
-rather than emulates: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that
-declares either field. To keep a model on SQLite, declare the column as a `CharField` or `TextField`;
+rather than emulates: on SQLite and MySQL, `makemigrations` raises `BackendCapabilityError` for a model that
+declares either field. To keep a model on SQLite or MySQL, declare the column as a `CharField` or `TextField`;
 it then holds whatever text you write.
 
 Both fields read back as a `String`. On write they accept a `String` or a `Sockets.IPv4` /
@@ -320,7 +322,7 @@ M.Pit_wall_session.objects.
 - A **projection alias** over a network column filters the same way. A pattern lookup on
   `"top_ip" => Max("client_ip")` reads `HOST(MAX(…))`, and the fragment is bound as text.
 - `Value(ip"…")` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints for it
-  (`::ffff:10.0.0.1`). On SQLite it raises `InvalidValueError`.
+  (`::ffff:10.0.0.1`). On SQLite it raises `InvalidValueError`, and on MySQL it currently reaches the driver, which refuses to bind it (`StatementError`; see the [MySQL Guide](mysql.md#Known-gaps)).
 
 ```julia
 # The highest address each team used, kept only when it is on the 10.20.x.x garage network.
@@ -377,7 +379,7 @@ M.Pit_wall_session.objects.
 - These lookups work on a network column only: the model's own, one reached through a relation
   (`"session__client_ip__@net_contained"`), or a CTE or `cjoin_on` column over one. On any other
   column, on a projection alias, or with a list of values, they raise `FilterError`.
-- **PostgreSQL only.** On SQLite, a lookup that is otherwise valid raises `BackendCapabilityError`,
+- **PostgreSQL only.** On SQLite and MySQL, a lookup that is otherwise valid raises `BackendCapabilityError`,
   as the fields themselves do. The value checks above come first, so an invalid one still raises
   its own error there (`InvalidValueError`).
 
@@ -393,7 +395,7 @@ M.Pit_wall_session.objects.
 | `SearchVectorField()` | a parsed document: lexemes, their positions and weights | `tsvector` | not supported | not supported |
 
 **PostgreSQL only.** SQLite's full-text search is a separate index table, and PormG does not emulate
-it: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one.
+it: on SQLite and MySQL, `makemigrations` raises `BackendCapabilityError` for a model that declares one.
 
 Fill it with `update("search_vector" => SearchVector(…))`, search it with `"search_vector__@search" => …`, rank it
 with `SearchRank("search_vector", …)` and index it with a GIN `Models.Index`. It reads and writes as the
@@ -431,9 +433,9 @@ Race_report = Models.Model("race_report",
 |---|---|---|---|---|
 | `ArrayField(base_field)` | a list of `base_field` values | the base type followed by `[]`, e.g. `integer[]` | not supported | not supported |
 
-**PostgreSQL only.** SQLite has no array type, and PormG does not emulate one: on SQLite,
+**PostgreSQL only.** SQLite and MySQL have no array type, and PormG does not emulate one: on either,
 `makemigrations` raises `BackendCapabilityError` for a model that declares an `ArrayField`. To keep
-a model on SQLite, put the elements in a related model with a `ForeignKey` per element.
+a model on SQLite or MySQL, put the elements in a related model with a `ForeignKey` per element.
 
 ### ArrayField(base_field)
 
@@ -689,7 +691,7 @@ Part = Models.Model(
 
 **Purpose**: Unlimited length text content.
 
-**Database Type**: `TEXT`
+**Database Type**: `TEXT` (`LONGTEXT` on MySQL, whose `TEXT` holds 64 KB)
 
 **Use Cases**: Articles, descriptions, comments, JSON data, large text content.
 
@@ -707,7 +709,7 @@ Race_report = Models.Model(
 
 **Purpose**: Email addresses with built-in validation.
 
-**Database Type**: `VARCHAR` with email validation
+**Database Type**: `VARCHAR` with email validation (`LONGTEXT` on MySQL)
 
 **Use Cases**: Team-member and driver emails, contact information, notification addresses.
 
@@ -766,7 +768,7 @@ Press_release = Models.Model(
 
 **Purpose**: Django-compatible storage for password hashes.
 
-**Database Type**: `VARCHAR(128)`
+**Database Type**: `VARCHAR(128)` (`LONGTEXT` on MySQL)
 
 **Use Cases**: Persisting password hashes in tables that share a Django `auth`-style schema.
 
@@ -888,7 +890,7 @@ Timing_event = Models.Model(
 
 **Purpose**: Double-precision floating-point numbers for measurements and calculations.
 
-**Database Type**: `DOUBLE PRECISION`
+**Database Type**: `DOUBLE PRECISION` (`DOUBLE` on MySQL)
 
 ```julia
 # Telemetry measurements
@@ -922,7 +924,7 @@ Car_performance = Models.Model(
 **Purpose**: Precise decimal numbers for financial and monetary data.
 
 **Database Type**: `decimal(max_digits, decimal_places)` on PostgreSQL (`numeric`, exact at any
-width); `DECIMAL(max_digits, decimal_places)` on SQLite.
+width); `DECIMAL(max_digits, decimal_places)` on SQLite and MySQL.
 
 **Use Cases**: Currency, financial calculations, precise measurements.
 
@@ -963,7 +965,7 @@ Merchandise = Models.Model(
 **Write validation**: every write (`create`, `update`, `get_or_create`, `update_or_create`,
 `bulk_insert`, `bulk_update`, `bulk_copy`)
 checks a value against the three widths the column has, the way Django's `DecimalValidator` does.
-A value that exceeds one raises `InvalidValueError` naming the field, before any SQL, on both engines:
+A value that exceeds one raises `InvalidValueError` naming the field, before any SQL, on every engine:
 
 - at most `max_digits` digits in total;
 - at most `decimal_places` digits after the point (a value is never rounded to fit);
@@ -1039,17 +1041,17 @@ Sponsor_contract = Models.Model(
 
 **Purpose**: Date and time with timezone support.
 
-**Database Type**: `TIMESTAMP WITH TIME ZONE`
+**Database Type**: `TIMESTAMP WITH TIME ZONE` (`DATETIME(3)` on MySQL, read in the connection's UTC)
 
 **Use Cases**: Timestamps, logs, audit trails, precise timing.
 
 **Current Contract**:
 - `default` values are normalized to `Union{ZonedDateTime, DateTime, Nothing}`.
-- **Canonicalized to UTC (issue #79):** every `DateTimeField` value — written, bound, or used as a filter value — is canonicalized to one UTC ISO-8601 string, `yyyy-mm-ddTHH:MM:SS.sss+00:00` (millisecond precision, `+00:00` offset). This mirrors Django `USE_TZ` / Rails / SQLAlchemy and makes SQLite's lexicographic TEXT comparison agree with PostgreSQL's `timestamptz` instant comparison: equality and range filters return the **same rows on both backends** regardless of how the input instant is spelled (`Z` vs `+00:00`, `.0`/`.000`/no-subsecond, or a non-UTC offset such as `-03:00`/`+05:30`).
+- **Canonicalized to UTC (issue #79):** every `DateTimeField` value — written, bound, or used as a filter value — is canonicalized to one UTC ISO-8601 string, `yyyy-mm-ddTHH:MM:SS.sss+00:00` (millisecond precision, `+00:00` offset). This mirrors Django `USE_TZ` / Rails / SQLAlchemy and makes SQLite's lexicographic TEXT comparison and MySQL's UTC `DATETIME(3)` agree with PostgreSQL's `timestamptz` instant comparison: equality and range filters return the **same rows on every backend** regardless of how the input instant is spelled (`Z` vs `+00:00`, `.0`/`.000`/no-subsecond, or a non-UTC offset such as `-03:00`/`+05:30`).
 - Passing `ZonedDateTime` preserves the instant (converted to UTC for storage) and is the recommended path for shared Django/PostgreSQL tables.
 - Passing a plain Julia `DateTime` is interpreted as `UTC`.
 - Internal `auto_now` and `auto_now_add` timestamps are generated in `settings.time_zone` and then canonicalized to UTC on serialization — the same instant, stored in the UTC spelling.
-- The same semantics are exercised on both PostgreSQL and SQLite integration backends, including `bulk_insert` and `bulk_update` paths for `DateTimeField` values.
+- The same semantics are exercised on the PostgreSQL, SQLite and MySQL integration backends, including `bulk_insert` and `bulk_update` paths for `DateTimeField` values.
 - If your Django app uses `USE_TZ=True` with a non-UTC active timezone, you should treat plain `DateTime` as a deliberate UTC input and use `ZonedDateTime` for local civil times.
 
 #### TIMESTAMPTZ vs TIMESTAMP
@@ -1096,7 +1098,7 @@ Store_order = Models.Model(
 
 **Purpose**: Time of day without date information.
 
-**Database Type**: `TIME`
+**Database Type**: `TIME` (`TIME(6)` on MySQL)
 
 **Format**: HH:MM:SS
 
@@ -1193,14 +1195,14 @@ the window value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValu
 `Coalesce`, `Greatest`, `Least` or `NullIf` over `time` (#824). It also holds for a `Joined(...)`
 handle on the column, for a `CTE(...)` column whose body projects it, and for a `Subquery(...)`
 that projects it (#888). A computed value is not
-the column, so it is still whatever the engine delivered: text on SQLite, and a bare `Period` or a
-`CompoundPeriod` on PostgreSQL. That covers a `CTE(...)` column the body computes, and a `Coalesce`
+the column, so it is still whatever the engine delivered: text on SQLite, a bare `Period` or a
+`CompoundPeriod` on PostgreSQL, and a `CompoundPeriod` on MySQL. That covers a `CTE(...)` column the body computes, and a `Coalesce`
 whose arguments are of different types. The computed intervals PormG types are the difference of two
 timestamps, `F("start_at") - F("date")`, and interval arithmetic — `F("time") * 2`,
 `F("time") + (F("start_at") - F("date"))`, a difference plus a duration — and `Max`/`Min` over
 either (#894). `Sum("time")` and `Avg("time")` are typed too, and so are `Greatest`, `Least` and
 `Coalesce` over intervals of either kind (#900), and arithmetic on any of these
-(`Sum("time") / Count("lap")`, #907). Each reads back as a `CompoundPeriod` on both engines
+(`Sum("time") / Count("lap")`, #907). Each reads back as a `CompoundPeriod` on every engine
 (see *Subtracting two dates* in the F-expressions guide).
 
 On **SQLite** a duration is stored as text (`00:01:49.088`), and hours are never folded into days.
@@ -1262,7 +1264,7 @@ holds a vector, so two equal reads are not `===` even from the same engine.
 
 **Purpose**: True/false values for flags and binary states.
 
-**Database Type**: `BOOLEAN`
+**Database Type**: `BOOLEAN` (`TINYINT(1)` on MySQL, read back as a `Bool`)
 
 **Values**: `true` and `false`, or the integers `0` and `1`. A write or a filter given anything
 else raises `InvalidValueError` naming the field: kind `:range` for another integer, kind `:type`
@@ -1307,7 +1309,7 @@ System_setting = Models.Model(
 
 **Purpose**: Image file paths and metadata.
 
-**Database Type**: `VARCHAR` (stores file path)
+**Database Type**: `VARCHAR` (stores file path; `LONGTEXT` on MySQL)
 
 **Use Cases**: Race photos, galleries, driver avatars, car images.
 
@@ -1345,6 +1347,7 @@ Race_photo = Models.Model(
 **Database Type**: 
 - **PostgreSQL**: `BYTEA`
 - **SQLite**: `BLOB`
+- **MySQL**: `LONGBLOB`
 
 **Use Cases**: File storage, encrypted data, binary documents.
 
@@ -1356,11 +1359,11 @@ An `AbstractString` is also accepted on write and stored as its **UTF-8 code uni
 **Key Parameters**:
 - `max_length::Union{Int, Nothing} = nothing`: maximum payload size in **bytes**, not characters.
   Enforced before the query is built *and* by a `CHECK` constraint in the schema
-  (`octet_length` on PostgreSQL, `length` on SQLite). `nothing` means unbounded. The largest
+  (`octet_length` on PostgreSQL, `length` on SQLite and MySQL). `nothing` means unbounded. The largest
   accepted bound is `1073741824` (1 GiB, PostgreSQL's limit for one `bytea` value); a larger one
   raises `FieldValidationError`, since it would constrain nothing.
 - `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
-  (`'\xdeadbeef'::bytea` / `X'deadbeef'`). Must be a `Vector{UInt8}` — a `String` raises
+  (`'\xdeadbeef'::bytea` / `X'deadbeef'`; refused on MySQL with `UnsupportedConnectionError`, since PormG renders no byte literal there). Must be a `Vector{UInt8}` — a `String` raises
   `FieldValidationError` rather than guessing between its code units and a decoded encoding.
 
 ```julia
@@ -1428,12 +1431,13 @@ non-binary field is refused as an operator-less vector value.
 **Database Type**: 
 - **PostgreSQL**: `JSONB` (binary storage, fast querying, allows indexing)
 - **SQLite**: `TEXT` (stores as a JSON string)
+- **MySQL**: `JSON`
 
 **Use Cases**: Configuration settings, variable data payloads, complex metadata.
 
 **Handling**: In Julia, this field accepts and returns `Dict` or `Vector` types, automatically handling the serialization/deserialization.
 
-**NUL characters**: a value containing a NUL (`'\0'`) anywhere — a string value, a key, a nested element, or a JSON string carrying the escape `\u0000` — raises `InvalidValueError` before the statement is sent, on every backend (a `default=` carrying one raises `FieldValidationError` when the model is defined). PostgreSQL `jsonb` cannot store that escape, so SQLite refuses it too and the engines stay aligned. The literal text `\u0000` (a backslash followed by `u0000`) is ordinary data and is stored as written.
+**NUL characters**: a value containing a NUL (`'\0'`) anywhere — a string value, a key, a nested element, or a JSON string carrying the escape `\u0000` — raises `InvalidValueError` before the statement is sent, on every backend (a `default=` carrying one raises `FieldValidationError` when the model is defined). PostgreSQL `jsonb` cannot store that escape, so SQLite and MySQL refuse it too and the engines stay aligned. The literal text `\u0000` (a backslash followed by `u0000`) is ordinary data and is stored as written.
 
 ```julia
 Car_setup = Models.Model(

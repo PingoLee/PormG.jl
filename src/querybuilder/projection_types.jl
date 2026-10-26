@@ -738,7 +738,9 @@ end
 # raised at the server, SQLite computed on the `HH:MM:SS` text (`Round` read `0.0`, `Sqrt` NULL), MySQL
 # on the count of microseconds. Read after the operands render, from the type walk, so a column, a
 # `Sum` of one, interval arithmetic and a CTE column holding one are all seen. An operand the walk
-# cannot type is let through.
+# cannot type is let through. Only the `:interval` half of the domain is enforced here: text is read as
+# a number by its own rules (#1061, #1279), and a date or a time under a number function is outside
+# this issue's decided scope.
 function _check_operand_domain(p::FObject, instruc::SQLInstruction)
   domain = _operand_domain(p)
   (domain === nothing || :interval in domain) && return nothing

@@ -185,4 +185,13 @@ end
     @test _mod_refusal(expr; conn = _MOD_PG) === nothing
   end
   @test _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, "epoch"); conn = _MOD_MY) === nothing
+  # The four transforms MySQL renders from a date part refuse a duration operand at their Dialect arm,
+  # as `Extract` does; a date operand renders as before.
+  for (fn, label) in ((:DATE, "@date"), (:QUARTER, "@quarter"), (:QUADRIMESTER, "@quadrimester"),
+                      (:WEEK_DAY, "@week_day"))
+    arm = getfield(PormG.Dialect, fn)
+    err = try arm("x", Dict{String,Any}("temporal_kind" => :interval), _MOD_MY); nothing catch e; e end
+    @test err isa QueryBuildError && occursin("$(label) over a duration expression is not supported on MySQL", _mod_msg(err))
+    @test arm("x", Dict{String,Any}("temporal_kind" => :date), _MOD_MY) isa String
+  end
 end

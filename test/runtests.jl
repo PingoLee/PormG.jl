@@ -147,6 +147,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Multi-path Cascade Delete Alignment (#452)" include("unit/test_delete_multipath_alignment.jl")
     @testset "Deletion Collector Traversal (#459)" include("unit/test_delete_collector_traversal.jl")
     @testset "Mutation Fence Shape (#765)" include("unit/test_mutation_fence_shape.jl")
+    @testset "Delete Root Keys (#1342)" include("unit/test_delete_root_keys.jl")
     @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "CTE Columns Are Projection Aliases (#376)" include("unit/test_cte_db_column.jl")
     @testset "CTE Reference Namespace (#444/#431/#434)" include("unit/test_cte_reference.jl")

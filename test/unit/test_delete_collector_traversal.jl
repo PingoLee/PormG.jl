@@ -164,8 +164,9 @@ end
 
 """The step whose `:model` is `name`. Fails loudly rather than returning `nothing`."""
 function _dct_step(steps, name::String)
-  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped.
-  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
+  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped, and so is a #1342
+  # key read (`:lock` there, `:select` on SQLite).
+  idx = findfirst(s -> s[:model] == name && s[:operation] in (:delete, :update), steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -285,36 +286,37 @@ end
 # Deletion collector traversal: the multi-fragment UPDATE binds in text order on SQLite
 # `update_field` is a NEW renderer as of #459, and the testset above cannot discriminate its value
 # vector at all: with one root filter every fragment binds the same string, so any permutation reads
-# as correct. A `cjoin` on the root gives the plan two DISTINCT sentinels, one rendered in a JOIN
-# `ON` and one in a `WHERE`, so a lost or reordered value becomes visible.
+# as correct. A root filter binding two DISTINCT values gives the plan two sentinels, so a lost or
+# reordered value becomes visible. (This used a `cjoin` on the root, an `ON` sentinel and a `WHERE`
+# one, until #1342: a joined root that cascades is now resolved to keys first, so its sentinels bind
+# only in the key read and never reach a fragment. A `Qor` over the root's own column still does.)
 #
 # Be precise about what this does and does not pin, because the obvious label is wrong.
 #
-# It does NOT pin `update_field`'s #432 mark/detach wrap. MEASURED by removing those three lines and
-# re-running: all nine assertions still pass. The `ON` value is already in the `:where` bucket before
-# the wrap runs, lifted by the read builder's own `__@in` splice — the identical finding
+# It does NOT pin `update_field`'s #432 mark/detach wrap. MEASURED (on the cjoin shape) by removing
+# those three lines and re-running: all nine assertions still passed. The `ON` value was already in the
+# `:where` bucket before the wrap ran, lifted by the read builder's own `__@in` splice — the identical finding
 # `test_delete_multipath_alignment.jl` records for `delete_objects`, and the reason `isempty(:join)`
 # below is a shape pin rather than a regression guard. Keep the wrap anyway, for the reason that file
 # gives: it makes alignment a property of the code instead of a property of today's fragment shapes.
 #
 # It DOES pin: that each fragment renders once into one collector (double-rendering — #452's actual
 # defect, reached through this renderer — gives 8 values against 4 markers), that neither path is
-# dropped (a drop gives 2), and that the cjoin's `ON` value survives into every fragment. A swap OF
-# the two fragments stays invisible, since both carry the same root query.
+# dropped (a drop gives 2), and that the root's two values keep their order inside every fragment. A
+# swap OF the two fragments stays invisible, since both carry the same root query.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a multi-path SET_NULL binds in text order on SQLite (#459 / #432)" begin
   # SQLite only: PostgreSQL's `$N` travels with the text by construction, which is why every bug in
   # this family has been SQLite-only.
   q = DctDiamond.Dct_root.objects
-  q.filter("code" => "WHEREVAL")
-  q.cjoin("top" => "Dct_top", filters = ["tag" => "ONVAL"], warn = false)
+  q.filter(Qor("code" => "FIRSTVAL", "code" => "SECONDVAL"))
   steps = _dct_steps(q, _DCT_SL)
 
   for name in ("dct_leaf", "dct_dleaf")
     step = _dct_step(steps, name)
     @test length(_dct_fragments(step[:sql_text])) == 2
-    # Two fragments, each lifting its own join-then-where run to its marker position.
-    assert_bound_in_text_order(step, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
+    # Two fragments, each lifting the root's run to its marker position.
+    assert_bound_in_text_order(step, ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"])
     assert_marker_count(step, :sqlite)
     # Shape pin, not a regression guard — see the header. The cjoin's ON value reaches `:where`
     # through the read builder's `__@in` splice, so this passes with or without `update_field`'s
@@ -325,7 +327,7 @@ end
   # The parent DELETE is the #452 renderer on the same root — unchanged, and the control that says
   # the two renderers agree.
   mid = _dct_step(steps, "dct_mid")
-  assert_bound_in_text_order(mid, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
+  assert_bound_in_text_order(mid, ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

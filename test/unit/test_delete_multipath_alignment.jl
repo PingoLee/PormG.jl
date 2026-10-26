@@ -43,13 +43,19 @@ join-binding fragments. Cascade fragments are built as
 was always alone in its statement, where a lone fragment's `:join`-before-`:where` flatten already
 matches its text order.
 
-Since #765 the `dmp_a` root statement IS the discriminating case. A joined root renders as
+Since #765 the joined `dmp_a` root predicate IS the discriminating case. It renders as
 `"Tb"."id" IN (<selection>) AND EXISTS (<fence>)` — two builds of the same query, each binding its
 `ON` value then its `WHERE` value. Unwrapped, `:join` flattens both `ON` values first
 (`ONVAL, ONVAL, WHEREVAL, WHEREVAL` against a text order of `ONVAL, WHEREVAL, ONVAL, WHEREVAL`), so
 the `dmp_a` text-order assertion below must fail without it (measured on the same shape in
 `test_mutation_fence_shape.jl`, by stripping the wrap from `_mutation_predicate`). The cascade
 statements still cannot tell.
+
+Since #1342 that predicate lives in the KEY READ: a joined root that cascades is resolved to its
+primary keys first, and every statement after it, the root's own DELETE included, is scoped by those
+keys, so the cjoin's sentinels never reach a cascade fragment. The fragment assertions therefore use a
+root that binds two distinct values on its own columns (`_dmp_two_value_root`), which still renders
+into every fragment.
 
 Both backends run. PostgreSQL's `\$N` travels with the text by construction, which is why every bug
 in this family has been SQLite-only — but the COUNT half fails on both, and did here.
@@ -127,8 +133,9 @@ end
 
 """The step whose `:model` is `name`. Fails loudly rather than returning `nothing`."""
 function _dmp_step(steps, name::String)
-  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped.
-  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
+  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped, and so is a #1342
+  # key read (`:lock` there, `:select` on SQLite).
+  idx = findfirst(s -> s[:model] == name && s[:operation] in (:delete, :update), steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -149,6 +156,14 @@ _dmp_joined_root() = begin
   q
 end
 
+# A root whose own filter binds two DISTINCT values, so a fragment's values have an order to get wrong.
+# Join-free, so it is not resolved to keys (#1342) and renders into every cascade fragment.
+_dmp_two_value_root() = begin
+  q = DMP.Dmp_a.objects
+  q.filter(Qor("code" => "FIRSTVAL", "code" => "SECONDVAL"))
+  q
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Multi-path cascade: every emitted statement binds exactly as many values as it renders markers
 # This is #452's acceptance criterion, and the half that failed on BOTH backends. Asserted over
@@ -163,13 +178,13 @@ end
         steps = _dmp_steps(build_q, conn)
         # dmp_b and dmp_k are multi-path (two CASCADE FKs each); dmp_c is multi-path through the
         # recursion; dmp_a is the single-key root. All four must hold.
-        @test count(s -> s[:operation] != :lock, steps) == 4
+        @test count(s -> s[:operation] in (:delete, :update), steps) == 4
         # #770: on PostgreSQL the two parents (dmp_a, then dmp_b) are locked first, through the same
-        # multi-arm predicates — so the marker loop below covers the lock statements too. #771: the
-        # joined root also locks the table its cjoin reads (dmp_root) right after its own lock, and
-        # that statement binds the ON and the WHERE sentinel, so the loop covers it as well.
-        pg_locks = label == "plain root filter" ? ["dmp_a", "dmp_b"] : ["dmp_a", "dmp_root", "dmp_b"]
-        @test [s[:model] for s in steps if s[:operation] == :lock] == (kind === :postgres ? pg_locks : String[])
+        # multi-arm predicates — so the marker loop below covers the lock statements too. #1342: the
+        # joined root's lock IS its key read (`:select` on SQLite), which binds the ON and the WHERE
+        # sentinel twice, so the loop covers it as well; no lock is taken on the table its cjoin reads.
+        @test [s[:model] for s in steps if s[:operation] == :lock] == (kind === :postgres ? ["dmp_a", "dmp_b"] : String[])
+        @test count(s -> s[:operation] == :select, steps) == (kind === :sqlite && label != "plain root filter" ? 1 : 0)
         for step in steps
           assert_marker_count(step, kind)
         end
@@ -188,13 +203,13 @@ end
 # fragments sharing one collector, which is the arrangement #452 introduced.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a multi-path delete binds in text order on SQLite (#452 / #432)" begin
-  steps = _dmp_steps(_dmp_joined_root, _DMP_SL)
+  steps = _dmp_steps(_dmp_two_value_root, _DMP_SL)
 
-  # Two fragments, each contributing its subquery's ON value then its WHERE value.
+  # Two fragments, each contributing the root's two values in its own text order.
   for model in ("dmp_b", "dmp_k")
     step = _dmp_step(steps, model)
     assert_marker_count(step, :sqlite)
-    assert_bound_in_text_order(step, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
+    assert_bound_in_text_order(step, ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"])
     # The whole run lands in one bucket — but do not credit this file's wrap for it. What puts
     # these values in `:where` is the read builder's own `__@in` splice inside each fragment, which
     # lifts the nested root query's `ON` value before the delete-level splice ever sees it.
@@ -204,7 +219,7 @@ end
     # because the unfixed statement bound EIGHT values for four markers. So the first line is a
     # shape pin with no discriminating power and the second is a real regression guard. Kept
     # together because the pair states the property; labelled so neither is mistaken for the other.
-    @test step[:parameter_buckets][:where] == ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"]
+    @test step[:parameter_buckets][:where] == ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"]
     @test isempty(step[:parameter_buckets][:join])
   end
 
@@ -213,10 +228,12 @@ end
   # the wrap moves the value between buckets on purpose and that is not a behaviour change.
   #
   # Since #765 the joined root is `"Tb"."id" IN (<selection>) AND EXISTS (<fence>)`: two builds, each
-  # binding its ON then its WHERE value. Unwrapped, `:join` would flatten both ON values first.
-  root_step = _dmp_step(steps, "dmp_a")
-  assert_marker_count(root_step, :sqlite)
-  assert_bound_in_text_order(root_step, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
+  # binding its ON then its WHERE value. Unwrapped, `:join` would flatten both ON values first. Since
+  # #1342 that predicate is the key read's, the first step; the root's DELETE is scoped by the keys.
+  key_step = first(_dmp_steps(_dmp_joined_root, _DMP_SL))
+  @test key_step[:operation] == :select && key_step[:model] == "dmp_a"
+  assert_marker_count(key_step, :sqlite)
+  assert_bound_in_text_order(key_step, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

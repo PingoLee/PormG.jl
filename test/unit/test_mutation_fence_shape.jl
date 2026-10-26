@@ -51,13 +51,13 @@ import PormG.Models
 # A worker store in miniature: runs own tasks (CASCADE), tasks carry notes (SET_NULL) and keyless
 # tags. The shape Nitro.jl#379 hit — a compare-and-delete on `mf_task` — plus one of each statement
 # kind the deletion collector can emit.
-# The org a run belongs to: gives a task filter a second hop (`run__org__name`) for #771.
+# The org a run belongs to: gives a task filter a second hop (`run__org__name`).
 Mf_org = Models.Model("mf_org",
   id   = Models.IDField(),
   name = Models.CharField(),
 )
 
-# An unmanaged view a run points at (models.md → Unmanaged models): #771 must not lock through it.
+# An unmanaged view a run points at (models.md → Unmanaged models), reached by a `cjoin`.
 Mf_run_stats_v = Models.Model("mf_run_stats_v"; managed = false,
   id    = Models.IDField(),
   score = Models.IntegerField(),
@@ -82,41 +82,6 @@ Mf_note = Models.Model("mf_note",
   id   = Models.IDField(),
   body = Models.CharField(),
   task = Models.ForeignKey(Mf_task, on_delete = "SET_NULL", related_name = "notes", null = true),
-)
-
-# #771 — every other way a join can reach an unmanaged model. A reverse hop: an unmanaged audit view
-# keyed at tasks. And a many-to-many whose related end is unmanaged, from an unmanaged owner (so the
-# auto join table is unmanaged too, Django's rule) and from a managed one (so it is created, and
-# locked). Each owner has a CASCADE child, so it is a parent and takes locks at all.
-Mf_audit = Models.Model("mf_audit_v"; managed = false,
-  id    = Models.IDField(),
-  score = Models.IntegerField(),
-  task  = Models.ForeignKey(Mf_task, on_delete = "DO_NOTHING", related_name = "audits", null = true),
-)
-
-Mf_label = Models.Model("mf_label_v"; managed = false,
-  id    = Models.IDField(),
-  label = Models.CharField(),
-)
-
-Mf_feed = Models.Model("mf_feed_v"; managed = false,
-  id     = Models.IDField(),
-  labels = Models.ManyToManyField(Mf_label, related_name = "feeds"),
-)
-
-Mf_feed_item = Models.Model("mf_feed_item",
-  id   = Models.IDField(),
-  feed = Models.ForeignKey(Mf_feed, on_delete = "CASCADE", related_name = "items", db_constraint = false),
-)
-
-Mf_board = Models.Model("mf_board",
-  id     = Models.IDField(),
-  labels = Models.ManyToManyField(Mf_label, related_name = "boards"),
-)
-
-Mf_pin = Models.Model("mf_pin",
-  id    = Models.IDField(),
-  board = Models.ForeignKey(Mf_board, on_delete = "CASCADE", related_name = "pins"),
 )
 
 # Keyless: no primary key, so a joined update of it cannot go through a pk anyway.
@@ -270,17 +235,22 @@ _mf_ops(steps) = [(s[:operation], s[:model]) for s in steps]
     @test _mf_ops(_mf_steps(q, _MF_PG)) == [(:lock, "mf_task"), (:update, "mf_note"), (:delete, "mf_task")]
   end
 
-  @testset "PostgreSQL: a joined root locks through the same IN + EXISTS, FOR UPDATE once, outermost" begin
+  # #1342: a joined root that cascades is resolved to keys first, and that read IS its lock — the same
+  # IN + EXISTS predicate, `FOR UPDATE` once, outermost, returning the keys instead of a count.
+  @testset "PostgreSQL: a joined root locks through its key read: IN + EXISTS, FOR UPDATE once, outermost" begin
     q = MF.Mf_task.objects
     q.filter("id" => 7, "run__status" => "OPEN")
     steps = _mf_steps(q, _MF_PG)
     lock = steps[1]
     @test lock[:operation] == :lock
-    @test lock[:sql_text] == _mf_lock_sql("mf_task", _mf_predicate(_mf_step(steps, "mf_task"), "mf_task"))
+    @test startswith(lock[:sql_text], "SELECT \"Tb\".\"id\" FROM \"mf_task\" AS \"Tb\" WHERE \"Tb\".\"id\" IN (SELECT DISTINCT \"Tb\".\"id\"")
     @test occursin("AS \"__pormg_anchor\"", lock[:sql_text])
+    @test endswith(lock[:sql_text], " FOR UPDATE")
     @test count("FOR UPDATE", lock[:sql_text]) == 1
     @test lock[:parameters] == [7, "OPEN", 7, "OPEN"]
     assert_marker_count(lock, :postgres)
+    # The root is not locked a second time by #770's own statement.
+    @test count(s -> s[:operation] == :lock && s[:model] == "mf_task", steps) == 1
   end
 
   @testset "PostgreSQL: an unfiltered root (allow_delete_all) locks the whole table" begin
@@ -305,106 +275,40 @@ _mf_ops(steps) = [(s[:operation], s[:model]) for s in steps]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #771: a root filter across a relation — the tables it JOINS are locked too
-# #770's lock pins the root's own row, and a joined filter also reads another table: a concurrent
-# rename of that row flipped the root after its children were gone (staged on db_2 in
-# test_mutation_fence_concurrency.jl). So right after the root's own lock comes one `FOR SHARE` per
-# hop, in chain order. Each sits on a plain scan of the hop's table, keyed through the join, never on
-# the nullable side of the LEFT JOIN, which PostgreSQL refuses to lock.
+# #1342: a root filter that reads another table is resolved to keys, so nothing re-reads it
+# #771 used to lock every table a joined root filter read, `FOR SHARE`, because every statement of the
+# cascade re-read that filter. The re-read was the defect itself: a filter that reads the rows the
+# cascade writes (`"tasks__status"`, an `Exists` over a child) matched nothing by the time the root's
+# own DELETE ran. Now the root's keys are read once — on PostgreSQL that read is the root's
+# `FOR UPDATE` — and every later statement is scoped by them, so no hop lock is left to take. The
+# rows themselves are executed in test_delete_root_keys.jl.
 # ─────────────────────────────────────────────────────────────────────────────
 _mf_locks(steps) = [s for s in steps if s[:operation] == :lock]
 
-@testset "a joined root locks the tables its filter reads (#771)" begin
-  @testset "PostgreSQL: one hop, FOR SHARE after the root's own lock, before any write" begin
+@testset "a joined root is resolved to keys; no table it reads is locked (#1342, was #771)" begin
+  @testset "PostgreSQL: the key read, then #770's locks below the root, then the writes" begin
     q = MF.Mf_task.objects
     q.filter("id" => 7, "run__status" => "OPEN")
     steps = _mf_steps(q, _MF_PG)
-    @test _mf_ops(steps) == [(:lock, "mf_task"), (:lock, "mf_run"), (:update, "mf_note"), (:delete, "mf_task")]
-
-    hop = steps[2]
-    @test hop[:sql_text] ==
-      "SELECT count(*) FROM (SELECT 1 FROM \"mf_run\" AS \"__pormg_locked\" " *
-      "WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_1\".\"id\"\n" *
-      "  FROM \"mf_task\" as \"Tb\"\n" *
-      "   LEFT JOIN \"mf_run\" AS \"Tb_1\" ON \"Tb\".\"run\" = \"Tb_1\".\"id\" \n" *
-      "  WHERE \"Tb\".\"id\" = \$1 AND \"Tb_1\".\"status\" = \$2) FOR SHARE) AS \"__pormg_lock\""
-    @test hop[:parameters] == [7, "OPEN"]
-    assert_marker_count(hop, :postgres)
-    # The root's own lock is the #770 statement, untouched: FOR UPDATE, once.
-    @test count("FOR UPDATE", steps[1][:sql_text]) == 1
-    @test !occursin("FOR SHARE", steps[1][:sql_text])
-  end
-
-  @testset "PostgreSQL: two hops lock in chain order, each keyed through its own alias" begin
-    q = MF.Mf_task.objects
-    q.filter("run__org__name" => "ACME")
-    locks = _mf_locks(_mf_steps(q, _MF_PG))
-    @test [s[:model] for s in locks] == ["mf_task", "mf_run", "mf_org"]
-    @test startswith(locks[2][:sql_text],
-      "SELECT count(*) FROM (SELECT 1 FROM \"mf_run\" AS \"__pormg_locked\" WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_1\".\"id\"\n")
-    @test startswith(locks[3][:sql_text],
-      "SELECT count(*) FROM (SELECT 1 FROM \"mf_org\" AS \"__pormg_locked\" WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_2\".\"id\"\n")
-    for hop in locks[2:3]
-      @test endswith(hop[:sql_text], " FOR SHARE) AS \"__pormg_lock\"")
-      @test hop[:parameters] == ["ACME"]
-      assert_marker_count(hop, :postgres)
+    @test _mf_ops(steps) == [(:lock, "mf_task"), (:update, "mf_note"), (:delete, "mf_task")]
+    @test !any(s -> occursin("FOR SHARE", s[:sql_text]), steps)
+    # Nothing after the key read reads `mf_run` or binds the filter's values again.
+    for s in steps[2:end]
+      @test !occursin("mf_run", s[:sql_text])
+      @test s[:parameters] == [Int[]]   # the mock pool reads no keys: an empty array, one marker
+      assert_marker_count(s, :postgres)
     end
   end
 
-  # An ON value binds ahead of the WHERE value in the text. PostgreSQL numbers `$N` as values bind
-  # (WHERE first), so the pin is that each number still names its own value.
-  @testset "PostgreSQL: a join carrying an ON value binds each marker to its own value" begin
-    q = MF.Mf_task.objects
-    q.filter("status" => "WHEREVAL")
-    q.cjoin("run" => "Mf_run", filters = ["status" => "ONVAL"], warn = false)
-    hop = _mf_locks(_mf_steps(q, _MF_PG))[2]
-    @test occursin("ON \"Tb\".\"run\" = \"Tb_1\".\"id\" AND \"Tb_1\".\"status\" = \$2 \n  WHERE \"Tb\".\"status\" = \$1)", hop[:sql_text])
-    @test hop[:parameters] == ["WHEREVAL", "ONVAL"]
-    assert_marker_count(hop, :postgres)
-  end
-
-  # A view cannot always be locked (`FOR SHARE` fails on an aggregating or materialized one, and needs
-  # UPDATE privilege), so a hop into an unmanaged model is left unpinned — the managed hop before it
-  # in the same chain is still locked.
-  @testset "PostgreSQL: a hop into an unmanaged model is not locked" begin
-    q = MF.Mf_task.objects
-    q.filter("run__status" => "OPEN", "run__stats__score__@gt" => 10)
-    locks = _mf_locks(_mf_steps(q, _MF_PG))
-    @test [s[:model] for s in locks] == ["mf_task", "mf_run"]
-    @test !any(s -> occursin("\"mf_run_stats_v\" AS \"__pormg_locked\"", s[:sql_text]), locks)
-    # ...but the view is still in the join the managed hop's selection reads.
-    @test occursin("JOIN \"mf_run_stats_v\"", locks[2][:sql_text])
-    assert_marker_count(locks[2], :postgres)
-  end
-
-  # The same skip through every other producer of a join row, each pinned on its own.
-  @testset "PostgreSQL: the skip holds for a reverse hop, a cjoin and a many-to-many" begin
-    lock_models(q) = [s[:model] for s in _mf_locks(_mf_steps(q, _MF_PG))]
-
-    # A reverse hop into the unmanaged audit view (`_reverse_hop`).
-    q = MF.Mf_task.objects
-    q.filter("id" => 7, "audits__score__@gt" => 10)
-    @test lock_models(q) == ["mf_task"]
-
-    # A cjoin into it, which rebuilds the row by copy (`_with_config`).
+  @testset "PostgreSQL: a cjoin root and a two-hop root take only the key read as their lock" begin
     q = MF.Mf_run.objects
     q.cjoin("stats" => "Mf_run_stats_v", filters = ["score" => 5], warn = false)
     q.filter("status" => "OPEN")
-    # mf_task is the #770 lock of the next level down; no mf_run_stats_v hop sits between them.
-    @test lock_models(q) == ["mf_run", "mf_task"]
+    @test [s[:model] for s in _mf_locks(_mf_steps(q, _MF_PG))] == ["mf_run", "mf_task"]
 
-    # Both ends unmanaged: the auto join table is unmanaged as well, so neither hop is locked.
-    q = MF.Mf_feed.objects
-    q.filter("labels__label" => "x")
-    @test lock_models(q) == ["mf_feed_v"]
-
-    # A managed owner: its auto join table is created by PormG, so it is locked; the unmanaged
-    # related end is not.
-    q = MF.Mf_board.objects
-    q.filter("labels__label" => "x")
-    locks = lock_models(q)
-    @test length(locks) == 2 && locks[1] == "mf_board"
-    @test !("mf_label_v" in locks)
+    q = MF.Mf_task.objects
+    q.filter("run__org__name" => "ACME")
+    @test [s[:model] for s in _mf_locks(_mf_steps(q, _MF_PG))] == ["mf_task"]
   end
 
   @testset "PostgreSQL: a join-free root takes no FOR SHARE" begin
@@ -443,18 +347,30 @@ const _MF_FENCE = "EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\""
 @testset "a joined delete selects by pk AND fences through a correlated EXISTS (#765)" begin
   for (backend, conn, kind) in _MF_BACKENDS
     @testset "$backend" begin
-      q = MF.Mf_task.objects
-      q.filter("id" => 7, "run__status" => "OPEN")
-      root = _mf_step(_mf_steps(q, conn), "mf_task")
+      # `mf_note` has nothing to cascade to, so its own DELETE carries the joined filter. (A root
+      # that cascades carries the same predicate in its key read instead, #1342 — checked below.)
+      q = MF.Mf_note.objects
+      q.filter("id" => 7, "task__status" => "OPEN")
+      root = _mf_step(_mf_steps(q, conn), "mf_note")
       sql = root[:sql_text]
 
-      @test startswith(sql, "DELETE FROM \"mf_task\" AS \"Tb\" WHERE \"Tb\".\"id\" IN (SELECT DISTINCT \"Tb\".\"id\"")
+      @test startswith(sql, "DELETE FROM \"mf_note\" AS \"Tb\" WHERE \"Tb\".\"id\" IN (SELECT DISTINCT \"Tb\".\"id\"")
       @test occursin(")\n  AND " * _MF_FENCE, sql)
       # The fence's join hangs off the OUTER target row — the correlation PostgreSQL re-checks.
-      @test occursin(_MF_FENCE * "\n   LEFT JOIN \"mf_run\" AS \"Tb_1\" ON \"Tb\".\"run\" = \"Tb_1\".\"id\"", sql)
+      @test occursin(_MF_FENCE * "\n   LEFT JOIN \"mf_task\" AS \"Tb_1\" ON \"Tb\".\"task\" = \"Tb_1\".\"id\"", sql)
       # Two builds, each binding its own values, IN first: text order on both dialects.
       @test root[:parameters] == [7, "OPEN", 7, "OPEN"]
       assert_marker_count(root, kind)
+
+      # The cascading root's key read: the same predicate, the same values, in the same order.
+      q = MF.Mf_task.objects
+      q.filter("id" => 7, "run__status" => "OPEN")
+      key = first(_mf_steps(q, conn))
+      @test key[:operation] == (kind === :postgres ? :lock : :select)
+      @test occursin("WHERE \"Tb\".\"id\" IN (SELECT DISTINCT \"Tb\".\"id\"", key[:sql_text])
+      @test occursin(")\n  AND " * _MF_FENCE * "\n   LEFT JOIN \"mf_run\" AS \"Tb_1\" ON \"Tb\".\"run\" = \"Tb_1\".\"id\"", key[:sql_text])
+      @test key[:parameters] == [7, "OPEN", 7, "OPEN"]
+      assert_marker_count(key, kind)
     end
   end
 end
@@ -486,9 +402,11 @@ end
   q = MF.Mf_task.objects
   q.filter("status" => "WHEREVAL")
   q.cjoin("run" => "Mf_run", filters = ["status" => "ONVAL"], warn = false)
-  root = _mf_step(_mf_steps(q, _MF_SL), "mf_task")
-  assert_marker_count(root, :sqlite)
-  assert_bound_in_text_order(root, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
+  # `mf_task` cascades, so its two builds are the key read's predicate (#1342); its DELETE is keyed.
+  key = first(_mf_steps(q, _MF_SL))
+  @test key[:operation] == :select && key[:model] == "mf_task"
+  assert_marker_count(key, :sqlite)
+  assert_bound_in_text_order(key, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
 
   # update(): the selection is the top-level build (its `:join` then `:where`), the fence a second
   # build lifted behind it. SET first, then IN(ON, WHERE), then EXISTS(ON, WHERE).

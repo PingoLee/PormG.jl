@@ -154,7 +154,7 @@ _serializes_get_or_create(::PormGSQLite) = true
 # keys in one index gap (measured on 8.4: a `FOR UPDATE` on a missing key, then the inserts, gave 1213).
 _serializes_get_or_create(::PormGMySQL) = false
 
-# A cascading delete locks every parent row, top-down, before it reads one (#770, #771). SQLite's
+# A cascading delete locks every parent row, top-down, before it reads one (#770). SQLite's
 # writers are already serialized for the whole transaction, so nothing can change under it.
 _locks_cascade_parents(::PormGPostgres) = true
 _locks_cascade_parents(::PormGSQLite) = false

@@ -1533,3 +1533,110 @@ end
             M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1342: a root filter that reads the rows the cascade writes
+#
+# The collector deletes children first and the root last, and every statement used to re-read the
+# root's filter. A filter that reads the children (`"just_a_nested_roll_back__description" => …`) then
+# matched nothing by the time the root's own DELETE ran: the children went, the root stayed, no error
+# (`(1, Dict("just_a_nested_roll_back" => 1, "just_a_test_deletion" => 0))` on every engine). Now the
+# root's keys are read once, before any write — the first step of the plan — and every statement is
+# scoped by them.
+#
+# Run on every engine, because the key read is a statement of its own (`FOR UPDATE` on PostgreSQL and
+# MySQL) and the keyed statements bind a list differently on each: one array on PostgreSQL, one marker
+# per key on SQLite and MySQL, in chunks past the bind budget (256 keys on MySQL).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DELETE: a root filter that reads the cascaded rows deletes the root too (#1342)" begin
+    @testset "the issue's repro: a reverse-relation filter on the child the cascade deletes" begin
+        parent_id = 936001
+        child_id  = 936101
+        try
+            M.Just_a_test_deletion.objects.create("id" => parent_id, "name" => "probe-parent-1342")
+            M.Just_a_nested_roll_back.objects.create(
+                "id" => child_id, "test" => parent_id, "description" => "probe-child-1342")
+
+            q = M.Just_a_test_deletion.objects
+            q.filter("just_a_nested_roll_back__description" => "probe-child-1342")
+            total, counts = q.delete()
+
+            @test counts == Dict("just_a_nested_roll_back" => 1, "just_a_test_deletion" => 1)
+            @test total == 2
+            @test M.Just_a_test_deletion.objects.filter("id" => parent_id).count() == 0
+            @test M.Just_a_nested_roll_back.objects.filter("id" => child_id).count() == 0
+        finally
+            _cleanup_scratch_delete_graph!(0; deletion_ids = [parent_id], nested_ids = [child_id])
+        end
+    end
+
+    # The filter reads ONE of the two cascade paths into `mp_mid_scratch` (`owner`), and the mids carry
+    # SET_NULL leaves. Before #1342 the leaves were nulled and both mids deleted, then the root's own
+    # DELETE re-read `mp_owned` and kept the root. The plan also binds the keys into a statement with
+    # two ORed arms (one per path), so each statement's markers are checked against its values.
+    @testset "a filter on one cascade path: the other path and the SET_NULL leaves follow" begin
+        root_id, other_root_id = 937001, 937002
+        owner_mid_id, backup_mid_id, control_mid_id = 937101, 937102, 937103
+        owner_leaf_id, backup_leaf_id, control_leaf_id = 937201, 937202, 937203
+
+        _reset_multipath_set_null_scratch_schema!()
+        try
+            MultipathSetNullM.Mp_root_scratch.objects.create("id" => root_id, "name" => "mp-root-1342")
+            MultipathSetNullM.Mp_root_scratch.objects.create("id" => other_root_id, "name" => "mp-other-1342")
+            MultipathSetNullM.Mp_mid_scratch.objects.create("id" => owner_mid_id, "owner" => root_id, "label" => "owned-1342")
+            MultipathSetNullM.Mp_mid_scratch.objects.create("id" => backup_mid_id, "backup" => root_id, "label" => "backup-1342")
+            MultipathSetNullM.Mp_mid_scratch.objects.create("id" => control_mid_id, "owner" => other_root_id, "label" => "control-1342")
+            MultipathSetNullM.Mp_leaf_scratch.objects.create("id" => owner_leaf_id, "mid" => owner_mid_id, "label" => "leaf-owner")
+            MultipathSetNullM.Mp_leaf_scratch.objects.create("id" => backup_leaf_id, "mid" => backup_mid_id, "label" => "leaf-backup")
+            MultipathSetNullM.Mp_leaf_scratch.objects.create("id" => control_leaf_id, "mid" => control_mid_id, "label" => "leaf-control")
+
+            by_owner() = MultipathSetNullM.Mp_root_scratch.objects.filter("mp_owned__label" => "owned-1342")
+
+            # The key read comes first, and reads the live keys, so every statement after it binds them.
+            steps = by_owner().delete(show_query = :dict)
+            @test steps[1][:model] == "mp_root_scratch" && steps[1][:operation] in (:lock, :select)
+            for step in steps
+                @test marker_count(step[:sql_text]) == length(step[:parameters])
+            end
+            @test !any(s -> occursin("owned-1342", string(s[:parameters])), steps[2:end])
+
+            total, counts = by_owner().delete()
+            @test counts == Dict("mp_root_scratch" => 1, "mp_mid_scratch" => 2)
+            @test total == 3
+            @test MultipathSetNullM.Mp_root_scratch.objects.filter("id" => root_id).count() == 0
+            @test MultipathSetNullM.Mp_mid_scratch.objects.filter("id__@in" => [owner_mid_id, backup_mid_id]).count() == 0
+            for leaf_id in (owner_leaf_id, backup_leaf_id)
+                row = MultipathSetNullM.Mp_leaf_scratch.objects.filter("id" => leaf_id).get()
+                @test ismissing(row[:mid]) || isnothing(row[:mid])
+            end
+            # The other root's graph is untouched.
+            @test MultipathSetNullM.Mp_root_scratch.objects.filter("id" => other_root_id).count() == 1
+            @test MultipathSetNullM.Mp_leaf_scratch.objects.filter("id" => control_leaf_id).get()[:mid] == control_mid_id
+        finally
+            _drop_multipath_set_null_scratch_schema!()
+        end
+    end
+
+    # More roots than one MySQL chunk (4096 ÷ 16 = 256 keys): every root and mid goes, and the counts
+    # add up across chunks. One chunk on SQLite and PostgreSQL, the same rows.
+    @testset "more roots than one chunk: every row goes and the counts add up" begin
+        n = 300
+        root_ids = collect(938001:938000 + n)
+        _reset_multipath_set_null_scratch_schema!()
+        try
+            bulk_insert(MultipathSetNullM.Mp_root_scratch.objects, DataFrame(id = root_ids, name = fill("bulk-root-1342", n)))
+            bulk_insert(MultipathSetNullM.Mp_mid_scratch.objects,
+                DataFrame(id = root_ids .+ 1000, owner = root_ids, label = fill("bulk-1342", n)))
+
+            q = MultipathSetNullM.Mp_root_scratch.objects
+            q.filter("mp_owned__label" => "bulk-1342")
+            total, counts = q.delete()
+
+            @test counts == Dict("mp_root_scratch" => n, "mp_mid_scratch" => n)
+            @test total == 2n
+            @test MultipathSetNullM.Mp_root_scratch.objects.filter("id__@in" => root_ids).count() == 0
+        finally
+            _drop_multipath_set_null_scratch_schema!()
+        end
+    end
+end

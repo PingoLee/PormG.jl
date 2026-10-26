@@ -362,6 +362,36 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Coalesce Q false",        :Result,              m -> _EKM_FN.Coalesce(_EKM_Q.Q("grid__@gt" => 1), false)),
   ("Sum Q",                   :Result,              m -> _EKM_FN.Sum(_EKM_Q.Q("grid__@gt" => 1))),
   ("Case then Q",             :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.Q("points__@gt" => 10))], default = false)),
+  # ── #1327, #1321: a conditional over operands of two classes (text, number, date, interval) ─────
+  ("Coalesce text int",       :Result,              m -> _EKM_FN.Coalesce("positiontext", "grid")),
+  ("Greatest text int literal", :Result,            m -> _EKM_FN.Greatest("positiontext", _EKM_FN.Value(9))),
+  ("Case int text literal",   :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1)], default = "x")),
+  ("NullIf text int",         :Result,              m -> _EKM_FN.NullIf("positiontext", _EKM_Q.F("grid"))),
+  ("Coalesce text int output text", :Result,        m -> _EKM_FN.Coalesce("positiontext", "grid"; output_field = "text")),
+  ("Coalesce int hop date",   :Result,              m -> _EKM_FN.Coalesce("grid", "raceid__date")),
+  ("Coalesce date int",       :Race,                m -> _EKM_FN.Coalesce("date", "year")),
+  ("Coalesce int interval",   :Result,              m -> _EKM_FN.Coalesce("grid", "fastestlaptime")),
+  # ── #1323: a time of day in arithmetic, or beside it ─────────────────────────────────────────────
+  ("F time + 1",              :Race,                m -> _EKM_Q.F("time") + 1),
+  ("F time * 2",              :Race,                m -> _EKM_Q.F("time") * 2),
+  ("Case time int + 1",       :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("time"))], default = 0) + 1),
+  ("Coalesce time int * 2",   :Race,                m -> _EKM_FN.Coalesce("time", 0) * 2),
+  ("F time > Time literal",   :Race,                m -> _EKM_Q.F("time") > Time(12)),
+  # ── #1324: a math function over a duration ───────────────────────────────────────────────────────
+  ("Round interval",          :Result,              m -> _EKM_FN.Round("fastestlaptime")),
+  ("Round interval places",   :Result,              m -> _EKM_FN.Round("fastestlaptime", 2)),
+  ("Floor interval",          :Result,              m -> _EKM_FN.Floor("fastestlaptime")),
+  ("Ceil interval",           :Result,              m -> _EKM_FN.Ceil("fastestlaptime")),
+  ("Sqrt interval",           :Result,              m -> _EKM_FN.Sqrt("fastestlaptime")),
+  ("Exp interval",            :Result,              m -> _EKM_FN.Exp("fastestlaptime")),
+  ("Ln interval",             :Result,              m -> _EKM_FN.Ln("fastestlaptime")),
+  ("Power interval 2",        :Result,              m -> _EKM_FN.Power("fastestlaptime", 2)),
+  ("Mod interval 3",          :Result,              m -> _EKM_FN.Mod("fastestlaptime", 3)),
+  ("Abs interval",            :Result,              m -> _EKM_FN.Abs("fastestlaptime")),
+  ("Round F interval * 2",    :Result,              m -> _EKM_FN.Round(_EKM_Q.F("fastestlaptime") * 2)),
+  ("Extract hour F datetime - datetime", :Race,     m -> _EKM_FN.Extract(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"), "hour")),
+  ("Extract minute F interval * 2", :Result,        m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "minute")),
+  ("Extract epoch F interval * 2", :Result,         m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "epoch")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

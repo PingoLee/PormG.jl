@@ -6421,4 +6421,476 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce text int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(`Tb`.`positiontext`, `Tb`.`grid`) > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > \$1", params = [("\"10\"", "String")]),
+  ("Coalesce text int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`positiontext`, `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Coalesce text int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Coalesce text int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "GREATEST(COALESCE(`Tb`.`positiontext`, ?), COALESCE(?, `Tb`.`positiontext`)) > ?", params = [("9", "Int64"), ("9", "Int64"), ("9", "Int64"), ("9", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "GREATEST(\"Tb\".\"positiontext\", \$2::bigint) > \$3", params = [("9", "Int64"), ("9", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MAX(COALESCE(\"Tb\".\"positiontext\", ?), COALESCE(?, \"Tb\".\"positiontext\")) > ?", params = [("9", "Int64"), ("9", "Int64"), ("9", "Int64"), ("9", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(COALESCE(`R2`.`positiontext`, ?), COALESCE(?, `R2`.`positiontext`)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("9", "Int64"), ("9", "Int64"), ("1", "Int64"), ("9", "Int64"), ("9", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(\"R2\".\"positiontext\", \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("9", "Int64"), ("1", "Int64"), ("9", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Greatest text int literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(COALESCE(\"R2\".\"positiontext\", ?), COALESCE(?, \"R2\".\"positiontext\")) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("9", "Int64"), ("9", "Int64"), ("1", "Int64"), ("9", "Int64"), ("9", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Case int text literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("10", "Int64")]),
+  ("Case int text literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::bigint\nELSE \$6::text\nEND\n > \$7", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("10", "Int64")]),
+  ("Case int text literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("10", "Int64")]),
+  ("Case int text literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int text literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::bigint\nELSE \$7::text\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int text literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("NullIf text int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(`Tb`.`positiontext`, `Tb`.`grid`) > ?", params = [("\"10\"", "String")]),
+  ("NullIf text int | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(`Tb`.`positiontext`, `Tb`.`grid`) > ?", params = [("\"pole\"", "String")]),
+  ("NullIf text int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > \$1", params = [("\"10\"", "String")]),
+  ("NullIf text int | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > \$1", params = [("\"pole\"", "String")]),
+  ("NullIf text int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > ?", params = [("\"10\"", "String")]),
+  ("NullIf text int | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"positiontext\", \"Tb\".\"grid\") > ?", params = [("\"pole\"", "String")]),
+  ("NullIf text int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(`R2`.`positiontext`, `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("NullIf text int | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(`R2`.`positiontext`, `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("NullIf text int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("NullIf text int | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("NullIf text int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("NullIf text int | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    NULLIF(\"R2\".\"positiontext\", \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Coalesce text int output text | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(`Tb`.`positiontext`, `Tb`.`grid`) AS CHAR) > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(`Tb`.`positiontext`, `Tb`.`grid`) AS CHAR) > ?", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\"))::text > \$1", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\"))::text > \$1", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\") AS TEXT) > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(COALESCE(\"Tb\".\"positiontext\", \"Tb\".\"grid\") AS TEXT) > ?", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Coalesce text int output text | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
+  ("Coalesce text int output text | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(`R2`.`positiontext`, `R2`.`grid`) AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Coalesce text int output text | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(`R2`.`positiontext`, `R2`.`grid`) AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Coalesce text int output text | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\"))::text as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Coalesce text int output text | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\"))::text as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Coalesce text int output text | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\") AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Coalesce text int output text | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"positiontext\", \"R2\".\"grid\") AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Coalesce int hop date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on MySQL: PormG cannot t"),
+  ("Coalesce int hop date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb_1\".\"date\") > \$1", params = [("10", "Int64")]),
+  ("Coalesce int hop date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on SQLite: PormG cannot "),
+  ("Coalesce int hop date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`grid`, `R2_1`.`date`) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce int hop date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2_1\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce int hop date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2_1\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce date int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce date int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce date int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce date int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce date int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce date int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Coalesce int interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb\".\"fastestlaptime\") > \$1", params = [("10", "Int64")]),
+  ("Coalesce int interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on SQLite: PormG cannot "),
+  ("Coalesce int interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce int interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`time` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` + ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" + \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" + ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`time` * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` * ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`year` = ? THEN `Tb`.`time`\nELSE ?\nEND\n + ?) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$4 THEN \"Tb\".\"time\"\nELSE \$5::bigint\nEND\n + \$6::bigint) > \$7", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"time\"\nELSE ?\nEND\n + ?) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`year` = ? THEN `R2`.`time`\nELSE ?\nEND\n + ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$5 THEN \"R2\".\"time\"\nELSE \$6::bigint\nEND\n + \$7::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$8 \n) > \$9", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case time int + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"time\"\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(`Tb`.`time`, ?) * ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"time\", \$3::bigint) * \$4::bigint) > \$5", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"time\", ?) * ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(`R2`.`time`, ?) * ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"time\", \$4::bigint) * \$5::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce time int * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"time\", ?) * ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time > Time literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`time` > ?) > ?", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" > \$2) > \$3", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" > ?) > ?", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` > ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" > \$3) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" > ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("Round interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round interval places | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Floor interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Floor interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    FLOOR(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Ceil interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Ceil interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ceil interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    CEIL(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Sqrt interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Sqrt interval | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Exp interval | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Ln interval | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Power interval 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER(`Tb`.`fastestlaptime`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "POWER(`Tb`.`fastestlaptime`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power interval 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER((\"Tb\".\"fastestlaptime\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "POWER((\"Tb\".\"fastestlaptime\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power interval 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"fastestlaptime\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"fastestlaptime\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Power interval 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`fastestlaptime`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`fastestlaptime`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Power interval 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER((\"R2\".\"fastestlaptime\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER((\"R2\".\"fastestlaptime\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Power interval 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power interval 2 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Mod interval 3 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD(`Tb`.`fastestlaptime`, ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "MOD(`Tb`.`fastestlaptime`, ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod interval 3 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD((\"Tb\".\"fastestlaptime\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "MOD((\"Tb\".\"fastestlaptime\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("3", "Int64"), ("3", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod interval 3 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"fastestlaptime\", ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"fastestlaptime\", ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10.5", "Float64")]),
+  ("Mod interval 3 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`fastestlaptime`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`fastestlaptime`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod interval 3 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD((\"R2\".\"fastestlaptime\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD((\"R2\".\"fastestlaptime\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod interval 3 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod interval 3 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Abs interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Abs interval | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Abs interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Abs interval | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Round F interval * 2 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Extract hour F datetime - datetime | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(HOUR FROM (-TIMESTAMPDIFF(MICROSECOND, `Tb`.`start_at`, `Tb`.`start_at`))) > ?", params = [("10", "Int64")]),
+  ("Extract hour F datetime - datetime | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(HOUR FROM (\"Tb\".\"start_at\" - \"Tb\".\"start_at\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract hour F datetime - datetime | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract hour F datetime - datetime | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM (-TIMESTAMPDIFF(MICROSECOND, `R2`.`start_at`, `R2`.`start_at`))) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour F datetime - datetime | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM (\"R2\".\"start_at\" - \"R2\".\"start_at\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour F datetime - datetime | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"start_at\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MINUTE FROM CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED)) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MINUTE FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MINUTE FROM CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MINUTE FROM (\"R2\".\"fastestlaptime\" * \$3::bigint))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint)) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
 )

@@ -133,6 +133,25 @@ query.filter(
 # WHERE positionorder = 1 AND (nationality = 'Brazilian' OR nationality = 'British')
 ```
 
+### Qor Across a Reverse or Many-to-Many Relation
+
+An arm that reads a reverse relation (a model's accessor, such as `pit_stops` from `Race`) or a
+many-to-many field must not drop a parent with no row there: the other arm may still match it. PormG
+joins that relation `LEFT` (and every hop after it on the path), so it does:
+
+```julia
+# 2010–2011 season openers, or races where a driver made a fourth pit stop
+query = M.Race.objects
+query.filter("year__@in" => [2010, 2011], Qor("round" => 1, "pit_stops__stop__@gte" => 4))
+query.values("raceid").distinct()
+# LEFT JOIN "pit_stops" — the 2010 opener has no pit stop recorded and still matches `round`
+```
+
+A plain filter across the same relation (`"pit_stops__stop__@gte" => 4` outside a `Qor`) keeps its
+`INNER JOIN`. Before [#1367](https://github.com/PingoLee/PormG.jl/issues/1367) the `Qor` arm was
+`INNER` too, and the parents with no row there were silently missing. See
+[Join Types](values_and_joins.md#Join-Types).
+
 ### Q/Qor on Aggregate Aliases
 
 A condition on an aggregate alias (`values("wins" => Count("resultid"))`) inside `Q`/`Qor` renders

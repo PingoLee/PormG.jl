@@ -360,6 +360,11 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
     reuse = false
   end
   if reuse
+    # #1367: the memoized path built no hop just now, so an OR arm or an `__@isnull => true` column
+    # marks the hops along it for promotion here.
+    if instruc.scope.outer && v.field isa String
+      _outer_join_key!(instruc, _relation_prefix(instruc.object, v.field))
+    end
     return _alias_lhs(key, cached, instruc)
   else
     v_copy = deepcopy(v)
@@ -1073,6 +1078,20 @@ function _filter_column_node(col, instruc::SQLInstruction)
   return alias === nothing ? col : _projected_source(memo_key(:base, alias), instruc).field
 end
 
+# #1367: rendering a WHERE filter's rows — not a projection, an ordering, an ON clause or HAVING — where
+# an OR arm or `__@isnull => true` must also see a parent with no row across a relation it reads.
+# `having`, not `phase`, keeps HAVING out: an aggregate's argument renders at phase `:row` (#1367 review).
+_in_where_filter(instruc::SQLInstruction)::Bool =
+  instruc.scope.introducer === :filter && !instruc.scope.having && instruc.scope.join_hop === nothing
+
+_isnull_true_filter(v::SQLTypeOper, instruc::SQLInstruction)::Bool =
+  v.operator == "ISNULL" && v.values === true && _in_where_filter(instruc)
+
+# #1367: one arm of an OR, under `outer` in a WHERE filter: the other arm may match the parent with no
+# row across a relation this arm reads. Every OR renderer goes through it — the WHERE walk's, and the
+# `Qor` inside a `When` or a `Q`-valued expression, which renders through the select and filter walks.
+_or_arm(f, instruc::SQLInstruction) = _in_where_filter(instruc) ? with_scope(f, instruc; outer = true) : f()
+
 function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #985: inside an ON clause a comparison renders its column as the LEFT side and its value, below,
@@ -1097,7 +1116,12 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     interval_comparison === nothing || return interval_comparison
   end
 
-  column = _get_filter_query(v.column, instruc)
+  # #1367: `__@isnull => true` asks for the parent with NO row across the relation its column reads, so
+  # the column resolves under `outer` and the hop it reaches is joined LEFT (`_promote_outer_joins!`).
+  # A WHERE filter only: a `When` in a projection and an ON clause keep their join types.
+  column = _isnull_true_filter(v, instruc) ?
+    with_scope(() -> _get_filter_query(v.column, instruc), instruc; outer = true) :
+    _get_filter_query(v.column, instruc)
   # #972: set by the three transform arms below, from the NODE they matched — the licence
   # `_render_predicate` needs to put a transform's call text under `IS [NOT] NULL` (#197 refuses
   # any `(` otherwise). Never inferred from `column`'s text.
@@ -1426,7 +1450,7 @@ end
 function _get_filter_query(q::SQLTypeQor, instruc::SQLInstruction)
   resp = []
   for v in q.or
-    push!(resp, _get_filter_query(v, instruc))
+    push!(resp, _or_arm(() -> _get_filter_query(v, instruc), instruc))
   end
   return "(" * join(resp, " OR ") * ")"
 end

@@ -162,7 +162,9 @@ the same filter on the row being deleted, which is what PostgreSQL re-checks if 
 while the delete waits on its lock (see
 [Filters are a fence](#Filters-are-a-fence-on-PostgreSQL)). Each value is therefore bound twice. The
 joins are the ones a read of the same filter renders — a nullable foreign key stays a `LEFT JOIN`, so
-an `__@isnull` filter through it still matches rows with no related row at all.
+an `__@isnull` filter through it still matches rows with no related row at all. So does a reverse or
+many-to-many relation that an `__@isnull => true` filter or a `Qor` arm reads (#1367): the delete
+reaches the rows with no child there, as the read returns them.
 
 ## Cascade Deletion
 

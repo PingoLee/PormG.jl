@@ -360,6 +360,12 @@ function _with_config(row::ModelJoin, join_type_override::Union{String,Nothing},
 end
 _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 
+# #1367: the same row, joined `how` — by copy, as `_with_config`.
+_with_how(row::ModelJoin, how::String)::ModelJoin =
+  ModelJoin(a = row.a, alias_a = row.alias_a, key_a = row.key_a,
+            b = row.b, alias_b = row.alias_b, key_b = row.key_b,
+            how = how, to_many = row.to_many, on_conditions = row.on_conditions)
+
 # #1002: one hop that can change how many times a base row appears — what `_check_join_cardinality`
 # reads. `kind` is the relation (`:reverse`, `:many_to_many`, or `:forward` for a link to a non-unique
 # column); `repeats` is the row's `to_many` (a reverse OneToOne is a reverse hop that does not repeat,
@@ -385,6 +391,10 @@ _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
   ordered::Bool = false
   link::String = ""
   outer_column::String = ""
+  # #1367: a WHERE leaf that must also see a parent with NO row here reached the hop — an OR arm, or the
+  # column of `__@isnull => true` (`RenderScope.outer`). `_promote_outer_joins!` makes such a reverse
+  # or ManyToMany join LEFT.
+  outer::Bool = false
 end
 
 #
@@ -478,6 +488,16 @@ hand it the inner query's.
   # `cjoin_on` condition), `:outer_ref` — and `:other` is the default, so a clause that forgets to set
   # it is checked rather than let through.
   introducer::Symbol = :other
+  # #1367 — set while a WHERE leaf renders that must also match a parent with NO row across the relation
+  # it reads: every arm of a `Qor`, and the column of `__@isnull => true`. A reverse or ManyToMany hop it
+  # reaches records it (`JoinReach.outer`) and is joined LEFT (`_promote_outer_joins!`), where its child
+  # key's nullability would have made it INNER. Django's `promote_joins`, for the same two shapes.
+  outer::Bool = false
+  # #1367 — set while a HAVING predicate renders. HAVING renders inside the filter walk (introducer
+  # `:filter`), and an aggregate alias it reads can render its source afresh, whose aggregate argument
+  # resets `phase` to `:row`; so neither field tells a HAVING render from a WHERE one, and this does.
+  # HAVING filters groups, never the rows a join drops, so it promotes nothing (`_in_where_filter`).
+  having::Bool = false
 end
 
 _with_scope(s::RenderScope; kw...) =
@@ -565,6 +585,10 @@ end
   # `_check_join_cardinality` reads it. `nothing` until the first such hop: most builds have none, and a
   # build is allocation-sensitive (#41).
   join_reaches::Union{Nothing,Dict{String,JoinReach}} = nothing
+  # #1367: the aliases whose join type `on(path, join_type = …)` STATED (`join_type_overrides`), under the
+  # dedup survivor's alias (`_finish_hop!`). `_promote_outer_joins!` derives a join type and never
+  # replaces a stated one. `nothing` until the first such hop, for #41's reason.
+  stated_join_types::Union{Nothing,Set{String}} = nothing
   # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
   # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
   # second time would bind every value twice.

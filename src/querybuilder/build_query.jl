@@ -292,6 +292,7 @@ function build(object::SQLObject;
         isempty(rel) || _order_join_key!(instruct, rel)
       end
     end
+    _promote_outer_joins!(instruct)   # #1367: LEFT where an OR arm or `__@isnull => true` needs it
     _check_join_cardinality(instruct; semi_join = semi_join, distinct_rows = distinct_rows)
 
     build_row_join_sql_text(instruct)

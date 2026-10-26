@@ -240,7 +240,9 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
 - repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
 - **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps
   the type PormG derives from the relation itself — the field's own `how`, else `LEFT` for a
-  nullable ForeignKey and `INNER` for a `NOT NULL` one. Before
+  nullable ForeignKey and `INNER` for a `NOT NULL` one, and `LEFT` for a reverse relation a
+  filter's `Qor` arm or `__@isnull => true` reads ([#1367](https://github.com/PingoLee/PormG.jl/issues/1367)).
+  A `join_type=` you pass is kept even then. Before
   [#474](https://github.com/PingoLee/PormG.jl/issues/474) an `on()` with no `join_type` forced
   `LEFT`, so adding a predicate to a `NOT NULL` relation silently widened the result set
 - an explicit `join_type` on any `on()` call for a path stays in effect for later `on()` calls on

@@ -521,7 +521,8 @@ query.values("resultid", "driverid__surname", "points")
 ```
 
 `on()` adds predicates only. The join keeps the type PormG derives from the relation — the field's
-own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` one — unless you pass
+own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` one, and `LEFT` for a
+reverse or ManyToMany relation a filter's `Qor` arm or `__@isnull => true` reads — unless you pass
 `join_type` yourself, which then stays in effect for later `on()` calls on the same path.
 
 A condition's key names the joined row, and a right-side `F` names the base row in every spelling

@@ -655,12 +655,14 @@ end
     kinds = _rvc_kinds(q -> q.values("id",
       "ld" => F_.Lag("amount", default = 0, over = over),
       "le" => F_.Lead("amount", default = PormG.F("amount"), over = over),
-      "lt" => F_.Lag("d", default = Date(2031, 1, 1), over = over),
-      "li" => F_.Lag("d", default = PormG.F("id"), over = over)); connection = _RVC_PG)
+      "lt" => F_.Lag("d", default = Date(2031, 1, 1), over = over)); connection = _RVC_PG)
     @test kinds[:ld] == PormG.CDecimal(12, 2)
     @test kinds[:le] == PormG.CDecimal(12, 2)
     @test kinds[:lt] == PormG.CDate()
-    @test kinds[:li] == PormG.CDate()
+    # #1321: a number default beside a date is a mix of two types, refused when the query is built.
+    err = try _rvc_kinds(q -> q.values("id", "li" => F_.Lag("d", default = PormG.F("id"), over = over));
+                         connection = _RVC_PG); nothing catch e; e end
+    @test err isa PormG.QueryBuildError && occursin("(#1321)", sprint(showerror, err))
   end
 
   # #824: the `@date` transform is a date whatever its operand — `(col)::date` on PostgreSQL,

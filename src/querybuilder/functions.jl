@@ -129,6 +129,17 @@ _aggregate_refusal(fn::String, y) =
 # another.
 _result_rule(p::SQLTypeFunction) = _result_rule(Val(Symbol(p.function_name)))
 _result_rule(::Val) = :unknown
+
+# #1324 — WHICH OPERANDS A NUMBER FUNCTION MEANS, stated beside its constructor as its `_result_rule`
+# is. The rule says what the value is; this says what it is computed from, which the rule alone does
+# not separate: `Sum` (`:promoting`) and `Avg` (`:numeric`) mean a duration's total and mean, while
+# `Round`, `Floor`, `Sqrt` … mean a number only. A duration is not one, and each engine computed
+# something else over it: PostgreSQL raised at the server, SQLite computed on the `HH:MM:SS` text,
+# MySQL on the count of microseconds. A tuple of `:number` and `:interval`; asked of every function
+# whose rule is `:promoting` or `:numeric` (`_check_operand_domain`), and
+# `test/unit/test_expression_kind_rules.jl` fails on one that does not state it.
+_operand_domain(p::SQLTypeFunction) = _operand_domain(Val(Symbol(p.function_name)))
+_operand_domain(::Val) = nothing
 # The rules whose value is a number with its operands' type, or one of its operands' own values: one
 # boolean, float or decimal operand makes the result one, so any operand decides.
 const _OPERAND_TYPED_RULES = (:operand, :one_of, :first_operand, :promoting)
@@ -156,6 +167,7 @@ function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 _result_rule(::Val{:SUM}) = :promoting
+_operand_domain(::Val{:SUM}) = (:number, :interval)   # #1324: the total of the durations
 # `SUM` renders bare on both engines, so it has each one's aggregate type, not the `::numeric` cast the
 # other `:promoting` functions render on PostgreSQL over a non-integer (`_computed_kind`, `expression_kind.jl`). PostgreSQL
 # widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`, which PormG casts back to
@@ -201,6 +213,7 @@ function Avg(x; distinct::Bool = false)
   return FObject(function_name = "AVG", column = _aggregate_operand("Avg", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 _result_rule(::Val{:AVG}) = :numeric
+_operand_domain(::Val{:AVG}) = (:number, :interval)   # #1324: the mean duration
 # `AVG` renders bare too: PostgreSQL averages a `double precision` to one and an interval to an
 # interval, and every other number to a `numeric`. SQLite answers a REAL, but an interval stays one.
 _computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
@@ -919,23 +932,33 @@ end
 # other operand is cast to text; any other pair has no common type to name. For a date/timestamp pair
 # with a literal side the Julia conversion is offered too, and leads: it works on every engine, where
 # a cast to a timestamp is a feature SQLite lacks (#822), refused there by its own rule.
+#
+# #1327 — text beside a number: a cast of either operand says which comparison and which type is
+# meant, so both are named. An `output_field` is refused with the pair (`_declaration_lifts`), and the
+# message says why when one was declared. #1321 — a number beside a date, a time, an interval or a
+# UUID, and a UUID beside a date, a time or an interval: no common type, as for a time beside a date.
 const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
-  :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text")
+  :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text",
+  :number => "a number", :uuid => "a UUID")
 const _TEMPORAL_MIX_TYPE = Dict(:date => "date", :timestamp => "timestamp", :timestamptz => "timestamptz",
-  :time => "time", :interval => "interval", :text => "text")
+  :time => "time", :interval => "interval", :text => "text", :number => "numeric", :uuid => "uuid")
 const _TEMPORAL_MIX_NAME = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
   "NULLIF" => "NullIf", "CASE" => "Case", "LAG" => "Lag", "LEAD" => "Lead")
 const _TEMPORAL_MIX_TIMESTAMPS = (:date, :timestamp, :timestamptz)
 function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,String,Bool},
-                               b::Tuple{Symbol,String,Bool})
+                               b::Tuple{Symbol,String,Bool}; declared::Bool = false)
   name = _TEMPORAL_MIX_NAME[function_name]
   types = "\"$(_TEMPORAL_MIX_TYPE[a[1]])\" or \"$(_TEMPORAL_MIX_TYPE[b[1]])\""
   timestamps = a[1] in _TEMPORAL_MIX_TIMESTAMPS && b[1] in _TEMPORAL_MIX_TIMESTAMPS
+  number = :number in (a[1], b[1])
+  issue = number && :text in (a[1], b[1]) ? "#1327" : number || :uuid in (a[1], b[1]) ? "#1321" : "#1200"
   # `"text"` as the output_field works on both engines for a timestamp pair (PostgreSQL unifies the
   # two inside, then casts), where SQLite cannot cast to a timestamp type (#822).
   declare = if timestamps
     name in ("NullIf", "Lag", "Lead") ? "cast one operand to the other's type, \e[32mCast(x, $(types))\e[0m" :
       "pass \e[32moutput_field = \"$(_TEMPORAL_MIX_TYPE[a[1]])\", \"$(_TEMPORAL_MIX_TYPE[b[1]])\" or \"text\"\e[0m"
+  elseif number && :text in (a[1], b[1])
+    "cast the number to text, \e[32mCast(x, \"text\")\e[0m, or the text to a number, \e[32mCast(x, \"integer\")\e[0m"
   elseif :text in (a[1], b[1])
     "cast the other operand to text, \e[32mCast(x, \"text\")\e[0m"
   else
@@ -944,9 +967,12 @@ function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,St
   # Converting a literal in Julia resolves a date/timestamp mix only (a `Date(zdt)` beside a date).
   julia = timestamps && (a[3] || b[3]) ? "convert the literal in Julia first (\e[32mDate(zdt)\e[0m, " *
     "\e[32mDateTime(zdt, UTC)\e[0m, \e[32mZonedDateTime(dt, tz\"UTC\")\e[0m), or " : ""
+  why = declared ? " An `output_field` does not say it: it casts the value after the engine has met both " *
+    "operands." : ""
   return QueryBuildError(
     "\e[4m\e[31m$(name)\e[0m mixes $(_TEMPORAL_MIX_NOUN[a[1]]) ($(a[2])) and $(_TEMPORAL_MIX_NOUN[b[1]]) " *
-    "($(b[2])), and does not say which type its value has (#1200). Say it: $(julia)$(declare).")
+    "($(b[2])), and does not say which type its value has ($(issue)). " *
+    "Say it: $(julia)$(declare).$(why)")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
@@ -1422,6 +1448,7 @@ function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ABS}) = :promoting
+_operand_domain(::Val{:ABS}) = (:number,)   # #900, #1324: a duration has no absolute value
 # #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
 _computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 # #1130: so does MySQL's `ABS` over a column (an `INT` stays an `INT`, measured on 8.4); over another
@@ -1466,6 +1493,7 @@ function Round(x::_ScalarOperand, precision::Integer = 0)
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ROUND}) = :numeric
+_operand_domain(::Val{:ROUND}) = (:number,)   # #1324
 # #1121: computed as a `numeric` on PostgreSQL and a REAL on SQLite, it MEANS its operand's type, as
 # Django's `Round` (a `Transform`) does: a rounded float is a float, a rounded decimal a decimal.
 _output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
@@ -1623,6 +1651,7 @@ function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:FLOOR}) = :promoting
+_operand_domain(::Val{:FLOOR}) = (:number,)   # #1324
 # #1147: PostgreSQL has no `floor(integer)`, so over an integer it renders `FLOOR((x)::numeric)` cast back
 # to the operand's type (`Dialect.FLOOR`): the integer it was.
 _computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
@@ -1639,6 +1668,7 @@ function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:CEIL}) = :promoting
+_operand_domain(::Val{:CEIL}) = (:number,)   # #1324
 # #1147: as `Floor`'s, cast back to the operand's type (`Dialect.CEIL`).
 _computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 
@@ -1656,6 +1686,7 @@ function Sqrt(x::_ScalarOperand)
   return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:SQRT}) = :numeric
+_operand_domain(::Val{:SQRT}) = (:number,)   # #1324
 
 """
     Exp(column)
@@ -1669,6 +1700,7 @@ function Exp(x::_ScalarOperand)
   return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:EXP}) = :numeric
+_operand_domain(::Val{:EXP}) = (:number,)   # #1324
 
 """
     Ln(column)
@@ -1682,6 +1714,7 @@ function Ln(x::_ScalarOperand)
   return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:LN}) = :numeric
+_operand_domain(::Val{:LN}) = (:number,)   # #1324
 
 """
     Power(base, exponent)
@@ -1701,6 +1734,7 @@ function Power(x, y)
   return FObject(function_name = "POWER", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:POWER}) = :numeric
+_operand_domain(::Val{:POWER}) = (:number,)   # #1324
 
 """
     Mod(dividend, divisor)
@@ -1720,6 +1754,7 @@ function Mod(x, y)
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:MOD}) = :numeric
+_operand_domain(::Val{:MOD}) = (:number,)   # #1324
 # #1130: MySQL's `MOD` keeps its operands' type, which `_computed_kind` cannot name from the first
 # operand alone (`MOD(<int>, <double>)` is a DOUBLE). So it takes the `:numeric` arm, a float, as on
 # SQLite: never an integer, which would make `Mod("grid", 3) / 2` divide with `DIV`.

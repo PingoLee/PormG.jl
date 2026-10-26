@@ -674,13 +674,15 @@ end
     @test err isa PormG.QueryBuildError
     @test occursin("Greatest(d, d * -1)", sprint(showerror, err))
   end
-  # A number is untouched, and PostgreSQL builds the statement it built before.
+  # A number is untouched. #1324: PostgreSQL, which failed `abs(interval)` at the server, refuses it
+  # when the query is built too, with the same message: a duration has no absolute value anywhere.
   q = _IOM.Io_lap.objects
   q.values("id", "a" => _IO_FN.Abs("id"))
   @test occursin("ABS(\"Tb\".\"id\") as \"a\"", _io_sql(q))
   q_pg = _IOM.Io_lap.objects
   q_pg.values("id", "a" => _IO_FN.Abs("lap"))
-  @test occursin("ABS(", _io_sql(q_pg; conn = _IO_PG))
+  err = try _io_sql(q_pg; conn = _IO_PG); nothing catch e; e end
+  @test err isa PormG.QueryBuildError && occursin("Greatest(d, d * -1)", sprint(showerror, err))
 
   # A window value function over a duration has no millisecond form: ordering its alias would sort
   # its text, so it is refused on SQLite (#1311), as ordering it inside an expression is (#1301).

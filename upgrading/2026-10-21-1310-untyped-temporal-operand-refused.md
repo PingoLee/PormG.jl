@@ -49,7 +49,13 @@ These keep building, on every engine:
 - a function that names its own result over a date (`Count("date")`, `Extract("date", "YEAR")`);
 - a shape an earlier rule already refused, which keeps its own message.
 
-A time of day (`TimeField`) is not covered.
+A time of day (`TimeField`) is covered too, since #1323, in the same train (its own entry,
+`2026-10-26-1323-time-of-day-arithmetic-refused.md`). A `Case` or a `Coalesce` whose values are two
+types PormG can name (a duration or `0`, a date or `0`) is refused before this check, on every engine,
+by #1321 (`2026-10-26-1321-number-beside-date-or-uuid-refused.md`). A number function over a duration
+(`Floor(F("fastestlaptime") * 2)`) is refused at the function, on every engine, by #1324
+(`2026-10-26-1324-math-over-duration-refused.md`), so the `Floor` row below now raises on PostgreSQL too.
+The rows below that use one of these still raise `QueryBuildError`, with that message.
 
 PostgreSQL resolves the operands' types itself, so its SQL does not change. It still raises at the
 server when the types have no operator or common type, as `CASE` over an interval and a `bigint` does.

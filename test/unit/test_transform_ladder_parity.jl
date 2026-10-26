@@ -551,8 +551,11 @@ function _tlp_outcome(q, conn)
     msg = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
     # #1310: on SQLite `F("id") + Coalesce(<a date>, 0)` adds a date's text to a number, and is refused
     # as a value PormG cannot type beside a number while holding a date; both spellings must agree.
+    # #1327: `Coalesce(<@yyyy_q text>, 0)` is text beside a number, refused on every engine; #1321:
+    # `Coalesce(<@date>, 0)` is a date beside one, refused the same way.
     (e isa PormG.QueryBuildError &&
-     (occursin("(#1200)", msg) || occursin("beside a date, a timestamp or an interval", msg))) || rethrow()
+     (occursin("(#1200)", msg) || occursin("(#1327)", msg) || occursin("(#1321)", msg) ||
+      occursin("beside a date, a timestamp or an interval", msg))) || rethrow()
     return ("refused", replace(msg, r"`[^`]*`" => "`…`"))
   end
 end

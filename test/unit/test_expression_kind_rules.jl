@@ -101,6 +101,31 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1324: every number function states which operands it means
+# A function whose rule computes a number (`:promoting`, `:numeric`) states `_operand_domain` beside
+# its constructor: `:number` only, or `:number` and `:interval` (`Sum`, `Avg`). One left unstated would
+# fall to the `nothing` fallback, which `_check_operand_domain` lets through, so a new math function
+# over a duration would build unchecked. A method for a name with another rule is never asked.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1324: every number function states which operands it means" begin
+  numbers = Set(n for n in _ekr_built_names() if _EKR_QB._result_rule(Val(Symbol(n))) in (:promoting, :numeric))
+  stated = Set{String}()
+  for m in methods(_EKR_QB._operand_domain)
+    arg = m.sig.parameters[2]
+    arg isa DataType && arg <: Val && !isempty(arg.parameters) && arg.parameters[1] isa Symbol &&
+      push!(stated, String(arg.parameters[1]))
+  end
+  # Guard of the guard: the scan finds the number functions at all.
+  @test all(n -> n in numbers, ("SUM", "AVG", "ROUND", "ABS"))
+  @test setdiff(numbers, stated) == Set{String}()
+  @test setdiff(stated, numbers) == Set{String}()
+  for n in stated
+    domain = _EKR_QB._operand_domain(Val(Symbol(n)))
+    @test domain isa Tuple && :number in domain && all(in((:number, :interval)), domain)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Function result rules: every rule is one the readers know
 # `_infer_function_kind`, `_textless_number` and `_whole_numeric_operand` branch on
 # these symbols;

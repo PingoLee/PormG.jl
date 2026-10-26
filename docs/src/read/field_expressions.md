@@ -517,9 +517,21 @@ from it, and both are intentional divergences:
   function: it holds an interval as its microseconds, with no text to format.
 
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
-`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), a date
-times an interval, and `Abs(d)` (there is no `abs(interval)`). SQLite and MySQL refuse them at build time with
-`QueryBuildError`. For the magnitude of an interval, write `Greatest(d, d * -1)`.
+`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
+times an interval. SQLite and MySQL refuse them at build time with `QueryBuildError`.
+
+**A number function over a duration** (`Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`,
+`Abs`) raises `QueryBuildError` on every engine when the query is built (#1324): a duration is not a
+number, so none of them has a meaning over one. PostgreSQL raised at the server, SQLite computed on the
+`HH:MM:SS` text (`Round(F("fastestlaptime"))` read `0.0`), and MySQL on the count of microseconds. For
+the magnitude of an interval, write `Greatest(d, d * -1)`. For its seconds, write `Extract(d, "epoch")`
+on PostgreSQL and MySQL, and apply the function to that; SQLite has no `EPOCH` part. `Sum` and `Avg`
+mean a duration's total and mean, and keep building on every engine.
+
+On MySQL a date part of a duration expression (`Extract(F("start_at") - F("date"), "hour")`, a
+`Sum` of a duration under `Extract(…, "second")`) is refused too, since MySQL holds the duration as its
+count of microseconds and the part would read that count as a date or a time. `Extract(…, "epoch")`
+builds there.
 
 **Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
 still returns the text, but PormG sorts and compares the milliseconds behind it. Sorting the text
@@ -693,7 +705,11 @@ they store (SQLite on a date's or an interval's text, MySQL on the number a date
 `'00:01:30'` and read `0`. Every spelling of the ordering is checked: `F(…) > F(…)`, a filter pair
 (`"date__@gt" => F(…)`), a filter on a projected alias, `Q(…)`, a `When` condition, and an `update()`
 value. PostgreSQL types the operands itself, so it builds these shapes, and raises at the server when
-they have no common type, as that one does. A time of day (`TimeField`) is not covered by this check.
+they have no common type, as that one does. A time of day (`TimeField`) counts as a date does here
+(#1323): SQLite compares its `HH:MM:SS` text and MySQL the number its digits spell. Where the values
+of a `Case` or `Coalesce` are of two types PormG can name, such as a duration and `0`, the function
+is refused before any arithmetic, on every engine
+([Mixed date, time, text and number operands](functions_and_dates.md#Mixed-date,-time,-text-and-number-operands)).
 
 State the type instead: give every value of the `Case` or `Coalesce` the one type and do the arithmetic
 inside each branch, or, where a date is at stake, cast the value (`Cast(…, "date")`). A duration has no
@@ -709,6 +725,20 @@ query.values("driverid__surname",
 
 A value that holds no date or duration is not checked beside a number, and equality and `@in` are not
 checked at all: a JSON key times `2`, or compared for equality with a date, builds on every engine.
+
+#### Arithmetic on a time of day
+
+`+`, `-`, `*` and `/` over a `TimeField`, with a number or with another time, raise `QueryBuildError`
+on SQLite and MySQL (#1323). SQLite stores a time as its `HH:MM:SS` text and computes on the leading
+digits, so on the 2009 Australian Grand Prix (`06:00:00`) `F("time") + 1` was `7`; MySQL reads a time
+as the number its digits spell. PostgreSQL has no `time + integer` either and fails at the server.
+PormG has no spelling for arithmetic on a time of day on SQLite or MySQL. Comparing a time with a time
+builds on every engine, since the `HH:MM:SS` text sorts in time order:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009, "time__@lt" => Time(12))   # the races that started before noon
+```
 
 ### When NOT to Use F
 

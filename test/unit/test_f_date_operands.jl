@@ -876,8 +876,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#564: a TIME column is not whole-day arithmetic, and does not decide a date literal" begin
   # `at` is the fixture's `TimeField`.
-  @testset "F(time) + <integer> stays ordinary arithmetic" begin
-    for (backend, conn) in (("SQLite", _FD_SL), ("PostgreSQL", _FD_PG))
+  @testset "F(time) + <integer> stays ordinary arithmetic on PostgreSQL, refused on SQLite (#1323)" begin
+    # #1323: SQLite computed this on the time's text (`06:00:00 + 7` is `13`), so it is refused there;
+    # PostgreSQL keeps the ordinary arithmetic (its server has no `time + integer` and says so).
+    q = FD.Fd_result.objects
+    q.values("x" => F("at") + 7)
+    err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.QueryBuildError && occursin("on a time of day (`at`) is not supported on SQLite", err.msg)
+    for (backend, conn) in (("PostgreSQL", _FD_PG),)
       q = FD.Fd_result.objects
       q.values("x" => F("at") + 7)
       sql = _fd_sql(q; conn = conn)

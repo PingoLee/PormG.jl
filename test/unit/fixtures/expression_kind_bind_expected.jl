@@ -4817,78 +4817,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"result\" = \$4 THEN \"R2\".\"boolean_field\"\nELSE \$5::boolean\nEND)::text\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Case bool output text default false | subquery", :postgres, "w__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"result\" = \$4 THEN \"R2\".\"boolean_field\"\nELSE \$5::boolean\nEND)::text\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case int output text default text | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`laps`\nELSE ?\nEND\n AS CHAR) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | alone", :mysql, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`laps`\nELSE ?\nEND\n AS CHAR) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"laps\"\nELSE \$4::text\nEND)::text\n > \$5", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | alone", :postgres, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"laps\"\nELSE \$4::text\nEND)::text\n > \$5", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"laps\"\nELSE ?\nEND\n AS TEXT) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | alone", :sqlite, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"laps\"\nELSE ?\nEND\n AS TEXT) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | cte", :mysql, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | cte", :postgres, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case int output text default text | cte", :sqlite, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case int output text default text | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`laps`\nELSE ?\nEND\n AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case int output text default text | subquery", :mysql, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`laps`\nELSE ?\nEND\n AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case int output text default text | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"laps\"\nELSE \$5::text\nEND)::text\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case int output text default text | subquery", :postgres, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"laps\"\nELSE \$5::text\nEND)::text\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case int output text default text | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"laps\"\nELSE ?\nEND\n AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case int output text default text | subquery", :sqlite, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"laps\"\nELSE ?\nEND\n AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case float output text default text | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS CHAR) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | alone", :mysql, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS CHAR) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"points\"\nELSE \$4::text\nEND)::text\n > \$5", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | alone", :postgres, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"points\"\nELSE \$4::text\nEND)::text\n > \$5", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"points\"\nELSE ?\nEND\n AS TEXT) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | alone", :sqlite, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"points\"\nELSE ?\nEND\n AS TEXT) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | cte", :mysql, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | cte", :postgres, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"10\"", "String")]),
-  ("Case float output text default text | cte", :sqlite, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("\"pole\"", "String")]),
-  ("Case float output text default text | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case float output text default text | subquery", :mysql, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case float output text default text | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"points\"\nELSE \$5::text\nEND)::text\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case float output text default text | subquery", :postgres, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"points\"\nELSE \$5::text\nEND)::text\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Case float output text default text | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"points\"\nELSE ?\nEND\n AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Case float output text default text | subquery", :sqlite, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"points\"\nELSE ?\nEND\n AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Case int output integer default float | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`laps`\nELSE ?\nEND\n AS SIGNED) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("10", "Int64")]),
   ("Case int output integer default float | alone", :postgres, "v__@gt", "10") =>
@@ -6421,4 +6349,60 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
+  ("F time + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" + \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F time * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time > Time literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`time` > ?) > ?", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" > \$2) > \$3", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" > ?) > ?", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`time` > ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" > \$3) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("F time > Time literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" > ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("Extract hour F datetime - datetime | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(HOUR FROM (\"Tb\".\"start_at\" - \"Tb\".\"start_at\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract hour F datetime - datetime | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract hour F datetime - datetime | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM (\"R2\".\"start_at\" - \"R2\".\"start_at\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour F datetime - datetime | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"start_at\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MINUTE FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MINUTE FROM (\"R2\".\"fastestlaptime\" * \$3::bigint))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F interval * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint)) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
 )

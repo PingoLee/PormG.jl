@@ -639,8 +639,9 @@ end
            () -> Case([When("raceid__@gt" => 1, then = 1)], default = 0), true),
           (() -> Case([When("raceid__@gt" => 1, then = 1)], default = 0),
            () -> Case([When("raceid__@gt" => 2, then = 1)], default = 0), false),
-          # A binding label built inside a function argument: `born__@yyyy_q` binds nine values.
-          (() -> "born__@yyyy_q", () -> Concat("born__@yyyy_q", Value(" "), Count("resultid")), true),
+          # A binding label built inside a function argument: `born__@yyyy_q` binds nine values. Under
+          # `Length`, so the `Coalesce` below is a number beside a number (#1327 refuses text beside one).
+          (() -> "born__@yyyy_q", () -> Length(Concat("born__@yyyy_q", Value(" "), Count("resultid"))), true),
         )
         q = Model_.objects
         q.values("g" => grouped(), "x" => Coalesce(mixed(), Sum("points")))

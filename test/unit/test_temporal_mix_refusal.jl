@@ -18,6 +18,16 @@ and gives the spellings that say it: an `output_field`, a `Cast` of one operand 
 `Lead` take no `output_field`), or the literal converted in Julia. A naive and a zoned timestamp are
 two types here, as the issue sets it. A number beside a number is #1150's, not this rule's.
 
+#1327 widens the rule to text beside a number (an integer, a float and a decimal are one class): SQLite
+ordered any text above any number, MySQL compared the two as strings, PostgreSQL failed at the server.
+Refused on every engine, MySQL included, naming a `Cast` of either operand; a declared `output_field`
+does not lift it, since it casts the value after the engine has met both operands.
+
+#1321 completes the rule: any two classes that differ are a mix, so a number beside a date, a time, an
+interval or a UUID, and a UUID beside anything else, are refused the same way. Neither pair has a
+common type, so the message names none, and `output_field` does not lift a pair with a number or a
+UUID side.
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia --project=test/integration test/unit/test_temporal_mix_refusal.jl
@@ -62,6 +72,7 @@ Tmx_race = Models.Model("tmx_race",
   start_at = Models.DateTimeField(null = true),                       # TIMESTAMPTZ, the default
   local_at = Models.DateTimeField(type = "TIMESTAMP", null = true),   # naive
   laptime  = Models.DurationField(null = true),
+  token    = Models.UUIDField(null = true),                           # #1321
   circuit  = Models.ForeignKey(Tmx_circuit, on_delete = "CASCADE"),
 )
 
@@ -240,4 +251,155 @@ end
                Fn.Coalesce("name", "name"))
     @test _tmx_builds(expr)
   end
+end
+
+# ── #1327: text beside a number ───────────────────────────────────────────────────────────────────
+# MySQL renders the conditionals since #1130 phase 2c-1, so the #1327 rows assert on all three engines.
+# Window functions are a later MySQL phase, so `Lag`/`Lead` stay on the two engines above.
+struct TmxMockMySQL <: PormG.PormGMySQL end
+const _TMX_MY = TmxMockMySQL()
+const _TMX_ALL = (_TMX_PG, _TMX_SL, _TMX_MY)
+const _TMX_NUMBER_FIX = ("Cast(x, \"text\")", "Cast(x, \"integer\")")
+const _TMX_NOT_DECLARED = "An `output_field` does not say it"
+function _tmx_number_refused(expr, fname, a, b; engines = _TMX_ALL, declared::Bool = false)
+  for conn in engines
+    err = _tmx_refusal(expr; conn = conn)
+    @test err isa QueryBuildError
+    err isa QueryBuildError || continue
+    msg = _tmx_msg(err)
+    @test occursin("$(fname) mixes $(a) and $(b), and does not say which type its value has (#1327)", msg)
+    # Both casts are named: either one says which comparison, and which type, is meant.
+    @test all(f -> occursin(f, msg), _TMX_NUMBER_FIX)
+    @test !occursin("output_field = ", msg)
+    @test occursin(_TMX_NOT_DECLARED, msg) == declared
+    @test _tmx_names_no_engine(msg) && !occursin("MySQL", msg)
+  end
+end
+_tmx_builds_all(expr) = all(conn -> _tmx_refusal(expr; conn = conn) === nothing, _TMX_ALL)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: a conditional over text and a number is refused on every engine
+# `Coalesce`, `Greatest`, `Least`, `NullIf` and a `Case` whose values include text and a number, a
+# column or a literal on either side. SQLite answered by its type order (any text above any number),
+# MySQL compared as strings (`GREATEST('10', 9)` is `'9'`) and returned a VARCHAR, PostgreSQL failed
+# at the server: the query does not say which comparison or which type it means (explicit intent), so
+# each engine refuses it when it is built, naming both operands and both casts. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: text beside a number is refused on every engine" begin
+  name, number = "text (`name`)", "a number (`number`)"
+  _tmx_number_refused(Fn.Coalesce("name", "number"), "Coalesce", name, number)
+  _tmx_number_refused(Fn.Coalesce("name", 0), "Coalesce", name, "a number (an Int64 literal)")
+  _tmx_number_refused(Fn.Greatest("name", Fn.Value(9)), "Greatest", name, "a number (an Int64 literal)")
+  _tmx_number_refused(Fn.Least("number", "name"), "Least", number, name)
+  _tmx_number_refused(Fn.NullIf("name", F("number")), "NullIf", name, number)
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = 1), default = "x"), "Case",
+                      "a number (an Int64 literal)", "text (a String literal)")
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = "x"), default = F("number")), "Case",
+                      "text (a String literal)", number)
+  # A float or a decimal is a number as an integer is.
+  _tmx_number_refused(Fn.Coalesce("name", 1.5), "Coalesce", name, "a number (a Float64 literal)")
+  # A third, untyped operand does not hide the conflict between the two typed ones.
+  _tmx_number_refused(Fn.Coalesce(F("start_at") * 2, "name", "number"), "Coalesce", name, number)
+  # A window default is a literal, as in #1200: text beside the operand's number.
+  _tmx_number_refused(Fn.Lag("number"; default = "x", over = _tmx_over()), "Lag", number,
+                      "text (a String literal)"; engines = _TMX_ENGINES)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: an `output_field` does not lift the refusal for text beside a number
+# Since #852 `output_field` casts the result outside the call: `(COALESCE("name", 0))::text`. The
+# engine still meets text and a number inside it, so PostgreSQL still raises and MySQL still compares
+# as strings before the cast. Refused as without one, and the message says why the declaration is not
+# the spelling. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: output_field does not lift text beside a number" begin
+  _tmx_number_refused(Fn.Coalesce("name", 0; output_field = "text"), "Coalesce", "text (`name`)",
+                      "a number (an Int64 literal)"; declared = true)
+  _tmx_number_refused(Fn.Greatest("name", "number"; output_field = "integer"), "Greatest", "text (`name`)",
+                      "a number (`number`)"; declared = true)
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = 1), default = "x", output_field = "text"), "Case",
+                      "a number (an Int64 literal)", "text (a String literal)"; declared = true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: a cast on the operand that differs builds on every engine; numbers and untyped operands too
+# The spellings the refusal names (a `Cast` of the number to text, or of the text to an integer) give
+# both operands one class, so each engine meets one type. An integer beside a float or a decimal keeps
+# the widening it has (`:promoting`, #1150), and an operand the walk cannot type is let through, as in
+# #1200. Expected SQL on PostgreSQL: `COALESCE("Tb"."name", CAST($1 AS TEXT))`-shaped, not pinned here
+# beyond building.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: the explicit spellings, numbers and untyped operands build" begin
+  for expr in (Fn.Coalesce("name", Fn.Cast(Fn.Value(0), "text")),
+               Fn.Coalesce(Fn.Cast("name", "integer"), 0),
+               Fn.Greatest(Fn.Cast("number", "text"), "name"),
+               Fn.Case(Fn.When("number" => 1, then = "1"), default = "x"),
+               Fn.Coalesce("number", 1.5),
+               Fn.Coalesce("number", Fn.Value(2)),
+               Fn.Greatest("number", "number"),
+               Fn.Coalesce(F("start_at") * 2, "name"),
+               Fn.Case(Fn.When("number" => 1, then = "x"), default = nothing))   # a NULL is never the value
+    @test _tmx_builds_all(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1321: a number beside a date, a time, an interval or a UUID is refused on every engine
+# PostgreSQL has no common type for these (`COALESCE types integer and date cannot be matched`, at the
+# server); SQLite returned whichever operand was not NULL, a number on one row and a date's text on
+# another, and stored that text in a number column through `update`. Refused when the query is built,
+# on every engine, naming both operands and #1321; no common type is offered, and an `output_field`
+# does not lift it. A UUID beside text is the same question as a date beside text. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1321: a number or a UUID beside another class is refused on every engine" begin
+  function refused(expr, fname, a, b; engines = _TMX_ALL, fix = _TMX_NONE, declared::Bool = false)
+    for conn in engines
+      err = _tmx_refusal(expr; conn = conn)
+      @test err isa QueryBuildError
+      err isa QueryBuildError || continue
+      msg = _tmx_msg(err)
+      @test occursin("$(fname) mixes $(a) and $(b), and does not say which type its value has (#1321)", msg)
+      @test occursin(fix, msg)
+      @test !occursin("output_field = ", msg)
+      @test occursin(_TMX_NOT_DECLARED, msg) == declared
+      @test _tmx_names_no_engine(msg) && !occursin("MySQL", msg)
+    end
+  end
+  number, token = "a number (`number`)", "a UUID (`token`)"
+  refused(Fn.Coalesce("number", "date"), "Coalesce", number, _DATE)
+  refused(Fn.Greatest("date", "number"), "Greatest", _DATE, number)
+  refused(Fn.Coalesce("fp1_time", 0), "Coalesce", "a time (`fp1_time`)", "a number (an Int64 literal)")
+  refused(Fn.Least("laptime", "number"), "Least", "an interval (`laptime`)", number)
+  refused(Fn.NullIf("number", F("start_at")), "NullIf", number, "a timestamp with time zone (`start_at`)")
+  refused(Fn.Case(Fn.When("number" => 1, then = F("date")), default = 0), "Case", _DATE, "a number (an Int64 literal)")
+  refused(Fn.Coalesce("number", "token"), "Coalesce", number, token)
+  refused(Fn.Coalesce("token", "date"), "Coalesce", token, _DATE)
+  # An `output_field` does not lift a pair with a number or a UUID side.
+  refused(Fn.Coalesce("number", "date"; output_field = "date"), "Coalesce", number, _DATE; declared = true)
+  refused(Fn.Coalesce("token", "date"; output_field = "text"), "Coalesce", token, _DATE; declared = true)
+  # A window `default` of another class than the operand.
+  refused(Fn.Lag("number"; default = Date(2021, 1, 1), over = _tmx_over()), "Lag", number,
+          "a date (a Date literal)"; engines = _TMX_ENGINES)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1321: one class, or a spelling that states one, builds on every engine
+# Two UUIDs, a number beside the year of a date (an integer), a date cast to text beside text, and the
+# #1200 date/timestamp pair under an `output_field`, which it still lifts. A UUID beside text is not a
+# mix: SQLite and MySQL type a cast to `uuid` as text, so refusing it would refuse the explicit
+# spelling there only. A boolean beside a number is no class this rule reads (#1147's question).
+# Expected SQL on PostgreSQL: COALESCE("Tb"."token", ("Tb"."name")::uuid).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1321: one class, and the spellings that state one, build" begin
+  for expr in (Fn.Coalesce("token", "token"),
+               Fn.Coalesce("number", Fn.Extract("date", "year")),
+               Fn.Coalesce(Fn.Cast("date", "text"), "name"),
+               Fn.Coalesce("date", "start_at"; output_field = "date"),
+               Fn.Coalesce("token", Fn.Cast("name", "uuid")),
+               Fn.Coalesce("token", "name"),
+               Fn.Case(Fn.When("number" => 1, then = 1), default = true))
+    @test _tmx_builds_all(expr)
+  end
+  @test occursin("COALESCE(\"Tb\".\"token\", (\"Tb\".\"name\")::uuid) as \"x\"",
+                 _tmx_render(Fn.Coalesce("token", Fn.Cast("name", "uuid")); conn = _TMX_PG))
 end

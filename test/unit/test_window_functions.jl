@@ -1163,7 +1163,6 @@ end
 
     @testset "$backend — branches that do not agree are refused, naming output_field" begin
       refusals = (
-        "mixed types" => Case([When("raceid" => 1, then = 1)], default = "none"),
         "all NULL" => Case([When("raceid" => 1, then = missing)]),
         "text arithmetic" => Case([When("raceid" => 1, then = F("surname") + 1)], default = 0),
         "untyped function" => Case([When("raceid" => 1, then = PormG.Functions.Lower("surname"))], default = "none"),
@@ -1178,8 +1177,17 @@ end
         # The message names the CTE column and the fix, whatever the reason was.
         @test occursin("CTE column top", msg) && occursin("output_field", msg)
       end
+      # #1327: a number beside text is refused before the CTE column is typed, on every engine, naming
+      # the cast of either operand: an `output_field` would not make the engines agree.
       err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = "none")); nothing catch e; e end
-      @test occursin("(IntegerField and CharField)", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+      @test err isa PormG.QueryBuildError
+      @test occursin("(#1327)", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+      # The CTE column's own mixed-types arm, reached by a pair #1327 does not classify (a number
+      # beside a boolean, #1147's question): it names both fields and `output_field`.
+      err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = true)); nothing catch e; e end
+      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+      @test err isa PormG.QueryBuildError && occursin("CTE column top", msg) && occursin("output_field", msg)
+      @test occursin("(IntegerField and BooleanField)", msg)
     end
   end
 

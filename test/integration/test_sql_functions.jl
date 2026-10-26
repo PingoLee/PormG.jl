@@ -2242,8 +2242,9 @@ end
 # integer branch with a fractional default under `integer` runs too, the default (a `numeric`, as
 # PostgreSQL types a written fraction) widening the CASE to `numeric` before the outer cast rounds it. SQLite refuses both shapes when the query is
 # built (#1217's checks, #1028), which this does not change. A text default beside an integer branch
-# has no shared type, so its bind keeps the `output_field` type and PostgreSQL rejects it as before;
-# the explicit spelling is `Cast(F("result"), "text")` in the branch.
+# is text beside a number, which the `output_field` does not settle: refused on every engine when the
+# query is built (#1327; PostgreSQL used to reject it at the server). The explicit spelling,
+# `Cast(F("result"), "text")` in the branch, reads the branch's text on every engine.
 # Expected SQL, PostgreSQL: (CASE WHEN "Tb"."result" = $1 THEN "Tb"."boolean_field" ELSE $2::boolean END)::text
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1222: a declared Case's literal default binds as its branches' type" begin
@@ -2270,13 +2271,12 @@ end
                 @test rows(expr)().x == want
             end
         end
-        # No shared type: PostgreSQL's server rejects the CASE (its own message); SQLite and MySQL build it,
-        # the integer branch read as its text.
+        # #1327: text beside a number, refused on every engine whatever the `output_field`; the cast in
+        # the branch is the spelling that states it.
         e = refusal(rows(int_text))
-        @test by_engine(postgres = () -> e !== nothing && !(e isa PormG.QueryBuildError) &&
-                                         occursin(r"CASE types \w+ and \w+ cannot be matched", sprint(showerror, e)),
-                        sqlite = () -> e === nothing && rows(int_text)().x == ["1", "none"],
-                        mysql = () -> e === nothing && rows(int_text)().x == ["1", "none"])()
+        @test e isa PormG.QueryBuildError && occursin("(#1327)", sprint(showerror, e))
+        cast_text = Case(When("result" => 1, then = Cast(F("result"), "text")), default = "none", output_field = "text")
+        @test rows(cast_text)().x == ["1", "none"]
     finally
         purge()
     end

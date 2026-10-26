@@ -565,10 +565,15 @@ end
   for expr in (Fn.Greatest(_CF("start_at") + Day(1), _CF("start_at") + Day(2); output_field = "text"),
                Fn.Least(_CF("start_at") + Day(1), _CF("start_at") - Day(1); output_field = "varchar(40)"),
                Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("laptime") * 2; output_field = "text"),
-               Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("number") + 1; output_field = "text"),
-               Fn.Greatest(_CF("start_at") - _CF("start_at"), _CF("number") * 2; output_field = "text"),
                Fn.Greatest("laptime", _CF("laptime") * 2; output_field = "text"))   # a typed DurationField column too
     @test _ccd_builds(expr)
+  end
+  # #1321: an interval beside a number is a mix the `output_field` does not lift, refused on every engine.
+  for expr in (Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("number") + 1; output_field = "text"),
+               Fn.Greatest(_CF("start_at") - _CF("start_at"), _CF("number") * 2; output_field = "text")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("(#1321)", _ccd_msg(err))
   end
   function keyed()
     outer = CCD.Ccd_team.objects
@@ -752,10 +757,15 @@ end
       (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
       (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),
       # no shared type: the output_field's, as before
-      (case(_CF("number"); default = "none", output_field = "text"), "text", "text"),
       (case(_CF("born"); default = "2009-01-01", output_field = "date"), "date", "date"))
     sql = _ccd_render(expr; conn = _CCD_PG)
     @test occursin("ELSE \$2::$(bind) END)::$(cast) as \"x\"", sql)
+  end
+  # #1327: a text default beside an integer branch is text beside a number, refused on every engine
+  # under any `output_field` (the server rejected it when it ran).
+  for conn in _CCD_ENGINES
+    err = _ccd_refusal(case(_CF("number"); default = "none", output_field = "text"); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1327)", _ccd_msg(err))
   end
   # #1316: every branch a literal binds the default as the literals' type too. Each literal binds as
   # its own type, so the `output_field`'s beside it was rejected by the server unless the two met:
@@ -866,10 +876,15 @@ end
 # the one #1304 kept (it reads the walk, not the render), and no other test reached it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1304: a numeric function over an interval, cast to a number, is refused on SQLite as the interval" begin
-  for (expr, named) in ((Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()), "`ROUND(…)`"),
-                        (Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()), "`SQRT(…)`"),
-                        (Fn.Cast(Fn.Sqrt("laptime"), "numeric"), "`SQRT(…)`"))
-    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1259", named = named)
+  # #1324: the function itself is refused now, on every engine, before the cast is checked: a number
+  # function has no meaning over a duration. The #1304 arm stays for a value the walk means as an
+  # interval under a function this rule does not cover.
+  for expr in (Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()),
+               Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()),
+               Fn.Cast(Fn.Sqrt("laptime"), "numeric")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("(#1324)", _ccd_msg(err))
   end
 end
 
@@ -941,7 +956,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1221: a DecimalField declaration renders and refuses as its numeric(p, s) string" begin
   d(p, s) = Models.DecimalField(max_digits = p, decimal_places = s)
-  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = 0, output_field = output_field)
+  # A path is the column: a string in a `Case` branch is a text literal, which #1327 refuses beside `0`.
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then isa String ? _CF(then) : then), default = 0,
+                                     output_field = output_field)
   shapes = (
     (op, t) -> Fn.Cast(op, t),
     (op, t) -> Fn.Coalesce(op, 0; output_field = t),
@@ -1959,9 +1976,14 @@ end
   text_err = _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_PG)
   @test text_err isa QueryBuildError && occursin("#1061", _ccd_msg(text_err))
   @test _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_SL) isa PormG.BackendCapabilityError
-  # Text behind a decimal branch: a scale-0 ask stopped at `price` and built (review of #1167).
+  # Text behind a decimal branch: a scale-0 ask stopped at `price` and built (review of #1167). Since
+  # #1327 the `Coalesce` itself is refused first, as text beside a number.
   mixed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "surname"), -1); conn = _CCD_PG)
-  @test mixed_err isa QueryBuildError && occursin("#1061", _ccd_msg(mixed_err))
+  @test mixed_err isa QueryBuildError && occursin("(#1327)", _ccd_msg(mixed_err))
+  # The #1061 arm behind a decimal branch stays reachable through a JSON key, which the #1327 mix
+  # check lets through (its type is the data's): the scale-0 ask must still look past `price`.
+  keyed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "payload__driver"), -1); conn = _CCD_PG)
+  @test keyed_err isa QueryBuildError && occursin("#1061", _ccd_msg(keyed_err))
   # An integer literal: its own value binds first, then the places — text order, `[125, -1]`.
   lit = (q = CCD.Ccd_driver.objects; q.values("x" => Fn.Round(Fn.Value(125), -1)); q)
   lit_pg = inspect_query(lit; connection = _CCD_PG)
@@ -2234,30 +2256,31 @@ end
   scaled = _CF("laptime") * 2       # an interval
   for (operand, named) in ((Fn.Case(Fn.When("active" => true, then = shifted)), "`CASE(…)` over a timestamp expression"),
                            (Fn.Lag(scaled), "`LAG(…)` over an interval expression"),
-                           (Fn.NullIf(scaled, "points"), "`NULLIF(…)` over an interval expression"),
+                           # an interval beside an interval: beside a number it is #1321's mix instead
+                           (Fn.NullIf(scaled, "laptime"), "`NULLIF(…)` over an interval expression"),
                            (Fn.Min(shifted), "`MIN(…)` over a timestamp expression"))
     _ccd_refused_everywhere(Fn.Concat(Fn.Value("-"), operand); issue = "#1028", named = named)
   end
   _ccd_expect(Fn.Cast(_CF("laptime") * 1.5, Models.FloatField()); departs = _SL_ONLY, issue = "#1259",
               named = "Cast(…, \"FLOAT\") of an interval expression")
-  _ccd_expect(Fn.Coalesce(_CF("laptime") * 1.5, 0; output_field = "numeric"); departs = _SL_ONLY, issue = "#1259",
+  # A zero duration beside it, not `0`: an interval beside a number is #1321's mix on every engine.
+  _ccd_expect(Fn.Coalesce(_CF("laptime") * 1.5, Fn.Value(Second(0)); output_field = "numeric"); departs = _SL_ONLY, issue = "#1259",
               named = "of an interval expression")
   # Any duration from arithmetic, not only a product by a float literal: by a decimal column, divided
   # by a float, and under a further step (`Floor(…) / 2`).
   for x in (_CF("laptime") * _CF("price"), _CF("laptime") / 2.0)
     _ccd_expect(Fn.Cast(x, "float8"); departs = _SL_ONLY, issue = "#1259", named = "of an interval expression")
   end
-  # #1310: under a further step the quotient is refused before the cast is checked. `Floor` names no
-  # type over an interval, and on SQLite `Floor(<interval>) / 2` divided the floor of its `HH:MM:SS`
-  # text; it is refused there with or without the `Cast`, and PostgreSQL builds it.
-  floored = Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer")
-  @test _ccd_refusal(floored; conn = _CCD_PG) === nothing
-  floor_err = _ccd_refusal(floored; conn = _CCD_SL)
-  @test floor_err isa QueryBuildError
-  @test occursin("`/` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on SQLite",
-                 _ccd_msg(floor_err))
-  # `Mod` over such arithmetic, cast to an integer, takes the refusal `Mod("laptime", 3)` already had.
-  _ccd_expect(Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"); departs = _SL_ONLY, issue = "#1028",
-              named = "`MOD(…)`")
-  _ccd_expect(Fn.Cast(Fn.Mod("laptime", 3), "integer"); departs = _SL_ONLY, issue = "#1028", named = "`MOD(…)`")
+  # #1324: `Floor` and `Mod` over a duration, under a further step or a `Cast`, are refused at the
+  # function itself, on every engine: a number function has no meaning over a duration. Before, `Floor`
+  # named no type over an interval, so only the quotient over it was refused, on SQLite (#1310), and a
+  # `Mod` of one only under a cast to a number, on SQLite (#1028).
+  for expr in (Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer"),
+               Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"),
+               Fn.Cast(Fn.Mod("laptime", 3), "integer")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("of a duration is not supported", _ccd_msg(err)) &&
+          occursin("(#1324)", _ccd_msg(err))
+  end
 end

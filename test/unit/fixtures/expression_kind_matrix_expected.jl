@@ -3783,41 +3783,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case bool output text default false | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1`"),
   ("Case int output text default text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case float output text default text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case int output integer default float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case int output integer default float | alone", :sqlite) =>
@@ -4952,6 +4952,492 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce text int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Greatest text int literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Greatest text int literal | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
+  ("Case int text literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("Case int text literal | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
+  ("NullIf text int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("NullIf text int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
+  ("Coalesce text int output text | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce text int output text | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
+  ("Coalesce int hop date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce int hop date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
+  ("Coalesce date int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce date int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
+  ("Coalesce int interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("Coalesce int interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
+  ("F time + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time + 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
+  ("F time + 1 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F time + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
+  ("F time + 1 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time + 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `+` computes on the n"),
+  ("F time + 1 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time * 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
+  ("F time * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F time * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
+  ("F time * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `*` computes on the n"),
+  ("F time * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`*` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Case time int + 1 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Case time int + 1 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
+  ("Coalesce time int * 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("Coalesce time int * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
+  ("F time > Time literal | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F time > Time literal | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F time > Time literal | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F time > Time literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+  ("F time > Time literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+  ("F time > Time literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+  ("F time > Time literal | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F time > Time literal | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F time > Time literal | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Round interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round interval places | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Floor interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Floor interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
+  ("Ceil interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Ceil interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Sqrt interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
+  ("Exp interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Exp interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
+  ("Ln interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Ln interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
+  ("Power interval 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Power interval 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
+  ("Mod interval 3 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Mod interval 3 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Abs interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
+  ("Round F interval * 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Extract hour F datetime - datetime | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F datetime - datetime | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour F datetime - datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour F datetime - datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour F datetime - datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour F datetime - datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour F datetime - datetime | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F datetime - datetime | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour F datetime - datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract minute F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract minute F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract minute F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract minute F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract minute F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract minute F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract minute F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract minute F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract minute F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract epoch F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F interval * 2 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Extract epoch F interval * 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract epoch F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Extract epoch F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract epoch F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F interval * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Extract epoch F interval * 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

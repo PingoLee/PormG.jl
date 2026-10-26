@@ -625,7 +625,24 @@ end
 # hands back each row's own text, and a text column beside one fails at the PostgreSQL server. That is
 # explicit intent (#1147): refused on every engine, naming the spellings that say the type, as
 # Django refuses mixed types without an `output_field`. A naive and a zoned timestamp are two types
-# here, as the issue sets it. A number beside a number is not this rule's (#1150 normalizes it).
+# here, as the issue sets it. A number beside a number is not this rule's (#1150 normalizes it): an
+# integer, a float and a decimal are one class, `:number`.
+#
+# #1327 — text beside a number is the same question. Measured: SQLite answers the row's own value
+# (`MAX` by its type order, any text above any number), MySQL compares as strings (`GREATEST('10', 9)`
+# is `'9'`) and returns a VARCHAR, PostgreSQL fails at the server. Refused on every engine, naming the
+# `Cast` that says which one is meant.
+#
+# #1321 — and a number beside a date, a time, an interval or a UUID. PostgreSQL has no common type for
+# them and fails at the server; SQLite returns whichever operand is not NULL, so `update("grid" =>
+# Coalesce("grid", "racedate"))` stored the date's text in the INTEGER column. Every two classes that
+# differ are a mix, as Django's `Expression contains mixed types` holds for any two field types, with
+# one exception: a UUID beside text. SQLite and MySQL hold a UUID as its text and type a cast to `uuid`
+# as text, so there the explicit spelling, `Coalesce("token", Cast(x, "uuid"))`, is text beside a
+# UUID column; refusing the pair would refuse it on those engines only. They answer the UUID's text,
+# its meaning, and PostgreSQL raises at the server for a text column beside one (the #1087
+# tie-breaker). A boolean and a JSON value have no class here: a boolean beside a number is its own
+# meaning question (#1147), and a JSON key's type is the data's.
 #
 # Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
 # and a kind of any other family are let through, and a conflict between two typed operands is refused
@@ -637,29 +654,44 @@ _temporal_mix_class(k::CDateTime) = k.with_timezone ? :timestamptz : :timestamp
 _temporal_mix_class(::CTime) = :time
 _temporal_mix_class(::CInterval) = :interval
 _temporal_mix_class(::Union{CText,CVarChar}) = :text
+_temporal_mix_class(::Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}) = :number
+_temporal_mix_class(::CUUID) = :uuid
 _temporal_mix_class(::Any) = nothing
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
+
+# The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321), except a UUID beside
+# text (above).
+_is_mix(a::Symbol, b::Symbol) = a !== b && !(a in (:uuid, :text) && b in (:uuid, :text))
+# #1327 — a declared `output_field` casts the value OUTSIDE the function (#852), so the engine still
+# meets both operands inside it: PostgreSQL raises, MySQL's `GREATEST('10', 9)` compares as strings
+# before the cast. It lifts the #1200 pairs, as it did; a pair with a number or a UUID side (#1321) is
+# refused under one too, since the declaration would not make the engines agree.
+_declaration_lifts(a::Symbol, b::Symbol) = !(:number in (a, b) || :uuid in (a, b))
+_declares_mix_type(p::FObject) = get(p.kwargs, "output_field", nothing) isa AbstractString
+_declares_mix_type(::WindowFunction) = false
 
 """
     _temporal_mix(p, instruc) -> Union{Tuple{Tuple{Symbol,String,Bool},Tuple{Symbol,String,Bool}}, Nothing}
 
-The first two values of `p` (one of `_TEMPORAL_MIX_FUNCTIONS`, with no `output_field`) whose types are
-two different temporal types, or a temporal type and text, as `((class, what, literal), …)`; or
-`nothing`. Read after `p`'s operands render.
+The first two values of `p` (one of `_TEMPORAL_MIX_FUNCTIONS`) whose classes are a mix (`_is_mix`)
+that its `output_field`, if it declares one, does not lift (`_declaration_lifts`), as
+`((class, what, literal), …)`; or `nothing`. Read after `p`'s operands render.
 """
 function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   p.function_name in _TEMPORAL_MIX_FUNCTIONS || return nothing
-  p isa FObject && get(p.kwargs, "output_field", nothing) isa AbstractString && return nothing
   # SQLite's NULL-skipping rotations of a `Greatest`/`Least` (`_null_skipping_operands`): that node
   # checks its own operands, under its own name.
   haskey(p.kwargs, "rotation_of") && return nothing
-  first_side = nothing
+  declared = _declares_mix_type(p)
+  sides = Tuple{Symbol,String,Bool}[]
   for value in _temporal_mix_values(p)
     class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
     class === nothing && continue
     side = (class, _temporal_mix_label(value), value isa SQLText)
-    first_side === nothing && (first_side = side; continue)
-    class === first_side[1] || return (first_side, side)
+    for seen in sides
+      _is_mix(seen[1], class) && !(declared && _declaration_lifts(seen[1], class)) && return (seen, side)
+    end
+    any(s -> s[1] === class, sides) || push!(sides, side)
   end
   return nothing
 end
@@ -678,7 +710,10 @@ function _temporal_mix_values(p::Union{FObject,WindowFunction})
   return Any[v isa Union{SQLObject,SQLType,AbstractString} ? v : SQLText(v) for v in values
              if !_is_null_literal(v isa SQLText ? v.field : v)]
 end
-_temporal_mix_label(p::SQLText) = "a $(nameof(typeof(p.field))) literal"
+function _temporal_mix_label(p::SQLText)
+  t = string(nameof(typeof(p.field)))
+  return "$(first(t) in "AEIO" ? "an" : "a") $(t) literal"
+end
 function _temporal_mix_label(p)
   label = _concat_operand_label(p)
   label === nothing || return "`$(label)`"
@@ -690,12 +725,44 @@ end
     _check_temporal_mix(p, instruc)
 
 Throws `_temporal_mix_refusal` when `_temporal_mix` finds two values of `p` whose types do not say
-which one the value has (#1200), on every engine.
+which one the value has (#1200, #1327), on every engine.
 """
 function _check_temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   mix = _temporal_mix(p, instruc)
-  mix === nothing || throw(_temporal_mix_refusal(p.function_name, mix...))
+  mix === nothing || throw(_temporal_mix_refusal(p.function_name, mix...; declared = _declares_mix_type(p)))
   return nothing
+end
+
+# #1324 — a number function over a duration (`_operand_domain` without `:interval`) has no meaning on
+# any engine, so it is refused on every one when the query is built, as `Abs` was (#900): PostgreSQL
+# raised at the server, SQLite computed on the `HH:MM:SS` text (`Round` read `0.0`, `Sqrt` NULL), MySQL
+# on the count of microseconds. Read after the operands render, from the type walk, so a column, a
+# `Sum` of one, interval arithmetic and a CTE column holding one are all seen. An operand the walk
+# cannot type is let through. Only the `:interval` half of the domain is enforced here: text is read as
+# a number by its own rules (#1061, #1279), and a date or a time under a number function is outside
+# this issue's decided scope.
+function _check_operand_domain(p::FObject, instruc::SQLInstruction)
+  domain = _operand_domain(p)
+  (domain === nothing || :interval in domain) && return nothing
+  for x in (p.column isa AbstractVector ? p.column : (p.column,))
+    _is_null_literal(x isa SQLText ? x.field : x) && continue
+    _expression_kind(x, instruc) isa CInterval && throw(_duration_math_refusal(p.function_name, instruc.connection))
+  end
+  return nothing
+end
+_check_operand_domain(::Any, ::SQLInstruction) = nothing
+# The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
+function _duration_math_refusal(function_name::AbstractString, conn)
+  name = uppercasefirst(lowercase(function_name))
+  remedy = if function_name == "ABS"
+    "For the magnitude of a duration d, write Greatest(d, d * -1)."
+  else
+    spelling = _duration_seconds_spelling(conn)
+    spelling === nothing ? "$(_backend_name(conn)) has no spelling for a duration's seconds." :
+      "For a duration's seconds, write $(spelling), and apply `$(name)` to that."
+  end
+  return QueryBuildError("`$(name)` of a duration is not supported: a duration is not a number, so `$(name)` " *
+                         "has no meaning over one on any engine (#1324). $(remedy)")
 end
 
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the

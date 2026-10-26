@@ -58,6 +58,7 @@ Utt_race = Models.Model("utt_race",
   date           = Models.DateField(null = true),
   start_at       = Models.DateTimeField(null = true),
   fastestlaptime = Models.DurationField(null = true),
+  time           = Models.TimeField(null = true),     # #1323
   meta           = Models.JSONField(null = true),
 )
 
@@ -152,8 +153,9 @@ end
 #     -> (CASE WHEN "Tb"."year" = $1 THEN "Tb"."meta" #>> '{"round"}' ELSE "Tb"."fastestlaptime" END * $2::bigint)
 # On SQLite the same shapes built `(CASE … END * ?)`: #1301's `'00:01:30' * 2 = 0` and #1307's
 # `'2009-03-29' + 1 = 2010`, reached through a `Case` the walk cannot name, a `Coalesce`, a `Max` over
-# such a `Case`, the `Case` on the right, a date or `0` added to a number, `Floor` of a duration (the
-# floor of its text), and an ordering. Each is now refused, naming the function.
+# such a `Case`, the `Case` on the right, a window `default`, and an ordering. Each is now refused,
+# naming the function. (A `Case` over a number and a date is #1321's mix and `Floor` of a duration is
+# #1324's, both refused on every engine before this rule is asked.)
 # Why it matters: the walk names neither value, so the render cannot know the arithmetic is temporal;
 # the fact that a date or a duration is one of the values is enough to know the generic SQL is wrong.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,13 +167,9 @@ end
   for (label, expr, filter, op, named) in (
       ("Case(key | duration) * 2",  _utt_case_lap() * 2,                         false, "*", "`CASE(…)`"),
       ("Case(key | date) + 1",      _utt_case_date() + 1,                        false, "+", "`CASE(…)`"),
-      ("Case(year | date) + 1",     _utt_case_year_date() + 1,                   false, "+", "`CASE(…)`"),
-      ("year + Case(year | date)",  F("year") + _utt_case_year_date(),           false, "+", "`CASE(…)`"),
       ("Coalesce(key, date) + 1",   Fn.Coalesce("meta__round", "date") + 1,      false, "+", "`COALESCE(…)`"),
       ("Coalesce(key, dur) * 2",    Fn.Coalesce("meta__round", "fastestlaptime") * 2, false, "*", "`COALESCE(…)`"),
       ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1,                   false, "+", "`MAX(…)`"),
-      ("year + Coalesce(date, 0)",  F("year") + Fn.Coalesce("date", 0),          false, "+", "`COALESCE(…)`"),
-      ("Floor(duration) / 2",       Fn.Floor(F("fastestlaptime") * 2) / 2,       false, "/", "`FLOOR(…)`"),
       ("Lag(key, default = date) + 1",
        PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1,
                                                                                   false, "+", "`LAG(…)`"),
@@ -189,6 +187,18 @@ end
         @test m isa QueryBuildError
         @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side, is not " *
                        "supported on MySQL", m.msg)
+      end
+    end
+  end
+  # #1321: a `Case` or a `Coalesce` over a number and a date is a mix of two types the walk names, so
+  # it is refused when it is built, on every engine and before any arithmetic over it, naming #1321.
+  for (label, expr) in (("Case(year | date) + 1", _utt_case_year_date() + 1),
+                        ("year + Case(year | date)", F("year") + _utt_case_year_date()),
+                        ("year + Coalesce(date, 0)", F("year") + Fn.Coalesce("date", 0)))
+    @testset "$label" begin
+      for conn in (_UTT_PG, _UTT_SL, _UTT_MY)
+        e = _utt_refusal(expr; conn = conn)
+        @test e isa QueryBuildError && occursin("(#1321)", e.msg)
       end
     end
   end
@@ -355,4 +365,72 @@ end
   q.values("raceid", "earlier" => QB.Subquery(inner))
   sql = inspect_query(q; connection = _UTT_SL)[:sql_text]
   @test occursin("< \"Tb\".\"date\"", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1323: arithmetic on a time of day is refused on SQLite and MySQL, unchanged on PostgreSQL
+# A `TimeField` is stored as its `HH:MM:SS` text on SQLite and read as the number its digits spell on
+# MySQL, and arithmetic over it fell to the generic `(l op r)`: on the 2009 Australian Grand Prix
+# (`06:00:00`) `F("time") + 1` was `7` and `F("time") * 2` was `12` on SQLite, with no error. A time
+# beside arithmetic, as either side and under a number, is refused on those engines, naming the side and
+# that the engine has no spelling for it. Expected SQL on PostgreSQL (unchanged, it fails at its server:
+# no `time + bigint` operator):
+#   F("time") + 1 -> ("Tb"."time" + $1::bigint)
+# Why it matters: SQLite returned a different number with no error, a meaning departure; the engine
+# that departs refuses on itself (#882's precedent, for a typed column this time).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1323: arithmetic on a time of day" begin
+  @test _utt_render(F("time") + 1; conn = _UTT_PG) ==
+        ("SELECT (\"Tb\".\"time\" + \$1::bigint) as \"v\" FROM \"utt_race\" as \"Tb\"", Any[1])
+  for (label, expr, op, side) in (
+      ("time + 1",       F("time") + 1,          "+", "`time`"),
+      ("time * 2",       F("time") * 2,          "*", "`time`"),
+      ("time - time",    F("time") - F("time"),  "-", "`time`"),
+      ("year + time",    F("year") + F("time"),  "+", "`time`"),
+      ("(time + 1) * 2", (F("time") + 1) * 2,    "+", "`time`"))
+    @testset "$label" begin
+      @test _utt_refusal(expr; conn = _UTT_PG) === nothing
+      for (conn, engine) in ((_UTT_SL, "SQLite"), (_UTT_MY, "MySQL"))
+        e = _utt_refusal(expr; conn = conn)
+        @test e isa QueryBuildError
+        e isa QueryBuildError || continue
+        @test occursin("`$(op)` on a time of day ($(side)) is not supported on $(engine)", e.msg)
+        @test occursin("no spelling for arithmetic on a time of day", e.msg)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1323: a value the walk cannot name beside a time, or holding one, is #1310's refusal
+# `F("meta__round") > F("time")` compared a JSON value with the time's text on SQLite. With a time of
+# day among #1310's kinds it is refused there as a date is, naming a time of day. A `Case` or a
+# `Coalesce` holding a time beside a number is refused before that, on every engine, as #1321's mix.
+# Comparing a time with a `Time` literal keeps building on every engine: `HH:MM:SS` text sorts in time
+# order. Expected SQL on PostgreSQL (unchanged):
+#   F("meta__round") > F("time") -> WHERE ("Tb"."meta" #>> '{"round"}' > "Tb"."time")
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1323: a time of day beside a value the walk cannot name" begin
+  for (label, expr, op) in (("key > time", F("meta__round") > F("time"), ">"),
+                            ("time @gt key", "time__@gt" => F("meta__round"), ">"))
+    @testset "$label" begin
+      @test _utt_refusal(expr; conn = _UTT_PG, filter = true) === nothing
+      for (conn, engine) in ((_UTT_SL, "SQLite"), (_UTT_MY, "MySQL"))
+        e = _utt_refusal(expr; conn = conn, filter = true)
+        @test e isa QueryBuildError
+        e isa QueryBuildError || continue
+        @test occursin("`$(op)` beside a time of day, with `meta__round` on one side, is not supported on $(engine)", e.msg)
+        @test occursin("default = Time(0)", e.msg)
+      end
+    end
+  end
+  for conn in (_UTT_PG, _UTT_SL, _UTT_MY)
+    for expr in (Case(When("year" => 2009, then = F("time")), default = 0) + 1, Fn.Coalesce("time", 0) * 2)
+      e = _utt_refusal(expr; conn = conn)
+      @test e isa QueryBuildError && occursin("(#1321)", e.msg)
+    end
+    # A time compared with a time builds everywhere.
+    @test _utt_refusal(F("time") > Time(12); conn = conn, filter = true) === nothing
+    @test _utt_refusal("time__@lt" => Time(12); conn = conn, filter = true) === nothing
+  end
 end

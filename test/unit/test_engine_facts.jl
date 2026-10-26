@@ -66,6 +66,7 @@ _ef_engine(T) = T isa Type && T <: PormG.PormGPostgres ? :postgres :
 # fact stays undecided — a `MethodError` naming it — until its phase adds it here, so a MySQL method
 # that appears without being listed (or a listed one that disappears) fails below.
 const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sql, :_execute_async,
+                               :_duration_seconds_spelling,   # #1324: MySQL's EPOCH reads a duration's seconds
                                :_acquire_in_mode, :_acquire_for_statement,
                                # Phase 2a (plain-column reads): what every filter, ordering, list
                                # membership and `inspect_query` asks.

@@ -2,18 +2,8 @@
 # julia -t auto --project=test/integration test/integration/runtests.jl
 include("common_setup.jl")
 
-# MySQL (#1130) is in progress: the connection, the reads, the writes and the migrations run there, and
-# the migration edge suite (`test_migration_bootstrap.jl`) with them, but most behaviour files below have
-# no MySQL row yet. Its own files run on their own.
-by_engine(postgres = true, sqlite = true, mysql = false) || error(
-    "the full integration suite does not run on MySQL yet (#1130: most behaviour files have no MySQL row); run " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_bulk.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl`, " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_alters.jl` and " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_inspectdb.jl`")
+# Every engine runs this file: PostgreSQL (`db_2`), SQLite (`db_sl`, `-t 1`) and MySQL (`db_my`, #1130). MySQL's own
+# files (`test_mysql_*.jl`) run on their own: the reads file empties the database before making its tables.
 
 # 1b. Load delete scratch modules at top level (module expressions are forbidden
 #     inside @testset / macro-wrapped bodies in Julia).

@@ -1140,9 +1140,11 @@ end
 
                 # Enforce uniqueness on nullable_int at the DB. Created after seeding, when
                 # the values are already distinct, so the index builds cleanly.
-                PormG.ConnectionPool.fetch(pool,
-                    "CREATE UNIQUE INDEX IF NOT EXISTS \"$(unique_index_name)\" " *
-                    "ON \"bulk_update_payload_scratch\" (\"nullable_int\")")
+                # MySQL has no `IF NOT EXISTS` on an index; each engine's own statement (#1179).
+                create_index = "CREATE UNIQUE INDEX IF NOT EXISTS \"$(unique_index_name)\" " *
+                               "ON \"bulk_update_payload_scratch\" (\"nullable_int\")"
+                PormG.ConnectionPool.fetch(pool, by_engine(postgres = create_index, sqlite = create_index,
+                    mysql = "CREATE UNIQUE INDEX `$(unique_index_name)` ON `bulk_update_payload_scratch` (`nullable_int`)"))
 
                 # chunk_size=2 → chunk 1 = rows 1-2, chunk 2 = rows 3-4, chunk 3 = row 5.
                 # Row 1 sets nullable_int=999 (chunk 1, succeeds); row 3 also sets 999
@@ -1172,8 +1174,11 @@ end
                 # unwrapped through run_in_transaction), not a pre-flight reject — otherwise a
                 # future validation that rejected 999 before any chunk ran would leave every row
                 # unchanged and pass the atomicity checks below trivially. SQLite: "UNIQUE
-                # constraint failed"; PostgreSQL: "duplicate key value violates unique constraint".
-                @test occursin(r"unique|duplicate"i, string(err))
+                # constraint failed"; PostgreSQL: "duplicate key value violates unique constraint". MySQL's
+                # text quotes the value, so it is not carried, and the error names the index instead.
+                @test by_engine(postgres = () -> occursin(r"unique|duplicate"i, string(err)),
+                                sqlite = () -> occursin(r"unique|duplicate"i, string(err)),
+                                mysql = () -> err isa PormG.IntegrityError && err.constraint == unique_index_name)()
 
                 # Atomicity: the mid-chunk failure must roll back EVERY chunk, including the
                 # already-flushed first chunk. Pre-fix on SQLite, chunk 1 auto-committed and
@@ -1187,8 +1192,9 @@ end
                 end
             finally
                 try
-                    PormG.ConnectionPool.fetch(pool,
-                        "DROP INDEX IF EXISTS \"$(unique_index_name)\"")
+                    PormG.ConnectionPool.fetch(pool, by_engine(postgres = "DROP INDEX IF EXISTS \"$(unique_index_name)\"",
+                        sqlite = "DROP INDEX IF EXISTS \"$(unique_index_name)\"",
+                        mysql = "DROP INDEX `$(unique_index_name)` ON `bulk_update_payload_scratch`"))
                 catch
                     # Index may never have been created (e.g. seeding failed) — safe to ignore.
                 end
@@ -1514,11 +1520,12 @@ end
                                        ("1.10", F("price") - 1, "0.1"))
             reset!(start)
             err = attempt(expr)
+            rounds_on_write = () -> begin   # the column rounds the value to 2 places
+                @test err === nothing
+                @test price() == Decimals.decimal(rounded)
+            end
             by_engine(
-                postgres = () -> begin   # the column rounds the value to 2 places
-                    @test err === nothing
-                    @test price() == Decimals.decimal(rounded)
-                end,
+                postgres = rounds_on_write, mysql = rounds_on_write,
                 sqlite = () -> begin
                     @test err isa PormG.QueryBuildError
                     msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
@@ -1528,14 +1535,14 @@ end
                 end)()
         end
 
-        # PostgreSQL's column rounded `1.00 / 3` to the scale, so the row matches "0.33".
+        # PostgreSQL's column, and MySQL's, rounded `1.00 / 3` to the scale, so the row matches "0.33".
         reset!("1.00")
-        by_engine(postgres = () -> begin
-                      q().update("price" => F("price") / 3)
-                      @test price() == Decimals.decimal("0.33")
-                      @test q().filter("price" => "0.33").count() == 1
-                  end,
-                  sqlite = () -> nothing)()
+        matches_rounded = () -> begin
+            q().update("price" => F("price") / 3)
+            @test price() == Decimals.decimal("0.33")
+            @test q().filter("price" => "0.33").count() == 1
+        end
+        by_engine(postgres = matches_rounded, mysql = matches_rounded, sqlite = () -> nothing)()
 
         # The explicit spelling stores the same Decimal on every engine.
         for (start, expr, expected) in (("10.50", Round(F("price") * 2, 2), "21"),

@@ -57,7 +57,11 @@ end
         e
     end
     @test err isa PormGError
-    @test occursin("unique constraint", PormG._emsg(sprint(showerror, err); color = false))
+    # PostgreSQL and SQLite reject the statement and PormG names the missing constraint; MySQL's upsert names
+    # no key, so PormG refuses before sending it, naming the unique key the lookup must be (#1267).
+    @test occursin(by_engine(postgres = "unique constraint", sqlite = "unique constraint",
+                             mysql = "to be a unique key of the model"),
+                   PormG._emsg(sprint(showerror, err); color = false))
     residual = M.Status.objects.filter("status" => marker)
     residual.exists() && residual.delete()
 end

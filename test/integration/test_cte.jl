@@ -76,8 +76,12 @@ end
         insp = query |> inspect_query
         df = query |> DataFrame
 
-        @test !occursin("\"driverid__surname\"", insp[:sql_text])
-        @test occursin(r"ORDER BY\s+\"[A-Za-z0-9_]+\"\.\"surname\" ASC", insp[:sql_text])
+        @test !occursin(engine_sql("\"driverid__surname\""), insp[:sql_text])
+        # MySQL leads with the key that places the NULLs as PostgreSQL does (`(<x> IS NULL) ASC`, #1271).
+        @test occursin(by_engine(postgres = r"ORDER BY\s+\"[A-Za-z0-9_]+\"\.\"surname\" ASC",
+                                 sqlite = r"ORDER BY\s+\"[A-Za-z0-9_]+\"\.\"surname\" ASC",
+                                 mysql = r"ORDER BY\s+\(`([A-Za-z0-9_]+)`\.`surname` IS NULL\) ASC, `\1`\.`surname` ASC"),
+                       insp[:sql_text])
         @test nrow(df) == 50
     end
 
@@ -149,10 +153,10 @@ end
 
             @test nrow(df) == 1
             # WITH clause is present ...
-            @test occursin("WITH \"sub\"", insp[:sql_text])
+            @test occursin(engine_sql("WITH \"sub\""), insp[:sql_text])
             # ... but no JOIN to the CTE is emitted
-            @test !occursin("LEFT JOIN \"sub\"", insp[:sql_text])
-            @test !occursin("INNER JOIN \"sub\"", insp[:sql_text])
+            @test !occursin(engine_sql("LEFT JOIN \"sub\""), insp[:sql_text])
+            @test !occursin(engine_sql("INNER JOIN \"sub\""), insp[:sql_text])
             # Both parameters (CTE filter + main filter) in order: CTE first
             @test insp[:parameters] == [1, seed_id]
         finally
@@ -531,8 +535,8 @@ end
 
     # Both CTEs must be emitted in the WITH clause
     @test occursin("WITH", insp[:sql_text])
-    @test occursin("\"tc\"", insp[:sql_text])
-    @test occursin("\"mr\"", insp[:sql_text])
+    @test occursin(engine_sql("\"tc\""), insp[:sql_text])
+    @test occursin(engine_sql("\"mr\""), insp[:sql_text])
 
     # cjoin (Race) and on() (Driver) produce LEFT JOINs
     @test occursin("LEFT JOIN", insp[:sql_text])

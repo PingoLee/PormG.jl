@@ -95,15 +95,15 @@ end
     # Alias is `is_null`, not `isnull` — SQLite reserves ISNULL as a postfix operator keyword.
     # The cast an untyped NULL parameter needs, and how a raw boolean reads back, are each engine's
     # own (engine mechanics and representation): a row per engine (#1179).
-    marker = by_engine(postgres = "$(ph(1))::text", sqlite = ph(1))
+    marker = by_engine(postgres = "$(ph(1))::text", sqlite = ph(1), mysql = ph(1))
     sql = "SELECT ($(marker) IS NULL) AS is_null"
 
     for nullish in (missing, nothing)
         got = DataFrame(fetch(settings, sql; params = [nullish]))[1, :is_null]
-        @test got === by_engine(postgres = true, sqlite = 1)    # PG returns Bool, SQLite returns Int 1
+        @test got === by_engine(postgres = true, sqlite = 1, mysql = 1)    # PG returns Bool; SQLite and MySQL an Int 1
     end
     ctrl = DataFrame(fetch(settings, sql; params = ["x"]))[1, :is_null]
-    @test ctrl === by_engine(postgres = false, sqlite = 0)      # control: a non-null value is not NULL
+    @test ctrl === by_engine(postgres = false, sqlite = 0, mysql = 0)      # control: a non-null value is not NULL
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

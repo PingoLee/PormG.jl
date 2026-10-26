@@ -16,13 +16,14 @@ end
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
 end
 
-# PostgreSQL folds unquoted aliases to lowercase; quote_identifier prevents that.
+# PostgreSQL folds unquoted aliases to lowercase; quote_identifier prevents that. The expected text is
+# in each engine's own quote (`engine_sql`).
 @testset "values pair aliases preserve mixed case" begin
   query = M.Driver.objects.filter("driverref" => "hamilton")
   query.values("Escala" => "surname")
 
   inspection = PormG.QueryBuilder.inspect_query(query)
-  @test occursin(" as \"Escala\"", inspection[:sql_text])
+  @test occursin(engine_sql(" as \"Escala\""), inspection[:sql_text])
   @test !occursin(" as Escala", inspection[:sql_text])
 
   rows = query.list(:dict)
@@ -37,7 +38,7 @@ end
   query.values("localização" => "surname")
 
   inspection = PormG.QueryBuilder.inspect_query(query)
-  @test occursin(" as \"localização\"", inspection[:sql_text])
+  @test occursin(engine_sql(" as \"localização\""), inspection[:sql_text])
 
   rows = query.list(:dict)
   @test length(rows) == 1
@@ -52,7 +53,7 @@ end
   inspection = PormG.QueryBuilder.inspect_query(
     M.Driver.objects.filter("driverref" => "hamilton").values("surname")
   )
-  @test occursin(" as \"surname\"", inspection[:sql_text])
+  @test occursin(engine_sql(" as \"surname\""), inspection[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,10 +223,12 @@ end
 @testset "Ordering and Aggregations" begin
     query = M.Result.objects;
     query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
-    query.order_by("raceid__circuitid");
+    # A circuit holds one group per constructor Senna drove for there, so the constructor breaks the tie:
+    # without it, the order of Monaco's three groups was whatever the engine read first.
+    query.order_by("raceid__circuitid", "constructorid__name");
     query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
     df = query |> DataFrame
-    # query |> show_query
+    @test (df[2, :constructorid__name], df[4, :constructorid__name]) == ("McLaren", "Toleman")
     @test df[2, :count_grid] == 5
     @test df[2, :max_grid] == 3
     @test df[2, :min_grid] == 1
@@ -1350,7 +1353,7 @@ end
 # type does, not fail at the server or hand back an integer.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1194: a temporal cast is typed as its type; SQLite refuses the cast" begin
-  if by_engine(sqlite = true, postgres = false)
+  if by_engine(sqlite = true, postgres = false, mysql = false)
     for (model, col, t) in ((M.Race, "time", "time"), (M.Race, "start_at", "timestamptz"),
                             (M.Pit_stops, "duration", "interval"), (M.Race, "name", "bytea"))
       e = try model.objects.values("c" => Cast(col, t)).list(:dict); nothing catch err; err end

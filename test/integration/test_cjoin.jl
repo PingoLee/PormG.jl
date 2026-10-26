@@ -332,8 +332,9 @@ end
     # SELECT list: PormG renders a projection alias with lowercase `as` and a join alias with
     # uppercase `AS`, so `AS "` appears only in join clauses.
     sql = q.list(show_query = :sql)
-    @test occursin("AS \"driverid\"", sql)          # the joined copy, under the declared alias
-    @test occursin(r"JOIN\s+\"driver\"\s+AS\s+\"(?!driverid\")", sql)  # …and the FK's, generated
+    @test occursin(engine_sql("AS \"driverid\""), sql)          # the joined copy, under the declared alias
+    Q = engine_quote()
+    @test occursin(Regex("JOIN\\s+$(Q)driver$(Q)\\s+AS\\s+$(Q)(?!driverid$(Q))"), sql)  # …and the FK's, generated
     @test length(collect(eachmatch(r"\bJOIN\b", sql))) == 2
 end
 

@@ -28,8 +28,12 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Whether two spellings of a table name are two tables: an engine fact, stated per engine so a
-# backend added later states its own rather than inheriting one (#1179).
-const DBT_CASE_SENSITIVE = by_engine(postgres = true, sqlite = false)
+# backend added later states its own rather than inheriting one (#1179). On MySQL it is the server's
+# `lower_case_table_names` (0, the Linux default, keeps a table name's case; 1 and 2 fold it), so the
+# row reads the server rather than assume one.
+const DBT_CASE_SENSITIVE = by_engine(postgres = () -> true, sqlite = () -> false,
+    mysql = () -> DataFrame(PormG.fetch(PormG.config[PORMG_DB_FOLDER].connections,
+                                        "SELECT @@lower_case_table_names AS v")).v[1] == 0)()
 
 @testset "db_table: the physical table is created under the db_table name" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections

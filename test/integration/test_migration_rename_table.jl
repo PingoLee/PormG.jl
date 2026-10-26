@@ -35,7 +35,7 @@ if !isdefined(Main, :column_names)
 end
 
 import PormG.Migrations: LiveTable, read_live_schema, get_migration_plan, _order_statements,
-                         _execute_statements_pg, _execute_statements_sqlite
+                         _execute_statements_pg, _execute_statements_sqlite, _split_mysql_statements
 # `with_transaction` is qualified at each call: `common_setup.jl` already binds the name from `PormG`.
 import PormG.ConnectionPool: with_sqlite_write_lock, acquire_connection, finalize_transaction_connection!
 const _rt615_tx = PormG.ConnectionPool.with_transaction
@@ -57,8 +57,9 @@ _rt615_live(pool) = read_live_schema(pool; include_table = collect(String, value
 function _rt615_apply!(pool, plan)
     ordered, _ = _order_statements([plan[k] for k in keys(plan)])
     # Engine mechanics, a row per engine (#1179): an ordinary transaction on PostgreSQL, SQLite's
-    # write lock with foreign keys suspended on its own handle.
-    if by_engine(pool; postgres = true, sqlite = false)
+    # write lock with foreign keys suspended on its own handle, and on MySQL, whose DDL commits as it
+    # runs, each statement in turn on one leased connection, renewed after (as `migrate` does there).
+    pg = () -> begin
         _, conn = _rt615_tx(pool, "BEGIN;")
         try
             _execute_statements_pg(pool, ordered; conn = conn)
@@ -69,31 +70,41 @@ function _rt615_apply!(pool, plan)
         finally
             finalize_transaction_connection!(pool, conn)
         end
-    else
-        with_sqlite_write_lock(pool) do
-            conn = acquire_connection(pool; mode = :write)
+    end
+    sl = () -> with_sqlite_write_lock(pool) do
+        conn = acquire_connection(pool; mode = :write)
+        try
+            _rt615_tx(pool, "PRAGMA foreign_keys = OFF;", conn = conn)
+            _rt615_tx(pool, "BEGIN IMMEDIATE TRANSACTION;", conn = conn)
             try
-                _rt615_tx(pool, "PRAGMA foreign_keys = OFF;", conn = conn)
-                _rt615_tx(pool, "BEGIN IMMEDIATE TRANSACTION;", conn = conn)
-                try
-                    _execute_statements_sqlite(pool, ordered; conn = conn)
-                    _rt615_tx(pool, "COMMIT;", conn = conn, release_conn = false)
-                catch
-                    _rt615_tx(pool, "ROLLBACK;", conn = conn, release_conn = false)
-                    rethrow()
-                end
-            finally
-                # renew: this handle has enforcement OFF and must not go back to the pool as it is.
-                finalize_transaction_connection!(pool, conn; renew = true)
+                _execute_statements_sqlite(pool, ordered; conn = conn)
+                _rt615_tx(pool, "COMMIT;", conn = conn, release_conn = false)
+            catch
+                _rt615_tx(pool, "ROLLBACK;", conn = conn, release_conn = false)
+                rethrow()
             end
+        finally
+            # renew: this handle has enforcement OFF and must not go back to the pool as it is.
+            finalize_transaction_connection!(pool, conn; renew = true)
         end
     end
+    my = () -> begin
+        conn = acquire_connection(pool)
+        try
+            for entry in ordered, statement in _split_mysql_statements(entry)
+                _rt615_tx(pool, statement; conn = conn)
+            end
+        finally
+            finalize_transaction_connection!(pool, conn; renew = true)
+        end
+    end
+    by_engine(pool; postgres = pg, sqlite = sl, mysql = my)()
     return nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Table rename: plan, apply, and converge against the live engine
-# old → new, carrying what both engines can express: a column rename that also becomes nullable, a
+# old → new, carrying what every engine can express: a column rename that also becomes nullable, a
 # dropped UNIQUE, an indexed column, and a second table whose key points at the renamed one. The
 # rows, the constraint drop (PostgreSQL finds its name only by asking the catalog under the OLD
 # name), the indexes and the child's key must all survive, and the next `makemigrations` must
@@ -101,13 +112,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Table rename, applied ($(PORMG_DB_FOLDER)) (#615)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    # Where the UNIQUE constraint's name lives: the catalog, under the old table, on PostgreSQL; SQLite
-    # rebuilds the table instead. Representation of the plan, a row per engine (#1179).
-    names_constraint_in_catalog = by_engine(postgres = true, sqlite = false)
+    # How the plan drops the UNIQUE: by the constraint's name, which lives in the catalog under the old
+    # table, on PostgreSQL; by the index's name on MySQL, whose UNIQUE is an index; SQLite rebuilds the
+    # table instead. Representation of the plan, a row per engine (#1179).
+    drops_unique_by_name = by_engine(postgres = "DROP CONSTRAINT", sqlite = nothing, mysql = "DROP INDEX")
     # Every value below is a constant this file chose, so the SQL carries literals and no parameters.
-    q(sql) = PormG.ConnectionPool.fetch(pool, sql) |> DataFrame
+    q(sql) = PormG.ConnectionPool.fetch(pool, engine_sql(sql)) |> DataFrame
     # A write returns no columns, which `DataFrame` cannot build on SQLite — so writes skip it.
-    exec(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)
+    exec(sql) = (PormG.ConnectionPool.fetch(pool, engine_sql(sql)); nothing)
     # Child before parents: SQLite enforces foreign keys outside a migration (#276).
     drop_all() = for t in (RT615.child, RT615.old, RT615.new, RT615.parent)
         try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, t)); catch; end
@@ -151,14 +163,17 @@ end
             end
         end
         new_key = Symbol(RT615.new)
-        @test plan[new_key]["Rename table"] == "ALTER TABLE \"$(RT615.old)\" RENAME TO \"$(RT615.new)\";"
+        @test plan[new_key]["Rename table"] == by_engine(
+            postgres = "ALTER TABLE \"$(RT615.old)\" RENAME TO \"$(RT615.new)\";",
+            sqlite = "ALTER TABLE \"$(RT615.old)\" RENAME TO \"$(RT615.new)\";",
+            mysql = "RENAME TABLE `$(RT615.old)` TO `$(RT615.new)`;")
         @test !haskey(plan, Symbol(RT615.old))
-        # The child plans nothing (#678): both engines carry its constraint across the rename, which
+        # The child plans nothing (#678): every engine carries its constraint across the rename, which
         # the dangling-insert check and the converged re-diff below then confirm on the real engine.
         @test !haskey(plan, Symbol(RT615.child))
-        if names_constraint_in_catalog
-            # The UNIQUE constraint's name exists only in the catalog, under the old table.
-            @test occursin("DROP CONSTRAINT", plan[new_key]["Alter field: code"])
+        if drops_unique_by_name !== nothing
+            # The UNIQUE's name exists only in the catalog, under the old table.
+            @test occursin(drops_unique_by_name, plan[new_key]["Alter field: code"])
         end
 
         _rt615_apply!(pool, plan)

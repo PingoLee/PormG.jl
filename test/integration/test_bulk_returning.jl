@@ -33,7 +33,27 @@ end
 # the ids are pre-allocated. `created_at` is filled by PormG (`auto_now_add`) and `price` is a
 # DECIMAL — both are driver round-trips, which is what this layer is for.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "returning=: auto pk, timestamp and decimal, correlated to the input (#671)" begin
+# `returning=` with the pk absent from the frame draws the ids before the INSERT. A backend that cannot
+# refuses it, naming the feature, and writes nothing (#1266); the frames below that carry their pk, or
+# conflict on a target, still run there.
+const BR_PREALLOCATES = requires(:preallocated_keys)
+if !BR_PREALLOCATES
+    @testset "returning=: an auto pk is refused where keys cannot be drawn ahead (#1266)" begin
+        labels = ["br671-refused-$(i)" for i in 1:2]
+        df = DataFrames.DataFrame(label = labels, price = [1.5, 2.5])
+        err = try
+            bulk_insert(M.Django_contract_scratch.objects, df; returning = ["id", "price"])
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.BackendCapabilityError && occursin("drawing auto-increment keys", err.msg)
+        q = M.Django_contract_scratch.objects
+        q.filter("label__@in" => labels)
+        @test !q.exists()
+    end
+end
+BR_PREALLOCATES && @testset "returning=: auto pk, timestamp and decimal, correlated to the input (#671)" begin
     labels = ["br671-auto-$(i)" for i in 1:5]
     purge() = (q = M.Django_contract_scratch.objects; q.filter("label__@in" => labels); q.exists() && q.delete())
     purge()
@@ -97,7 +117,7 @@ end
 # answer to. Parents are inserted with `returning = ["id"]`, and children are built from those ids;
 # every child must then point at the parent carrying its intended label.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "returning=: wire child rows from returned parent ids (#671)" begin
+BR_PREALLOCATES && @testset "returning=: wire child rows from returned parent ids (#671)" begin
     parent_labels = ["br671-fk-$(i)" for i in 1:3]
     parents = () -> (q = M.Bulk_update_required_parent_scratch.objects; q.filter("label__@in" => parent_labels); q)
     children = () -> (q = M.Bulk_update_payload_scratch.objects; q.filter("label__@in" => parent_labels); q)

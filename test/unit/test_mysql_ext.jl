@@ -151,7 +151,7 @@ end
 
 # What: MySQL's error numbers classify into the taxonomy; lost connections are recognised from the
 #   number, MySQL.jl's own closed-connection text, the transport, or a wrapper's cause.
-# Why: SQLSTATE `HY000` covers 1205 (lock wait), 3024 (statement timeout) and 2006 (server gone), so
+# Why: SQLSTATE `HY000` covers 1205 (lock wait), 3572 (NOWAIT), 3024 (statement timeout) and 2006 (server gone), so
 #   only the number classifies them; a wrongly "operational" constraint violation would be retried by
 #   a caller that backs off on `OperationalError`.
 @testset "MySQL errors classify by error number (#1130)" begin
@@ -162,6 +162,8 @@ end
   @test classify(_my_err(1048, "23000")) === :integrity
   @test classify(_my_err(3819)) === :integrity              # CHECK constraint, SQLSTATE HY000
   @test classify(_my_err(1205)) === :operational            # lock wait timeout, HY000
+  # a row another transaction holds, under NOWAIT (HY000; PostgreSQL's 55P03 is operational too)
+  @test classify(MySQL.StmtError(3572, "lock(s) could not be acquired immediately", "HY000")) === :operational
   @test classify(_my_err(1213, "40001")) === :operational   # deadlock
   @test classify(_my_err(3024)) === :operational            # MAX_EXECUTION_TIME
   @test classify(_my_err(1317, "70100")) === :operational   # KILL QUERY
@@ -211,6 +213,8 @@ end
   @test f.sqlstate == "23000" && f.message === nothing
   @test PormG.backend_error_fields(_my_err(1292, "22007"; msg = "Incorrect datetime value: 'x1991'")).message === nothing
   @test PormG.backend_error_fields(_my_err(1064, "42000"; msg = "near 'SELECT secret'")).message === nothing
+  nowait = "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."
+  @test PormG.backend_error_fields(_my_err(3572; msg = nowait)).message == nowait   # names no value
   f = PormG.backend_error_fields(_my_err(1146, "42S02"; msg = "Table 'f1.nope' doesn't exist"))
   @test f.message == "Table 'f1.nope' doesn't exist"
   @test (f.constraint, f.table, f.column) === (nothing, nothing, nothing)   # the ERR packet has none
@@ -219,6 +223,39 @@ end
   e = _MyCP._as_database_error(pool, _my_err(1062, "23000"; msg = "Duplicate entry 'Senna' for key 'driver.surname'"))
   @test e isa PormG.IntegrityError && e.adapter == "MySQL"
   @test !occursin("Senna", sprint(showerror, e))
+  @test (e.table, e.constraint) == ("driver", "surname")
+end
+
+# What: a duplicate key (1062) names its key in `constraint`, and its table in `table` when the text
+#   qualifies it, as PostgreSQL's error does; the value in the same text is never read.
+# Expected: `for key 'driver.surname'` → ("driver", "surname"); a bare `for key 'PRIMARY'` → (nothing,
+#   "PRIMARY"); a value that spells ` for key 'x.y'` still gives the real key, which ends the text. Every
+#   ambiguous text gives (nothing, nothing): a key name holding a quote, a name with two dots, a part
+#   longer than an identifier, MySQL's `*UNKNOWN*`, a text at the 512-byte message limit (which the
+#   server may have cut inside the value), and a text with no key.
+# Why: the message is dropped because it quotes the value (#987), which left a caller nothing to tell
+#   which unique key a row broke; the key name is the part of the text that is safe.
+@testset "a MySQL duplicate key names its key, never its value (#1130)" begin
+  dup(msg) = (f = PormG.backend_error_fields(_my_err(1062, "23000"; msg = msg)); (f.table, f.constraint, f.message))
+  @test dup("Duplicate entry 'Senna' for key 'driver.surname'") == ("driver", "surname", nothing)
+  @test dup("Duplicate entry '7' for key 'PRIMARY'") == (nothing, "PRIMARY", nothing)
+  @test dup("Duplicate entry 'a' for key 'x.y' for key 'driver.driverref'") == ("driver", "driverref", nothing)
+  @test dup("Duplicate entry 'a' for key 'driver.it's'") == (nothing, nothing, nothing)
+  @test dup("Duplicate entry 'a'") == (nothing, nothing, nothing)
+  # A name with two dots cannot be split (a quoted table or key name can hold one): no name, not a guess.
+  @test dup("Duplicate entry 'a' for key 'circuit.idx.v2'") == (nothing, nothing, nothing)
+  @test dup("Duplicate entry 'a' for key '*UNKNOWN*'") == (nothing, nothing, nothing)
+  @test dup("Duplicate entry 'a' for key 'driver.$("k" ^ 65)'") == (nothing, nothing, nothing)
+  # A text at MySQL's 512-byte message limit may have been cut inside a long value, so the value's own
+  # ` for key 'x.y'` could end it: read as no name. One byte under the limit, the key is read.
+  sized(n, tail) = "Duplicate entry '" * "a" ^ (n - 17 - ncodeunits(tail)) * tail
+  cut = sized(511, " for key 'evil.k'")              # the value's own text, where the server cut it
+  @test ncodeunits(cut) == 511 && dup(cut) == (nothing, nothing, nothing)
+  whole = sized(510, "' for key 'driver.surname'")
+  @test ncodeunits(whole) == 510 && dup(whole) == ("driver", "surname", nothing)
+  # Only 1062 is read: another integrity number's text keeps its own fields.
+  f = PormG.backend_error_fields(_my_err(1451, "23000"; msg = "Cannot delete or update a parent row"))
+  @test (f.table, f.constraint) === (nothing, nothing)
 end
 
 # What: the #1277 repro on a MySQL pool object (built, never connected). 1317 (`KILL QUERY`,

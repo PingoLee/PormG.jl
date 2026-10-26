@@ -51,7 +51,7 @@ end
     @test nul951_is_refusal(nul951_refusal(() -> M.Driver.objects.filter("surname__@icontains" => NUL951_VALUE).exists()))
 
     # Raw SQL with the backend's own placeholder (a row per engine, #1179), and the statement text itself.
-    marker = by_engine(postgres = "\$1::text", sqlite = "?")
+    marker = by_engine(postgres = "\$1::text", sqlite = "?", mysql = "?")
     @test nul951_is_refusal(nul951_refusal(() -> fetch(NUL951_POOL, "SELECT $marker AS t", [NUL951_VALUE])))
     @test nul951_is_refusal(nul951_refusal(() -> fetch(NUL951_POOL, "SELECT '$NUL951_VALUE' AS t")))
     # The same raw query with a clean value still runs, so the refusal is about the NUL alone.

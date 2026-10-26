@@ -100,6 +100,16 @@ function vr_expected_text(kind::Symbol, value)
   return VR_FORMATTER[kind](value)
 end
 
+# The render P1 compares with, per engine: MySQL stores a duration as its microseconds (its
+# `DurationField` is a BIGINT, #1130), so its interval formatter is that integer; every other kind
+# is spelled by the same formatter on every engine. A row per engine (#1179).
+const VR_FORMATTER_BY_ENGINE = (sqlite = VR_FORMATTER, postgres = VR_FORMATTER,
+  mysql = merge(VR_FORMATTER, Dict{Symbol,Function}(:interval => PormG.Dialect._format_mysql_duration)))
+function vr_expected_text(kind::Symbol, value, engine::Symbol)
+  kind in (:integer, :text) && return vr_expected_text(kind, value)
+  return VR_FORMATTER_BY_ENGINE[engine][kind](value)
+end
+
 """
     vr_observed_text(kind, x) -> String | Integer
 
@@ -168,6 +178,10 @@ end
 _vr_utc_naive(v::TimeZones.ZonedDateTime) = DateTime(TimeZones.astimezone(v, TimeZones.tz"UTC"))
 _vr_utc_naive(v::DateTime) = v
 
+# The RAW value `@date` arrives as, before the read path parses it: SQLite's `strftime` text, and the
+# `Date` PostgreSQL's `(col)::date` and MySQL's `DATE(col)` deliver. A row per engine (#1179).
+const _VR_AT_DATE_RAW = (sqlite = AbstractString, postgres = Date, mysql = Date)
+
 const VR_CASES = VRCase[
   # ── TIMESTAMP ────────────────────────────────────────────────────────────
   # Identity: the write path and the read path agree on the column itself. P3 here is the
@@ -217,7 +231,7 @@ const VR_CASES = VRCase[
          # no projection kind was recorded for the transform. It now records `CDate`, so the read path
          # parses SQLite's `strftime` text as PostgreSQL's `(col)::date` already delivers it. The
          # `shape` stays: it pins the RAW value, and on SQLite that is still the engine's text.
-         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date),
+         shape = (x, engine) -> x isa _VR_AT_DATE_RAW[engine]),
   # #571 FIXED: `EXTRACT(YEAR FROM …)` is `numeric` on PostgreSQL ≥ 14, delivered as a `Decimal`,
   # while SQLite's `CAST(strftime('%Y', …) AS INTEGER)` is an `Int` — same value, two types. The
   # PostgreSQL arm now casts `::integer`, so P3 holds on both engines. The four siblings below share
@@ -266,7 +280,7 @@ const VR_CASES = VRCase[
   # #562 FIXED, on a DATE column: same collapse; and the same P3 remainder as the TIMESTAMP case
   # above, fixed by #824 the same way. The raw `shape` is unchanged.
   vrcase("at_date_f", :date, c -> F("$(c)__@date"), v -> v, pair = c -> "$(c)__@date",
-         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date),
+         shape = (x, engine) -> x isa _VR_AT_DATE_RAW[engine]),
   # #571 FIXED on a DATE column too — same cast, same four siblings, same nudge caveat as above.
   vrcase("at_year_f", :date, c -> F("$(c)__@year"), v -> year(v), result_kind = :integer,
          pair = c -> "$(c)__@year"),
@@ -355,7 +369,7 @@ Run every case of `kind` against the probe row. `base()` must return a FRESH que
 filtered to exactly one row whose `col` holds `stored`; `engine` is `:sqlite` or `:postgres`.
 """
 function vr_run_cases(base::Function, col::String, stored, engine::Symbol; kind::Symbol)
-  engine in (:sqlite, :postgres) || throw(ArgumentError("engine must be :sqlite or :postgres"))
+  engine in (:sqlite, :postgres, :mysql) || throw(ArgumentError("engine must be :sqlite, :postgres or :mysql"))
   for case in filter(c -> c.kind === kind, VR_CASES)
     @testset "$(kind) · $(case.id)" begin
       expected_value = case.expect(stored)
@@ -366,7 +380,7 @@ function vr_run_cases(base::Function, col::String, stored, engine::Symbol; kind:
       q.values("x" => case.expr(col))
       raw = _vr_try(() -> vr_raw_value(q, :x))
       observed = vr_observed_text(case.result_kind, raw)
-      expected = vr_expected_text(case.result_kind, expected_value)
+      expected = vr_expected_text(case.result_kind, expected_value, engine)
       if engine in case.broken.p1
         @test_broken observed == expected
       else
@@ -468,7 +482,7 @@ Read raw (`vr_raw_value`), for the same reason P1 is: the claim is about what th
 not about what PormG then parsed it into.
 """
 function vr_run_tochar_formats(base::Function, col::String, stored, engine::Symbol)
-  engine in (:sqlite, :postgres) || throw(ArgumentError("engine must be :sqlite or :postgres"))
+  engine in (:sqlite, :postgres, :mysql) || throw(ArgumentError("engine must be :sqlite, :postgres or :mysql"))
   # The two tables name the same keys — a map row without an oracle, or an oracle row without a
   # map entry, is a hole in this measurement and fails here rather than being skipped.
   @test Set(keys(VR_TOCHAR_ORACLE)) == Set(keys(PormG.date_format_map))

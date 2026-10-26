@@ -226,6 +226,10 @@ _to_backticks(sql::AbstractString) = replace(sql, r"'(?:[^']|'')*'|\"(?:[^\"]|\"
 end)
 engine_sql(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
     by_engine(conn; postgres = String(sql), sqlite = String(sql), mysql = _to_backticks(sql))
+# - `engine_quote()`: the character the engine quotes an identifier with, for a `Regex` over rendered SQL
+#   that `engine_sql` cannot write (`Regex("JOIN $(Q)driver$(Q)")`).
+engine_quote(; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
+    by_engine(conn; postgres = "\"", sqlite = "\"", mysql = "`")
 # - `driver_message(e)`: an error's message with the driver's own text, lower-cased. MySQL's errors keep the
 #   server's message (`Duplicate entry … for key …`) in `.cause`, since it quotes the input (#1130).
 driver_message(e)::String = lowercase(sprint(showerror, e) *

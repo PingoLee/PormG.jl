@@ -113,15 +113,29 @@ const _CA672_AWKWARD = "O\"Brien, {Jr} \\ \"NULL\""
             slug          = slugs[1:2],
             payload       = Union{Dict{String, Any}, Missing}[payload2, payload2],
         )
-        res = bulk_insert(scratch(), upsert,
-            on_conflict = (action = :update, target = ["slug"], set = ["payload"]))
-        @test res.count == 2
-        for twin in slugs[3:4]
-            q = scratch(); q.filter("slug" => twin); q.update("payload" => payload2)
-        end
-        for i in 1:2
-            @test isequal(_ca672_read(scratch().filter("slug" => slugs[i]), ["payload"]),
-                          _ca672_read(scratch().filter("slug" => slugs[i + 2]), ["payload"]))
+        # A backend whose upsert cannot name its key refuses it, since these rows could also conflict
+        # on `uuid_token` (#1267); the rows are left as they were, and the bulk_update below still runs.
+        if requires(:upsert_conflict_target)
+            res = bulk_insert(scratch(), upsert,
+                on_conflict = (action = :update, target = ["slug"], set = ["payload"]))
+            @test res.count == 2
+            for twin in slugs[3:4]
+                q = scratch(); q.filter("slug" => twin); q.update("payload" => payload2)
+            end
+            for i in 1:2
+                @test isequal(_ca672_read(scratch().filter("slug" => slugs[i]), ["payload"]),
+                              _ca672_read(scratch().filter("slug" => slugs[i + 2]), ["payload"]))
+            end
+        else
+            err = try
+                bulk_insert(scratch(), upsert, on_conflict = (action = :update, target = ["slug"], set = ["payload"]))
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.BackendCapabilityError && occursin("uuid_token", err.msg)
+            kept = only(_ca672_read(scratch().filter("slug" => slugs[1]), ["payload"]))
+            @test JSON.parse(kept isa AbstractString ? kept : JSON.json(kept)) == payload   # unchanged
         end
 
         # ── bulk_update vs update() ───────────────────────────────────────────

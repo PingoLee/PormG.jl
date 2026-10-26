@@ -10,8 +10,14 @@ settings = PormG.config[PORMG_DB_FOLDER]
 # - whether a second connection can write while a transaction holds the writer (SQLite has one);
 # - whether a locked read renders and takes row locks (SQLite's `select_for_update` is a documented
 #   no-op, docs/src/api.md).
-const TX_CONCURRENT_WRITERS = by_engine(postgres = true, sqlite = false)
-const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
+const TX_CONCURRENT_WRITERS = by_engine(postgres = true, sqlite = false, mysql = true)   # InnoDB locks rows
+const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false, mysql = true)
+# How a `NOWAIT` read reports a row another transaction holds: PostgreSQL's SQLSTATE 55P03, and MySQL's
+# error 3572 (its SQLSTATE, HY000, is shared by most of its errors). SQLite takes no row lock.
+const TX_NOWAIT_REFUSED = by_engine(postgres = e -> e.sqlstate == "55P03", sqlite = e -> false,
+                                    mysql = e -> Int(getfield(e, :cause).errno) == 3572)
+# Whether a foreign key is checked at COMMIT rather than at each statement: a capability (#1272).
+const TX_DEFERS_FKS = requires(:deferred_foreign_keys)
 
 @info "Starting Transactions testset"
 @testset "Transactions and Context Propagation" begin
@@ -42,7 +48,7 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
 
   @testset "Nested with_tx_context shares connection" begin
     # Start a manual transaction and get connection
-    begin_sql = by_engine(postgres = "BEGIN;", sqlite = "BEGIN IMMEDIATE TRANSACTION;")
+    begin_sql = by_engine(postgres = "BEGIN;", sqlite = "BEGIN IMMEDIATE TRANSACTION;", mysql = "START TRANSACTION;")
     result, conn = with_transaction(settings, begin_sql)
     try
       with_tx_context(settings.connections, conn) do
@@ -672,7 +678,7 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
             end
             :free
           catch e
-            (e isa PormG.OperationalError && e.sqlstate == "55P03") ? :locked : e
+            (e isa PormG.OperationalError && TX_NOWAIT_REFUSED(e)) ? :locked : e
           end
         end
         PormG.atomic(PORMG_DB_FOLDER) do
@@ -727,7 +733,7 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
 
     # #1106: a lock without `of` beside that LEFT join used to reach PostgreSQL and fail there with
     # `FOR UPDATE cannot be applied to the nullable side of an outer join`, and ran on SQLite. Now it
-    # is refused before any statement is sent, on both engines, and the message names the fix.
+    # is refused before any statement is sent, on every engine, and the message names the fix.
     plain = try
       PormG.atomic(PORMG_DB_FOLDER) do
         nullable_read().list()
@@ -776,7 +782,7 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
       q.filter("resultid" => rid)
       q.values("resultid", "lock_drivers__driverid")
       q.select_for_update()
-      @test occursin("LEFT JOIN \"lock_drivers\"", q.list(show_query = :sql))
+      @test occursin(engine_sql("LEFT JOIN \"lock_drivers\""), q.list(show_query = :sql))
       q.list()
     end
     @test length(cte_rows) == 1
@@ -815,14 +821,23 @@ end
 
   try
     # Child first, parent second — inconsistent between the two statements, consistent at COMMIT.
-    PormG.run_in_transaction(PORMG_DB_FOLDER) do
+    child_first() = PormG.run_in_transaction(PORMG_DB_FOLDER) do
       M.Just_a_nested_roll_back.objects.create(
         "id" => child_id, "test" => parent_id, "description" => "deferred fk #276")
       M.Just_a_test_deletion.objects.create("id" => parent_id, "name" => "deferred fk #276")
     end
-
-    @test M.Just_a_nested_roll_back.objects.filter("id" => child_id).exists()
-    @test M.Just_a_test_deletion.objects.filter("id" => parent_id).exists()
+    if TX_DEFERS_FKS
+      child_first()
+      @test M.Just_a_nested_roll_back.objects.filter("id" => child_id).exists()
+      @test M.Just_a_test_deletion.objects.filter("id" => parent_id).exists()
+    else
+      # A backend that checks each statement refuses the child at its INSERT, and the block rolls
+      # back: the parent written after it is never stored either (#1272).
+      err = try child_first(); nothing catch e; e end
+      @test err isa PormG.IntegrityError
+      @test !M.Just_a_nested_roll_back.objects.filter("id" => child_id).exists()
+      @test !M.Just_a_test_deletion.objects.filter("id" => parent_id).exists()
+    end
 
     # …and deferral is not a licence to commit a violation: a child whose parent never arrives must
     # still fail, just at COMMIT rather than at the INSERT. Without this half the testset would pass
@@ -844,12 +859,21 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #686 — `without_foreign_keys` must be the outermost transaction, on BOTH engines. The PostgreSQL
+# #686 — `without_foreign_keys` must be the outermost transaction, on PostgreSQL and SQLite. The PostgreSQL
 # method used to nest silently as a SAVEPOINT, so code green on db_2 threw on db_sl. The orphan
 # half pins the divergence that remains, and that the docs describe: SQLite's own exit check raises
 # UnsafeMutationError, PostgreSQL's COMMIT raises IntegrityError. Either way nothing is committed.
+# A backend whose foreign keys cannot be deferred refuses the block before it opens (#1272).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "without_foreign_keys must be the outermost transaction (#686)" begin
+if !TX_DEFERS_FKS
+  @testset "without_foreign_keys is refused where foreign keys cannot be deferred (#1272)" begin
+    ran = Ref(false)
+    err = try PormG.without_foreign_keys(() -> (ran[] = true), PORMG_DB_FOLDER); nothing catch e; e end
+    @test err isa PormG.BackendCapabilityError && occursin("without_foreign_keys", err.msg)
+    @test !ran[]
+  end
+end
+TX_DEFERS_FKS && @testset "without_foreign_keys must be the outermost transaction (#686)" begin
   parent_id  = 940_011
   child_id   = 940_012
   orphan_id  = 940_013
@@ -904,7 +928,7 @@ end
     end
     # Engine mechanics (#1179): on SQLite PormG runs the exit check itself (`PRAGMA
     # foreign_key_check`); on PostgreSQL the COMMIT is the check. A row per engine.
-    checks_itself = by_engine(sqlite = true, postgres = false)
+    checks_itself = by_engine(sqlite = true, postgres = false)   # MySQL refuses the block (above)
     if checks_itself
       @test err isa PormG.UnsafeMutationError
       # The exit check is whole-database: pin the count, so an orphan some other test left behind

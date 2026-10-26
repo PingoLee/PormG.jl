@@ -165,7 +165,7 @@ meta = query.list(show_query=:dict)
 | `:dialect` | `:postgresql` or `:sqlite`. |
 | `:bucketing` | `:numbered` (`$1`, PostgreSQL) or `:positional` (`?`, SQLite). |
 | `:model` | The model / table name. |
-| `:operation` | `:select`, `:insert`, `:update` or `:delete`; a cascading delete also has `:lock` steps on PostgreSQL and MySQL, and one whose filter reads another table starts with its key read (`:lock` there, `:select` on SQLite); `bulk_copy` reports `:bulk_copy`. |
+| `:operation` | `:select`, `:insert`, `:update` or `:delete`; a cascading delete also has `:lock` steps on PostgreSQL and MySQL, and a filtered one starts with its key read (`:lock` there, `:select` on SQLite); `bulk_copy` reports `:bulk_copy`. |
 
 A statement that runs in several steps — a cascading `delete()`, a chunked bulk call — returns a
 `Vector` of these, one per step.

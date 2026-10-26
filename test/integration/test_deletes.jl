@@ -229,6 +229,61 @@ function _reset_multipath_set_null_scratch_schema!()
     return nothing
 end
 
+# ── Schema helpers: own_table_scratch (#1370) ────────────────────────────────
+
+function _drop_own_table_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"ot_driver_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"ot_team_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"ot_lineage_scratch\";")
+    return nothing
+end
+
+# Tyrrell has no favourite driver; McLaren's is Stewart, who races for Tyrrell; Williams's is its own.
+# And a lineage Tyrrell <- BAR <- Honda, `predecessor` pointing at the team a team was renamed from.
+function _reset_own_table_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_own_table_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    # No foreign key on `favourite_driver`: the second model declares it with `db_constraint = false`.
+    _scratch_sql(pool, """
+    CREATE TABLE "ot_team_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "favourite_driver" INTEGER
+    );
+    """)
+    _scratch_sql(pool, """
+    CREATE TABLE "ot_driver_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "surname" TEXT NOT NULL,
+        "team" INTEGER NOT NULL,
+        FOREIGN KEY ("team") REFERENCES "ot_team_scratch" ("id")
+    );
+    """)
+    _scratch_sql(pool, """
+    CREATE TABLE "ot_lineage_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "predecessor" INTEGER,
+        FOREIGN KEY ("predecessor") REFERENCES "ot_lineage_scratch" ("id")
+    );
+    """)
+
+    for (id, name, favourite) in ((1, "Tyrrell", nothing), (2, "McLaren", 10), (3, "Williams", 30))
+        OwnTableM.Ot_team_scratch.objects.create("id" => id, "name" => name, "favourite_driver" => favourite)
+    end
+    for (id, surname, team) in ((10, "Stewart", 1), (20, "Senna", 2), (30, "Mansell", 3))
+        OwnTableM.Ot_driver_scratch.objects.create("id" => id, "surname" => surname, "team" => team)
+    end
+    for (id, name, predecessor) in ((1, "Tyrrell", nothing), (2, "BAR", 1), (3, "Honda", 2))
+        OwnTableM.Ot_lineage_scratch.objects.create("id" => id, "name" => name, "predecessor" => predecessor)
+    end
+    return nothing
+end
+
 # ── Schema helpers: set_null_guard_scratch ────────────────────────────────────
 
 function _drop_set_null_guard_scratch_schema!()
@@ -1637,6 +1692,74 @@ end
             @test MultipathSetNullM.Mp_root_scratch.objects.filter("id__@in" => root_ids).count() == 0
         finally
             _drop_multipath_set_null_scratch_schema!()
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A cascade that writes the root's OWN table (#1370)
+# A filter on the root's own columns used to be re-read by the root's DELETE, which runs after every
+# SET_NULL / SET_DEFAULT update. When one of those updates writes the root's table, the DELETE then
+# matched the rows it had just re-pointed: `filter("favourite_driver__@isnull" => true)` deleted
+# McLaren and Senna as well as Tyrrell and Stewart, `(4, team => 2, driver => 2)`, with no error. Now
+# every filtered root with something to cascade reads its keys first, and nothing re-reads the filter.
+#
+# Run on every engine: the key read is `FOR UPDATE` on PostgreSQL and MySQL, and MySQL checks the
+# driver's foreign key at each statement, so the order (update, drivers, team) is what keeps it valid.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DELETE: a cascade that writes the root's own table deletes only the rows the filter matched (#1370)" begin
+    # What: the root's own column nulled through a second model over the root's table.
+    # SQL: the key read `SELECT "Tb"."id" FROM "ot_team_scratch" AS "Tb" WHERE "Tb"."favourite_driver"
+    #      IS NULL`, then `UPDATE "ot_team_scratch" … SET "favourite_driver" = NULL …`, the drivers'
+    #      DELETE and the team's `DELETE … WHERE "Tb"."id"` over the keys.
+    # Why: the reproduction of #1370; Django deletes Tyrrell and Stewart and only updates McLaren.
+    @testset "a second model over the root's table: the team it nulls is updated, not deleted" begin
+        _reset_own_table_scratch_schema!()
+        try
+            by_no_favourite() = OwnTableM.Ot_team_scratch.objects.filter("favourite_driver__@isnull" => true)
+
+            steps = by_no_favourite().delete(show_query = :dict)
+            # The writes, in order; PostgreSQL and MySQL also lock the drivers first (#770).
+            @test [(s[:operation], s[:model]) for s in steps if s[:operation] in (:delete, :update)] ==
+                  [(:update, "ot_team_view_scratch"), (:delete, "ot_driver_scratch"), (:delete, "ot_team_scratch")]
+            @test steps[1][:model] == "ot_team_scratch" && steps[1][:operation] in (:lock, :select)
+            for step in steps
+                @test marker_count(step[:sql_text]) == length(step[:parameters])
+                step === steps[1] || @test !occursin("IS NULL", step[:sql_text])
+            end
+
+            total, counts = by_no_favourite().delete()
+            @test counts == Dict("ot_team_scratch" => 1, "ot_driver_scratch" => 1)
+            @test total == 2
+            @test sort((OwnTableM.Ot_team_scratch.objects.values("id") |> DataFrame).id) == [2, 3]
+            @test sort((OwnTableM.Ot_driver_scratch.objects.values("id") |> DataFrame).id) == [20, 30]
+            mclaren = OwnTableM.Ot_team_scratch.objects.filter("id" => 2).get()
+            @test ismissing(mclaren[:favourite_driver]) || isnothing(mclaren[:favourite_driver])
+        finally
+            _drop_own_table_scratch_schema!()
+        end
+    end
+
+    # What: the same statement targeting the root's own model: a self-referential SET_NULL key.
+    # SQL: none; planning raises `QueryBuildError("Circular dependency …")` before the first write.
+    # Why: the collector's cycle refusal (#1272) keeps this shape from reaching #1370's sequence on
+    #      every engine; the key read now makes it safe too, if that refusal is ever lifted.
+    @testset "a self-referential SET_NULL under a filter on the nulled column is refused before any write" begin
+        _reset_own_table_scratch_schema!()
+        try
+            q = OwnTableM.Ot_lineage_scratch.objects
+            q.filter("predecessor__@isnull" => true)
+            err = try
+                q.delete()
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.QueryBuildError && occursin("Circular dependency", _strip_ansi(sprint(showerror, err)))
+            @test OwnTableM.Ot_lineage_scratch.objects.count() == 3
+            @test OwnTableM.Ot_lineage_scratch.objects.filter("id" => 2).get()[:predecessor] == 1
+        finally
+            _drop_own_table_scratch_schema!()
         end
     end
 end

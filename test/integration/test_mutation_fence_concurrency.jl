@@ -189,10 +189,13 @@ _MF_RUNS && @testset "Mutation fence under concurrent UPDATE (#765)" begin
         @testset "delete(): a filter on the row itself is re-checked" begin
             M.Just_a_test_deletion.objects.create("id" => _MF_ROW, "name" => "fence-old")
 
+            # The row has dependents to cascade to, so since #1370 the statement that waits on T1's
+            # lock is the key read, `SELECT "Tb"."id" … WHERE <filter> FOR UPDATE`, which re-checks the
+            # row's new version as the DELETE's own WHERE did.
             blocked, (total, _) = _mf_race(
                 () -> M.Just_a_test_deletion.objects.filter("id" => _MF_ROW).update("name" => "fence-moved"),
                 () -> _mf_quiet(() -> M.Just_a_test_deletion.objects.filter("id" => _MF_ROW, "name" => "fence-old").delete()),
-                "DELETE FROM \"just_a_test_deletion\"")
+                "SELECT \"Tb\".\"id\" FROM \"just_a_test_deletion\"")
 
             @test blocked
             @test total == 0

@@ -185,6 +185,15 @@ here has one.
 _dct_fragments(sql::AbstractString) =
   [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(?\"Tb\"\.\"(\w+)\"", sql)]
 
+"""
+Whether a statement scoped by the root's keys binds them once per arm. The root's filter renders only
+in the key read (#1370), and a mock pool reads no keys: PostgreSQL binds one empty key array per arm
+(`= ANY(\$N)`), SQLite renders the empty set (`(1 = 0)`) and binds nothing. So on PostgreSQL the
+values still count the arms, which is what #459's duplicated arms inflated.
+"""
+_dct_binds_keys(s, backend::Symbol, arms::Int) = backend === :postgres ?
+  (length(s[:parameters]) == arms && all(isempty, s[:parameters])) : isempty(s[:parameters])
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Deletion collector traversal: a long cascade chain collects each model exactly once
 # One CASCADE foreign key per link means one cascade path per model, so every statement must carry
@@ -199,17 +208,24 @@ _dct_fragments(sql::AbstractString) =
       q.filter("code" => "DELME")
       all_steps = _dct_steps(q, conn)
 
-      # #770: on PostgreSQL every link but the last is a parent, locked root-first before any write.
-      # Each lock scopes through the same single arm as its DELETE, so it binds the one root value too.
-      locks = filter(s -> s[:operation] == :lock, all_steps)
+      # #1370: the root's keys are read first (`:lock`, `FOR UPDATE`, on PostgreSQL, where that read
+      # is also the root's #770 lock), and the one root value binds there and nowhere else.
+      key_read = all_steps[1]
+      @test key_read[:model] == "dct_c01" && key_read[:operation] == (backend === :postgres ? :lock : :select)
+      @test key_read[:parameters] == ["DELME"]
+      assert_marker_count(key_read, backend)
+
+      # #770: on PostgreSQL every other link but the last is a parent, locked top-down before any
+      # write. Each lock scopes through the same single arm as its DELETE.
+      locks = filter(s -> s[:operation] == :lock, all_steps[2:end])
       @test [s[:model] for s in locks] ==
-            (backend === :postgres ? ["dct_c" * lpad(i, 2, '0') for i in 1:DctChain.CHAIN_N-1] : String[])
-      @test all_steps[1:length(locks)] == locks
+            (backend === :postgres ? ["dct_c" * lpad(i, 2, '0') for i in 2:DctChain.CHAIN_N-1] : String[])
+      @test all_steps[2:length(locks)+1] == locks
       for s in locks
-        @test s[:parameters] == ["DELME"]
+        @test _dct_binds_keys(s, backend, 1)
         assert_marker_count(s, backend)
       end
-      steps = filter(s -> s[:operation] != :lock, all_steps)
+      steps = filter(s -> s[:operation] == :delete, all_steps)
 
       # One statement per link, no more and no fewer.
       @test length(steps) == DctChain.CHAIN_N
@@ -217,18 +233,18 @@ _dct_fragments(sql::AbstractString) =
             Set("dct_c" * lpad(i, 2, '0') for i in 1:DctChain.CHAIN_N)
 
       for s in steps
-        @test s[:operation] == :delete
-        # THE assertion. Pre-fix this runs 1, 2, 3 … 14 across the chain.
-        @test length(_dct_fragments(s[:sql_text])) == 1
-        # One fragment scopes through one root filter, so exactly one value is bound.
-        @test s[:parameters] == ["DELME"]
+        # THE assertion. Pre-fix this runs 1, 2, 3 … 14 across the chain. The root's own DELETE is
+        # scoped by its keys alone, which renders `(1 = 0)` on SQLite: no arm to count.
+        @test length(_dct_fragments(s[:sql_text])) == (s[:model] == "dct_c01" && backend === :sqlite ? 0 : 1)
+        # One fragment scopes through the root's keys, so exactly one key list is bound.
+        @test _dct_binds_keys(s, backend, 1)
         assert_marker_count(s, backend)
       end
 
       # Stated as a total as well: the redundant arms bound ~380 values across the plan pre-fix, and
       # a per-statement assertion alone would let a regression hide in whichever statement happens to
-      # be checked last.
-      @test sum(length(s[:parameters]) for s in steps) == DctChain.CHAIN_N
+      # be checked last. One key array per statement on PostgreSQL; SQLite binds none on this mock.
+      @test sum(length(s[:parameters]) for s in steps) == (backend === :postgres ? DctChain.CHAIN_N : 0)
     end
   end
 end
@@ -248,10 +264,10 @@ end
 
       # Statement count is unchanged by the fix: one UPDATE per (field, value, model), plus the two
       # DELETEs. Fragments moved, statements did not. #770 adds the two parents' locks on PostgreSQL,
-      # root first, ahead of every write.
-      @test count(s -> s[:operation] != :lock, steps) == 4
-      @test [(s[:operation], s[:model]) for s in steps if s[:operation] == :lock] ==
-            (backend === :postgres ? [(:lock, "dct_root"), (:lock, "dct_mid")] : Tuple{Symbol, String}[])
+      # root first, ahead of every write; the root's is its #1370 key read, a `:select` on SQLite.
+      @test count(s -> s[:operation] in (:delete, :update), steps) == 4
+      @test [(s[:operation], s[:model]) for s in steps if s[:operation] in (:lock, :select)] ==
+            (backend === :postgres ? [(:lock, "dct_root"), (:lock, "dct_mid")] : [(:select, "dct_root")])
 
       for name in ("dct_leaf", "dct_dleaf")
         step = _dct_step(steps, name)
@@ -264,7 +280,7 @@ end
         # emitted twice.
         @test occursin("\"R1\".\"owner\" IN", step[:sql_text])
         @test occursin("\"R1\".\"backup\" IN", step[:sql_text])
-        @test length(step[:parameters]) == 2
+        @test _dct_binds_keys(step, backend, 2)
         assert_marker_count(step, backend)
       end
 
@@ -300,10 +316,13 @@ end
 # below is a shape pin rather than a regression guard. Keep the wrap anyway, for the reason that file
 # gives: it makes alignment a property of the code instead of a property of today's fragment shapes.
 #
-# It DOES pin: that each fragment renders once into one collector (double-rendering — #452's actual
-# defect, reached through this renderer — gives 8 values against 4 markers), that neither path is
-# dropped (a drop gives 2), and that the root's two values keep their order inside every fragment. A
-# swap OF the two fragments stays invisible, since both carry the same root query.
+# It pinned, until #1370: that each fragment renders once into one collector (double-rendering —
+# #452's actual defect, reached through this renderer — gave 8 values against 4 markers), that
+# neither path is dropped (a drop gave 2), and that the root's two values keep their order inside
+# every fragment. Since #1370 every filtered root that cascades is resolved to keys first, so the two
+# values bind only in the key read, and each fragment binds the root's keys: the fragment count and
+# the marker count are what is left to pin here, and the PostgreSQL arm of the testset above counts
+# one key array per fragment.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a multi-path SET_NULL binds in text order on SQLite (#459 / #432)" begin
   # SQLite only: PostgreSQL's `$N` travels with the text by construction, which is why every bug in
@@ -312,22 +331,28 @@ end
   q.filter(Qor("code" => "FIRSTVAL", "code" => "SECONDVAL"))
   steps = _dct_steps(q, _DCT_SL)
 
+  # Since #1370 the root's two values bind once, in text order, in the key read; every fragment is
+  # scoped by the keys, which this mock reads none of.
+  key_read = first(steps)
+  @test key_read[:operation] == :select && key_read[:model] == "dct_root"
+  assert_bound_in_text_order(key_read, ["FIRSTVAL", "SECONDVAL"])
+  assert_marker_count(key_read, :sqlite)
+
   for name in ("dct_leaf", "dct_dleaf")
     step = _dct_step(steps, name)
     @test length(_dct_fragments(step[:sql_text])) == 2
-    # Two fragments, each lifting the root's run to its marker position.
-    assert_bound_in_text_order(step, ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"])
+    # Two fragments, each over the root's keys: nothing of the filter is bound again.
+    @test !any(v -> v in ("FIRSTVAL", "SECONDVAL"), step[:parameters])
     assert_marker_count(step, :sqlite)
-    # Shape pin, not a regression guard — see the header. The cjoin's ON value reaches `:where`
-    # through the read builder's `__@in` splice, so this passes with or without `update_field`'s
-    # own wrap. Recorded so nobody reads it as proof the wrap works.
+    # Shape pin, not a regression guard — see the header.
     @test isempty(step[:parameter_buckets][:join])
   end
 
-  # The parent DELETE is the #452 renderer on the same root — unchanged, and the control that says
-  # the two renderers agree.
+  # The parent DELETE is the #452 renderer on the same root — the control that says the two
+  # renderers agree.
   mid = _dct_step(steps, "dct_mid")
-  assert_bound_in_text_order(mid, ["FIRSTVAL", "SECONDVAL", "FIRSTVAL", "SECONDVAL"])
+  @test length(_dct_fragments(mid[:sql_text])) == 2
+  assert_marker_count(mid, :sqlite)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

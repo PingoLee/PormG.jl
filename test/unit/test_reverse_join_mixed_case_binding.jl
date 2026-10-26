@@ -225,7 +225,9 @@ end
     @test root_step[:operation] == :delete
     @test contains(lowercase(root_step[:model]), "dim_unidade")
 
-    for step in insp
+    # The first step reads the root's keys (#1370: every filtered root with something to cascade).
+    @test insp[1][:operation] in (:select, :lock)
+    for step in insp[2:end]
         @test haskey(step, :operation)
         @test haskey(step, :sql_text)
         @test step[:operation] in (:delete, :update)

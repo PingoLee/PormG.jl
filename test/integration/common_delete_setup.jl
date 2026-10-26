@@ -219,3 +219,47 @@ if !@isdefined(MultipathSetNullM)
     Models.set_models(multipath_set_null_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
     const MultipathSetNullM = multipath_set_null_scratch_models
 end
+
+module own_table_scratch_models
+import PormG.Models
+
+# A cascade statement that writes the delete root's OWN table (#1370). A team keeps its favourite
+# driver as a plain integer; an unmanaged second model over the same table declares it as a SET_NULL
+# foreign key to a driver, and a driver CASCADEs from its team. Deleting the teams with no favourite
+# driver nulls the favourite of a team whose favourite driver the cascade deletes: before #1370 the
+# root's DELETE re-read its own filter after that UPDATE and deleted that team too.
+Ot_team_scratch = Models.Model("ot_team_scratch",
+    id               = Models.IDField(),
+    name             = Models.CharField(),
+    favourite_driver = Models.IntegerField(null = true)
+)
+
+Ot_team_view_scratch = Models.Model("ot_team_view_scratch", db_table = "ot_team_scratch", managed = false,
+    id               = Models.IDField(),
+    name             = Models.CharField(),
+    favourite_driver = Models.ForeignKey("Ot_driver_scratch", pk_field = "id", on_delete = "SET_NULL",
+                           null = true, related_name = "ot_fans", db_constraint = false)
+)
+
+Ot_driver_scratch = Models.Model("ot_driver_scratch",
+    id      = Models.IDField(),
+    surname = Models.CharField(),
+    team    = Models.ForeignKey(Ot_team_scratch, pk_field = "id", on_delete = "CASCADE",
+                  related_name = "ot_drivers")
+)
+
+# A self-referential SET_NULL lineage: the shape that statement takes when it targets the root's own
+# model, which the collector refuses as a dependency cycle before any write.
+Ot_lineage_scratch = Models.Model("ot_lineage_scratch",
+    id          = Models.IDField(),
+    name        = Models.CharField(),
+    predecessor = Models.ForeignKey("Ot_lineage_scratch", pk_field = "id", on_delete = "SET_NULL",
+                      null = true, related_name = "ot_successors")
+)
+
+end
+
+if !@isdefined(OwnTableM)
+    Models.set_models(own_table_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const OwnTableM = own_table_scratch_models
+end

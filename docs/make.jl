@@ -72,6 +72,7 @@ makedocs(
             "Error Handling" => "errors.md",
             "Backend Capabilities" => "backends.md",
             "PostgreSQL Guide" => "postgres.md",
+            "MySQL Guide" => "mysql.md",
             "Async & Concurrency" => "async.md",
             "Advisory Locks" => "advisory_lock.md",
             "Import from Django" => "import_django.md",

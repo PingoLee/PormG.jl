@@ -953,21 +953,21 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 A cast to text, to an integer, to a scaled `numeric(p, s)` or to a single-precision float goes
 through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
 engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
-other builds the query as written. For the scale and integer rows, [Rounding](rounding.md) shows the
-explicit spelling that builds on every engine. Measured on PostgreSQL 16 and SQLite 3.45:
+others build the query as written. For the scale and integer rows, [Rounding](rounding.md) shows the
+explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite 3.45 and MySQL 8.4:
 
-| Cast | It means | PostgreSQL | SQLite |
-|---|---|---|---|
-| to text, of a float, a decimal, a `numeric` function, a timestamp, an interval or a JSON document | the value's text | builds (`'10'`, `'14.00'`) | builds (`'10.0'`, `'14'`) |
-| to text, of a boolean | `'true'` / `'false'` | builds | **refused**: it writes `'1'` / `'0'` |
-| to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
-| to a number (an integer, a float, a `numeric`, scaled or not), of an interval | an error, since an interval has no numeric value | builds, and raises when the query runs | **refused**: it casts the stored `HH:MM:SS` text and reads its hours (`00:01:23.456` → `0`) |
-| to a number, of a date, a timestamp or a time | an error, since none has a numeric value | builds, and raises when the query runs | **refused**: it casts the stored text and reads its leading digits, the year (`2009-03-29` → `2009`) or a time's hour (`06:00:00` → `6`) |
-| to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
-| to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
-| to `numeric(p, s)`, of a column or a computed value too large on some rows (`Cast("driverid", "numeric(2,0)")`) | an overflow, on those rows | raises `StatementError` (SQLSTATE `22003`) when the query runs | raises the same `StatementError` as it reads those rows (#1110) |
-| to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) |
-| any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds |
+| Cast | It means | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|---|
+| to text, of a float, a decimal, a `numeric` function, a timestamp, an interval or a JSON document | the value's text | builds (`'10'`, `'14.00'`) | builds (`'10.0'`, `'14'`) | builds |
+| to text, of a boolean | `'true'` / `'false'` | builds | **refused**: it writes `'1'` / `'0'` | **refused**: it writes `'1'` / `'0'` |
+| to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) | builds |
+| to a number (an integer, a float, a `numeric`, scaled or not), of an interval | an error, since an interval has no numeric value | builds, and raises when the query runs | **refused**: it casts the stored `HH:MM:SS` text and reads its hours (`00:01:23.456` → `0`) | **refused**: a duration is its count of microseconds there, and the cast reads the count |
+| to a number, of a date, a timestamp or a time | an error, since none has a numeric value | builds, and raises when the query runs | **refused**: it casts the stored text and reads its leading digits, the year (`2009-03-29` → `2009`) or a time's hour (`06:00:00` → `6`) | **refused**: its cast reads the digits as one number (`2009-03-29` → `20090329`) |
+| to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit | builds |
+| to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` | **refused**: it clamps it to the largest value the type holds (`9.99`) |
+| to `numeric(p, s)`, of a column or a computed value too large on some rows (`Cast("driverid", "numeric(2,0)")`) | an overflow, on those rows | raises `StatementError` (SQLSTATE `22003`) when the query runs | raises the same `StatementError` as it reads those rows (#1110) | raises the same `StatementError` as it reads those rows (#1110) |
+| to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) | builds |
+| any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds | **refused**: a sum of integers is a `DECIMAL` (`7.5`) |
 
 The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
 is documented, not refused: the `Concat` section above lists each engine's text. A quotient is the

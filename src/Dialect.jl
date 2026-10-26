@@ -14,7 +14,7 @@ import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLT
 #                                lookup, an extract part SQLite lacks, too old a SQLite library,
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
-#   UnsupportedConnectionError — a MySQL rendering a later phase of #1130 delivers (a cast target).
+#   UnsupportedConnectionError — a MySQL rendering PormG has no faithful SQL for (a cast target).
 # And one it READS: `StatementError` with SQLSTATE 22003, a SQLite value too wide for its declared
 # `numeric(p, s)` (#1110), the error PostgreSQL raises for the same row.
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError, UnsupportedConnectionError
@@ -4776,9 +4776,8 @@ const MYSQL_TABLE_OPTIONS = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8m
 # PostgreSQL (`stamp_db_default(::PormGMySQL)`).
 _parenthesizes_db_default(::PormGMySQL) = true
 
-_mysql_not_yet(what::AbstractString, phase::AbstractString = "4c") = UnsupportedConnectionError(
-  "$(what) is not supported on MySQL yet: the MySQL migrations arrive in phases, and this one is phase " *
-  "$(phase)'s (#1130).")
+_mysql_no_byte_literal(what::AbstractString) = UnsupportedConnectionError(
+  "$(what) is not supported on MySQL: PormG renders no byte literal there (#1130).")
 
 function _get_column_type(field::PormGField, conn::PormGMySQL; type_map = nothing)::String
   field isa sIDField && return "BIGINT"
@@ -4833,7 +4832,7 @@ function _mysql_default_clause(field::PormGField, col_name::AbstractString, base
   end
   value = field.default !== nothing ? field.default : temporary_default
   value === nothing && return nothing
-  value isa AbstractVector{UInt8} && throw(_mysql_not_yet("A default value for the binary column \"$(col_name)\""))
+  value isa AbstractVector{UInt8} && throw(_mysql_no_byte_literal("A default value for the binary column \"$(col_name)\""))
   literal = _format_default_sql_value(value, conn)
   return _mysql_expression_only(base_type) ? "DEFAULT ($(literal))" : "DEFAULT $(literal)"
 end
@@ -4851,8 +4850,8 @@ end
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
                             temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
-  # PormG's one generated field is a tsvector, refused above; a generated declaration is a feature MySQL's
-  # row in the capability table does not have.
+  # PormG's one generated field is a tsvector, refused above. MySQL has generated columns, but not the
+  # generated search vector the capability row names (#1358), so the refusal stays if it is ever reached.
   generated_sql(field) === nothing ||
     throw(_capability_error(conn, :generated_columns, "The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)

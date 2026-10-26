@@ -555,9 +555,12 @@ end
   # PostgreSQL places NULLs natively, and SQLite 3.45 does too: no key, the alias as before.
   @test occursin("ORDER BY \"laps\" DESC NULLS FIRST", _mr_inspect(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))[:sql_text])
   @test occursin("ORDER BY \"laps\" DESC NULLS FIRST", _mr_inspect(_MR_SL.Result.objects.values("laps" => "position").order_by("-laps"))[:sql_text])
-  # A path MySQL does not render yet says so, rather than reporting a PormG bug.
-  msg = sprint(showerror, _MR_QB._unsupported_conn("date/interval arithmetic", MrMockMySQL()))
-  @test occursin("not rendered for MySQL yet", msg) && !occursin("PormG bug", msg)
+  # MySQL is one of the engines every execution path renders (#1130 phase 5d): the internal fallback names
+  # it among the pools it expects, and it no longer has an arm that calls a path a later phase's.
+  msg = sprint(showerror, _MR_QB._unsupported_conn("date/interval arithmetic", nothing))
+  @test occursin("expected a PostgreSQL, SQLite or MySQL connection pool", msg)
+  @test MrMockMySQL() isa PormG._SQLEngine
+  @test !occursin("later phase", sprint(showerror, _MR_QB._unsupported_conn("op", MrMockMySQL())))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -936,7 +936,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | :--- | :--- |
 | `PormGAbstractType` | Base abstract type for all PormG types. |
 | `PormGSettings` | The connection-settings/config type (`Configuration.Settings` is a subtype). *Renamed from `SQLConn`.* |
-| `PormGBackend` | Base for the database backend/dialect markers (subtypes: `PormGPostgres`, `PormGSQLite`, `PormGMySQL`; MySQL is in progress, #1130), the dispatch key for SQL rendering and driver selection. |
+| `PormGBackend` | Base for the database backend/dialect markers (subtypes: `PormGPostgres`, `PormGSQLite`, `PormGMySQL`), the dispatch key for SQL rendering and driver selection. |
 | `SQLObject` | Base for objects that can be stored in the database. |
 | `SQLObjectHandler` | Handles operations on SQL objects (the query builder). |
 | `SQLTableAlias` | Manages table aliases in SQL queries. |
@@ -1026,7 +1026,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`, the `regex` family), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on a filter, an insert or an update — the message names where, never the value, and `kind`/`field`/`row` carry it as data (#971) — an identifier failed the safety check, an interval/duration could not be parsed, or a piece of SQL grammar PormG must write itself — a `Cast` type name, an `Extract` part, a window `frame=` — is outside the grammar it accepts. |
 | `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
-| `UnsupportedConnectionError` | A connection object that is neither PostgreSQL nor SQLite reached an execution path — an internal PormG dispatch bug; please report it. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
+| `UnsupportedConnectionError` | A connection object that is none of PormG's engine pools reached an execution path — an internal PormG dispatch bug; please report it. On MySQL it is also the refusal of what has no faithful SQL there: a `Cast` to a type with no MySQL target (`boolean`, `interval`, `bytea`), or a default on a binary column. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
 | `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. |
 
 **Defining models**

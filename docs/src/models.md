@@ -674,6 +674,7 @@ unmanaged model, after the tables:
 ```julia
 PormG.Migrations.import_models_from_postgres("db"; include_views = true)
 PormG.Migrations.import_models_from_sqlite("db_sl"; include_views = true)
+PormG.Migrations.import_models_from_mysql("db_my"; include_views = true)
 ```
 
 `include_table` and the ignore lists filter views by name, as they filter tables. A view has no
@@ -689,6 +690,9 @@ Driver_points_v = Models.Model("driver_points_v", managed = false,
   driverid = Models.BigIntegerField(null=true),
   points = Models.FloatField(null=true))
 ```
+
+On MySQL the catalog derives a view column's nullability from its source, so a column taken straight
+from a `NOT NULL` column (`driverid` here) is generated without `null=true`.
 
 Reads, filters and aggregates work on a keyless model. The writes that address rows by key — a
 filtered `delete()`, `bulk_update` without `match_on`, an upsert without a conflict `target` — raise,

@@ -1925,9 +1925,9 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   end
   # Every refusal comes before the existing entry is closed below, so a refused re-registration
   # leaves its pool serving (#1256): the adapter, then the environment.
-  # MySQL takes no connection URL yet (#1130): it is configured by keys, through `load`.
+  # MySQL takes no connection URL (#1130): it is configured by keys, through `load`.
   adapter == "MySQL" && throw(InvalidConfigurationError(
-    "register_connection does not take `adapter = \"MySQL\"` yet: a MySQL connection is configured by " *
+    "register_connection does not take `adapter = \"MySQL\"`: a MySQL connection is configured by " *
     "its keys (`host:`, `port:`, `username:`, `password:`, `database:`) in connection.yml, through `load`."))
   adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
   app_env = _registered_env(env, key)

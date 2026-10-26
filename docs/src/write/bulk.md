@@ -84,18 +84,16 @@ Qualifications:
 
 ### How rows reach the database
 
-`bulk_insert()` and `bulk_update()` send each chunk as one statement, but the two backends carry the rows differently. SQLite has no array parameters, so this divergence is intentional:
+`bulk_insert()` and `bulk_update()` send each chunk as one statement, but the backends carry the rows differently. SQLite and MySQL have no array parameters, so this divergence is intentional:
 
-| | PostgreSQL | SQLite |
-| :--- | :--- | :--- |
-| Row source | one **array parameter per column**, expanded by `unnest(...)` | one `?` per cell in a `VALUES` list |
-| Parameters per statement | one per column, plus any `filters=` / handler values | rows × columns, plus any `filters=` / handler values |
-| Chunk size | `chunk_size` as given — no parameter cap applies (a non-positive `chunk_size` falls back to 65,535 ÷ columns rows) | `chunk_size`, lowered automatically so a statement stays under SQLite's limit of 32,766 parameters (999 on SQLite builds older than 3.32) |
-| Statement text | the same for every chunk | grows with the chunk's row count |
+| | PostgreSQL | SQLite | MySQL |
+| :--- | :--- | :--- | :--- |
+| Row source | one **array parameter per column**, expanded by `unnest(...)` | one `?` per cell in a `VALUES` list | one `?` per cell: a `VALUES (?, …), …` list for `bulk_insert()`, and for `bulk_update()` a `VALUES ROW(?, …), …` derived table the `UPDATE` joins |
+| Parameters per statement | one per column, plus any `filters=` / handler values | rows × columns, plus any `filters=` / handler values | rows × columns, plus any `filters=` / handler values |
+| Chunk size | `chunk_size` as given — no parameter cap applies (a non-positive `chunk_size` falls back to 65,535 ÷ columns rows) | `chunk_size`, lowered automatically so a statement stays under SQLite's limit of 32,766 parameters (999 on SQLite builds older than 3.32) | `chunk_size`, lowered automatically so a statement stays under MySQL.jl's limit of 4,096 parameters |
+| Statement text | the same for every chunk | grows with the chunk's row count | grows with the chunk's row count |
 
-MySQL carries the rows as SQLite does, one `?` per cell, with `chunk_size` lowered so a statement stays under 65,535 parameters: a `VALUES (?, …), …` list for `bulk_insert()`, and for `bulk_update()` a `VALUES ROW(?, …), …` derived table that the `UPDATE` joins (`UPDATE t AS Tb, (VALUES ROW(…)) AS source (…) SET Tb.col = source.col WHERE …`).
-
-For a table whose columns have the types their fields declare — every table PormG created or migrated — what you observe is the same on both: the rows written, the returned `count`, and the errors raised. Only the inspection output differs, because `show_query` shows what each backend actually runs. On PostgreSQL, `show_query = :params` returns one vector per column, after any filter values:
+For a table whose columns have the types their fields declare — every table PormG created or migrated — what you observe is the same on every engine: the rows written, the returned `count`, and the errors raised. Only the inspection output differs, because `show_query` shows what each backend actually runs. On PostgreSQL, `show_query = :params` returns one vector per column, after any filter values:
 
 ```julia
 bulk_insert(M.Status.objects, statuses_df, show_query = :params)

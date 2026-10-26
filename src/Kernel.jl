@@ -49,10 +49,8 @@ engine rather than as a runtime branch. The values you actually hold are the con
 pools: `PostgresConnectionPool <: PormGPostgres`, `SQLiteConnectionPool <: PormGSQLite` and
 `MySQLConnectionPool <: PormGMySQL`.
 
-`PormGMySQL` is in progress (#1130): its pool connects, runs statements and transactions, takes
-advisory locks, and renders plain-column reads. What the query builder does not render for it yet
-(writes, date arithmetic, casts, most functions) fails before any SQL is sent, at the first part of
-the query builder MySQL has no method for (a `MethodError` naming it).
+`PormGMySQL` is MySQL 8.4 or newer (#1130): reads, writes, migrations and `inspectdb`. What it
+lacks is refused before any SQL is sent — see the [MySQL Guide](@ref).
 
 Deliberately **not** `<: PormGSettings`: that is the configuration/`Settings` type, and a pool
 carries none of its fields (#186).
@@ -63,7 +61,7 @@ Adding a backend means defining `PormG.backend_*` methods in a package extension
 abstract type PormGBackend <: PormGAbstractType end
 abstract type PormGPostgres <: PormGBackend end
 abstract type PormGSQLite <: PormGBackend end
-abstract type PormGMySQL <: PormGBackend end    # #1130, in progress: MySQL 8.4+
+abstract type PormGMySQL <: PormGBackend end    # #1130: MySQL 8.4+
 # Every engine PormG ships, as one name for a signature that accepts any of them (#1130). Written
 # where a method is the same for every engine — the pool's funnels, the transaction context — so a
 # backend added later widens one line rather than every `Union{PormGPostgres, PormGSQLite}` it

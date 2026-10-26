@@ -4,7 +4,7 @@ PormG is PostgreSQL-first for production and SQLite-friendly for local developme
 
 1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL, most with a documented SQLite fallback or no-op.
 2. **PostgreSQL-only field types** — specialized types SQLite has no column for. PormG refuses them on SQLite rather than emulate them, so a model that declares one runs on PostgreSQL only.
-3. **PostgreSQL ↔ SQLite divergences** — behaviour a power user must know when the same code runs on both backends.
+3. **Divergences between the engines** — behaviour a power user must know when the same code runs on more than one backend.
 
 The deep-dive pages own the full reference and verified examples; this guide points you to them rather than restating them.
 
@@ -61,6 +61,7 @@ end
 ```
 
 - **PostgreSQL** uses `pg_advisory_lock` / `pg_try_advisory_lock`.
+- **MySQL** has them too, as named locks (`GET_LOCK`); see [Advisory Locks](advisory_lock.md).
 - **SQLite** does not support advisory locks, so `with_advisory_lock` is a **no-op** — the block still runs, just without cross-process locking. This is deliberate, so the same code is correct in production and in SQLite tests. It warns once per lock key; `on_missing_lock = :ignore` accepts that silently and `on_missing_lock = :error` raises `BackendCapabilityError` rather than running unprotected.
 
 Waiting strategies (`:poll` vs `:block`), timeouts, and async safety: **[Advisory Locks](advisory_lock.md)**.
@@ -244,60 +245,62 @@ returns a different answer, so a test suite running on SQLite fails where produc
   both and renders `date(x)` on SQLite. See
   [Functions and Dates → Cast](read/functions_and_dates.md#Cast-—-Type-Conversion).
 
-## Advanced SQL (both backends, PostgreSQL-first)
+## Advanced SQL (every backend, PostgreSQL-first)
 
-These run on SQLite too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
+These run on SQLite and MySQL too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
 
 - **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) render on PostgreSQL (and MySQL) — SQLite supports only the default frame.
 - **[Subqueries and CTEs](read/subqueries_and_ctes.md)** — `.with(...)` and its `"<cte>__<column>"` columns, correlated subqueries, `Exists`/`OuterRef`, and CTE joins.
 - **[Filters and Aggregates](read/filters_and_aggregates.md)** and **[Functions and Dates](read/functions_and_dates.md)** — the `Sum`/`Count`/`Max`, date-bucket, and SQL-function surface.
 - **[Field Expressions](read/field_expressions.md)** — `F("...")` database-side arithmetic and field-to-field comparisons.
 
-## PostgreSQL ↔ SQLite divergences
+## Divergences between the engines
 
 PormG gives a query one meaning on every backend. Where a backend computes a different value, that backend refuses the query or PormG normalizes it there; where it only writes the same value differently, the difference is documented; and a feature a backend lacks raises `BackendCapabilityError`. The ones a power user hits:
 
-| Area | PostgreSQL | SQLite |
-|------|-----------|--------|
-| **Bind placeholders** | `$1`, `$2`, … | `?` |
-| **Bulk load** | `bulk_copy()` (COPY) | `bulk_insert()` (no COPY) |
-| **`bulk_insert` / `bulk_update` rows** | one array parameter per column, `unnest(...)`; no parameter cap on `chunk_size` | one `?` per cell in `VALUES`; `chunk_size` capped at SQLite's parameter limit — see [How rows reach the database](write/bulk.md#How-rows-reach-the-database) |
-| **Advisory locks** | real (`pg_advisory_lock`) | no-op (warns once per key; `on_missing_lock=:error` raises) |
-| **PK allocation** | real sequences (`nextval`) | emulated via `sqlite_sequence` high-water mark |
-| **Drop a constraint (migrations)** | `ALTER TABLE … DROP CONSTRAINT` | full table rebuild (SQLite has no `DROP CONSTRAINT`) |
-| **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |
-| **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
-| **`UUIDField` storage** | native `UUID` | `TEXT` |
-| **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` |
-| **`ArrayField`** | native arrays (`integer[]`, …) | not supported — `makemigrations` raises `BackendCapabilityError` |
-| **`SearchVectorField`** | native `tsvector` | not supported — `makemigrations` raises `BackendCapabilityError` |
-| **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
-| **Window frames** | explicit `frame=` clauses | default frame only |
-| **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
-| **Array lookups** (`@acontains`, `@contained_by`, `@overlap`, `@len`, index, slice) | array operators and subscripts | `BackendCapabilityError` |
-| **Network lookups** (`@net_contained`, `@net_contains`, `@net_overlaps`, …, `@family`, `@prefixlen`) | `inet` operators | `BackendCapabilityError` |
-| **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
-| **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
-| **Full-text search** (`@search`, `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline`) | `tsvector` / `tsquery` | `BackendCapabilityError` |
-| **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |
-| **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
-| **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
-| **`Round(x, n)` at a decimal tie** | `ROUND(x::numeric, n)` rounds the exact decimal form: `Round(2.675, 2)` is `2.68` | `ROUND(x, n)` rounds the stored double: `2.67` — the last digit only, as with Django ([Rounding to decimal places](read/functions_and_dates.md#Rounding-to-decimal-places)) |
-| **`Sum` of a `bigint`** | `sum(bigint)` is `numeric`; PormG renders `SUM(x)::bigint`, an integer ([What a `Sum` returns](read/filters_and_aggregates.md#What-a-Sum-returns)) | an integer |
-| **`Cast` to text** | builds; a boolean reads `true` | builds; a boolean's cast is refused (SQLite writes `1`) — see [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) |
-| **`Cast` to an integer or `numeric(p, s)`** | builds: rounds to the nearest integer or to the scale | refused where a fraction or extra places would be truncated or kept |
-| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]`; refused outside a transaction | no lock clause — a SQLite write transaction already locks the whole database; refused outside a transaction, as on PostgreSQL |
-| **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
-| **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |
+| Area | PostgreSQL | SQLite | MySQL |
+|------|-----------|--------|-------|
+| **Bind placeholders** | `$1`, `$2`, … | `?` | `?` |
+| **Bulk load** | `bulk_copy()` (COPY) | `bulk_insert()` (no COPY) | `bulk_insert()` (no COPY); `bulk_copy()` raises `BackendCapabilityError` |
+| **`bulk_insert` / `bulk_update` rows** | one array parameter per column, `unnest(...)`; no parameter cap on `chunk_size` | one `?` per cell in `VALUES`; `chunk_size` capped at SQLite's parameter limit — see [How rows reach the database](write/bulk.md#How-rows-reach-the-database) | one `?` per cell; `chunk_size` capped at MySQL.jl's 4,096 parameters |
+| **Advisory locks** | real (`pg_advisory_lock`) | no-op (warns once per key; `on_missing_lock=:error` raises) | real (`GET_LOCK`), a server-wide name that PormG scopes to the database |
+| **PK allocation** | real sequences (`nextval`) | emulated via `sqlite_sequence` high-water mark | `AUTO_INCREMENT`; drawing keys before the rows are written raises `BackendCapabilityError` |
+| **Drop a constraint (migrations)** | `ALTER TABLE … DROP CONSTRAINT` | full table rebuild (SQLite has no `DROP CONSTRAINT`) | `ALTER TABLE … DROP CHECK` / `DROP INDEX` / `DROP FOREIGN KEY`, in place |
+| **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax | `ON DUPLICATE KEY UPDATE`, which names no target: a targeted upsert runs only when the target is the one unique key a row can conflict on |
+| **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) | `JSON` |
+| **`UUIDField` storage** | native `UUID` | `TEXT` | `CHAR(36)` |
+| **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` | not supported — `makemigrations` raises `BackendCapabilityError` |
+| **`ArrayField`** | native arrays (`integer[]`, …) | not supported — `makemigrations` raises `BackendCapabilityError` | not supported — `makemigrations` raises `BackendCapabilityError` |
+| **`SearchVectorField`** | native `tsvector` | not supported — `makemigrations` raises `BackendCapabilityError` | not supported — `makemigrations` raises `BackendCapabilityError` |
+| **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` | `DECIMAL(p, s)`, exact up to MySQL's 65 digits; a wider declaration is refused by MySQL at `migrate` |
+| **Window frames** | explicit `frame=` clauses | default frame only | `ROWS` and `RANGE` frames; `GROUPS` and `EXCLUDE` raise `BackendCapabilityError` |
+| **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work | `BackendCapabilityError` — `__` key paths still work |
+| **Array lookups** (`@acontains`, `@contained_by`, `@overlap`, `@len`, index, slice) | array operators and subscripts | `BackendCapabilityError` | `BackendCapabilityError` |
+| **Network lookups** (`@net_contained`, `@net_contains`, `@net_overlaps`, …, `@family`, `@prefixlen`) | `inet` operators | `BackendCapabilityError` | `BackendCapabilityError` |
+| **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` | `BackendCapabilityError` |
+| **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` | `BackendCapabilityError` |
+| **Full-text search** (`@search`, `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline`) | `tsvector` / `tsquery` | `BackendCapabilityError` | `BackendCapabilityError` |
+| **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` | `DATE`, `DATETIME(3)`, `TIME(6)`; `interval` raises `UnsupportedConnectionError` |
+| **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` | the portable table, through `DATE_FORMAT`; others raise `BackendCapabilityError` |
+| **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` | SQLite's eleven plus `QUARTER`, `EPOCH`, `MILLISECONDS` and `MICROSECONDS`; `CENTURY`, `DECADE`, `MILLENNIUM`, `JULIAN` and the `TIMEZONE` fields raise `BackendCapabilityError` |
+| **`Round(x, n)` at a decimal tie** | `ROUND(x::numeric, n)` rounds the exact decimal form: `Round(2.675, 2)` is `2.68` | `ROUND(x, n)` rounds the stored double: `2.67` — the last digit only, as with Django ([Rounding to decimal places](read/functions_and_dates.md#Rounding-to-decimal-places)) | rounds the double's shortest digits as a `DECIMAL`, half away from zero: `2.68` |
+| **`Sum` of a `bigint`** | `sum(bigint)` is `numeric`; PormG renders `SUM(x)::bigint`, an integer ([What a `Sum` returns](read/filters_and_aggregates.md#What-a-Sum-returns)) | an integer | `SUM` of integers is a `DECIMAL`; PormG renders `SUM(x) DIV 1`, an integer |
+| **`Cast` to text** | builds; a boolean reads `true` | builds; a boolean's cast is refused (SQLite writes `1`) — see [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) | builds; a boolean's cast is refused (MySQL writes `1`) |
+| **`Cast` to an integer or `numeric(p, s)`** | builds: rounds to the nearest integer or to the scale | refused where a fraction or extra places would be truncated or kept | builds: rounds to the nearest integer or to the scale |
+| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]`; refused outside a transaction | no lock clause — a SQLite write transaction already locks the whole database; refused outside a transaction, as on PostgreSQL | `SELECT … FOR UPDATE [OF …]` (`no_key` raises `BackendCapabilityError`); refused outside a transaction |
+| **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) | raises `BackendCapabilityError`: InnoDB checks a foreign key at each statement |
+| **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default | rendering a pin without a `mysql` entry raises `BackendCapabilityError` — add `mysql = "…"`, or `mysql = nothing` |
 
 Notes:
 
-- **Placeholders.** The generated SQL uses `$1`/`$2` on PostgreSQL and `?` on SQLite. Doc SQL blocks conventionally show the PostgreSQL form; the shape is otherwise identical. You never write placeholders yourself — parameters are always bound, never interpolated. The one exception is the raw-SQL manual-params escape hatch (`fetch`/`fetch_async` with a values array), where you write the backend-native placeholder yourself and PormG binds the values — see [Async & Concurrency](async.md).
-- **DateTime is canonicalized to UTC.** `DateTimeField` values are stored as a single UTC ISO-8601 string on both backends (see the `#79` entry in the change log); prefer `ZonedDateTime` when the source has a real civil timezone.
+- **Placeholders.** The generated SQL uses `$1`/`$2` on PostgreSQL and `?` on SQLite and MySQL. Doc SQL blocks conventionally show the PostgreSQL form; the shape is otherwise identical. You never write placeholders yourself — parameters are always bound, never interpolated. The one exception is the raw-SQL manual-params escape hatch (`fetch`/`fetch_async` with a values array), where you write the backend-native placeholder yourself and PormG binds the values — see [Async & Concurrency](async.md).
+- **DateTime is canonicalized to UTC.** `DateTimeField` values are stored in UTC on every backend: a single ISO-8601 string on PostgreSQL and SQLite (see the `#79` entry in the change log), and a `DATETIME(3)` written in the connection's UTC session on MySQL; prefer `ZonedDateTime` when the source has a real civil timezone.
 - **Suspending foreign keys.** Inside a plain transaction PormG already defers foreign-key checks
-  to `COMMIT` on both backends, so `atomic` handles children written before their parents.
+  to `COMMIT` on PostgreSQL and SQLite, so `atomic` handles children written before their parents.
+  MySQL checks a foreign key at each statement, so there a child must follow its parent, and
+  `without_foreign_keys` raises `BackendCapabilityError`.
   `without_foreign_keys` is still a single transaction. It is for repairing an already-inconsistent
-  database, or for planting a violation in a SQLite test. On both engines it must be the outermost
+  database, or for planting a violation in a SQLite test. On both of those engines it must be the outermost
   transaction: nested inside `atomic`, it raises `TransactionError` before touching the database.
   The two engines differ in two ways:
   - **Mechanism:** see the table above.
@@ -323,8 +326,8 @@ Notes:
   that does not fit the declaration (the unrounded result of an `F`-arithmetic `update`, which
   PostgreSQL rounds to the column's scale), and a field declared wider than fifteen digits, keep the
   `Int64`/`Float64` SQLite holds. See [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON).
-- **Primary-key allocation** (`allocate_primary_keys`) presents one API over both backends; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. See [Bulk Insert, Copy, and Update](write/bulk.md).
-- **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT`. `bulk_insert`/`bulk_copy` resynchronize automatically (and `bulk_insert` retries a duplicate-key error once by resyncing first); row-level writers (`create`/`insert`, `update_or_create`, `get_or_create`) do not — call `resync_sequences(model)` explicitly after one of them writes an explicit primary key. See [Sequence synchronisation](schema_conventions.md#Sequence-synchronisation).
+- **Primary-key allocation** (`allocate_primary_keys`) presents one API over PostgreSQL and SQLite; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. MySQL's `AUTO_INCREMENT` reserves none, so it raises `BackendCapabilityError` there. See [Bulk Insert, Copy, and Update](write/bulk.md).
+- **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT` or MySQL's `AUTO_INCREMENT`, which an explicit id moves past. `bulk_insert`/`bulk_copy` resynchronize automatically (and `bulk_insert` retries a duplicate-key error once by resyncing first); row-level writers (`create`/`insert`, `update_or_create`, `get_or_create`) do not — call `resync_sequences(model)` explicitly after one of them writes an explicit primary key. See [Sequence synchronisation](schema_conventions.md#Sequence-synchronisation).
 
 ## Production notes
 

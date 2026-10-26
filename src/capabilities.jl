@@ -75,7 +75,10 @@ const _BACKEND_FEATURES = (
   :identity_columns       => "identity columns (`GENERATED … AS IDENTITY`)",
   :declarative_partitions => "declarative partitioning (`PARTITION BY`)",
   :include_columns        => "non-key index columns (`INCLUDE`)",
-  :generated_columns      => "generated columns (`GENERATED ALWAYS AS (…) STORED`)",
+  # #1358: PormG's one generated field, not the SQL construct: MySQL and SQLite have `GENERATED ALWAYS AS
+  # (…) STORED` too, but neither has the `tsvector` it computes. PostgreSQL's version row (12) is the
+  # construct's, which is why a hand-written plan step that uses it is read against this row too.
+  :generated_columns      => "a generated search vector (`SearchVectorField(generated_from = …)`, a `tsvector` column `GENERATED ALWAYS AS (…) STORED`)",
   :drop_expression        => "removing a column's generation expression (`ALTER COLUMN … DROP EXPRESSION`)",
   :input_validity         => "testing a value against a type's input function (`pg_input_is_valid`)",
   # #1264: a server PormG is verified against. Every backend has it; a backend with a version row
@@ -103,7 +106,7 @@ for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :
           :transactional_ddl, :partial_indexes, :unbounded_text_indexes, :statement_timeouts)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
-# MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
+# MySQL (#1130) gained each row in the phase that delivered it. Phase 1 delivered the
 # connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269). Phase 2c-2: `ROUND`
 # takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4). Phase 2c-3b: window functions
 # (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.

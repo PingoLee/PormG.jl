@@ -18,7 +18,7 @@ Or you can manually create the `connection.yml` file and populate it using the s
 
 ## Adapters & Environments
 
-Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or — in an interactive session only — an optional top-level `default_env:` key; see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL`, `SQLite` and `MySQL` (in progress, see [Using MySQL](@ref)); any other is refused when the file is loaded.
+Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or — in an interactive session only — an optional top-level `default_env:` key; see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL`, `SQLite` and `MySQL` (see [Using MySQL](@ref)); any other is refused when the file is loaded.
 
 ### Using PostgreSQL
 
@@ -100,7 +100,7 @@ The last one is refused rather than warned about because it cannot work at all: 
 
 ### Using MySQL
 
-MySQL is in progress ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). A MySQL pool connects, runs raw SQL and transactions, and takes advisory locks; model queries and migrations are not available on it yet ([Backend Capabilities](../backends.md)). It needs MySQL **8.4 or newer**, and MySQL.jl 2.0 loaded with `using MySQL`.
+To use a MySQL database, assign `adapter: MySQL`. It needs MySQL **8.4 or newer**, and MySQL.jl 2.0 loaded with `using MySQL`. What differs on MySQL, from its collation to its non-transactional DDL, is in the [MySQL Guide](../mysql.md).
 
 ```yaml
 default_env: dev
@@ -119,7 +119,7 @@ dev:
     time_zone: 'UTC'
 ```
 
-A MySQL connection is configured by these keys, not by a URL. `connect_timeout`, `sslrootcert`, `sslcert` and `sslkey` are read as on PostgreSQL, and `sslmode` takes MySQL's modes listed above. The PostgreSQL-only keys `url`, `hostaddr`, `passfile`, `client_encoding`, `postgres_driver` and `extensions` raise `InvalidConfigurationError` instead of being dropped. For the same reason, `register_connection` does not take `adapter = "MySQL"` yet.
+A MySQL connection is configured by these keys, not by a URL. `connect_timeout`, `sslrootcert`, `sslcert` and `sslkey` are read as on PostgreSQL, and `sslmode` takes MySQL's modes listed above. The PostgreSQL-only keys `url`, `hostaddr`, `passfile`, `client_encoding`, `postgres_driver` and `extensions` raise `InvalidConfigurationError` instead of being dropped. For the same reason, `register_connection` does not take `adapter = "MySQL"`.
 
 The server's default account plugin, `caching_sha2_password`, sends the password in full only over TLS, so with `sslmode: disabled` MySQL.jl refuses to authenticate unless the server already has the account's credentials cached. Keep TLS on.
 
@@ -129,23 +129,25 @@ These are the keys PormG reads **directly under an environment block** — the p
 
 | Key | Applies to | Meaning |
 |---|---|---|
-| `adapter` | both | **Required.** `PostgreSQL` or `SQLite`. A block without it raises `InvalidConfigurationError` on load. |
-| `database` | both | Database name (PostgreSQL) or file path (SQLite). A relative SQLite path resolves inside the config folder — except for the two keyword forms, `:memory:` and a `file:` URI, which are passed to SQLite verbatim (see [In-memory databases](#In-memory-databases)). |
-| `host` | both | Server host on PostgreSQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
-| `url` | PostgreSQL | A complete connection string, in either the libpq keyword form or the URL form (`postgres://user:password@host/db`). When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Both forms are redacted wherever PormG logs, displays or serializes the connection — see [Credentials never leave through `show` or `JSON.json`](advanced.md#Credentials-never-leave-through-show-or-JSON.json). Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
-| `username`, `password`, `port`, `hostaddr` | PostgreSQL | Standard credentials/target. Forwarded into the libpq DSN. |
-| `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN. |
-| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN. |
-| `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite. |
-| `postgres_driver` | PostgreSQL | The driver that opens the connections: `LibPQ` (the default) or `Postgres` (**experimental**). Case-insensitive. Unset, the `PORMG_POSTGRES_DRIVER` environment variable decides, then LibPQ. See [Choosing the PostgreSQL driver](#Choosing-the-PostgreSQL-driver). Ignored with a warning on SQLite. |
+| `adapter` | every engine | **Required.** `PostgreSQL`, `SQLite` or `MySQL`. A block without it raises `InvalidConfigurationError` on load. |
+| `database` | every engine | Database name (PostgreSQL, MySQL) or file path (SQLite). A relative SQLite path resolves inside the config folder — except for the two keyword forms, `:memory:` and a `file:` URI, which are passed to SQLite verbatim (see [In-memory databases](#In-memory-databases)). |
+| `host` | every engine | Server host on PostgreSQL and MySQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
+| `url` | PostgreSQL | Refused on MySQL. A complete connection string, in either the libpq keyword form or the URL form (`postgres://user:password@host/db`). When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Both forms are redacted wherever PormG logs, displays or serializes the connection — see [Credentials never leave through `show` or `JSON.json`](advanced.md#Credentials-never-leave-through-show-or-JSON.json). Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
+| `username`, `password`, `port` | PostgreSQL, MySQL | Standard credentials/target. Forwarded into the libpq DSN on PostgreSQL. |
+| `hostaddr` | PostgreSQL | Forwarded into the libpq DSN. Refused on MySQL. |
+| `passfile`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN. Refused on MySQL. |
+| `connect_timeout` | PostgreSQL, MySQL | Forwarded into the libpq DSN on PostgreSQL. |
+| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL, MySQL | TLS settings, forwarded into the libpq DSN on PostgreSQL. On MySQL `sslmode` takes MySQL's modes — see [Using MySQL](@ref). |
+| `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite, refused on MySQL. |
+| `postgres_driver` | PostgreSQL | The driver that opens the connections: `LibPQ` (the default) or `Postgres` (**experimental**). Case-insensitive. Unset, the `PORMG_POSTGRES_DRIVER` environment variable decides, then LibPQ. See [Choosing the PostgreSQL driver](#Choosing-the-PostgreSQL-driver). Ignored with a warning on SQLite, refused on MySQL. |
 | `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
-| `ignore_tables` | both | Table-name prefixes that introspection skips on **this connection only**: `makemigrations`, `check` and the importers never read them. See [Tables PormG leaves alone](#Tables-PormG-leaves-alone). Never forwarded to the driver. |
-| `unignore_defaults` | PostgreSQL | Entries of PormG's **built-in** ignore list that this connection reads and migrates after all, such as `account_` for a Django app labelled `account`. Each must equal a built-in entry exactly. See [Switching a built-in entry off](#Switching-a-built-in-entry-off). Any entry is refused on SQLite, whose list has none to remove. Never forwarded to the driver. |
-| `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
-| `options` | both | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
-| `config` | both | The settings sub-dictionary described in the next section. |
+| `ignore_tables` | every engine | Table-name prefixes that introspection skips on **this connection only**: `makemigrations`, `check` and the importers never read them. See [Tables PormG leaves alone](#Tables-PormG-leaves-alone). Never forwarded to the driver. |
+| `unignore_defaults` | PostgreSQL, MySQL | Entries of PormG's **built-in** ignore list that this connection reads and migrates after all, such as `account_` for a Django app labelled `account`. Each must equal a built-in entry exactly. See [Switching a built-in entry off](#Switching-a-built-in-entry-off). Any entry is refused on SQLite, whose list has none to remove. Never forwarded to the driver. |
+| `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | every engine | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
+| `options` | every engine | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
+| `config` | every engine | The settings sub-dictionary described in the next section. |
 
-The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry both sets without harm. `hostaddr`, `port`, `password`, `passfile`, `connect_timeout`, `client_encoding` and the four `ssl*` keys reach libpq under exactly the names written here; `username` and `database` are translated to libpq's `user=` and `dbname=` for you.
+The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry both sets without harm. Under `adapter: MySQL` they are refused, as [Using MySQL](@ref) lists. `hostaddr`, `port`, `password`, `passfile`, `connect_timeout`, `client_encoding` and the four `ssl*` keys reach libpq under exactly the names written here; `username` and `database` are translated to libpq's `user=` and `dbname=` for you.
 
 Every forwarded value is single-quoted and escaped for libpq, so write it exactly as it is: a password such as `corr3ct horse 'battery'`, or a certificate path such as `C:\certs\root ca.crt`, needs no quoting of its own beyond what YAML requires. YAML's own typing still applies first, so quote any value YAML would read as a number or a boolean — `password: 007` reaches libpq as `7`, and `password: '007'` as `007`. A value containing a NUL character cannot be sent to PostgreSQL at all and is rejected when the connection is built. (Only `url:` is passed through untouched, so a value inside it follows libpq's own quoting rules.)
 

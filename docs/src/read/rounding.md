@@ -230,5 +230,6 @@ UUID or a date, is refused into every number field on every engine
 | Django | PostgreSQL's column rounds on write. On SQLite, a converter quantizes a decimal column on read. `DecimalValidator` refuses extra places only in `full_clean()`, not on `save()` |
 | **PormG** | **refuses on the engine that would not honor it**, refuses a value with extra places on every write, refuses an expression `update` writes with extra places on that engine (#1279), and names the explicit spelling |
 
-MySQL (#1130) is in progress. `Round` follows the rules above there; the other rows join them as
-its phases land.
+On MySQL, `Round` follows the rules above. A cast to `numeric(p, s)` and an expression `update`
+writes into a `DecimalField` are rounded to the scale, as PostgreSQL's column rounds them, so neither
+is refused there for its extra places ([MySQL Guide](../mysql.md)).

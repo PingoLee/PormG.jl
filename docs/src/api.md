@@ -135,7 +135,7 @@ An integrated switch available on all terminal methods to toggle between executi
 | `:dict` | Returns the metadata dictionary — the eight keys below. |
 | `:inspection` | Alias of `:dict`. Useful when you want the same rich metadata shape used by `inspect_query()`. |
 | `:params` | Returns the parameters array only. |
-| `:none` | Returns `nothing`. Zero-overhead mode for benchmarking the builder itself. |
+| `:none` | Returns `nothing`, or a `Vector` of `nothing`s for a call that runs several statements (a cascading `delete()`). Zero-overhead mode for benchmarking the builder itself. |
 
 ```julia
 query = M.Driver.objects.filter("nationality" => "British")

@@ -33,7 +33,10 @@ transaction, so a failure part-way through leaves the database untouched.
   plan emits, returned bare when the plan is a single statement and as a `Vector` otherwise. A
   cascade can emit several statements for the same table (one `UPDATE` per `SET_NULL` /
   `SET_DEFAULT` field, plus its `DELETE`), so the count tracks statements, not tables.
-- Under `:none`: `nothing`.
+- Under `:none`: `nothing` for each statement, by the same rule — `nothing` when the plan is a
+  single statement, and a `Vector` of `nothing`s, one per statement, when it cascades. The
+  statements are built and discarded; on a live pool the key read and the cascade's existence
+  probes still run, as they do for the other inspection modes.
 
 # Behavior
 

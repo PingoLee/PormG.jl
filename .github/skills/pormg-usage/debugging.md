@@ -18,12 +18,16 @@ Every terminal accepts `show_query`:
 | `:params` | the bound parameters only |
 | `:none` | `nothing` — builds the query and skips the round-trip, for benchmarking |
 
+A call that runs several statements returns a `Vector` of these, one per statement, in the order they
+run. That covers a cascading `delete()`, whose first statement reads the root's keys, and a chunked
+bulk call. Index the result, or check `isa Vector`, rather than assuming one `String` or `Dict`.
+
 ```julia
 q = M.Result.objects.filter("driverid__surname" => "Senna").values("raceid__year", "points")
 
 q.list(show_query = :sql)                                  # the SELECT
 q.update("points" => 0, show_query = :dict)[:parameters]   # a mutation, inspected — never runs
-q.delete(show_query = :sql)
+q.delete(show_query = :sql)                                # a Vector: result cascades, so the key read comes first
 
 info = inspect_query(q)            # or q.inspect(), or q |> inspect_query()
 info[:sql_text]; info[:parameters]; info[:dialect]

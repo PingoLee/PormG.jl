@@ -32,8 +32,10 @@ using Dates
 # shared key would let another file's settings decide this file's dialect.
 struct PtcMockSQLite <: PormG.PormGSQLite end
 struct PtcMockPostgres <: PormG.PormGPostgres end
+struct PtcMockMySQL <: PormG.PormGMySQL end
 const _PTC_SL = PtcMockSQLite()
 const _PTC_PG = PtcMockPostgres()
+const _PTC_MY = PtcMockMySQL()
 PormG.backend_sqlite_version(::PtcMockSQLite) = 3045000
 
 PormG.config["ptc_mock"] = PormG.Configuration.Settings(
@@ -78,6 +80,33 @@ _ptc_refusal(f, conn) = try _ptc_sql(f, conn); nothing catch e; e end
 
 # The text a pattern lookup reads from `col` on each engine.
 _ptc_read(col, conn) = conn isa PormG.PormGPostgres ? "CAST($(col) AS text)" : col
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL (#1130 phase 5b): a time and a date read as the text PostgreSQL gives them. A `TimeField` is a
+# `TIME(6)` there, whose cast prints six fractional digits (`14:00:00.000000`), so a bare cast would let
+# `@contains ".000"` match every whole-second time; the read trims the fraction's trailing zeros and
+# then a bare `.`, as PostgreSQL's cast does. A date is its `YYYY-MM-DD` cast. The kinds every engine
+# refuses (a timestamp, an interval, a boolean, bytes) are refused on MySQL too, before any read.
+# Expected SQL: the `TIME_FORMAT` read below, and `CAST(`Tb`.`date` AS CHAR) LIKE ?`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1183, #1086 on MySQL: a time and a date read as PostgreSQL's text" begin
+  read = "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM TIME_FORMAT(`Tb`.`time`, '%H:%i:%s.%f')))"
+  @test occursin("WHERE $(read) LIKE ?", _ptc_sql(q -> q.filter("time__@startswith" => "14:"), _PTC_MY))
+  @test _ptc_params(q -> q.filter("time__@startswith" => "14:"), _PTC_MY) == ["14:%"]
+  @test occursin("$(read) NOT LIKE ?", _ptc_sql(q -> q.filter("time__@ncontains" => ":30"), _PTC_MY))
+  @test occursin("WHERE CAST(`Tb`.`date` AS CHAR) LIKE ?", _ptc_sql(q -> q.filter("date__@contains" => "-03-"), _PTC_MY))
+  # A date part is an integer: its digits.
+  @test occursin("AS CHAR) LIKE ?", _ptc_sql(q -> q.filter("date__@year__@startswith" => "20"), _PTC_MY))
+  for col in ("start_at", "duration", "sprint", "snapshot", "speed")
+    @test (col, _ptc_refusal(q -> q.filter("$(col)__@contains" => "1"), _PTC_MY) isa PormG.FilterError) == (col, true)
+  end
+  # A network column is the capability table's refusal there, as every network lookup is on MySQL.
+  for kind in (:inet, :cidr)
+    err = try PormG.Dialect._pattern_text_operand(_PTC_MY, Val(kind), "`c`"); nothing catch e; e end
+    @test (kind, err isa PormG.BackendCapabilityError) == (kind, true)
+    @test occursin("MySQL", sprint(showerror, err))
+  end
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A time column reads as its text on both engines. PostgreSQL prints a `time` as `HH:MM:SS[.f]` with

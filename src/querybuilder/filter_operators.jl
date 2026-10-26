@@ -39,6 +39,8 @@ _json_finite(value::AbstractFloat) = isfinite(value) ? value :
 #     `::numeric`.
 #   - SQLite `json_extract` returns the value's NATIVE type, so equality binds the raw Julia value
 #     (a JSON number stays a number → `5 = 5`, not `5 = '5'`) and comparisons need no cast.
+#   - MySQL reads text, as PostgreSQL does, and compares that text with a bound number as a double,
+#     so `<`/`>` need no cast there (`_json_numeric_operand`).
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   op = v.operator
   # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at
@@ -71,7 +73,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
     ph = add_parameter!(instruc, as_text ? string(v.values) : v.values)
     return string(column, " ", op, " ", ph)
   elseif op in (">", ">=", "<", "<=")
-    lhs = as_text ? "($(column))::numeric" : column
+    lhs = _json_numeric_operand(instruc.connection, column)
     rhs = try
       _json_numeric_rhs(v.values)
     catch e

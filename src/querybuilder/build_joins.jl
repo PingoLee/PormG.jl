@@ -55,6 +55,24 @@ function _cache_join(field::String, instruct::SQLInstruction)
   return false
 end
 
+# A cached join column's selector — `"Tb_1"."surname"`, `` `Tb_1`.`surname` `` on MySQL — back into its
+# alias and its column, unquoted, for a CTE `join_field` on a path (`"driverid__surname" => …`), whose
+# `CteJoin` quotes each again. Read in the engine's own quote character, with a doubled one undone:
+# stripping `"` and splitting on the first `.` left MySQL's backticks in the alias (the alias check
+# refused `` `R1_1` ``), and mis-split a `db_column` holding a `"` or a `.` on every engine. A selector
+# that is not one quoted alias and one quoted column (a JSON extraction, an expression) names no column
+# to join on, so it is refused.
+function _split_qualified_column(selector::AbstractString, path::AbstractString, conn)::Tuple{String,String}
+  q = first(quote_identifier("x", conn))
+  part = "$(q)((?:[^$(q)]|$(q)$(q))+)$(q)"
+  m = match(Regex("\\A$(part)\\.$(part)\\z"), selector)
+  m === nothing && throw(QueryBuildError(
+    "A CTE join_field on the path '$(path)' must name a column of the main model or of a model it " *
+    "reaches through a foreign key; this path resolves to an expression, which has no column to join on."))
+  unquote(s) = replace(String(s), "$(q)$(q)" => string(q))
+  return (unquote(m[1]), unquote(m[2]))
+end
+
 # #45 — materialize a `cjoin_on` entry into a row_join WITHOUT the FK-driven anchor path. The ON
 # clause is entirely user-provided (`config.filters`); no `main.key_a = joined.key_b` equi-anchor
 # is emitted (`build_row_join_sql_text` dispatches on the row being an `AnchorlessJoin`). The row
@@ -872,9 +890,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         # #474: the MAIN model's join field, so the base-model half of the namespace — never the
         # CTE's, even though this branch sits inside the CTE arm.
         cache_item = memo_projection(instruct, memo_key(:base, main_table_key))
-        v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
-        cte_alias_a = v_split[1] |> string
-        cte_key_a = v_split[2] |> string
+        cte_alias_a, cte_key_a = _split_qualified_column(cache_item.field, main_table_key, instruct.connection)
       else
         throw(UnknownFieldError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
       end

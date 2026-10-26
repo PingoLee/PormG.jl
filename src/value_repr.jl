@@ -391,7 +391,7 @@ value_parser(k::CanonicalType, backend::PormGBackend, label) = value_parser(k, b
 value_parser(::CFloat64, ::PormGPostgres) = Dialect._parse_computed_float
 value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
 # MySQL (#1130, #1270). MySQL.jl delivers typed values: `Date`, `Time`, a `Decimal` for a DECIMAL
-# (the extension's exact conversion), a `DateTime` for a DATETIME, with no zone. Three kinds need
+# (the extension's exact conversion), a `DateTime` for a DATETIME, with no zone. These kinds need
 # undoing:
 # - a boolean is a `TINYINT(1)`, and the wire has no boolean, so it arrives as the 0/1 it stores
 #   (`Int8`; a comparison as an `Int64`), as on SQLite;
@@ -401,9 +401,14 @@ value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
 # - a `DurationField` is a BIGINT of microseconds (#1130), read as the `Dates.CompoundPeriod` SQLite
 #   reads, in the same units; a computed one (`SUM`, `/`) arrives as a DECIMAL and is rounded to the
 #   microsecond.
+# - a date, a timestamp or a time MySQL computed as TEXT (`NULLIF` over one, phase 5b) arrives as that
+#   text, so the temporal kinds parse it back (`Dialect._parse_mysql_datetime`, `_parse_mysql_time`);
+#   a value MySQL.jl decoded passes unchanged.
 value_parser(::CBool, ::PormGMySQL) = Dialect._parse_sqlite_bool
 value_parser(::CInterval, ::PormGMySQL) = Dialect._parse_mysql_interval
-value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : nothing
+value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : Dialect._parse_mysql_datetime
+value_parser(::CDate, ::PormGMySQL) = Dialect._parse_sqlite_date
+value_parser(::CTime, ::PormGMySQL) = Dialect._parse_mysql_time
 value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
 # A computed number that means a decimal (#1121, phase 2c-2): MySQL computes `Sqrt`/`Power`/`Exp`/`Ln`
 # over a decimal as a DOUBLE and `Floor`/`Ceil` over one as a `BIGINT`, so a width-less decimal reads

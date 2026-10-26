@@ -180,17 +180,19 @@ The value is a **fragment of the column's text**, not a whole value of the colum
 bound as text whatever the column holds, as in Django. `"date__@startswith" => "2009"` matches every
 race in 2009, and so does `"date__@yyyy_mm__@startswith" => "2009"`, though an exact `@yyyy_mm`
 needs a whole `"2009-03"`. A date column, or a transform that yields a date (`@date`), is matched
-as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an `Extract`) as its
+as its `YYYY-MM-DD` text on every backend, and a date part (`@year`, `@hour`, an `Extract`) as its
 digits: `"date__@year__@startswith" => "200"` selects the 2000s. An integer column, a relation's
 key included, is matched as its digits too: `"grid__@startswith" => "1"` selects grid slots 1 and
-10–19 on both backends. So is an integer alias, CTE column or `Subquery` (a `Count`, a
+10–19 on every backend. So is an integer alias, CTE column or `Subquery` (a `Count`, a
 `Max("grid")`), an integer `Case` alias with no `output_field`, a `Value(1)` alias, arithmetic over a
 date part (`F("date__@year") + 1`) and a day count (`F("date") - F("date")`), and a date shifted by
 whole days (`F("date") + Day(1)`) is matched as its `YYYY-MM-DD` text. A time column is matched as its `HH:MM:SS` text, with a
 fraction only when the time has one: `"time__@startswith" => "14:"` selects the races that start
-at 14:00 to 14:59 on both backends.
+at 14:00 to 14:59 on every backend. On MySQL a `TimeField` is a `TIME(6)`, which the server prints
+with six fractional digits (`14:00:00.000000`); PormG trims the trailing zeros there, so the text is
+`14:00:00`, or `14:00:00.25`, as on the other backends.
 
-A float or decimal column raises a `FilterError` on both backends, because each engine prints it
+A float or decimal column raises a `FilterError` on every backend, because each engine prints it
 differently: `2.0` is `2` on PostgreSQL and `2.0` on SQLite, so one fragment would select different
 rows. So does an alias, a CTE column or a `Subquery` whose value is not an integer (an `Avg`, a
 `Sum` over a decimal), and a number whose type PormG cannot name, whose text it cannot vouch
@@ -199,7 +201,7 @@ text explicitly through a cast: `values("t" => Cast("fastestlapspeed", "text"));
 filter("t__@startswith" => "2")`. A `Case` alias with a float `default`, and a `Value(2.5)` alias,
 raise the same way.
 
-A timestamp, duration, boolean or binary column raises a `FilterError` on both backends, and so
+A timestamp, duration, boolean or binary column raises a `FilterError` on every backend, and so
 does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`, a duration such as
 `F("start_at") - F("start_at")` or `F("fastestlaptime") * 2`, a timestamp such as `F("date") + Hour(1)`). Their text differs per engine: a
 timestamp prints in the session's time zone on PostgreSQL and as PormG's UTC text on SQLite, a
@@ -376,8 +378,9 @@ path, and (on PostgreSQL) test containment and key existence.
 ### Path lookups (`field__key`, `field__0__key`)
 
 Append the JSON keys to the field name with `__`. A numeric segment is a JSON **array index**.
-The value is extracted as **text** and compared to your filter value. Works on **both** backends
-(PostgreSQL `#>>`, SQLite `json_extract`).
+The value is extracted as **text** and compared to your filter value. Works on **every** backend
+(PostgreSQL `#>>`, SQLite `json_extract`, MySQL `JSON_UNQUOTE(JSON_EXTRACT(…))`). A key that holds
+JSON `null` extracts to NULL, as a missing key does.
 
 Assume `Constructor` has a `metadata` JSONField holding, e.g.,
 `{"principal": "Toto Wolff", "wins": 121, "drivers": [{"name": "Russell"}]}`:
@@ -389,7 +392,8 @@ M.Constructor.objects.filter("metadata__principal" => "Toto Wolff")
 # Array index then key: drivers[0].name
 M.Constructor.objects.filter("metadata__drivers__0__name" => "Russell")
 
-# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively.
+# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively, and
+# MySQL compares the text with the number as a double.
 # The value is a number, or base-10 numeric text ("100"); other text raises InvalidValueError.
 M.Constructor.objects.filter("metadata__wins__@gte" => 100)
 
@@ -404,9 +408,9 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
 A path lookup compares the extracted value against a **value**. A column expression on the right
-(`"metadata__principal" => F("name")`) raises a `FilterError` on both backends. The two engines extract
-different types (PostgreSQL text, SQLite the native JSON type), so no single comparison against a
-column means the same thing on both.
+(`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
+different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison
+against a column means the same thing on all of them.
 
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
@@ -415,12 +419,27 @@ column means the same thing on both.
     `InvalidValueError`.
     Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
     (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
-    (`"metadata__wins" => 121`) works on both backends.
+    (`"metadata__wins" => 121`) works on every backend. A numeric operator against a key that holds
+    text that is not a number (`"metadata__principal__@gte" => 10`) has no portable answer:
+    PostgreSQL raises, SQLite ranks text above every number, and MySQL reads the text as `0`.
 
     A numeric segment is always treated as an **array index**. An object key that is a number
     (e.g. `{"2024": …}`) is therefore not portably addressable: PostgreSQL's `#>>` may still resolve
     it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
     avoid numeric object keys in a `__` path.
+
+### A whole document (`field => document`)
+
+A filter on the column itself compares the whole stored document, and `get_or_create` and
+`update_or_create` find their row the same way:
+
+```julia
+M.Constructor.objects.filter("metadata" => """{"principal": "Toto Wolff", "wins": 121}""")
+```
+
+PostgreSQL compares `jsonb` values, so key order and spacing do not matter, and MySQL compares JSON
+values too (PormG binds the document as `CAST(? AS JSON)` there). SQLite compares the stored text, so
+it matches a document written from the same value.
 
 ### Containment and key-existence operators (PostgreSQL only)
 
@@ -874,9 +893,12 @@ M.Driver.objects.latest("dob")     # youngest driver
 # Total rows
 M.Driver.objects.count()                                 # SELECT COUNT(*)
 
-# Distinct rows — dedupes the rows list() returns: whole rows, or the values() projection when there is one
+# Distinct rows — dedupes the model's rows, or the values() projection when there is one
 M.Driver.objects.distinct().count()                      # same as:
 M.Driver.objects.count(distinct=true)
+
+# Across a to-many filter, each matching driver counts once (110 drivers with a pole, not their 1136 poles)
+M.Driver.objects.filter("result__grid" => 1).distinct().count()
 
 # Non-null values of one column
 M.Driver.objects.count("nationality")                    # SELECT COUNT("nationality")

@@ -242,6 +242,11 @@ const _MR_QUOTE_SHAPES = [
            join_field = "driverid" => "driverid")
     _mr_inspect(q.values("points", "br_surname" => CTE("br", "surname")))[:sql_text]
   end,
+  "a CTE joined on a path through a ForeignKey" => M -> begin
+    q = M.Result.objects
+    q.with("dl" => M.Driver.objects.values("driverid", "surname"), join_field = "driverid__surname" => "surname")
+    _mr_inspect(q.values("points", "dl_id" => CTE("dl", "driverid")))[:sql_text]
+  end,
   "cjoin_on" => M -> begin
     q = M.Result.objects.values("points", "d_surname" => Joined("d", "surname"))
     q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
@@ -266,6 +271,37 @@ const _MR_QUOTE_SHAPES = [
   # The derived-table aliases are quoted the engine's way, on every engine.
   @test occursin("as `__pormg_distinct_count`", _MR_QUOTE_SHAPES[3].second(_MR_MY))
   @test occursin("as \"__pormg_distinct_count\"", _MR_QUOTE_SHAPES[3].second(_MR_PG))
+  # A CTE joined on a path joins on the joined driver's own column (#1130 phase 5b): the alias was the
+  # cached selector with `"` stripped, which left MySQL's backticks in it and failed the alias check.
+  by_path = Dict(_MR_QUOTE_SHAPES)["a CTE joined on a path through a ForeignKey"]
+  @test occursin("LEFT JOIN `dl` AS `R1_2` ON `R1_1`.`surname` = `R1_2`.`surname`", by_path(_MR_MY))
+  @test occursin("LEFT JOIN \"dl\" AS \"R1_2\" ON \"R1_1\".\"surname\" = \"R1_2\".\"surname\"", by_path(_MR_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# distinct().count() across a join: the model's rows, on every engine
+# An unprojected `distinct()` counts the model's rows, as Django's does. Its derived table used to be
+# `SELECT DISTINCT *`, which takes the joined table's columns too, so across a to-many join every
+# (driver, result) pair was distinct: the F1 data's drivers with a pole counted 1136, not 110, on
+# PostgreSQL and SQLite alike, and on MySQL two `driverid` columns in a derived table are error 1060.
+# Expected: the inner select is the base alias's columns only, on each engine, joins and all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "distinct().count() across a to-many join counts the model's rows, on every engine" begin
+  for (M, q) in ((_MR_PG, '"'), (_MR_SL, '"'), (_MR_MY, '`'))
+    sql = M.Driver.objects.filter("result__grid" => 1).distinct().count(show_query = :sql)
+    @test occursin("SELECT COUNT(*) FROM (\nSELECT DISTINCT $(q)Tb$(q).*\nFROM $(q)driver$(q) as $(q)Tb$(q)\n", sql)
+    @test occursin("JOIN $(q)result$(q) AS $(q)Tb_1$(q)", sql)
+    @test !occursin("DISTINCT *", sql)
+    # `exists()` past an offset skips the same rows: the model's, not one per related row.
+    probe = M.Driver.objects.filter("result__grid" => 1).distinct().offset(110).exists(show_query = :sql)
+    @test startswith(probe, "SELECT DISTINCT $(q)Tb$(q).*\nFROM $(q)driver$(q) as $(q)Tb$(q)")
+    @test startswith(M.Driver.objects.filter("result__grid" => 1).distinct().exists(show_query = :sql), "SELECT 1\n")
+    # ... and so does `Exists(...)`, through the derived table it probes a kept projection with.
+    ex = _mr_inspect(M.Race.objects.filter(Exists(M.Driver.objects.filter("result__grid" => 1).distinct().offset(110))))[:sql_text]
+    @test occursin(Regex("EXISTS \\(SELECT 1 FROM \\(SELECT DISTINCT $(q)\\w+$(q)\\.\\*\\n"), ex)
+    @test occursin("as $(q)__pormg_exists$(q)\nLIMIT 1 OFFSET", ex)
+    @test occursin("EXISTS (SELECT 1\n", _mr_inspect(M.Race.objects.filter(Exists(M.Driver.objects.filter("result__grid" => 1).distinct())))[:sql_text])
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -560,10 +596,12 @@ end
 # MySQL read parsers: what MySQL.jl delivers, turned into what the kind means
 # #1270: the wire has no boolean (a `TINYINT(1)` reads as `Int8`, a comparison as `Int64`); a
 # DATETIME has no zone and the session is UTC; `AVG` over an integer is a DECIMAL that means a float
-# (#1121); a `DurationField` is a BIGINT of microseconds (#1130). Expected: those four parsed — the
-# interval into the `CompoundPeriod` SQLite reads, in the same units — every parser fail-open on a value
-# it does not recognize, and no parser for the kinds MySQL.jl already delivers typed (a date, a time, a
-# naive datetime, a decimal column).
+# (#1121); a `DurationField` is a BIGINT of microseconds (#1130); and MySQL computes `NULLIF` over a
+# DATE, a DATETIME or a TIME as text (measured on 8.4, phase 5b). Expected: those parsed — the interval
+# into the `CompoundPeriod` SQLite reads, in the same units; the temporal text into the `Date`,
+# `DateTime` or `Time` MySQL.jl decodes the column as, a `Time` to the microsecond — every parser
+# fail-open on a value it does not recognize (a value MySQL.jl decoded passes unchanged), and no parser
+# for text or an integer.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL read parsers: what MySQL.jl delivers, turned into what the kind means" begin
   my = MrMockMySQL()
@@ -573,7 +611,22 @@ end
   parse_ts = PormG.value_parser(PormG.CDateTime(true), my)
   @test parse_ts(DateTime(1991, 3, 10, 14, 0, 0, 125)) == ZonedDateTime(DateTime(1991, 3, 10, 14, 0, 0, 125), tz"UTC")
   @test parse_ts(missing) === missing
-  @test PormG.value_parser(PormG.CDateTime(false), my) === nothing
+  @test parse_ts("1991-03-10 14:00:00.125") == ZonedDateTime(DateTime(1991, 3, 10, 14, 0, 0, 125), tz"UTC")
+  # MySQL's temporal text, as `NULLIF` over each type returns it, back into the decoded type.
+  parse_naive = PormG.value_parser(PormG.CDateTime(false), my)
+  @test parse_naive("1991-03-10 14:00:00.125") === DateTime(1991, 3, 10, 14, 0, 0, 125)
+  @test parse_naive("1991-03-10 14:00:00") === DateTime(1991, 3, 10, 14)
+  @test parse_naive(DateTime(1991, 3, 10)) === DateTime(1991, 3, 10)
+  @test parse_naive("1991-03-10 14:00:00.000001") == "1991-03-10 14:00:00.000001"   # below a DateTime's millisecond
+  @test parse_naive("1991-02-30 14:00:00") == "1991-02-30 14:00:00" && parse_naive("x") == "x"
+  parse_date = PormG.value_parser(PormG.CDate(), my)
+  @test parse_date("2009-03-29") === Date(2009, 3, 29) && parse_date(Date(2009, 3, 29)) === Date(2009, 3, 29)
+  @test parse_date("2009-03-29 10:00:00") == "2009-03-29 10:00:00" && parse_date(missing) === missing
+  parse_time = PormG.value_parser(PormG.CTime(), my)
+  @test parse_time("10:30:00.000000") === Time(10, 30)
+  @test parse_time("23:59:59.999999") === Time(23, 59, 59, 999, 999)
+  @test parse_time("10:30:00") === Time(10, 30) && parse_time(Time(10, 30)) === Time(10, 30)
+  @test parse_time("25:00:00") == "25:00:00" && parse_time("-01:00:00") == "-01:00:00"
   parse_float = PormG.value_parser(PormG.CFloat64(), my)
   @test parse_float(Decimal(0, 16666666666666666666666666666667, -31)) === 1.6666666666666667
   @test parse_float(2.5) === 2.5
@@ -588,7 +641,7 @@ end
   @test parse_interval(Decimal(0, 805, 5)) == parse_interval(80_500_000)
   @test parse_interval(Decimal(0, 25, -1)) == parse_interval(3) && parse_interval(Decimal(1, 25, -1)) == parse_interval(-3)
   @test parse_interval(missing) === missing && parse_interval("00:01:20") == "00:01:20"
-  for kind in (PormG.CDate(), PormG.CTime(), PormG.CText(), PormG.CInt64())
+  for kind in (PormG.CText(), PormG.CInt64())
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
   # #1110: a declared decimal's parser applies its width; a value that fits passes unchanged.
@@ -901,6 +954,40 @@ end
   @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"
   @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")
   @test _MR_QB._interval_ms_as_text("?", MrMockSQLite()) == PormG.Dialect._sqlite_interval_text("?")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL bitwise operators: signed 64-bit results, an arithmetic right shift, and xor (#1130 phase 5b)
+# MySQL computes `&`, `|`, `<<`, `>>`, `~` and `^` on BIGINT UNSIGNED (measured on 8.4: `~5` is
+# 18446744073709551610, `-8 >> 1` is 9223372036854775804), where PostgreSQL and SQLite compute signed
+# 64-bit integers (-6, -4). Expected SQL: each result `CAST(… AS SIGNED)`; `>>` as
+# `FLOOR(CAST(a AS DECIMAL(20, 0)) / (1 << b))`, which names `a` once, so each value binds once in text
+# order; `xor` as `^`, in a projection and an UPDATE alike. PostgreSQL and SQLite render as before.
+# Why: the unsigned results were silent wrong values, and `xor` was refused on MySQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL bitwise operators: signed results, an arithmetic right shift, and xor" begin
+  R = _MR_MY.Result
+  proj(e) = (r = _mr_inspect(R.objects.values("v" => e));
+             (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")), r[:parameters]))
+  @test proj(F("grid") & 4) == ("CAST((`Tb`.`grid` & ?) AS SIGNED)", Any[4])
+  @test proj(F("grid") | F("laps")) == ("CAST((`Tb`.`grid` | `Tb`.`laps`) AS SIGNED)", Any[])
+  @test proj(~F("grid")) == ("CAST(~(`Tb`.`grid`) AS SIGNED)", Any[])
+  @test proj(F("grid") << 2) == ("CAST((`Tb`.`grid` << ?) AS SIGNED)", Any[2])
+  @test proj(F("grid") >> 2) == ("CAST(FLOOR(CAST(`Tb`.`grid` AS DECIMAL(20, 0)) / (1 << ?)) AS SIGNED)", Any[2])
+  @test proj(xor(F("grid"), 3)) == ("CAST((`Tb`.`grid` ^ ?) AS SIGNED)", Any[3])
+  # Nested: the inner result is signed before the outer operator reads it, and the values bind in order.
+  @test proj((F("grid") & 12) >> 1) ==
+        ("CAST(FLOOR(CAST(CAST((`Tb`.`grid` & ?) AS SIGNED) AS DECIMAL(20, 0)) / (1 << ?)) AS SIGNED)", Any[12, 1])
+  upd = R.objects.filter("grid" => 1).update("laps" => xor(F("laps"), 6); show_query = :dict)
+  @test upd[:sql_text] == "UPDATE `result` AS `Tb`\nSET `laps` = CAST((`Tb`.`laps` ^ ?) AS SIGNED)\nWHERE `Tb`.`grid` = ?\n"
+  @test upd[:parameters] == Any[6, 1]
+  # PostgreSQL and SQLite are unchanged: `#` and SQLite's `(a | b) - (a & b)`, each side bound twice.
+  pg = _mr_inspect(_MR_PG.Result.objects.values("v" => xor(F("grid"), 3)))
+  @test occursin("(\"Tb\".\"grid\" # \$1::bigint)", pg[:sql_text])
+  sl = _mr_inspect(_MR_SL.Result.objects.values("v" => xor(F("grid"), 3)))
+  @test occursin("(((\"Tb\".\"grid\") | (?)) - ((\"Tb\".\"grid\") & (?)))", sl[:sql_text]) && sl[:parameters] == Any[3, 3]
+  @test occursin("(\"Tb\".\"grid\" >> ?)", _mr_inspect(_MR_SL.Result.objects.values("v" => F("grid") >> 2))[:sql_text])
+  @test occursin("~(\"Tb\".\"grid\")", _mr_inspect(_MR_PG.Result.objects.values("v" => ~F("grid")))[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

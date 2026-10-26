@@ -23,8 +23,10 @@ using PormG.Models
 
 struct JsonLookupMockSQLite <: PormG.PormGSQLite end
 struct JsonLookupMockPostgres <: PormG.PormGPostgres end
+struct JsonLookupMockMySQL <: PormG.PormGMySQL end
 const _JL_SL = JsonLookupMockSQLite()
 const _JL_PG = JsonLookupMockPostgres()
+const _JL_MY = JsonLookupMockMySQL()
 
 PormG.config["json_lookup_mock"] = PormG.Configuration.Settings(
   connections = _JL_SL, change_data = true, db_def_folder = "json_lookup_mock",
@@ -106,6 +108,35 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     pg = _sql(mkq(); conn = _JL_PG)
     @test occursin("(\"Tb\".\"payload\" #>> '{\"count\"}')::numeric >= \$1", pg[:sql_text])   # PG: cast
     @test pg[:parameters] == [5]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # MySQL (#1130 phase 5b): the value at the path as text, as PostgreSQL reads it
+  # `JSON_EXTRACT` with every key double-quoted (so a key named `null` is a key), `JSON_UNQUOTE` for the
+  # text, and `NULLIF` against JSON's `null` first, because `JSON_UNQUOTE` alone reads a JSON null as
+  # the text 'null' (measured), which `@isnull` would not match; and a code-point collation, because the
+  # text's own `utf8mb4_bin` pads trailing spaces (`"Max "` equalled `'Max'`). Equality binds text, as on
+  # PostgreSQL; an ordering compares the text with the bound number, which MySQL does as a double, so
+  # it has no cast. Before phase 5b every path lookup was a `MethodError` on MySQL.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "MySQL: the value at the path as text, a JSON null as NULL" begin
+    mk(f) = (q = JL.Json_scratch.objects; f(q); q.values("id"); q)
+    x(path) = "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '$(path)'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
+    r = _sql(mk(q -> q.filter("payload__nome" => "hamilton")); conn = _JL_MY)
+    @test occursin("WHERE $(x("\$.\"nome\"")) = ?", r[:sql_text]) && r[:parameters] == ["hamilton"]
+    @test _sql(mk(q -> q.filter("payload__count" => 5)); conn = _JL_MY)[:parameters] == ["5"]
+    @test occursin(x("\$.\"standings\"[0].\"name\""),
+                   _sql(mk(q -> q.filter("payload__standings__0__name" => "Max")); conn = _JL_MY)[:sql_text])
+    r = _sql(mk(q -> q.filter("payload__count__@gte" => 5)); conn = _JL_MY)
+    @test occursin("WHERE $(x("\$.\"count\"")) >= ?", r[:sql_text]) && r[:parameters] == [5]
+    @test occursin("$(x("\$.\"missing\"")) IS NULL", _sql(mk(q -> q.filter("payload__missing__@isnull" => true)); conn = _JL_MY)[:sql_text])
+    @test occursin("'\$.\"null\"'", _sql(mk(q -> q.filter("payload__null" => "x")); conn = _JL_MY)[:sql_text])
+    @test PormG.Dialect._json_extract_expr(_JL_MY, "`c`", ["a", "0", "b"]) ==
+          "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`c`, '\$.\"a\"[0].\"b\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
+    # The projection and the ordering read the same text.
+    q = JL.Json_scratch.objects; q.values("id", "payload__nome"); q.order_by("payload__nome")
+    sql = _sql(q; conn = _JL_MY)[:sql_text]
+    @test occursin("$(x("\$.\"nome\"")) as `payload__nome`", sql)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -299,6 +330,38 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test insp[:parameters] == ["hamilton"]
     @test insp[:parameter_buckets][:where] == ["hamilton"]
     @test insp[:parameter_buckets][:select] == []   # the SELECT extraction bound no parameter
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A whole document compared with the column: JSON on every engine (#1130 phase 5b)
+  # MySQL compares a JSON column with a string as a JSON string scalar, so `payload = ?` matched no
+  # stored document (measured on 8.4), and get_or_create's hit read missed into an INSERT. Expected SQL:
+  # MySQL parses the bound text, `CAST(? AS JSON)`, one per element of a list; PostgreSQL and SQLite
+  # bind the bare marker, the text the write stored. A pattern lookup on the column binds text as before.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a whole JSON document: CAST(? AS JSON) on MySQL, the bare marker elsewhere" begin
+    doc = "{\"driver\":\"hamilton\"}"
+    mkq() = (q = JL.Json_scratch.objects; q.filter("payload" => doc); q.values("id"); q)
+    my = _sql(mkq(); conn = _JL_MY)
+    @test occursin("WHERE `Tb`.`payload` = CAST(? AS JSON)", my[:sql_text])
+    @test my[:parameters] == Any[doc]
+    @test occursin("WHERE \"Tb\".\"payload\" = \$1\n", _sql(mkq(); conn = _JL_PG)[:sql_text])
+    @test occursin("WHERE \"Tb\".\"payload\" = ?\n", _sql(mkq(); conn = _JL_SL)[:sql_text])
+    ne = (q = JL.Json_scratch.objects; q.filter("payload__@ne" => doc); q.values("id"); q)
+    @test occursin(r"`Tb`.`payload` (<>|!=) CAST\(\? AS JSON\)", _sql(ne; conn = _JL_MY)[:sql_text])   # the marker, whichever spelling
+    other = "{\"driver\":\"max\"}"
+    inq = (q = JL.Json_scratch.objects; q.filter("payload__@in" => [doc, other]); q.values("id"); q)
+    my_in = _sql(inq; conn = _JL_MY)
+    @test occursin("IN (CAST(? AS JSON), CAST(? AS JSON))", my_in[:sql_text]) && my_in[:parameters] == Any[doc, other]
+    # A pattern lookup binds text, a LIKE or a verbatim one alike: no JSON marker.
+    for lookup in ("@contains", "@iexact", "@niexact")
+      like = (q = JL.Json_scratch.objects; q.filter("payload__$(lookup)" => "hamilton"); q.values("id"); q)
+      @test (lookup, occursin("AS JSON", _sql(like; conn = _JL_MY)[:sql_text])) == (lookup, false)
+    end
+    # An empty list is the membership that matches nothing, as on every engine, not `CAST( AS JSON)`.
+    none = (q = JL.Json_scratch.objects; q.filter("payload__@in" => String[]); q.values("id"); q)
+    @test !occursin("AS JSON", _sql(none; conn = _JL_MY)[:sql_text])
+    @test _sql(none; conn = _JL_MY)[:sql_text] == replace(_sql(none; conn = _JL_SL)[:sql_text], '"' => '`')
   end
 
 end

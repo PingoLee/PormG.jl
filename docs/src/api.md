@@ -206,17 +206,17 @@ plan[:total_cost]      # 167.35   (PostgreSQL's estimate; nothing on SQLite)
 plan[:estimated_rows]  # 62
 ```
 
-The result is the `inspect_query` dictionary plus these keys, present on both engines:
+The result is the `inspect_query` dictionary plus these keys, present on every engine:
 
-| Key | PostgreSQL | SQLite |
-| :--- | :--- | :--- |
-| `:explain_sql` | The `EXPLAIN (FORMAT JSON …)` statement that ran. | The `EXPLAIN QUERY PLAN` statement that ran. |
-| `:plan` | The parsed JSON plan document. | The plan rows, as `Dict`s of `:id`, `:parent`, `:detail`. |
-| `:indexes_used` | Every `Index Name` in the plan tree. | Each `USING [COVERING] INDEX` name; `"INTEGER PRIMARY KEY"` / `"PRIMARY KEY"` for a key lookup; `"AUTOMATIC INDEX"` for a transient index SQLite builds for the one statement. |
-| `:seq_scans` | Each table read by a `Seq Scan`. | Each `SCAN` step that uses no index — named by the query's **alias** (`Tb`, `Tb_1`, …). |
-| `:total_cost`, `:estimated_rows` | The root node's estimates. | `nothing` |
-| `:planning_time_ms`, `:execution_time_ms` | Measured, with `analyze = true`. | `nothing` |
-| `:analyze` | Whether the query was executed. | `false` |
+| Key | PostgreSQL | SQLite | MySQL |
+| :--- | :--- | :--- | :--- |
+| `:explain_sql` | The `EXPLAIN (FORMAT JSON …)` statement that ran. | The `EXPLAIN QUERY PLAN` statement that ran. | The `EXPLAIN FORMAT=JSON` statement that ran. |
+| `:plan` | The parsed JSON plan document. | The plan rows, as `Dict`s of `:id`, `:parent`, `:detail`. | The parsed JSON plan document. |
+| `:indexes_used` | Every `Index Name` in the plan tree. | Each `USING [COVERING] INDEX` name; `"INTEGER PRIMARY KEY"` / `"PRIMARY KEY"` for a key lookup; `"AUTOMATIC INDEX"` for a transient index SQLite builds for the one statement. | Every table's `key`; `"PRIMARY"` for the primary key. |
+| `:seq_scans` | Each table read by a `Seq Scan`. | Each `SCAN` step that uses no index — named by the query's **alias** (`Tb`, `Tb_1`, …). | Each table read in full (`access_type` `ALL`), named by the query's alias. |
+| `:total_cost`, `:estimated_rows` | The root node's estimates. | `nothing` | The query block's cost, and the rows its last table produces. |
+| `:planning_time_ms`, `:execution_time_ms` | Measured, with `analyze = true`. | `nothing` | `nothing` |
+| `:analyze` | Whether the query was executed. | `false` | `false` |
 
 | Keyword | Effect |
 | :--- | :--- |
@@ -224,10 +224,10 @@ The result is the `inspect_query` dictionary plus these keys, present on both en
 | `buffers = false` | Adds PostgreSQL's buffer usage to `:plan`. |
 | `verbose = false` | Adds PostgreSQL's `VERBOSE` detail to `:plan`. |
 
-SQLite has only `EXPLAIN QUERY PLAN`: passing any of the three keywords there raises
-`BackendCapabilityError`.
+SQLite has only `EXPLAIN QUERY PLAN`, and MySQL's `EXPLAIN ANALYZE` prints only a text tree: passing
+any of the three keywords on either raises `BackendCapabilityError`.
 
-A `select_for_update()` query needs a transaction to be explained, on PostgreSQL and SQLite — with or
+A `select_for_update()` query needs a transaction to be explained, on every engine — with or
 without `analyze` — exactly as it does to run, and raises `QueryBuildError` outside one.
 
 The facts are what the plan states — PormG does not warn about a "missing" index. A sequential scan

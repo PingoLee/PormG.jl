@@ -689,9 +689,14 @@ end
 _keeps_order(object::SQLObject, keep_values::Bool)::Bool = keep_values && _contains_agg(object.values)
 
 # What an existence probe selects: `1`, or the kept projection — `DISTINCT` when the query is — whose
-# GROUP BY names projection positions. Shared by `exists()` and `Exists(...)`.
-_exists_projection(object::SQLObject, instruction::SQLInstruction, keep::Bool)::String =
-  keep ? string(object.distinct ? "DISTINCT " : "", _query_select(instruction.select, instruction.connection)) : "1"
+# GROUP BY names projection positions. Shared by `exists()` and `Exists(...)`. An unprojected
+# `distinct()` probed past an offset skips the model's rows, as `count()` counts them (#1359): the base
+# table's columns, `DISTINCT "Tb".*`, since `1` repeats a row once per related row across a to-many join.
+function _exists_projection(object::SQLObject, instruction::SQLInstruction, keep::Bool)::String
+  keep && return string(object.distinct ? "DISTINCT " : "", _query_select(instruction.select, instruction.connection))
+  object.distinct && object.offset > 0 && return "DISTINCT $(quote_identifier(instruction.alias, instruction.connection)).*"
+  return "1"
+end
 
 # The terminals that cannot honor a slice refuse it instead of ignoring it. `last()`, `earliest()` and
 # `latest()` reorder the rows, which changes which rows the slice holds — Django refuses them too.
@@ -767,17 +772,21 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   if is_distinct || keep_values
     # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite, and a grouped projection has one
     # row per group, not per matching row. Either way the rows `list()` would return are counted from
-    # a derived table, so count() == length(list()). With no values() the projection is `*`, so an
-    # unprojected `distinct()` renders `SELECT DISTINCT *` as it always did. Its GROUP BY names
-    # projection positions, which is why the projection is printed rather than replaced by `1`.
+    # a derived table, so count() == length(list()). With no values() an unprojected `distinct()` counts
+    # the model's rows, as Django's does: `SELECT DISTINCT "Tb".*`, the base table's columns only. A bare
+    # `*` also took every joined table's columns, so across a to-many join no row was ever a duplicate and
+    # the count was one per (row, related row) pair; on MySQL two joined columns of the same name are
+    # error 1060 in a derived table. A kept projection's GROUP BY names projection positions, which is
+    # why that projection is printed rather than replaced by `1`.
     # Any CTEs stay at the top level and remain in scope for the subquery; the projection's values bind
     # under `:select`, ahead of the WHERE ones, which is where its text sits.
     # #1074: a projection kept because a filter names its alias counts the same way, named for what it is.
     # #1053: a slice applies after DISTINCT and GROUP BY, so its tail goes inside the subquery. Its
     # markers are the last in the text and bind under `:limit`, the last bucket, so the order holds on
     # both engines.
+    projection = keep_values ? _query_select(instruction.select, instruction.connection) : "$(safe_alias).*"
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
-    SELECT $(is_distinct ? "DISTINCT " : "")$(_query_select(instruction.select, instruction.connection))
+    SELECT $(is_distinct ? "DISTINCT " : "")$(projection)
     $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier(is_distinct ? "__pormg_distinct_count" : instruction.aggregate ? "__pormg_grouped_count" : "__pormg_projected_count", instruction.connection))
     """
   elseif _is_sliced(q.object)

@@ -26,6 +26,8 @@ end
         "points" => 15,
         "active" => true,
         "standings" => [Dict("name" => "Max"), Dict("name" => "Lewis")],
+        "sponsor" => nothing,
+        "team" => "Mercedes ",
     )
 
     # Clean any stale row, then seed exactly one.
@@ -79,6 +81,21 @@ end
             q = base(); q.filter("payload__driver__@isnull" => true)
             @test q.count() == 0     # present key is NOT null
 
+            # A key that HOLDS JSON null extracts to NULL too, on every engine: MySQL's JSON_UNQUOTE
+            # alone reads it as the text 'null' (#1130 phase 5b), which `@isnull` would not match and
+            # an equality with "null" would.
+            q = base(); q.filter("payload__sponsor__@isnull" => true)
+            @test q.count() == 1
+            q = base(); q.filter("payload__sponsor" => "null")
+            @test q.count() == 0
+
+            # A trailing space is part of the text on every engine: MySQL's JSON text pads in its own
+            # `utf8mb4_bin` collation, so `"Mercedes "` equalled "Mercedes" there (#1130 phase 5b).
+            q = base(); q.filter("payload__team" => "Mercedes")
+            @test q.count() == 0
+            q = base(); q.filter("payload__team" => "Mercedes ")
+            @test q.count() == 1
+
             # .values() projection returns the extracted value
             q = base(); q.values("payload__driver")
             row = q.list() |> first
@@ -103,6 +120,16 @@ end
             row, created = M.Field_validation_scratch.objects.get_or_create("payload" => seeded)
             @test created == false
             @test row.slug == slug
+        end
+
+        # A plain filter on the whole document matches its row, and a different document does not
+        # (#1130 phase 5b): on MySQL the bare marker compared the JSON column with a JSON string, so
+        # no document matched even its own text, and get_or_create above missed into an INSERT.
+        @testset "a whole JSON document matches its own row" begin
+            q = base(); q.filter("payload" => PormG.Models.format_json_sql(seeded))
+            @test q.count() == 1
+            q = base(); q.filter("payload" => PormG.Models.format_json_sql(merge(seeded, Dict("points" => 16))))
+            @test q.count() == 0
         end
 
         # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.

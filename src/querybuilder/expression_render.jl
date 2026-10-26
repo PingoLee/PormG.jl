@@ -965,6 +965,9 @@ end
 
 const _ARITHMETIC_OPERATIONS = ("+", "-", "*", "/")
 
+# The binary bitwise operators that render infix (`~` and `xor` have arms of their own).
+const _BITWISE_OPERATIONS = ("&", "|", "<<", ">>")
+
 # #814 — the operators whose answer depends on ORDER, as opposed to equality.
 const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
 
@@ -1665,27 +1668,15 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
       return _render_left_typed(v.field_name, "", instruc)
     end
   elseif v.operation == "~"
-    # Unary NOT operator. Bitwise, never temporal.
+    # Unary NOT operator. Bitwise, never temporal; a signed integer on every engine (`_bitwise_not_sql`).
     left_side = _set_update_query_left(v.field_name, v.operation, instruc)
-    return "~($(left_side))", nothing
+    return _bitwise_not_sql(instruc.connection, left_side), nothing
   elseif v.operation == "xor"
-    # Bitwise, never temporal — on either engine.
-    if instruc.connection isa PormGPostgres
-      left_side = _set_update_query_left(v.field_name, v.operation, instruc)
-      right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
-      return "($(left_side) # $(right_side))", nothing
-    elseif instruc.connection isa PormGSQLite
-      # Positional Parameter Alignment: render each side twice to duplicate any embedded parameters
-      left_side1 = _set_update_query_left(v.field_name, v.operation, instruc)
-      right_side1 = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
-
-      left_side2 = _set_update_query_left(v.field_name, v.operation, instruc)
-      right_side2 = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
-
-      return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))", nothing
-    else
-      throw(_unsupported_conn("xor update expression", instruc.connection))
-    end
+    # Bitwise, never temporal. Each engine's own spelling (`_xor_sql`), which may name a side twice, so
+    # the sides render on each call.
+    sides = () -> (_set_update_query_left(v.field_name, v.operation, instruc),
+                   _set_update_query_operand(v.operand, v.field_name, v.operation, instruc))
+    return _xor_sql(instruc.connection, sides), nothing
   elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
     # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
     # infix branch: a Period operand must NOT reach `_set_update_query_operand`, which would try to
@@ -1854,6 +1845,9 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
       _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
 
     v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
+    # `&`, `|`, `<<`, `>>`: a signed 64-bit integer on every engine (`_bitwise_sql`).
+    v.operation in _BITWISE_OPERATIONS &&
+      return _bitwise_sql(instruc.connection, v.operation, left_side, right_side), nothing
     return "($(left_side) $(v.operation) $(right_side))", nothing
   end
 end

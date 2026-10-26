@@ -283,7 +283,45 @@ _parse_sqlite_bool(v::Any) = v
 # MySQL (#1130): a DATETIME carries no zone, and the extension pins every session to UTC (`time_zone =
 # '+00:00'`), which is also the zone a `ZonedDateTime` is bound in. Fail-open like every parser here.
 _parse_mysql_utc_datetime(v::DateTime) = ZonedDateTime(v, tz"UTC")
+_parse_mysql_utc_datetime(v::AbstractString) = (d = _parse_mysql_datetime(v); d isa DateTime ? ZonedDateTime(d, tz"UTC") : d)
 _parse_mysql_utc_datetime(v::Any) = v
+
+# MySQL (#1130 phase 5b): a temporal MySQL computed as TEXT, back into what MySQL.jl decodes the column
+# as. MySQL types `NULLIF` over a DATE, a DATETIME or a TIME as a string (measured on 8.4:
+# `"2009-03-29"`, `"2009-03-29 10:00:00.000"`, `"10:30:00.000000"`), where `COALESCE`, `IF` and `CASE`
+# keep the type. Fail-open like every parser here: a decoded `Date`, `DateTime` or `Time`, or text in
+# any other shape, is returned unchanged. A DATE is SQLite's text exactly (`_parse_sqlite_date`); a TIME
+# carries six fractional digits (`TIME(6)`, a `TimeField`), which a `Time` holds to the microsecond; a
+# DATETIME keeps them only to the millisecond a `DateTime` holds, and text with digits below it passes
+# unchanged, as the column read refuses such a value (`_read_value`, #1270).
+const _MYSQL_DATETIME_TEXT = r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$"
+const _MYSQL_TIME_TEXT = r"^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$"
+_mysql_fraction_us(digits) = digits === nothing ? 0 : parse(Int, rpad(digits, 6, '0'))
+function _parse_mysql_datetime(v::Any)
+    v isa AbstractString || return v
+    m = match(_MYSQL_DATETIME_TEXT, v)
+    m === nothing && return v
+    us = _mysql_fraction_us(m[5])
+    us % 1000 == 0 || return v
+    try
+      return DateTime(Date(m[1]), Time(parse(Int, m[2]), parse(Int, m[3]), parse(Int, m[4]), div(us, 1000)))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # a well-shaped but impossible value
+    end
+end
+function _parse_mysql_time(v::Any)
+    v isa AbstractString || return v
+    m = match(_MYSQL_TIME_TEXT, v)
+    m === nothing && return v
+    us = _mysql_fraction_us(m[4])
+    try
+      return Time(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]), div(us, 1000), rem(us, 1000))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # past a day (MySQL's TIME runs to 838:59:59)
+    end
+end
 
 # MySQL (#1130): a `DurationField` is a BIGINT of microseconds, Django's choice there — exact, with no
 # range below a BIGINT's (MySQL's `TIME` stops at 838:59:59). The WRITE half: a duration in any form
@@ -3668,6 +3706,21 @@ function _json_extract_expr(::PormGSQLite, column::String, segments::Vector{Stri
   path = "\$" * join(map(s -> _is_json_array_index(s) ? "[$s]" : ".$s", segments))
   return string("json_extract(", column, ", '", path, "')")
 end
+# MySQL (#1130 phase 5b): the value at the path as TEXT, as PostgreSQL's `#>>` reads it. Keys are
+# double-quoted, as on PostgreSQL, so a key named `null` or `true` is a key (MySQL's unquoted path key
+# must be an ECMAScript identifier); they are pre-validated, so neither `"` nor `\` can reach the
+# literal. `JSON_UNQUOTE` alone reads a JSON `null` as the text `'null'` (measured on 8.4), where
+# PostgreSQL and SQLite read SQL NULL, so `@isnull` would miss a key that holds null: `NULLIF` against
+# JSON's `null` makes it NULL first, and leaves the string `"null"` a string. A missing key is NULL, an
+# object or an array its JSON text. Not `JSON_VALUE`, which returns NULL for a string past 512
+# characters (measured). The text comes back in `utf8mb4_bin`, a PAD SPACE collation, so `"Max "` equalled
+# `'Max'` (measured, #1265's departure); `COLLATE utf8mb4_0900_bin` compares code points with no padding,
+# as the session's own collation does and as PostgreSQL and SQLite compare text.
+function _json_extract_expr(::PormGMySQL, column::String, segments::Vector{String})::String
+  path = "\$" * join(map(s -> _is_json_array_index(s) ? "[$s]" : ".\"$s\"", segments))
+  return string("(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(", column, ", '", path,
+                "'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)")
+end
 
 # #602: every text-lookup renderer below takes `column::AbstractString, value::AbstractString`.
 # Both are RENDERED SQL text — `column` is the quoted column expression and `value` is the bind
@@ -3897,6 +3950,28 @@ _pattern_text_operand(::PormGPostgres, ::Val{:time}, column::AbstractString)::St
 # that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
 # there rather than rendering a `LIKE` the server rejects.
 _pattern_text_operand(::PormGSQLite, ::Val, column::AbstractString)::String = String(column)
+# MySQL (#1130 phase 5b), one method per kind it reads, so a kind added later raises a `MethodError`
+# here too. Each gives PostgreSQL's text, so a pattern matches the same rows (measured on 8.4):
+# - an integer: its digits, `CAST(… AS CHAR)`;
+# - a date: `YYYY-MM-DD`, which MySQL prints whatever the session (it has no `DateStyle`);
+# - a time: a `TimeField` is `TIME(6)`, whose cast prints six fractional digits (`10:30:00.000000`), so
+#   `@contains ".000"` would match every whole-second time. `TIME_FORMAT`'s `%f` always prints them,
+#   and trimming the trailing zeros and then a bare `.` gives `10:30:00` and `10:30:00.25`, as
+#   PostgreSQL's cast and Julia's `string(::Time)` write them. The column is named once;
+# - a uuid: the `CHAR(36)` column as written, lowercase and hyphenated, as on SQLite (#902).
+_pattern_text_operand(::PormGMySQL, ::Val{:integer}, column::AbstractString)::String =
+  "CAST($(column) AS CHAR)"
+_pattern_text_operand(::PormGMySQL, ::Val{:date}, column::AbstractString)::String =
+  "CAST($(column) AS CHAR)"
+_pattern_text_operand(::PormGMySQL, ::Val{:time}, column::AbstractString)::String =
+  "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM TIME_FORMAT($(column), '%H:%i:%s.%f')))"
+_pattern_text_operand(::PormGMySQL, ::Val{:uuid}, column::AbstractString)::String = String(column)
+# A network column is a feature MySQL lacks (`:network_types`): a model that declares one and is queried
+# without a migration reaches here, and gets the refusal every other network lookup gives on MySQL.
+_pattern_text_operand(conn::PormGMySQL, ::Val{:inet}, column::AbstractString)::String =
+  throw(_capability_error(conn, :network_types, "A pattern lookup on an inet column"))
+_pattern_text_operand(conn::PormGMySQL, ::Val{:cidr}, column::AbstractString)::String =
+  throw(_capability_error(conn, :network_types, "A pattern lookup on a cidr column"))
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

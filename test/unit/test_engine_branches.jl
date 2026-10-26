@@ -52,10 +52,10 @@ const _EB_REVIEWED = Dict(
   # #1129 item 2 (PR A): every silent branch in `Dialect.jl` and `src/querybuilder/` now asks an engine
   # fact (`querybuilder/engine_facts.jl`). What remains here is compliant or a recorded quirk:
   #   - `if isa PormGPostgres … elseif isa PormGSQLite … else throw(_unsupported_conn(…))` chains,
-  #     which name both engines and refuse any other (expression_render's `xor` — two per chain).
-  #     expression_render's three
+  #     which name both engines and refuse any other. expression_render's three
   #     temporal chains (a shift, a difference, a day-count shift) became one method per engine when
-  #     MySQL gained its own (#1130 phase 2b), 8 → 2. execution_write's `insert` read-back, joined
+  #     MySQL gained its own (#1130 phase 2b), 8 → 2, and its `xor` chain became the `_xor_sql` fact
+  #     when MySQL gained `xor` (phase 5b), 2 → 0. execution_write's `insert` read-back, joined
   #     `update` and `update` count became engine facts when MySQL gained writes (#1130 phase 3a),
   #     11 → 5, and the two upsert chains became one method per engine with the upserts (phase 3b),
   #     5 → 1: the SQLite id reservation remains. execution_bulk's `allocate_primary_keys` chain, its
@@ -66,7 +66,6 @@ const _EB_REVIEWED = Dict(
   #     reserved SQLite id), projection_types 16 (SQLite's literal affinity), select_nodes 166 (window
   #     frames, a gap in PormG on SQLite).
   "src/querybuilder/execution_write.jl" => 1,
-  "src/querybuilder/expression_render.jl" => 2,
   "src/querybuilder/projection_types.jl" => 1,
   "src/querybuilder/select_nodes.jl" => 1,
   "src/tools.jl" => 1,

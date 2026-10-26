@@ -171,9 +171,9 @@ What that does not give you:
 
 ### MySQL: a named lock, and no transactional DDL
 
-On MySQL ([in progress](../backends.md)), `migrate()` serializes on a named lock (`GET_LOCK`) under the
-same key, waited on for up to `lock_wait`. A MySQL named lock is server-wide, so two databases on one
-server also migrate one at a time.
+On MySQL ([MySQL Guide](../mysql.md)), `migrate()` serializes on a named lock (`GET_LOCK`) under the
+same key, waited on for up to `lock_wait`. A MySQL lock name is server-wide, so PormG hashes the
+database name into it: two databases on one server migrate independently, as on PostgreSQL.
 
 MySQL has no transactional DDL: each statement commits on its own, so a plan cannot be applied whole.
 `migrate()` refuses a plan of more than one statement with `BackendCapabilityError` unless you accept

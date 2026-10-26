@@ -149,10 +149,11 @@ expression that reflects the specific scenario you are investigating:
    ```
    julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'
    ```
-   MySQL is in progress ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). With a local
-   MySQL 8.4 (a Docker `mysql:8.4` container is enough) and a `test/integration/db_my/connection.yml`
-   using `adapter: MySQL`, its integration files run on their own:
+   MySQL runs against a local MySQL 8.4 (a Docker `mysql:8.4` container is enough) and a
+   `test/integration/db_my/connection.yml` using `adapter: MySQL`. The full suite runs there as on
+   the other engines, and MySQL's own files run on their own, after it:
    ```
+   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/runtests.jl
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_writes.jl

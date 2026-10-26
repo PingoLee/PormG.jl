@@ -60,7 +60,7 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
 ## Implementation Details
 
 - **PostgreSQL**: Implementation uses `pg_try_advisory_lock` (non-blocking) or `pg_advisory_lock` (blocking).
-- **MySQL** (in progress, [#1130](https://github.com/PingoLee/PormG.jl/issues/1130)): `GET_LOCK` and `RELEASE_LOCK`, session-level like PostgreSQL's, so a dropped connection releases the lock. A MySQL lock name is server-wide, where a PostgreSQL advisory lock is scoped to its database, so PormG hashes the database name in with the key: two databases on one server do not block each other, as on PostgreSQL. A contention error names the holder by its MySQL connection id.
+- **MySQL**: `GET_LOCK` and `RELEASE_LOCK`, session-level like PostgreSQL's, so a dropped connection releases the lock. A MySQL lock name is server-wide, where a PostgreSQL advisory lock is scoped to its database, so PormG hashes the database name in with the key: two databases on one server do not block each other, as on PostgreSQL. A contention error names the holder by its MySQL connection id.
 - **SQLite**: `with_advisory_lock` is a **no-op** — see the warning below.
 - **Async Safety**: `with_advisory_lock` uses `LibPQ.async_execute` and `fetch()` to ensure that the Julia task yields while waiting for the database, keeping the event loop unblocked.
 

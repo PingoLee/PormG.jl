@@ -61,6 +61,7 @@ end
 ```
 
 - **PostgreSQL** uses `pg_advisory_lock` / `pg_try_advisory_lock`.
+- **MySQL** has them too, as named locks (`GET_LOCK`); see [Advisory Locks](advisory_lock.md).
 - **SQLite** does not support advisory locks, so `with_advisory_lock` is a **no-op** — the block still runs, just without cross-process locking. This is deliberate, so the same code is correct in production and in SQLite tests. It warns once per lock key; `on_missing_lock = :ignore` accepts that silently and `on_missing_lock = :error` raises `BackendCapabilityError` rather than running unprotected.
 
 Waiting strategies (`:poll` vs `:block`), timeouts, and async safety: **[Advisory Locks](advisory_lock.md)**.
@@ -244,9 +245,9 @@ returns a different answer, so a test suite running on SQLite fails where produc
   both and renders `date(x)` on SQLite. See
   [Functions and Dates → Cast](read/functions_and_dates.md#Cast-—-Type-Conversion).
 
-## Advanced SQL (both backends, PostgreSQL-first)
+## Advanced SQL (every backend, PostgreSQL-first)
 
-These run on SQLite too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
+These run on SQLite and MySQL too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
 
 - **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) render on PostgreSQL (and MySQL) — SQLite supports only the default frame.
 - **[Subqueries and CTEs](read/subqueries_and_ctes.md)** — `.with(...)` and its `"<cte>__<column>"` columns, correlated subqueries, `Exists`/`OuterRef`, and CTE joins.

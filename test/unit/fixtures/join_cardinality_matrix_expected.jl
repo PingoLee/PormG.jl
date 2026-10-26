@@ -97,6 +97,86 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("filter + Qor/ManyToMany", :sqlite) =>
     (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
+  ("filter + Qor + exists()/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb_1\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists()/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb_1\".\"name\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
+  ("filter + Qor + exists()/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists()/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
+  ("filter + Qor + exists()/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists()/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
+  ("filter + Qor + exists()/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists()/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb\".\"code\" = \$1 AND (\"Tb_1\".\"name\" = \$2 OR \"Tb\".\"number\" = \$3)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb\".\"code\" = ? AND (\"Tb_1\".\"name\" = ? OR \"Tb\".\"number\" = ?)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb\".\"code\" = \$1 AND (\"Tb_1\".\"grid\" = \$2 OR \"Tb\".\"number\" = \$3)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb\".\"code\" = ? AND (\"Tb_1\".\"grid\" = ? OR \"Tb\".\"number\" = ?)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb\".\"code\" = \$1 AND (\"Tb_1\".\"bio\" = \$2 OR \"Tb\".\"number\" = \$3)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb\".\"code\" = ? AND (\"Tb_1\".\"bio\" = ? OR \"Tb\".\"number\" = ?)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb\".\"code\" = \$1 AND (\"Tb_2\".\"name\" = \$2 OR \"Tb\".\"number\" = \$3)) LIMIT 1"),
+  ("filter + Qor nested in Q + exists()/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb\".\"code\" = ? AND (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?)) LIMIT 1"),
+  ("filter + Qor + values same path/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"name\" as \"teamid__name\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb_1\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+  ("filter + Qor + values same path/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"name\" as \"teamid__name\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb_1\".\"name\" = ? OR \"Tb\".\"number\" = ?)"),
+  ("filter + Qor + values same path/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"grid\" as \"results__grid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+  ("filter + Qor + values same path/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"grid\" as \"results__grid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = ? OR \"Tb\".\"number\" = ?)"),
+  ("filter + Qor + values same path/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"bio\" as \"profile__bio\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+  ("filter + Qor + values same path/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"bio\" as \"profile__bio\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = ? OR \"Tb\".\"number\" = ?)"),
+  ("filter + Qor + values same path/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_2\".\"name\" as \"sponsors__name\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+  ("filter + Qor + values same path/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_2\".\"name\" as \"sponsors__name\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?)"),
+  ("filter @isnull true + exists()/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" IS NULL LIMIT 1"),
+  ("filter @isnull true + exists()/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" IS NULL LIMIT 1"),
+  ("filter @isnull false + exists()/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" IS NOT NULL LIMIT 1"),
+  ("filter @isnull false + exists()/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" IS NOT NULL LIMIT 1"),
   ("filter + limit/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1 LIMIT \$2"),
   ("filter + limit/forward nullable", :sqlite) =>
@@ -417,6 +497,22 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = \$1) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = \$2)"),
   ("delete()/ManyToMany", :sqlite) =>
     (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = ?) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = ?)"),
+  ("delete() Qor/forward nullable", :postgres) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE (\"Tb_2\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE (\"Tb_2\".\"name\" = \$3 OR \"Tb\".\"number\" = \$4))"),
+  ("delete() Qor/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?))"),
+  ("delete() Qor/reverse", :postgres) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"grid\" = \$1 OR \"Tb\".\"number\" = \$2)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"grid\" = \$3 OR \"Tb\".\"number\" = \$4))"),
+  ("delete() Qor/reverse", :sqlite) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"grid\" = ? OR \"Tb\".\"number\" = ?)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"grid\" = ? OR \"Tb\".\"number\" = ?))"),
+  ("delete() Qor/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"profile\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"bio\" = \$1 OR \"Tb\".\"number\" = \$2)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"profile\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"bio\" = \$3 OR \"Tb\".\"number\" = \$4))"),
+  ("delete() Qor/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"profile\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"bio\" = ? OR \"Tb\".\"number\" = ?)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"profile\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"bio\" = ? OR \"Tb\".\"number\" = ?))"),
+  ("delete() Qor/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE (\"Tb_3\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE (\"Tb_3\".\"name\" = \$3 OR \"Tb\".\"number\" = \$4))"),
+  ("delete() Qor/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE (\"Tb_3\".\"name\" = ? OR \"Tb\".\"number\" = ?)) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE (\"Tb_3\".\"name\" = ? OR \"Tb\".\"number\" = ?))"),
   ("on() path/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" AND \"Tb_1\".\"name\" = \$1"),
   ("on() path/forward nullable", :sqlite) =>
@@ -509,6 +605,14 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "UnknownFieldError", message = "the column nope not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the reve"),
   ("values, an unknown name before the last segment, after the first hop (#1134)", :sqlite) =>
     (stage = :build, error = "UnknownFieldError", message = "the column nope not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the reve"),
+  ("filter + Qor + exists(), reverse then forward", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"code\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists(), reverse then forward", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" WHERE (\"Tb_2\".\"code\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
+  ("filter + Qor + exists(), on() join_type INNER", :postgres) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = \$1 OR \"Tb\".\"number\" = \$2) LIMIT 1"),
+  ("filter + Qor + exists(), on() join_type INNER", :sqlite) =>
+    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = ? OR \"Tb\".\"number\" = ?) LIMIT 1"),
   ("filter, forward not null from Result", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"code\" = \$1"),
   ("filter, forward not null from Result", :sqlite) =>

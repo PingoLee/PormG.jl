@@ -609,6 +609,30 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM \"R2\".\"date\")::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%Y', \"R2\".\"date\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract quarter | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "QUARTER(`Tb`.`date`) > ?", params = [("10", "Int64")]),
+  ("Extract quarter | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(QUARTER FROM \"Tb\".\"date\")::integer > \$1", params = [("10", "Int64")]),
+  ("Extract quarter | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    QUARTER(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract quarter | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(QUARTER FROM \"R2\".\"date\")::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract quarter | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(QUARTER(`Tb`.`date`)) > ?", params = [("10", "Int64")]),
+  ("Sum Extract quarter | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(EXTRACT(QUARTER FROM \"Tb\".\"date\")::integer) > \$1", params = [("10", "Int64")]),
+  ("Sum Extract quarter | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum Extract quarter | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum Extract quarter | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(QUARTER(`R2`.`date`)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract quarter | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(EXTRACT(QUARTER FROM \"R2\".\"date\")::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract quarter / 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(QUARTER FROM \"Tb\".\"date\")::integer / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract quarter / 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(QUARTER FROM \"R2\".\"date\")::integer / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F bare float | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`Tb`.`points` > ?", params = [("10", "Int64")]),
   ("F bare float | alone", :mysql, "v__@gt", "float 10.5") =>

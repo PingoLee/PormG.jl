@@ -61,6 +61,10 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("transform @hour",         :Race,                m -> "start_at__@hour"),
   ("ToChar YYYY-MM",          :Race,                m -> _EKM_FN.ToChar("date", "YYYY-MM")),
   ("Extract year",            :Race,                m -> _EKM_FN.Extract("date", "year")),
+  # #1337: QUARTER, an integer on every engine that has it (SQLite has no `EXTRACT` quarter)
+  ("Extract quarter",         :Race,                m -> _EKM_FN.Extract("date", "quarter")),
+  ("Sum Extract quarter",     :Race,                m -> _EKM_FN.Sum(_EKM_FN.Extract("date", "quarter"))),
+  ("Extract quarter / 2",     :Race,                m -> _EKM_FN.Extract("date", "quarter") / 2),
   # ── F: bare, arithmetic, comparison ───────────────────────────────────────────────────────────
   ("F bare float",            :Result,              m -> _EKM_Q.F("points")),
   ("F bare hop date",         :Result,              m -> _EKM_Q.F("raceid__date")),

@@ -38,6 +38,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &&
 @testset "Schema Importer / Introspection ($(PORMG_DB_FOLDER))" begin
   settings = PormG.config[PORMG_DB_FOLDER]
   pool = settings.connections
@@ -1110,7 +1111,13 @@ end
   split1033 = split_statements
 
   # The spelling this issue retires is refused at declaration, on the engine under test.
-  @test_throws PormG.FieldValidationError M1033.IntegerField(db_default = pin("0"))
+  # A number reads back as a literal on PostgreSQL and SQLite; MySQL stores every `DEFAULT (<expr>)` as an
+  # expression, numbers included (`column_ir.jl`), so there `0` stays the expression it is and is accepted.
+  if by_engine(postgres = true, sqlite = true, mysql = false)
+    @test_throws PormG.FieldValidationError M1033.IntegerField(db_default = pin("0"))
+  else
+    @test M1033.IntegerField(db_default = pin("0")) isa PormG.Models.sIntegerField
+  end
   @test_throws PormG.FieldValidationError M1033.CharField(db_default = pin("'Finished'"))
 
   drop1033!()
@@ -1140,6 +1147,7 @@ end
 # declared text verbatim and gets no marker; its arm pins that it still converges.
 # Mutation gate: the unit twin (test/unit/test_db_default.jl) carries it; this is the live half.
 # ─────────────────────────────────────────────────────────────────────────────
+not_yet_on(:mysql, "how MySQL re-spells an expression default, and its marker (#1362)") &&
 @testset "An expression default the deparser re-spells converges through its marker (#1037)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   M1037 = PormG.Models
@@ -1987,7 +1995,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Unmanaged models over a real view and table: nothing planned, queried as usual (#741)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, engine_sql(sql))
   view = "pormg_it_741_points_v"
   drop741!() = try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
   M741 = PormG.Models
@@ -2056,12 +2064,12 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "inspectdb include_views: real views become unmanaged, keyless models (#767)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, engine_sql(sql))
   view, mview = "pormg_it_767_points_v", "pormg_it_767_wins_mv"
   # Engine facts, one row each: whether the engine has a materialized view to read, and whether it
   # gives a computed view column (`SUM(points)`) a type.
-  has_mview = by_engine(postgres = true, sqlite = false)
-  types_view_sum = by_engine(postgres = true, sqlite = false)
+  has_mview = by_engine(postgres = true, sqlite = false, mysql = false)
+  types_view_sum = by_engine(postgres = true, sqlite = false, mysql = true)
   function drop767!()
     try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
     has_mview && try; ddl("DROP MATERIALIZED VIEW IF EXISTS \"$(mview)\""); catch; end
@@ -2084,7 +2092,8 @@ end
     # Import them into a scratch folder registered on the suite's own connection.
     PormG.config[key] = PormG.Configuration.Settings(connections = pool, db_def_folder = key, change_data = true)
     import_models = by_engine(postgres = PormG.Migrations.import_models_from_postgres,
-                              sqlite = PormG.Migrations.import_models_from_sqlite)
+                              sqlite = PormG.Migrations.import_models_from_sqlite,
+                              mysql = PormG.Migrations.import_models_from_mysql)
     import_models(key; force_replace = true, include_table = names, include_views = true)
     content = read(joinpath(key, "automatic_models.jl"), String)
     for n in names
@@ -2097,13 +2106,15 @@ end
       @test !occursin("primary_key", block.captures[1])
       @test !occursin("IDField", block.captures[1])
     end
-    # SUM(points): PostgreSQL types it, SQLite gives a computed view column no type — named by a marker.
+    # SUM(points): PostgreSQL and MySQL type it, SQLite gives a computed view column no type — named by a marker.
     @test occursin("# PormG: the database reports no type for 'points' of the view '$(view)'", content) == !types_view_sum
     if types_view_sum
       # The shape docs/src/models.md shows: the fixture's bigint key is a nullable BigIntegerField, and
-      # SUM over a double precision column a nullable float — every view column reads as nullable.
+      # SUM over a double precision column a nullable float — on PostgreSQL every view column reads as nullable.
+      # MySQL's catalog keeps the source column's NOT NULL on a view column, so its key reads as required.
+      key_field = by_engine(postgres = "BigIntegerField(null=true)", mysql = "BigIntegerField()")
       @test occursin("Pormg_it_767_points_v = Models.Model(\"pormg_it_767_points_v\", managed = false,\n" *
-                     "  driverid = Models.BigIntegerField(null=true),\n" *
+                     "  driverid = Models.$(key_field),\n" *
                      "  points = Models.FloatField(null=true))", content)
     end
 
@@ -2505,6 +2516,7 @@ end
 # Mutation gate: make `_index_definition_elements` return `nothing` and the functional and partial
 # indexes stop reading back on both engines, so the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
+not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its partial-index refusal (#1362)") &&
 @testset "Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)          # DDL: no result set on SQLite
@@ -2663,6 +2675,7 @@ end
 # `unique && advanced && continue` in PostgreSQL's) and the declared constraints stop reading back, so
 # the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
+not_yet_on(:mysql, "MySQL's functional unique index and its partial-unique refusal (#1362)") &&
 @testset "Partial and functional UniqueConstraints: declared, marked, enforced, read back, adopted (#934)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)

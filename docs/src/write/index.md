@@ -34,4 +34,4 @@ PormG is designed as **Async-First**. All database operations must utilize non-b
 | `update()` | Selective updates | Standard | SQL UPDATE |
 | `bulk_update()` | Modifying many rows | Fast | Multi-row UPDATE |
 
-⭐ **PostgreSQL Only**: `bulk_copy()` uses PostgreSQL's native `COPY FROM STDIN` protocol and is not available for SQLite. For SQLite, use `bulk_insert()` instead.
+⭐ **PostgreSQL Only**: `bulk_copy()` uses PostgreSQL's native `COPY FROM STDIN` protocol and is not available on SQLite or MySQL. There, use `bulk_insert()` instead.

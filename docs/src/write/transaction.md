@@ -1,6 +1,6 @@
 # Transactions and `run_in_transaction`
 
-PormG transactions are **async-aware** and **connection-aware**, designed to integrate seamlessly with multithreaded Julia code and web frameworks like Genie.jl. The primary entry point is `run_in_transaction`, which borrows a connection from the pool, executes your block inside a PostgreSQL transaction, and either commits or rolls back automatically.
+PormG transactions are **async-aware** and **connection-aware**, designed to integrate seamlessly with multithreaded Julia code and web frameworks like Genie.jl. The primary entry point is `run_in_transaction`, which borrows a connection from the pool, executes your block inside a database transaction, and either commits or rolls back automatically.
 
 Because every operation runs through the async core, even synchronous-looking code never blocks the scheduler. This means you can safely wrap database work inside `@async` tasks, web request handlers, or multithreaded `@sync` loops without deadlocking.
 
@@ -495,7 +495,7 @@ cannot work:
 - `atomic(durable = true)` nested inside an already-open transaction on the same database — it must
   be outermost. A transaction open on a different database does not count.
 - [`without_foreign_keys`](@ref) nested inside an already-open transaction on the same database —
-  it must be outermost too, on both engines.
+  it must be outermost too, on PostgreSQL and SQLite; on MySQL it raises `BackendCapabilityError` (`deferred_foreign_keys`) instead.
 - An ORM call that would run on a database with no open transaction while a transaction is open on
   another. The database that counts is the one the call **runs** on: the model's own connection,
   or the one `.db("<key>")` routes it to. Wrap the call in `atomic("<that key>")`, or move it
@@ -594,7 +594,7 @@ atomic("db_2") do
 end
 ```
 
-Savepoints behave **identically on PostgreSQL and SQLite** — both support `SAVEPOINT` /
+Savepoints behave **identically on every engine** — PostgreSQL, SQLite and MySQL all support `SAVEPOINT` /
 `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` natively.
 
 Pass `durable = true` to assert a block is the outermost transaction on its database; it raises if
@@ -627,7 +627,7 @@ atomic("db_2") do
 end
 ```
 
-Options (PostgreSQL):
+Options (PostgreSQL; MySQL renders the same clauses, `OF` included, and raises `BackendCapabilityError` for `no_key`):
 
 | Call | SQL | Meaning |
 |------|-----|---------|
@@ -638,7 +638,7 @@ Options (PostgreSQL):
 | `select_for_update(of = ("self",))` | `FOR UPDATE OF "Tb"` | Lock only the named tables — see below. |
 
 `nowait` and `skip_locked` are mutually exclusive; `of` combines with any of the other three. A
-locked read **must run inside a transaction**, on PostgreSQL and SQLite alike. Under autocommit it
+locked read **must run inside a transaction**, on every engine. Under autocommit it
 raises `QueryBuildError` before the query is sent, because the lock would be released as soon as
 the read returned.
 
@@ -698,7 +698,7 @@ That has three costs:
 - **Nullable foreign keys fail.** A path through a nullable foreign key is joined `LEFT`, and
   PostgreSQL refuses to lock the nullable side of an outer join. A lock without `of` beside any
   `LEFT`, `RIGHT` or `FULL` join therefore raises `QueryBuildError` before the query runs, on
-  PostgreSQL and SQLite alike, and the message names the join. Beside a `LEFT` join there are two
+  every engine, and the message names the join. Beside a `LEFT` join there are two
   fixes. `of = ("self",)` locks the base rows and leaves the nullable side unlocked. An `INNER` join,
   `on("<path>", join_type = "INNER")` or `cjoin_on(…; join_type = "INNER")`, locks that table too
   and drops the rows that have no match. It is refused even when a filter on the joined table
@@ -726,8 +726,8 @@ end
 | A `cjoin_on` alias | The table joined under that alias. |
 
 PormG renders the alias it generated for each table (`FOR UPDATE OF "Tb", "Tb_1"`), since
-PostgreSQL's `OF` names an alias rather than a table. The following raise `QueryBuildError` before
-the query runs, on PostgreSQL and SQLite alike:
+PostgreSQL's `OF` names an alias rather than a table, as MySQL's does. The following raise `QueryBuildError` before
+the query runs, on every engine:
 
 - a target that names nothing this query joins (PormG does not add a join just to lock it);
 - a target joined `LEFT` — the nullable side of an outer join, which PostgreSQL cannot lock;
@@ -740,10 +740,10 @@ A name that is both a relation path and a `cjoin_on` alias raises `AmbiguousFiel
 
 !!! warning "Row locking on SQLite"
     SQLite has no `SELECT ... FOR UPDATE`. Inside a transaction, `select_for_update()` on SQLite emits
-    no lock clause and raises nothing, so identical query code runs on both backends (this matches
+    no lock clause and raises nothing, so identical query code runs on every backend (this matches
     Django, SQLAlchemy, and Rails). SQLite already serializes writers per database file via
     `BEGIN IMMEDIATE` (see [Multithreaded Work](#Multithreaded-Work)), so the transaction provides the
-    exclusion a row lock would. The transaction requirement is the same on both engines: outside
+    exclusion a row lock would. The transaction requirement is the same on every engine: outside
     `run_in_transaction` / `atomic`, a locked read raises `QueryBuildError` on SQLite exactly as on
     PostgreSQL, so code tested on SQLite does not first fail in production. `of` renders
     nothing on SQLite either, but a read that returns rows (`list()`, `first()`, …) still checks the
@@ -756,7 +756,7 @@ A name that is both a relation path and a `cjoin_on` alias raises `AmbiguousFiel
 If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), PormG exposes:
 
 - **`with_tx_context(f, pool, conn)`**: Run `f()` with `conn` installed as the ambient transaction connection for `pool`, so ORM calls and child tasks inside `f` use it. It is a scoped value, not thread-local storage, and it does not start a transaction: you issue `BEGIN`/`COMMIT`/`ROLLBACK` yourself.
-- **`with_transaction(settings, sql, conn=nothing, release_conn=false, params=nothing)`**: Execute raw SQL inside a transaction context. Bind values with `params`, a vector or tuple in the backend's own placeholder style (`$1, $2` on PostgreSQL, `?` on SQLite), as with [raw `fetch`](@ref "Binding values — a manual-params array"). Never interpolate them into `sql`.
+- **`with_transaction(settings, sql, conn=nothing, release_conn=false, params=nothing)`**: Execute raw SQL inside a transaction context. Bind values with `params`, a vector or tuple in the backend's own placeholder style (`$1, $2` on PostgreSQL, `?` on SQLite and MySQL), as with [raw `fetch`](@ref "Binding values — a manual-params array"). Never interpolate them into `sql`.
 - **`get_tx_connection()`**: Check whether a transaction context is active, on any database, and return its connection. It does not say which database that is, so never hand it to a query for a different one.
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
 - **`acquire_connection(pool; timeout_seconds=nothing)`** / **`release_connection(pool, conn)`**: Lease a connection and give it back. Every acquire must be paired with a release, from a `finally`. `with_transaction` does this for you when you pass `conn=nothing`. Neither is exported — call them qualified, as below.
@@ -781,8 +781,8 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
     end
     ```
 
-    **`mode` is SQLite-only — it is not a keyword the PostgreSQL method accepts**, so passing it
-    to a PostgreSQL pool is a `MethodError`, not a no-op. Backend-portable code must branch on
+    **`mode` is SQLite-only — it is not a keyword the PostgreSQL or MySQL method accepts**, so passing it
+    to either pool is a `MethodError`, not a no-op. Backend-portable code must branch on
     the pool type, which is what PormG's own internals do:
 
     ```julia
@@ -826,7 +826,7 @@ short by `Ctrl+C`, the driver may still be on it — end it with
 
 !!! tip "Prefer nested `atomic` for savepoints"
     For savepoints, reach for nested [`atomic`](#Nested-Transactions-and-Savepoints) — it manages the
-    `SAVEPOINT` / `RELEASE` / `ROLLBACK TO` lifecycle and naming for you, on both backends. The
+    `SAVEPOINT` / `RELEASE` / `ROLLBACK TO` lifecycle and naming for you, on every backend. The
     hand-rolled version below is shown only to illustrate the underlying mechanics.
 
 ```julia

@@ -29,7 +29,7 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations. |
 | `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
-| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on both engines. |
+| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on every engine. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
 | `.last()` | `PormGRow` or `nothing` | Returns the last matching row (inverts `order_by`; falls back to primary-key descending when no ordering is set). |
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
@@ -101,13 +101,17 @@ The engines do not compute these values in the same type, so PormG converts what
 - SQLite computes the decimal family as a double. PormG reads it as a `Decimal` built from that double
   to **15 significant digits**, as Django's SQLite backend does. A sum of `0.1` and `0.2` reads as
   `0.3`, not `0.30000000000000004`.
+- MySQL computes `Sum` over integers and `Avg` as a `DECIMAL`. PormG turns the integer sum back with
+  `DIV 1` and reads the mean as the `Float64` or `Decimal` it means (each connection sets
+  `div_precision_increment = 30`, so a mean is not cut to 4 decimals). MySQL computes `Sqrt`, `Power`,
+  `Exp` and `Ln` over a decimal as a double, which PormG reads as it does SQLite's.
 
 ```julia
 q = M.Result.objects
 q.filter("raceid" => 18)
 q.values("avg_grid" => Avg("grid"))
 q.list(:dict)
-# => [Dict(:avg_grid => 11.5)]     a Float64 on both engines
+# => [Dict(:avg_grid => 11.5)]     a Float64 on every engine
 
 q = M.Constructor_results.objects
 q.filter("raceid" => 18)
@@ -115,26 +119,27 @@ q.values("total" => Sum("points"), "avg" => Avg("points"))
 q.list(:dict)
 # PostgreSQL => total 39, avg 3.5454545454545455   both Decimals
 # SQLite     => total 39, avg 3.54545454545455     both Decimals
+# MySQL      => total 39, avg 3.545454545454545454545454545455   both Decimals
 ```
 
-The type is the same on both engines. The last digits can differ, as the `Avg` above shows: PostgreSQL
-computes in exact `numeric` and SQLite in a double. The same holds for a float, so `Sqrt(10)` is
-`3.162277660168379` on PostgreSQL and `3.1622776601683795` on SQLite. That is how each engine spells
+The type is the same on every engine. The last digits can differ, as the `Avg` above shows: PostgreSQL
+computes in exact `numeric`, MySQL in a `DECIMAL` and SQLite in a double. The same holds for a float,
+so `Sqrt(10)` is `3.162277660168379` on PostgreSQL and `3.1622776601683795` on SQLite and MySQL. That is how each engine spells
 the number, not a different meaning, and PormG leaves it alone. [Rounding](rounding.md) collects
 where a value is rounded and where PormG refuses instead.
 
 This applies to the value a projection, a `CTE(...)` column or a `Subquery(...)` reads back, and to a
 value that is one of several operands when one of them is a computed number:
-`Coalesce(Avg("grid"), 0)` reads as a `Float64` on both engines. A `Coalesce`, `Greatest`, `Least`,
+`Coalesce(Avg("grid"), 0)` reads as a `Float64` on every engine. A `Coalesce`, `Greatest`, `Least`,
 `NullIf` or `Case` over columns and literals only is not a computed number: each row's value is one
 of its operands, and it reads back as the driver delivers it. The exception is an `output_field`
 naming a decimal type: the call has declared what it means, so it reads as a `Decimal`, as a `Cast`
 to one does (#1212).
 
-An integer's width follows the engine, for a column and a computed value alike: PostgreSQL keeps the
-column's own type (an `IntegerField` reads as an `Int32`, a `BigIntegerField` or a `Count` as an
-`Int64`), and SQLite has one 64-bit integer, so every integer reads as an `Int64` there. That is the
-same value in two widths, not a different meaning, so PormG leaves it alone. Compare integers by value
+An integer's width follows the engine, for a column and a computed value alike: PostgreSQL and MySQL
+keep the column's own type (an `IntegerField` reads as an `Int32`, a `BigIntegerField` or a `Count` as
+an `Int64`), and SQLite has one 64-bit integer, so every integer reads as an `Int64` there. That is the
+same value in different widths, not a different meaning, so PormG leaves it alone. Compare integers by value
 (`==`), or convert with `Int(x)` where one Julia type is needed.
 
 ### Serializing rows to JSON
@@ -165,7 +170,7 @@ JSON.json((count = query.count(), drivers = query.list()))
 ```
 
 Durations go through the same formatter either way, so a `DurationField` reads as `"00:01:49.088"`
-rather than as a struct dump, on both engines.
+rather than as a struct dump, on every engine.
 
 A `DecimalField` goes through the same formatter too, and comes out as a JSON **number** carrying the
 digits the value actually has — not as a string, and not re-rounded through a `Float64` on the way out:
@@ -187,6 +192,9 @@ A whole value reads as `14`, not `14.0`, and a fractional one keeps its scale �
 nineteen digits, where routing it through a `Float64` would have rendered `1.2345678901234568e16`.
 LibPQ delivers a `NUMERIC` as a `Decimals.Decimal`, so nothing on the path narrows it.
 
+**On MySQL it is exact at any declared width too.** A `DecimalField` is a `DECIMAL(p, s)` column, up
+to 65 digits, and MySQL.jl delivers it as a `Decimals.Decimal`.
+
 **On SQLite it is exact up to fifteen digits, and PormG refuses anything wider.** SQLite has no exact
 decimal type. A `DECIMAL(p, s)` column gets SQLite's `NUMERIC` affinity, which converts the value as it
 is stored into an `Int64` or a `Float64` — preferring an integer conversion, and silently dropping what
@@ -207,17 +215,17 @@ keeps fifteen significant digits exactly, so **`makemigrations` raises `BackendC
 `DecimalField` with `max_digits` above 15 on SQLite** rather than create a column like the one above.
 Every decimal column PormG creates on SQLite therefore holds the values it accepts exactly — and
 because it does, PormG reads a `DecimalField` declared with `max_digits` of 15 or fewer back as the
-**`Decimals.Decimal` that was written**, the same type PostgreSQL returns, rather than the
+**`Decimals.Decimal` that was written**, the same type PostgreSQL and MySQL return, rather than the
 `Int64`/`Float64` SQLite stored it as. The declaration decides it, not who created the column: a field
 declared wider than 15 digits — a table created outside PormG, or before this refusal — still behaves
 as the table shows and reads back raw, because SQLite may already have rounded what it holds and a
 `Decimal` rebuilt from that would only look exact. Narrowing such a field to 15 does not recover
 digits SQLite already dropped: the third row above would then read back as an exact-looking `1`. Use
-PostgreSQL where more than fifteen digits is the point.
+PostgreSQL or MySQL where more than fifteen digits is the point.
 
-!!! note "Both engines emit the same JSON text"
+!!! note "Every engine emits the same JSON text"
     Projected as the column itself — a field path, a bare `F("amount")`, or the model's `*` — a
-    `DecimalField` reaches `.list(:json)` as a `Decimal` on both engines, so both emit the same
+    `DecimalField` reaches `.list(:json)` as a `Decimal` on every engine, so each emits the same
     digits: `{"amount":1234567.89}`. Before, SQLite handed back a `Float64`, which Julia renders in
     exponent form from a million up (`{"amount":1.23456789e6}`). The same applies to a function
     that returns one of the column's own values (`Max("amount")`, `Min("amount")`, the window
@@ -226,11 +234,13 @@ PostgreSQL where more than fifteen digits is the point.
     reference to the column or a `CTE(...)` column whose body projects it, and to the row a write
     hands back (`create()`, `update_or_create`, `get_or_create`).
 
-    A **computed** decimal also reaches it as a `Decimal` on both engines (#1121): an aggregate
+    A **computed** decimal also reaches it as a `Decimal` on every engine (#1121): an aggregate
     that computes (`Sum("amount")`, `Avg`), arithmetic (`F("amount") * 2`), `Round`, `Abs`,
     `Floor` or `Ceil` over the column, a `Cast` to a decimal type or a decimal `output_field`
     (#1212), and a `CTE(...)` column or `Subquery(...)` whose body computes one. On SQLite that `Decimal` is built from the double SQLite computed, to fifteen
-    significant digits, so its last digits can differ from PostgreSQL's exact `numeric`. See
+    significant digits, so its last digits can differ from PostgreSQL's exact `numeric`. MySQL computes
+    them as a `DECIMAL`, a double (`Sqrt`, `Exp`, `Ln`, `Power`) or a `BIGINT` (`Floor`, `Ceil`), and
+    PormG reads each as a `Decimal`. See
     [The type of a computed number](#The-type-of-a-computed-number).
 
     Everything else still arrives on SQLite as the number SQLite holds, and renders that way:
@@ -518,9 +528,9 @@ the literal one above, or an aggregate beside a window with an empty `WindowOver
 
 !!! warning "`distinct()` + `order_by()`: the sort key must be projected"
     Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a
-    `DISTINCT` query by a column outside its projection is rejected by PostgreSQL (and the SQL
-    standard), and returns rows in a nondeterministic order on SQLite — so PormG raises the same clear
-    error on both backends:
+    `DISTINCT` query by a column outside its projection is rejected by PostgreSQL and MySQL (and the
+    SQL standard), and returns rows in a nondeterministic order on SQLite — so PormG raises the same
+    clear error on every backend:
 
     ```julia
     # ✗ raises: surname is not in the SELECT DISTINCT projection

@@ -10,7 +10,8 @@ This page collects the rules and shows what to write instead of each refused que
 on the pages they belong to: [The type of a computed number](index.md#The-type-of-a-computed-number),
 [Rounding to decimal places](functions_and_dates.md#Rounding-to-decimal-places) and
 [A cast an engine computes differently](functions_and_dates.md#A-cast-an-engine-computes-differently).
-Every result below was measured on PostgreSQL 16 and SQLite 3.54 against the Formula 1 dataset.
+Every result below was measured on PostgreSQL 16 and SQLite 3.54, and the MySQL results on MySQL 8.4,
+against the Formula 1 dataset.
 
 ## The three rules
 
@@ -25,7 +26,7 @@ Every result below was measured on PostgreSQL 16 and SQLite 3.54 against the For
    only.** It raises `QueryBuildError` when the query is built, and the message names the explicit
    spelling. That spelling is usually `Round(x, s)` before the cast.
 
-**Two conversions to the type a call means.** Neither is rounding to a scale. Each turns what the
+**Three conversions to the type a call means.** None is rounding to a scale. Each turns what the
 driver delivers into the Julia type the call means (#1121):
 
 - SQLite computes a decimal aggregate and decimal arithmetic as a double. PormG reads that double as
@@ -33,28 +34,32 @@ driver delivers into the Julia type the call means (#1121):
   precision the double has and adds none.
 - PostgreSQL computes `Avg` over integers, and a function over a float such as `Round` or `Sqrt`, as a
   `numeric`. When the call means a float, PormG reads it as the nearest `Float64`.
+- MySQL computes `Avg` over integers, and `Round` over a float, as a `DECIMAL`, read as the nearest
+  `Float64` when the call means a float. It computes `Sqrt`, `Exp`, `Ln` and `Power` over a decimal as
+  a double, read as a `Decimal` to 15 significant digits, as on SQLite.
 
 ## Reading a decimal
 
-A `DecimalField` column reads back as the `Decimal` it holds, on both engines (#648):
+A `DecimalField` column reads back as the `Decimal` it holds, on every engine (#648):
 
 ```julia
 # Constructor result 3835 scored 5.5 points.
 M.Constructor_results.objects.filter("constructorresultsid" => 3835).values("points").list()
-# => points = Decimal 5.5 on both engines
+# => points = Decimal 5.5 on every engine
 ```
 
 That holds for every value PormG checked on its way in. On SQLite, a cell with more places than the
 declaration reads back rounded to its scale, as PostgreSQL's column would hold it. A cell with more
 digits before the point than the declaration allows raises `StatementError` with
 `sqlstate == "22003"` on every read of it, the error PostgreSQL raises when such a value is written
-(#1110). Such a cell can only come from a write PormG did not check: a tool other than PormG, or an
+(#1110). On MySQL a column made wider than its field by hand raises the same error for a value the
+field cannot hold ([MySQL Guide](../mysql.md#Reads)). Such a cell can only come from a write PormG did not check: a tool other than PormG, or an
 expression `update` (*Writing a decimal* below), whose value's width SQLite does not check: an
 integer expression such as `F("grid") * 100` assigned to a `DecimalField(max_digits = 4,
-decimal_places = 2)` builds on SQLite and stores `2000` for a grid of `20`, where PostgreSQL refuses
-the `UPDATE`.
+decimal_places = 2)` builds on SQLite and stores `2000` for a grid of `20`, where PostgreSQL and
+MySQL refuse the `UPDATE`.
 
-`Sum` and `Avg` of a `DecimalField` read back as a `Decimal` on both engines. `Avg` of an integer reads
+`Sum` and `Avg` of a `DecimalField` read back as a `Decimal` on every engine. `Avg` of an integer reads
 back as a `Float64`:
 
 ```julia
@@ -64,9 +69,10 @@ M.Constructor_results.objects.filter("raceid" => 18).
     values("total" => Sum("points"), "avg" => Avg("points")).list()
 # PostgreSQL => total 39, avg 3.5454545454545455   both Decimals
 # SQLite     => total 39, avg 3.54545454545455     both Decimals, to 15 significant digits
+# MySQL      => total 39, avg 3.545454545454545454545454545455   both Decimals
 
 M.Result.objects.filter("raceid" => 2).values("avg_grid" => Avg("grid")).list()
-# => avg_grid = 10.5, a Float64 on both engines
+# => avg_grid = 10.5, a Float64 on every engine
 ```
 
 ## Rounding you ask for
@@ -92,26 +98,27 @@ engine has it (`Round(125, -1)` is `130` on PostgreSQL and MySQL), and raises `B
 on SQLite, whose `ROUND` has no negative precision.
 
 Division keeps the type of its operands, so an integer divided by an integer is an integer quotient
-on both engines (#1147, #1196). Divide by a float to keep the fraction:
+on every engine (#1147, #1196). Divide by a float to keep the fraction:
 
 ```julia
 using PormG: F
 
 # Result 1: Lewis Hamilton started the 2008 Australian GP from grid 1.
 M.Result.objects.filter("resultid" => 1).values(
-    "whole" => F("grid") / 2,       # 0 on both engines: integer division
-    "half"  => F("grid") / 2.0).list()   # 0.5 on both engines
+    "whole" => F("grid") / 2,       # 0 on every engine: integer division
+    "half"  => F("grid") / 2.0).list()   # 0.5 on every engine
 ```
 
-One quotient is refused on PostgreSQL instead: a `Sum` PormG cannot type, divided. PostgreSQL
-computes that sum as a `numeric` and keeps the fraction (#1111). Its message names the cast that
+One quotient is refused on PostgreSQL and MySQL instead: a `Sum` PormG cannot type, divided.
+PostgreSQL computes that sum as a `numeric`, and MySQL as a `DECIMAL`, and each keeps the fraction
+(#1111). Its message names the cast that
 says which you mean ([A cast an engine computes differently](functions_and_dates.md#A-cast-an-engine-computes-differently)).
 
 ## A declared scale or type
 
-A cast to `numeric(p, s)` means the value rounded to `s` places. PostgreSQL rounds it; SQLite would
-keep every digit, so the cast is refused there (#1040). Round to the scale first, and the cast builds
-on both engines with the same value:
+A cast to `numeric(p, s)` means the value rounded to `s` places. PostgreSQL and MySQL round it;
+SQLite would keep every digit, so the cast is refused there (#1040). Round to the scale first, and the
+cast builds on every engine with the same value:
 
 ```julia
 using PormG.Functions: Cast, Round
@@ -121,13 +128,14 @@ using PormG: F
 M.Result.objects.filter("raceid" => 2).
     values("points", "x" => Cast(F("points") * 1.5, "numeric(10,1)")).list()
 # PostgreSQL => 0.5 → 0.8, 1.5 → 2.3, 2.5 → 3.8   (Decimals, rounded by the cast)
+# MySQL      => 0.5 → 0.8, 1.5 → 2.3, 2.5 → 3.8   (Decimals, rounded by the cast)
 # SQLite     => QueryBuildError: Cast(…, "numeric(10,1)") of arithmetic over the FloatField `points`
 #               means the value rounded to the scale of numeric(10,1); SQLite computes every digit
 #               of it, so PormG refuses it on SQLite (#1040). Round it to the scale first …
 
 M.Result.objects.filter("raceid" => 2).
     values("points", "x" => Cast(Round(F("points") * 1.5, 1), "numeric(10,1)")).list()
-# => 0.5 → 0.8, 1.5 → 2.3, 2.5 → 3.8 on both engines
+# => 0.5 → 0.8, 1.5 → 2.3, 2.5 → 3.8 on every engine
 ```
 
 A `DecimalField` object is the same declaration (#1221):
@@ -136,7 +144,7 @@ same refusal and the same fix, and `DecimalField()` is `numeric(10,2)`. To leave
 cast to the unscaled `"numeric"`. On SQLite it then reads back through the 15-digit conversion above.
 
 A cast to an integer means the nearest integer. SQLite's cast truncates, so a fraction cast to an
-integer is refused there (#1028). Say how to round, and it builds on both engines:
+integer is refused there (#1028). Say how to round, and it builds on every engine:
 
 ```julia
 using PormG.Functions: Cast, Ceil, Floor, Round
@@ -151,10 +159,10 @@ M.Result.objects.filter("raceid" => 2).values("points",
 `Floor` and `Ceil` keep their operand's type, a `Float64` here. Wrap them in
 `Cast(…, IntegerField())` for an integer.
 
-`Cast("points", IntegerField())` builds on PostgreSQL, which rounds with its own cast. A
-`double precision` value rounds half to even there (`0.5` → `0`, `2.5` → `2`), and a `numeric` value
+`Cast("points", IntegerField())` builds on PostgreSQL and MySQL, which round with their own cast. A
+double rounds half to even on both (`0.5` → `0`, `2.5` → `2`), and a `numeric` or `DECIMAL` value
 rounds half away from zero (`5.5` → `6`). `Cast(Round(x), IntegerField())` rounds half away from
-zero on both engines. Write it when the tie matters.
+zero on every engine. Write it when the tie matters.
 
 A cast to `real` means the value rounded to single precision, read back as a `Float32`. SQLite has no
 4-byte float and would keep the double, so it is refused there (#1215). For a float on every engine,
@@ -163,18 +171,18 @@ cast to `FloatField()`.
 An `output_field` on `Case`, `Coalesce`, `Greatest` or `Least` is the same cast, and is held to the
 same rules (#1217). On SQLite each refused call below names the operand and its fix:
 
-| refused on SQLite | builds on both engines |
+| refused on SQLite | builds on every engine |
 |---|---|
 | `Case(When("grid__@lte" => 3, then = F("points") * 1.5), default = 0, output_field = "numeric(10,1)")` | `then = Round(F("points") * 1.5, 1)` |
 | `Coalesce("points", 0; output_field = "numeric(10,0)")` | `Coalesce(Round("points"), 0; output_field = "numeric(10,0)")` |
 | `Greatest("points", 0; output_field = "integer")` | `Greatest(Round("points"), 0; output_field = "integer")` |
 | `Least("points", 25; output_field = "numeric(10,0)")` | `Least(Round("points"), 25; output_field = "numeric(10,0)")` |
 
-A cast or `output_field` that names a decimal type reads back as a `Decimal` on both engines (#1212).
+A cast or `output_field` that names a decimal type reads back as a `Decimal` on every engine (#1212).
 
 ## Writing a decimal
 
-PormG checks a value against its `DecimalField` before any SQL, on both engines (#761, Django's
+PormG checks a value against its `DecimalField` before any SQL, on every engine (#761, Django's
 `DecimalValidator` bounds). A value with more places than `decimal_places` is refused, not rounded:
 
 ```julia
@@ -186,9 +194,9 @@ PormG checks a value against its `DecimalField` before any SQL, on both engines 
 ```
 
 That holds for a value written by `create`, `update`, `get_or_create` or a bulk write. Left to the
-engines, the value would be stored differently: PostgreSQL's `numeric(5, 2)` column rounds it to the
-scale, and SQLite's column keeps every digit, as the expression case below shows. PormG raises on both
-instead. Round the value in Julia, with the rounding mode you mean, before you write it:
+engines, the value would be stored differently: PostgreSQL's `numeric(5, 2)` and MySQL's
+`DECIMAL(5,2)` columns round it to the scale, and SQLite's column keeps every digit, as the expression
+case below shows. PormG raises on every engine instead. Round the value in Julia, with the rounding mode you mean, before you write it:
 
 ```julia
 round(1.234, RoundNearestTiesAway; digits = 2)   # 1.23
@@ -200,23 +208,24 @@ such as an integer count of hundredths.
 
 An expression written by `update` is held to the field's scale too, by the rule a cast to
 `numeric(p, s)` follows (#1279). On a `DecimalField(max_digits = 10, decimal_places = 2)`,
-PostgreSQL's column rounds `F("points") / 3` over `1.00` to `0.33`. SQLite would store every digit of
+PostgreSQL's and MySQL's columns round `F("points") / 3` over `1.00` to `0.33`. SQLite would store every digit of
 its double arithmetic and read it back as a `Float64` (`0.3333333333333333`), so it refuses the
 expression. That includes plain arithmetic: SQLite stores `1.10 - 1` as `0.10000000000000009`. Round
-the expression to the field's places, which stores the same `Decimal` on both engines:
+the expression to the field's places, which stores the same `Decimal` on every engine:
 
 ```julia
 # Constructor_results.points is a DecimalField(max_digits = 10, decimal_places = 2)
 q = M.Constructor_results.objects.filter("constructorresultsid" => 1)
 q.update("points" => F("points") / 3)              # the row holds 14.00
 #   PostgreSQL: stores 4.67
+#   MySQL:      stores 4.67
 #   SQLite:     QueryBuildError: update("points" => …) of arithmetic over the DecimalField `points`
 #               means the value rounded to the scale of DecimalField(max_digits = 10, decimal_places = 2);
 #               SQLite computes every digit of it, so PormG refuses it on SQLite (#1279). …
-q.update("points" => Round(F("points") / 3, 2))   # 4.67 on both engines
+q.update("points" => Round(F("points") / 3, 2))   # 4.67 on every engine
 ```
 
-An expression with nothing to round builds on both engines: the column itself, an integer column,
+An expression with nothing to round builds on every engine: the column itself, an integer column,
 `Round(x, d)` with `d` at most the field's places, or a `DecimalField` with fewer places. A
 `FloatField` or an `IntegerField` takes any number expression. An operand that is no number, such as a
 UUID or a date, is refused into every number field on every engine

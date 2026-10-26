@@ -23,7 +23,7 @@ flowchart TD
     Q["query() — execution_read.jl"]
     B["build() → InstructionObject<br/>build_query.jl"]
     J["_build_row_join (joins)<br/>build_joins.jl<br/>on / cjoin / cjoin_on — join_conditions.jl"]
-    P["parameters.jl<br/>$1.. (PG) / ? buckets (SQLite)"]
+    P["parameters.jl<br/>$1.. (PG) / ? buckets (SQLite, MySQL)"]
     F["functions.jl / operators.jl / ctes.jl<br/>expression_render.jl — F(...) / date / interval SQL"]
   end
 
@@ -39,8 +39,9 @@ flowchart TD
     PG["PormGLibPQExt.jl → LibPQ"]
     PJ["PormGPostgresExt.jl → Postgres (experimental)"]
     SL["PormGSQLiteExt.jl → SQLite"]
+    MY["PormGMySQLExt.jl → MySQL"]
   end
-  DB[("PostgreSQL / SQLite")]
+  DB[("PostgreSQL / SQLite / MySQL")]
 
   U --> OBJ --> CHAIN --> Q --> B
   B --> J
@@ -51,12 +52,13 @@ flowchart TD
   BK --> PG --> DB
   BK --> PJ --> DB
   BK --> SL --> DB
+  BK --> MY --> DB
   DB -->|rows| FE -->|results| U
 ```
 
 The key idea: **core never names a concrete driver type.** `Backend.jl` declares `backend_*`
 generics; the real bodies live in the `ext/` weak-dependency extensions, loaded only when `LibPQ`,
-`Postgres` or `SQLite` is present. A PostgreSQL pool names its driver (`postgres_driver:`), so the
+`Postgres`, `SQLite` or `MySQL` is present. A PostgreSQL pool names its driver (`postgres_driver:`), so the
 LibPQ and Postgres.jl extensions coexist.
 
 ## Read path — the query lifecycle
@@ -83,7 +85,7 @@ sequenceDiagram
   EX->>CP: fetch(conn, sql, params)
   CP->>CP: fetch_async() → acquire_connection (under lock)
   CP->>BE: backend_execute_async(conn, sql, params)
-  BE->>DB: $1.. (PG)  /  ? (SQLite)
+  BE->>DB: $1.. (PG)  /  ? (SQLite, MySQL)
   DB-->>BE: rows
   BE-->>CP: result
   CP->>CP: await_result → release connection
@@ -139,7 +141,7 @@ flowchart TD
   DIFF["diff: desired models vs current schema"]
   FILE["migration .jl file<br/>(OrderedDict of SQL DDL)"]
   MIG["migrate()<br/>migrations/runner.jl"]
-  LOCK["advisory lock (PG) / write-lock (SQLite)"]
+  LOCK["advisory lock (PG) / GET_LOCK (MySQL) / write-lock (SQLite)"]
   DDL["Dialect.jl renders CREATE / ALTER / DROP"]
   TRACK["pormg_migrations table<br/>version + checksum + status"]
   DB[("Database")]
@@ -184,7 +186,7 @@ characterizations worth stating plainly.
   bodies. Honest nuance: low-leverage for *runtime latency* (it runs once per query to produce a
   string), but it drives TTFX/allocations and the `invokelatest` world-age fragility on the join path.
 
-- **Positional-parameter buckets (deliberate, contained)** — for SQLite the positional `?` markers
+- **Positional-parameter buckets (deliberate, contained)** — for SQLite and MySQL the positional `?` markers
   are collected into per-clause buckets and flattened in SQL-clause order
   (`:cte → :select → :update → :join → :where → :group → :having → :order → :limit`). The flatten order is single-sourced in
   `_BUCKET_ORDER` (which `get_final_parameters` and the nested-run machinery both read) and guarded by `test_alignment_sqlite.jl` / `test_parameters.jl`. Noted here
@@ -219,7 +221,8 @@ characterizations worth stating plainly.
     `LibPQ.async_execute` is real non-blocking I/O, so queries on separate connections overlap. For
     **SQLite**, every statement is funnelled through a single global worker (serialized), with write
     transactions further pinned behind a process-wide lock — pool size buys no query-level
-    concurrency. "Async-first" is a real PostgreSQL capability, not a blanket ORM property.
+    concurrency. For **MySQL**, each statement runs on a task of its own, so queries on separate
+    connections overlap as on PostgreSQL. "Async-first" is a real PostgreSQL and MySQL capability, not a blanket ORM property.
     Usage patterns live in the [Async & Concurrency guide](async.md).
 
 ## Where to look next
@@ -230,8 +233,8 @@ characterizations worth stating plainly.
 | How SQL text is assembled | `src/querybuilder/build_query.jl` (`build`), `build_select.jl` (SELECT / ORDER BY), `build_filter.jl` (WHERE / HAVING), `select_nodes.jl` / `filter_nodes.jl` / `filter_operators.jl` (one node at a time), `projection_types.jl`, `build_joins.jl`, `ctes.jl` |
 | Custom joins — `on` / `cjoin` / `cjoin_on`, and what their conditions refer to | `src/querybuilder/join_conditions.jl` |
 | How an `F(...)` expression, a date shift or an interval renders | `src/querybuilder/expression_render.jl` |
-| Parameter ordering (PG `$1` vs SQLite `?` buckets) | `src/querybuilder/parameters.jl` |
+| Parameter ordering (PG `$1` vs SQLite/MySQL `?` buckets) | `src/querybuilder/parameters.jl` |
 | Backend-specific SQL | `src/Dialect.jl` |
 | Pool, async, transactions | `src/ConnectionPool.jl` |
-| Driver bodies | `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`, `ext/PormGSQLiteExt.jl` |
+| Driver bodies | `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`, `ext/PormGSQLiteExt.jl`, `ext/PormGMySQLExt.jl` |
 | Schema reconciliation | `src/Migrations.jl`, `src/migrations/` |

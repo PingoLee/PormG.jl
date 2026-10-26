@@ -197,7 +197,7 @@ dev:
   `etl_staging_2`. This is the same rule as every other ignore list.
 - **Skipped tables are invisible to** `makemigrations` (never dropped, never altered), to
   [`check`](../migrations/workflow.md#Checking-the-Database-Against-the-Models), and to
-  `import_models_from_postgres` / `import_models_from_sqlite`.
+  `import_models_from_postgres` / `import_models_from_sqlite` / `import_models_from_mysql`.
 - **The list adds to the others and replaces none of them.** Those others are the backend's
   built-in list (see [below](#The-built-in-list)), the process-wide
   [`register_ignore_tables!`](../extending.md#Extension-points), and the `ignore_table=` keyword
@@ -218,7 +218,7 @@ the existing table, it would plan to create it again on every run. So `makemigra
 matched, and the list the entry came from. (`makemigrations` plans nothing at all under
 `change_db: false`, so there only `check` reports it.) The same rule covers all three lists:
 this key, `register_ignore_tables!`, and the backend's built-in list. So a managed model on an
-`auth_` or `django_` table is refused on PostgreSQL. The one list it does not cover is `check`'s own
+`auth_` or `django_` table is refused on PostgreSQL and MySQL. The one list it does not cover is `check`'s own
 `ignore_table=` keyword, which only filters what `check` reads. The check covers every declared
 model, so `check`'s `include_table=` does not narrow it.
 
@@ -246,16 +246,17 @@ PormG skips these prefixes on every connection, before `ignore_tables:` adds any
 |---|---|
 | PostgreSQL (`postgres_ignore_table`) | `auth_`, `django_`, `social_`, `account_`, `allauth_`, `admin_`, `celery_`, `django_celery_`, `djcelery_`, `kombu_`, `pormg_migrations` |
 | SQLite (`sqlite_ignore_schema`) | `sqlite_sequence`, `sqlite_autoindex`, `pormg_migrations` |
+| MySQL (`mysql_ignore_table`) | the PostgreSQL entries |
 
-The PostgreSQL list hides the tables of Django, django-allauth, python-social-auth and Celery, which
-often share a PostgreSQL database with the tables PormG migrates. The SQLite list holds no framework
-prefix, so the two engines differ: a model on an `auth_` table is refused on PostgreSQL and
+The PostgreSQL and MySQL lists hide the tables of Django, django-allauth, python-social-auth and Celery, which
+often share a database with the tables PormG migrates. The SQLite list holds no framework
+prefix, so the engines differ: a model on an `auth_` table is refused on PostgreSQL and MySQL and
 migrated on SQLite.
 
 ### Switching a built-in entry off
 
 Django names a table `<app_label>_<model>`, so your own Django app labelled `account` keeps its
-tables under `account_`, a prefix the PostgreSQL list hides. List the entry under
+tables under `account_`, a prefix the PostgreSQL and MySQL lists hide. List the entry under
 `unignore_defaults:` and that connection reads and migrates those tables like any other:
 
 ```yaml
@@ -416,7 +417,7 @@ CREATE INDEX idx_drivers_forename_unaccent_exact
   ON drivers (lower(public.immutable_unaccent(forename)));
 ```
 
-SQLite configurations ignore `extensions` with a warning, and `iunaccent_contains` raises a clear error on SQLite.
+SQLite configurations ignore `extensions` with a warning and MySQL ones refuse it, and `iunaccent_contains` raises `BackendCapabilityError` on both.
 
 ## Multi-environment Routing
 

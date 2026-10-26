@@ -59,7 +59,7 @@ with `FilterError`.** So a bad value — the part of a filter an end user usuall
 | `create` with a `null` value on a non-null field | `InvalidValueError` | Rejected by PormG **before** any statement is sent |
 | `create` / `update` / the bulk writers with a value its field cannot take | `InvalidValueError` | Rejected **before** any statement is sent. The message names the operation, the field and, for a bulk write, the row — never the value, which could be a secret. The same facts are fields on the error: `e.kind` (`:type`, `:format`, `:range`, `:nul`, `:json_nul`, `:other`), `e.field`, `e.row` |
 | a text value containing a NUL character (`'\0'`): in a filter, a write (`create`, `update`, the bulk writers), a raw `fetch` value or an advisory-lock key | `InvalidValueError` | Rejected **before** any statement is sent, the same on every backend: PostgreSQL text cannot store a NUL, and the drivers would truncate the value or fail. A write names the field, a bulk write the row too; binary values are not affected. A `JSONField` value is the next row |
-| a `JSONField` value containing a NUL character (JSON writes it as `\u0000`): in a write, a `@jcontains` filter or a `get_or_create` lookup | `InvalidValueError` | Rejected **before** any statement is sent, the same on every backend: PostgreSQL `jsonb` cannot store `\u0000`, and SQLite is refused too so the engines agree. A write names the field, a bulk write the row too. The six-character text `\u0000` — a backslash followed by `u0000` — is not a NUL and is stored as written |
+| a `JSONField` value containing a NUL character (JSON writes it as `\u0000`): in a write, a `@jcontains` filter or a `get_or_create` lookup | `InvalidValueError` | Rejected **before** any statement is sent, the same on every backend: PostgreSQL `jsonb` cannot store `\u0000`, and SQLite and MySQL are refused too so the engines agree. A write names the field, a bulk write the row too. The six-character text `\u0000` — a backslash followed by `u0000` — is not a NUL and is stored as written |
 | `create` / `bulk_insert` violating a constraint | `IntegrityError` | The **database** refused it — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK` |
 
 ### Transactions and connections
@@ -68,7 +68,7 @@ with `FilterError`.** So a bad value — the part of a filter an end user usuall
 |---|---|---|
 | `atomic(durable = true)` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction |
 | an ORM call on a database with no open transaction — by the model's binding or routed with `.db()` — while a transaction is open on another | `TransactionError` | Wrap the call in `atomic` on the database it runs on, or move it outside the transaction |
-| `without_foreign_keys` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction, on both engines |
+| `without_foreign_keys` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction, on PostgreSQL and SQLite; MySQL refuses `without_foreign_keys` with `BackendCapabilityError` wherever it is called |
 | any query inside a transaction, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |
 | any query outside a transaction, connection lost mid-flight | `OperationalError` | Transient, and the pool has already recovered. A read (`list`, `first`, `get`, `count`, `exists`, …) you know is safe to repeat can run again — wrap it in `with_read_retry`; a write only when a second run changes nothing, because it may already have committed — see [Dropped connections](configuration/advanced.md) |
 | `with_read_retry` inside an open transaction | `TransactionError` | Refused before the block runs. A lost connection loses the whole transaction, so retry the `atomic` block, not one read in it |
@@ -79,6 +79,7 @@ with `FilterError`.** So a bad value — the part of a filter an end user usuall
 | `with_advisory_lock(...; on_missing_lock = :error)` on SQLite | `BackendCapabilityError` | SQLite has no advisory locks; the body would run unprotected, so it is refused instead |
 | `get_or_create` on PostgreSQL, the insert returns no row and the row cannot be read back | `OperationalError` | Usually a race: another session deleted the conflicting row, and the call retried can succeed. A trigger or rule that skips the insert gives the same error on every retry (#1299) |
 | `get_or_create` on SQLite, the insert reports success but the row cannot be read back | `StatementError` | No race is possible under the write lock: a trigger dropped the row, or a PormG fault. A retry fails the same way (#1299) |
+| `get_or_create` / `update_or_create` on MySQL, the insert succeeds but the row cannot be read back | `StatementError` | A trigger dropped the row, or a PormG fault. A duplicate-key error that re-reads nothing raises the `IntegrityError` instead (#1299, #1267) |
 
 ### Configuration and migrations
 
@@ -135,12 +136,12 @@ data, and their text is built from those fields alone: `error_message(e)`, `show
 `string(e)` never contain the database's `DETAIL`, `HINT` or `LINE n:` excerpt, which quote the
 row. So `error_message(e)` is safe to return to a client (#987).
 
-| Field | What | LibPQ | Postgres.jl | SQLite |
-|---|---|---|---|---|
-| `sqlstate` | The SQLSTATE, e.g. `"23505"` for a unique violation | ✓ | ✓ | — |
-| `constraint` | The constraint that refused the row | ✓ | ✓ | — |
-| `table`, `column` | The table and column the server named | ✓ | ✓ | — |
-| `message` | The server's primary message | ✓ | ✓ | ✓ |
+| Field | What | LibPQ | Postgres.jl | SQLite | MySQL |
+|---|---|---|---|---|---|
+| `sqlstate` | The SQLSTATE, e.g. `"23505"` for a unique violation | ✓ | ✓ | — | ✓ |
+| `constraint` | The constraint that refused the row | ✓ | ✓ | — | a duplicate key's name |
+| `table`, `column` | The table and column the server named | ✓ | ✓ | — | a duplicate key's table; no column |
+| `message` | The server's primary message | ✓ | ✓ | ✓ | only for errors whose text names objects, never a value (not a duplicate key) |
 
 A field the driver does not report is `nothing`, and so is one the server did not send for that
 error: a unique violation names its `constraint` and `table`, a `NOT NULL` violation its `table` and
@@ -161,6 +162,10 @@ catch e
     rethrow()
 end
 ```
+
+On MySQL a duplicate key and a missing parent both carry SQLSTATE `23000`, and a CHECK violation
+`HY000`; tell a duplicate key by `e.constraint`, which only a duplicate key fills (`"PRIMARY"`, or the
+unique key's name).
 
 The driver's own exception, with the full text the server sent, is in `e.cause`. Log
 `sprint(showerror, e.cause)` only to a sink you trust with the row's data.

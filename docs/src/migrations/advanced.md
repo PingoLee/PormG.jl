@@ -41,7 +41,7 @@ A data change has two homes, and which one fits depends on what it needs:
 | | A data step in the plan | `run_once` |
 |---|---|---|
 | Written in | SQL, in `pending_migrations.jl` | Julia, in your deploy or boot code |
-| Runs | inside the plan's transaction, at a fixed point: before or after its schema statements | on its own, beside `migrate`: a backfill after it, an index step before it |
+| Runs | inside the plan's transaction (on MySQL, in the plan's order, without one), at a fixed point: before or after its schema statements | on its own, beside `migrate`: a backfill after it, an index step before it |
 | Recorded | as part of the plan, in `pormg_migrations` | by name, in `pormg_migrations_data` |
 | Use it for | a short `UPDATE` that goes with the plan's schema change | ORM code, large backfills, `CREATE INDEX CONCURRENTLY`, and data that must be fixed before a plan can apply |
 
@@ -94,7 +94,7 @@ driver = OrderedDict{String, String}(
     that marks a finding and has no `Data (pre):` step.
   - Deleting the line also turns its count off, but then `dry_run` no longer shows the change.
     Mark the line rather than delete it.
-- **It is part of the plan.** It runs in the plan's single transaction, it is part of the plan's
+- **It is part of the plan.** It runs in the plan's single transaction (on MySQL, whose DDL commits each statement, in its place in the plan's order), it is part of the plan's
   checksum, and the [destructive guard](workflow.md#Destructive-Operations-Safety) reads it like any
   other statement: a `DELETE` with no `WHERE` needs `destructive = true`. `dry_run()` lists the data
   steps by label under *Data steps*.
@@ -113,7 +113,7 @@ driver = OrderedDict{String, String}(
 `pormg_migrations_data`, and skips it on every later call:
 
 ```julia
-using PormG, LibPQ   # load SQLite instead for a SQLite app
+using PormG, LibPQ   # load SQLite or MySQL instead for a SQLite or MySQL app
 
 PormG.Migrations.migrate("db"; interactive = false)
 PormG.Migrations.run_once("db", "2026-10-02_backfill_driver_code") do conn
@@ -132,10 +132,10 @@ nothing, as `migrate` does.
   code says now. To change what a step does, give it a new name. There is no down step.
 - **One transaction** (the default). The block's ORM calls and `fetch(conn, sql)` run in it, and
   the record commits with them. If the block throws, both roll back, nothing is recorded, and the
-  next call runs the step again.
+  next call runs the step again. On MySQL a DDL statement inside the step commits the transaction implicitly, so keep a transactional step to writes.
 - **Once, even with several instances.** On PostgreSQL it takes the advisory lock `migrate` takes
   and waits up to `lock_wait` seconds (default `30`), so a data step and a schema migration never run
-  at once and two instances booting together run a step once. SQLite has no such lock: there a step
+  at once and two instances booting together run a step once. MySQL takes its named lock (`GET_LOCK`) the same way. SQLite has no such lock: there a step
   checks its record inside its `BEGIN IMMEDIATE` transaction, which no other process can share.
 - **`transaction = false`** is for what cannot run in a transaction, such as PostgreSQL's
   `CREATE INDEX CONCURRENTLY`. The record is written after the block returns, so if it throws half

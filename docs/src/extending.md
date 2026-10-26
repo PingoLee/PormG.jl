@@ -35,7 +35,7 @@ All of these are callable as `PormG.<name>(...)` after `using PormG`.
 ### `register_ignore_tables!(tables)`
 
 Register table-name patterns that schema introspection (`convert_schema_to_models`,
-`import_models_from_postgres`, `import_models_from_sqlite`, `makemigrations`) should always
+`import_models_from_postgres`, `import_models_from_sqlite`, `import_models_from_mysql`, `makemigrations`) should always
 skip. Additive and idempotent. Use it for your framework's own infrastructure tables.
 
 Relations no model can declare are skipped already, with no registration: views, SQLite virtual
@@ -82,7 +82,7 @@ compare `key == "db"` or the folder's `basename`, never `settings.db_def_folder 
 
 Register a callback that **lazily resolves unknown connection keys** — useful for multi-tenant
 apps where the connection list isn't known up front. `f(key::String)` returns `nothing` (can't
-resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys, plus an optional `"env"`.
+resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys, plus an optional `"env"`. The adapter is PostgreSQL or SQLite: a MySQL connection takes no URL, and the resolver registers through `register_connection`, which refuses it.
 
 ```julia
 PormG.set_connection_resolver() do key

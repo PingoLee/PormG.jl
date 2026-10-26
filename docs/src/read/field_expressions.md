@@ -42,14 +42,15 @@ Sum("points") / Count("resultid") # Aggregate ratios
 **Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic).
 
 **Division keeps the type of its operands, on every engine.** Two integers divide as integers: on
-`M.Result`, `F("grid") / 2` is `7` for a grid of 15, as in Django and in both databases. A float or
+`M.Result`, `F("grid") / 2` is `7` for a grid of 15, as in Django, PostgreSQL and SQLite. MySQL's own
+`/` keeps the fraction, so PormG renders `DIV` there. A float or
 a decimal on either side makes the quotient a fraction: `F("points") / 2` (a `FloatField` there)
 and `F("grid") / 2.0` are `7.5`. Over a `DecimalField`, such as `M.Constructor_results`'
 `points`, or over a value that is one of several where one is a fraction (`Coalesce("grid", 0.5)`,
 a `Case` with an integer and a float branch, a window with a fractional `default`), SQLite would
 hold an integer on some rows — it stores a whole decimal (`15.00`) as one — and divide it as an
 integer. So PormG casts the dividend to `REAL` there: `F("points") / 2` on `M.Constructor_results`
-renders `(CAST("Tb"."points" AS REAL) / ?)` on SQLite and is `7.5` on both engines (#1150). A float
+renders `(CAST("Tb"."points" AS REAL) / ?)` on SQLite and is `7.5` on every engine (#1150). A float
 column or a float literal is a `REAL` already, and renders as written.
 
 ---
@@ -192,7 +193,7 @@ query.filter(
 df = query |> DataFrame
 ```
 
-PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)::integer` transform (PostgreSQL; `CAST(strftime('%m', ...) AS INTEGER)` on SQLite) on both sides.
+PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)::integer` transform (PostgreSQL; `CAST(strftime('%m', ...) AS INTEGER)` on SQLite; `EXTRACT(MONTH FROM ...)` on MySQL) on both sides.
 
 ### Comparing Against a Literal
 
@@ -200,7 +201,7 @@ The right-hand side of an `F` comparison may be an integer or a float, a string,
 of the temporal types `Dates.Time`, `Dates.Date`, `Dates.DateTime` and `TimeZones.ZonedDateTime`. Whatever
 the literal, it is bound as a parameter **through the column's own formatter** — the same path an
 ordinary filter pair takes — so `F("dob") >= Date(1970, 1, 1)` and `"dob__@gte" => Date(1970, 1, 1)`
-bind identical values on both backends. That matters most on SQLite, where a column holds the text
+bind identical values on every backend. That matters most on SQLite, where a column holds the text
 its formatter produced: a `Float64` against a `FloatField` binds `"1.5"`, a `Bool` against an
 `IntegerField` binds `1`, and a `UUID` binds its canonical string.
 
@@ -241,7 +242,8 @@ WHERE ((("Tb"."dob" + make_interval(years => $1::integer)))::date <= $2)
 ```
 
 On SQLite the same expression renders through `date(...)` modifiers instead —
-`date("Tb"."dob", '+' || ? || ' years') <= ?` — and binds the same two values.
+`date("Tb"."dob", '+' || ? || ' years') <= ?` — and binds the same two values. On MySQL it renders
+``` ((`Tb`.`dob` + INTERVAL ? MONTH) <= ?) ```, binding the 18 years as one count of `216` months.
 
 The representation follows the **column**, not the value: a `DateField` binds the calendar date
 (`'1970-01-01'`), a `DateTimeField` binds the canonical UTC timestamp
@@ -281,7 +283,7 @@ ten days, exactly as `F("date") + Day(7) + Day(3)` does.
 
 The date side can be any expression whose type is a date, not only a column: `Max("date")`,
 `Coalesce("date", …)`, `Lag("date", over = …)`, or a `Case` whose branches are all dates. `Case(When("round" => 1, then = F("date")), default = F("date")) + 1` is the date one day
-later on both engines; a `Case` that mixes a date and a timestamp must say its type (`output_field`).
+later on every engine; a `Case` that mixes a date and a timestamp must say its type (`output_field`).
 
 Generated SQL (PostgreSQL) — both operands are joined columns, so both carry a join alias:
 ```sql
@@ -294,6 +296,13 @@ Generated SQL (SQLite):
 ```sql
 WHERE ("Tb_1"."date" > "Tb_2"."dob")
   AND ("Tb_1"."date" <= date("Tb_2"."dob", '+' || ? || ' days'))
+-- parameters: [30]
+```
+
+Generated SQL (MySQL):
+```sql
+WHERE (`Tb_1`.`date` > `Tb_2`.`dob`)
+  AND (`Tb_1`.`date` <= (`Tb_2`.`dob` + INTERVAL ? DAY))
 -- parameters: [30]
 ```
 
@@ -330,7 +339,13 @@ date("Tb"."date", '+' || ? || ' months', '+' || ? || ' days')
 -- parameters: [1, 15]
 ```
 
-Magnitudes are always bound as parameters; the unit keywords come from a fixed whitelist. Weeks render natively on PostgreSQL and as days (×7) on SQLite, which has no `weeks` modifier.
+Generated SQL (MySQL) — one `INTERVAL` per component, years and months as one month count:
+```sql
+((`Tb`.`date` + INTERVAL ? MONTH) + INTERVAL ? DAY)
+-- parameters: [1, 15]
+```
+
+Magnitudes are always bound as parameters; the unit keywords come from a fixed whitelist. Weeks render natively on PostgreSQL and MySQL (`INTERVAL ? WEEK`) and as days (×7) on SQLite, which has no `weeks` modifier.
 
 When the result is a **timestamp** rather than a date — a `DateTimeField` column, or any duration carrying hours, minutes or seconds — SQLite renders the same modifiers through `strftime` with PormG's canonical UTC mask instead:
 
@@ -355,12 +370,13 @@ That mask is the exact format a `DateTimeField` stores, which is the point of it
     expression *evaluates to* once, and the wrapper, the bound literal and the projection all read
     that one answer.
 
-    **Both engines project the type this rule names.** PostgreSQL's own `date + interval` is a
+    **Every engine projects the type this rule names.** PostgreSQL's own `date + interval` is a
     `timestamp` even for whole days, so PormG casts a whole-day shift on a `DateField` back to
-    `date` there — which is the `::date` in the PostgreSQL SQL above. A projected expression
-    therefore reads back the same way on either engine:
+    `date` there — which is the `::date` in the PostgreSQL SQL above. MySQL types the shift as the
+    rule does: a `DATE` shifted by whole days stays a `DATE`, and by an hour becomes a `DATETIME`. A
+    projected expression therefore reads back the same way on every engine:
 
-    | Expression on a `DateField` | Reads back as (both engines) |
+    | Expression on a `DateField` | Reads back as (every engine) |
     |---|---|
     | `F("date") + Day(1)`, `F("date") + 7`, `F("date") - Month(1)` | a `Date` |
     | `F("date") + Hour(6)`, anything with a sub-day component | a timestamp |
@@ -383,10 +399,10 @@ F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
 
 !!! warning "Sub-day math on `DATE` columns"
     Adding a sub-day duration (`Hour`, `Minute`, `Second`) promotes the result to a timestamp, so
-    **comparisons** against it work on both engines (see the note above), and a projected expression
-    alias reads back as a typed timestamp on both.
-    **Writing** it into a `DATE` column is not well defined, and the two engines fail differently:
-    PostgreSQL coerces to `date` and drops the time, while on SQLite a `DATE` column has NUMERIC
+    **comparisons** against it work on every engine (see the note above), and a projected expression
+    alias reads back as a typed timestamp on every engine.
+    **Writing** it into a `DATE` column is not well defined, and the engines fail differently:
+    PostgreSQL and MySQL coerce to `date` and drop the time, while on SQLite a `DATE` column has NUMERIC
     affinity, which leaves a non-numeric string untouched — so the whole timestamp string is stored
     verbatim into a column that is then no longer a valid date. Sub-day arithmetic only round-trips
     through `update()` on a `TIMESTAMP` / `DateTimeField` column.
@@ -394,7 +410,7 @@ F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
 #### Subtracting two dates
 
 Subtracting one `DateField` expression from another gives the **number of days** between them, as an
-integer, on both engines — each driver's age in days on the day of the race, and only the results
+integer, on every engine — each driver's age in days on the day of the race, and only the results
 scored after their 30th birthday:
 
 ```julia
@@ -413,13 +429,19 @@ Generated SQL (SQLite) — a date is stored as text there, so the difference goe
 CAST(julianday("Tb_2"."date") - julianday("Tb_1"."dob") AS INTEGER)
 ```
 
+Generated SQL (MySQL) — its own `-` on two dates subtracts the numbers their digits spell, so the
+difference is `DATEDIFF`:
+```sql
+DATEDIFF(`Tb_2`.`date`, `Tb_1`.`dob`)
+```
+
 The result is a plain number, so it compares against an integer (`> 30 * 365` above) and composes with
 ordinary arithmetic. A whole-day shift is still a date, so `(F("date") + Day(30)) - F("date")` is `30`.
 
 | Difference | Reads back as |
 |---|---|
-| `DateField` − `DateField` (whole-day shifts included) | an integer number of days, both engines |
-| anything with a timestamp side — a `DateTimeField`, or a `DateField` plus a sub-day duration | an interval, read back as a `Dates.CompoundPeriod`, both engines |
+| `DateField` − `DateField` (whole-day shifts included) | an integer number of days, every engine |
+| anything with a timestamp side — a `DateTimeField`, or a `DateField` plus a sub-day duration | an interval, read back as a `Dates.CompoundPeriod`, every engine |
 
 !!! note "An integer, not a duration"
     Django returns a `DurationField` for `DateField - DateField`. PormG returns PostgreSQL's integer
@@ -437,7 +459,8 @@ query.values("name", "since_midnight" => F("start_at") - F("date"))
 PostgreSQL renders `("Tb"."start_at" - "Tb"."date")`, an `interval`. SQLite has no interval type, so
 the difference is rendered as the text a `DurationField` stores there —
 `06:00:00`, with hours never folded into days (`126:00:00`) and a fraction only when there is one —
-and both read back as the same `Dates.CompoundPeriod` (`== Hour(6)`).
+and MySQL renders ``` (-TIMESTAMPDIFF(MICROSECOND, `Tb`.`start_at`, `Tb`.`date`)) ```, the microseconds a
+`DurationField` stores there. All three read back as the same `Dates.CompoundPeriod` (`== Hour(6)`).
 
 Compare a timestamp difference against a duration:
 
@@ -446,7 +469,7 @@ query = M.Race.objects
 query.filter("year" => 2009, (F("start_at") - F("date")) == Hour(6))
 ```
 
-All six comparisons work on both engines — here, the 2009 races that started after noon UTC:
+All six comparisons work on every engine — here, the 2009 races that started after noon UTC:
 
 ```julia
 query = M.Race.objects
@@ -478,8 +501,8 @@ SQLite has no interval type, so PormG computes an interval there as a whole numb
 numeric, so a difference of 100 hours or more, and a negative one, order correctly. Two limits follow
 from it, and both are intentional divergences:
 
-- **Precision** is the millisecond on SQLite, the precision a stored timestamp has; PostgreSQL keeps
-  microseconds. Dividing by zero gives `NULL` on SQLite and an error on PostgreSQL.
+- **Precision** is the millisecond on SQLite, the precision a stored timestamp has; PostgreSQL and
+  MySQL keep microseconds. Dividing by zero gives `NULL` on SQLite and MySQL and an error on PostgreSQL.
 - **What has no millisecond form is refused on SQLite** with `QueryBuildError`: a month or a year
   (`d + Month(1)`, which has no fixed length), and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
   sees a single row in the subquery that formats the text; project its value in a CTE first and use
@@ -488,12 +511,14 @@ from it, and both are intentional divergences:
   (`Case(When("lap" => 1, then = F("time")), default = F("time")) * 2`).
   SQLite holds its value as the `HH:MM:SS` text, and multiplying that text gives `0`. Put the
   arithmetic inside each branch instead
-  (`Case(When("lap" => 1, then = F("time") * 2), default = F("time") * 2)`). On PostgreSQL the
-  arithmetic over the `Case` builds and reads back as a `Dates.CompoundPeriod`.
+  (`Case(When("lap" => 1, then = F("time") * 2), default = F("time") * 2)`). On PostgreSQL and
+  MySQL the arithmetic over the `Case` builds and reads back as a `Dates.CompoundPeriod`. MySQL also
+  refuses the month or the year, which has no fixed count of microseconds, and builds the window
+  function: it holds an interval as its microseconds, with no text to format.
 
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
 `d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), a date
-times an interval, and `Abs(d)` (there is no `abs(interval)`). SQLite refuses them at build time with
+times an interval, and `Abs(d)` (there is no `abs(interval)`). SQLite and MySQL refuse them at build time with
 `QueryBuildError`. For the magnitude of an interval, write `Greatest(d, d * -1)`.
 
 **Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
@@ -505,10 +530,10 @@ negative values. These cases use the milliseconds:
   be `"since_midnight__@gt" => Hour(12)`, `@range`, `@in` or `==`, or compare against another
   interval expression (`"since_midnight__@gt" => F("start_at") - F("date") - Hour(1)`).
 - `Max` and `Min` over an interval: a difference, interval arithmetic or a `DurationField`. They
-  return the longest and the shortest value, read back as a `Dates.CompoundPeriod` on both engines.
+  return the longest and the shortest value, read back as a `Dates.CompoundPeriod` on every engine.
 - `Sum` and `Avg` over an interval, which return the total and the mean duration, as PostgreSQL's
-  `sum(interval)` and `avg(interval)` do. On SQLite the mean is rounded to the millisecond. Both
-  read back as a `Dates.CompoundPeriod` on both engines.
+  `sum(interval)` and `avg(interval)` do. On SQLite the mean is rounded to the millisecond, and on
+  MySQL to the microsecond. Both read back as a `Dates.CompoundPeriod` on every engine.
 - `Greatest`, `Least` and `Coalesce` when every argument is a difference, interval arithmetic, a
   `DurationField` (by path, `F(...)` or `Joined(...)`), one of the functions in this list, a
   duration literal (`Coalesce("time", Value(Hour(0)))`, the usual "default to zero"), or a `NULL`
@@ -535,7 +560,8 @@ Like the arithmetic above, these comparisons round each side to the nearest mill
 On PostgreSQL a duration literal binds as an `interval` (`$1::interval`), wherever it is written: a
 `Value(Hour(1))`, a `Case` branch, a `Coalesce` argument. It compares as an interval and reads back
 as a `Dates.CompoundPeriod`, as a `DurationField` does. Without the type, two such parameters were
-compared as text (`"5 hours" > "40 hours"`), and a `Case` over them read back as its text.
+compared as text (`"5 hours" > "40 hours"`), and a `Case` over them read back as its text. On MySQL
+a duration literal binds as its count of microseconds, as a `DurationField` holds it.
 
 The latest 2009 starts, by time of day:
 
@@ -560,7 +586,8 @@ is refused on SQLite with `QueryBuildError`, however it is spelled:
   (`order_by(SQLOrder(SQLField(Case(…), "d")))`).
 
 Equality (`"d" => Hour(1)`, `"d__@in" => […]`) still compares the text, as it does for a
-`DurationField`. PostgreSQL compares the `interval` itself and builds all of them. To order or filter
+`DurationField`. PostgreSQL compares the `interval` itself, and MySQL its count of microseconds, and both build all
+of them. To order or filter
 one on SQLite, project it in a CTE (`.with("c" => body, …)`) and order or filter the CTE's column
 (`order_by("-c__d")`, `"c__d__@gt" => Hour(1)`), which SQLite reads in milliseconds.
 
@@ -571,7 +598,7 @@ The shapes:
 - A window value function over a duration (`Lag("time", over = …)`), including one over a
   `Subquery(...)`. Its value reads back as a `Dates.CompoundPeriod`.
 
-A `Subquery(...)` that returns a duration (#888) is ordered and compared by its milliseconds, and its
+On SQLite, a `Subquery(...)` that returns a duration (#888) is ordered and compared by its milliseconds, and its
 value reads back as a `Dates.CompoundPeriod`. But `Greatest` and `Least` over one choose their result
 by the text, so past 100 hours or below zero the value itself can be the wrong argument.
 
@@ -594,7 +621,7 @@ anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError
 of day, not a duration, and is refused against an interval: write `Hour(1)` or `Minute(90)` instead.
 
 `+`, `*` and `/` between two date or timestamp values have no meaning and raise `QueryBuildError`
-on both engines. To move a date, add a duration: `F("date") + Day(30)`.
+on every engine. To move a date, add a duration: `F("date") + Day(30)`.
 
 Either side of a difference can be more than a column. An extremum (`Max`, `Min`), a window value
 function (`Lag`, `Lead`, `FirstValue`, …), a `__@date` path and a date literal each count as the date
@@ -612,13 +639,13 @@ query.values("name", "since_opener" => F("date") - Date(2009, 3, 29))
 ```
 
 A date literal is a `Date`, `DateTime` or `ZonedDateTime`. A **string** on the right of date
-arithmetic is text, not a date (`F("date") - "2009-03-29"`), and raises `QueryBuildError` on both
-engines; a string that names a field (`F("date") - "dob"`) is that field. Subtracting a date literal
+arithmetic is text, not a date (`F("date") - "2009-03-29"`), and raises `QueryBuildError` on every
+engine; a string that names a field (`F("date") - "dob"`) is that field. Subtracting a date literal
 from something that is not a date or timestamp PormG can type — a number, `Sum(...)`, `__@year` —
 raises `QueryBuildError` too.
 
 A day count combined with a date is a whole-day **shift**, as it is on PostgreSQL: `F("date") ± count`
-and `count + F("date")` are dates (timestamps stay timestamps), on both engines. Each 2009 race moved
+and `count + F("date")` are dates (timestamps stay timestamps), on every engine. Each 2009 race moved
 as far again past the season opener:
 
 ```julia
@@ -628,7 +655,7 @@ query.values("name", "doubled" => F("date") + (F("date") - Date(2009, 3, 29)))
 ```
 
 An integer column (`IntegerField`, `PositiveIntegerField`, `PositiveSmallIntegerField`,
-`BigIntegerField`) is a day count too, so it shifts a date the same way on both engines — here, each
+`BigIntegerField`) is a day count too, so it shifts a date the same way on every engine — here, each
 2009 race date moved back by its round number:
 
 ```julia
@@ -638,18 +665,20 @@ query.values("name", "round", "shifted" => F("date") - F("round"))
 ```
 
 PostgreSQL renders `("Tb"."date" - "Tb"."round")`; SQLite shifts the julian-day number,
-`date(julianday("Tb"."date") - ("Tb"."round"))`. A `BigIntegerField` is cast to `integer` on
+`date(julianday("Tb"."date") - ("Tb"."round"))`; MySQL renders
+``` (`Tb`.`date` - INTERVAL (`Tb`.`round`) DAY) ```. A `BigIntegerField` is cast to `integer` on
 PostgreSQL, which has `date - integer` but no `date - bigint`. Only a plain column counts: a
 `ForeignKey`, an ID, `F("round") * 2`, a float, a text column or `Sum(...)` beside a date raises
-`QueryBuildError` on SQLite, where a date is text and `+` or `-` would use only its year.
+`QueryBuildError` on SQLite, where a date is text and `+` or `-` would use only its year, and on
+MySQL, where `+` or `-` reads a date as the number its digits spell.
 PostgreSQL has no such operator for these either, and fails when the statement runs. A `TimeField` is
-the one exception: PostgreSQL's `date + time` is a timestamp, while SQLite raises `QueryBuildError`
-for it — an intentional divergence. On SQLite, add the time as a duration instead
+the one exception: PostgreSQL's `date + time` is a timestamp, while SQLite and MySQL raise
+`QueryBuildError` for it — an intentional divergence. On SQLite and MySQL, add the time as a duration instead
 (`F("date") + Hour(6)`).
 
-A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
+A day count **minus** a date has no meaning and raises `QueryBuildError` on every engine; subtract the
 count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
-or a timestamp difference — gives a timestamp on both engines (see above).
+or a timestamp difference — gives a timestamp on every engine (see above).
 
 #### A value PormG cannot type beside a date or a duration
 
@@ -668,7 +697,7 @@ they have no common type, as that one does. A time of day (`TimeField`) is not c
 
 State the type instead: give every value of the `Case` or `Coalesce` the one type and do the arithmetic
 inside each branch, or, where a date is at stake, cast the value (`Cast(…, "date")`). A duration has no
-cast on SQLite, so write it as one (`Second(0)`, not `0`). Twice the fastest lap of each 2009 race's
+cast on SQLite or MySQL, so write it as one (`Second(0)`, not `0`). Twice the fastest lap of each 2009 race's
 fastest driver, and no time for the others:
 
 ```julia
@@ -805,7 +834,7 @@ GROUP BY 1
 -- Parameters: [10]
 ```
 
-The constant is **parameterized** (`$1`), never interpolated into the SQL string — so it stays safe even when the value comes from user input. (On SQLite the placeholder is `?` instead of `$1`.)
+The constant is **parameterized** (`$1`), never interpolated into the SQL string — so it stays safe even when the value comes from user input. (On SQLite and MySQL the placeholder is `?` instead of `$1`.)
 
 !!! info "Important"
     Do **not** wrap the aggregated column in `F()` for this. `F("points") - 10` renders `points - 10` (a row-level column expression), whereas `Sum("points") - 10` renders `SUM(points) - 10` (arithmetic on the aggregate). Reach for the aggregate constructor — `Sum`, `Max`, `Min`, `Count`, `Avg` — whenever the math should apply to the *aggregated* value, and pass the column as a plain string: `Max("points")`, not `Max(F("points"))`.

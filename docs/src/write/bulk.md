@@ -101,7 +101,7 @@ bulk_insert(M.Status.objects, statuses_df, show_query = :params)
 # SQLite:     Any[1, "Finished", 3, "Accident", 4, "Collision", 130, "Withdrew"]
 ```
 
-Each cell must hold a single value on both backends. A `Vector` or a tuple in a text-like column (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements, since neither row source can store it. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
+Each cell must hold a single value on every backend. A `Vector` or a tuple in a text-like column (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements, since no row source can store it. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
 
 An `ArrayField` (PostgreSQL only) is the other column whose one value is a vector. Each cell holds the
 `Vector` (or `nothing`), and rows may have different lengths. A column of arrays cannot be one
@@ -158,11 +158,11 @@ INSERT INTO "driver" ("driverref", "forename", "surname", "dob", "nationality")
 SELECT * FROM unnest($1::varchar[], $2::varchar[], $3::varchar[], $4::date[], $5::varchar[])
 ```
 
-SQLite renders the same call as `VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), …` — see [How rows reach the database](#How-rows-reach-the-database).
+SQLite and MySQL render the same call as `VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), …` — see [How rows reach the database](#How-rows-reach-the-database).
 
 ### Conflict Handling (ON CONFLICT)
 
-By default a duplicate key aborts the batch. When overlap is *expected* — idempotent re-seeding, or concurrent loaders filling one shared dimension table — attach an `ON CONFLICT` clause with `on_conflict=` instead of catching the error. PostgreSQL and SQLite (≥ 3.24) share the syntax, so the same call works on both backends.
+By default a duplicate key aborts the batch. When overlap is *expected* — idempotent re-seeding, or concurrent loaders filling one shared dimension table — attach an `ON CONFLICT` clause with `on_conflict=` instead of catching the error. PostgreSQL and SQLite (≥ 3.24) share the syntax, so the same call works on both. MySQL renders it as `ON DUPLICATE KEY UPDATE`, under the limits [below](#Conflict-Handling-(ON-CONFLICT)).
 
 ```julia
 # The status dimension is re-seeded on every deploy; some rows already exist.
@@ -201,10 +201,10 @@ ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 
 - `target` and `set` take **logical model field names**; PormG resolves `db_column` mappings and renders the quoted physical column names.
 - `set` columns must participate in the INSERT (be present in the DataFrame / `columns=` selection). `EXCLUDED.col` for a non-inserted column would silently write the column *default* instead of a caller value, so PormG rejects it up front.
-- `target` columns must exist on the model, but are **not** required to be declared `unique`/`primary_key` there — the database is the source of truth (partial indexes, constraints created outside PormG). A target with no matching constraint surfaces as the backend's own error (PostgreSQL: *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*).
-- **Dedupe the DataFrame on `target` first** when using `:update`. A batch that conflicts with *itself* diverges across engines: PostgreSQL raises *"cannot affect row a second time"*, while SQLite applies rows serially (last one wins). `unique(df, [:statusid])` before the call keeps behavior identical on both.
+- `target` columns must exist on the model, but are **not** required to be declared `unique`/`primary_key` there (except on MySQL, below) — the database is the source of truth (partial indexes, constraints created outside PormG). A target with no matching constraint surfaces as the backend's own error (PostgreSQL: *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*).
+- **Dedupe the DataFrame on `target` first** when using `:update`. A batch that conflicts with *itself* diverges across engines: PostgreSQL raises *"cannot affect row a second time"*, while SQLite and MySQL apply rows serially (last one wins). `unique(df, [:statusid])` before the call keeps behavior identical on every engine.
 - With `on_conflict` set, the duplicate-key → sequence-resync retry is **skipped**: a conflict is expected, not a symptom of a stale sequence. A duplicate-key error that still surfaces (a *different* constraint than your target) propagates immediately. The normal post-insert sequence synchronization for explicit primary keys still runs.
-- Under `DO NOTHING` with server-generated primary keys, PostgreSQL still consumes sequence values for skipped rows — the standard harmless gaps.
+- Under `DO NOTHING` with server-generated primary keys, PostgreSQL still consumes sequence values for skipped rows, and MySQL `AUTO_INCREMENT` values — the standard harmless gaps.
 - The returned `count` leaves out rows `DO NOTHING` skipped, on every engine, so `nrow(df) - count` is the number of duplicates. A `DO UPDATE` upsert counts each row it inserted or updated. See [Return Value](#Return-Value).
 - `bulk_copy()` cannot express `ON CONFLICT` (the COPY protocol has no such clause); use `bulk_insert(...; on_conflict=...)` when duplicates are possible.
 - **On MySQL** the clause is `ON DUPLICATE KEY UPDATE`, which names no target and fires on a conflict with any unique key ([#1267](https://github.com/PingoLee/PormG.jl/issues/1267)):
@@ -239,7 +239,7 @@ r = bulk_insert(M.Status.objects, statuses_df; returning = ["statusid"], on_conf
 already_present = statuses_df[ismissing.(r.rows.statusid), :]
 ```
 
-**How rows are matched to your input.** Neither engine promises that a multi-row `INSERT` reports its rows in input order, so PormG matches them **by key value, never by position**:
+**How rows are matched to your input.** No engine promises that a multi-row `INSERT` reports its rows in input order, so PormG matches them **by key value, never by position**:
 
 1. With an `on_conflict` `target`, by the target columns. Under `DO UPDATE` the row keeps the primary key it already had, so the target is the only key that finds it — and the returned row carries that existing id and the values just written.
 2. Otherwise by the primary key. If your frame carries it (or it is a `UUIDField(primary_key = true, auto_add = true)`, which PormG mints before the insert), that is the key. If it is a single auto-increment `IDField` the frame leaves out, PormG **pre-allocates** the ids from the column's own sequence first — exactly what [`allocate_primary_keys()`](#Pre-allocating-Primary-Keys-for-Cross-Table-FK-Wiring) does — inserts them explicitly, and matches on them. An `IDField(generated_always = true)` column is written with `OVERRIDING SYSTEM VALUE` for this, which is safe because the ids came from that identity's own sequence.
@@ -250,7 +250,7 @@ already_present = statuses_df[ismissing.(r.rows.statusid), :]
 - `returning` takes model field names — one name, or a vector. An unknown name raises `UnknownFieldError`. The key columns are always read, whether or not you ask for them.
 - A `target` column the INSERT does not carry raises `QueryBuildError`: it is the key, so the frame must hold it.
 - A key repeated **inside** the frame under `DO NOTHING` is written once, by its first occurrence; the later occurrences are `missing`. A row whose key contains a `NULL` is written but cannot be looked up, so it is `missing` too — `missing` means "not correlated", which is "not written" for every row with a complete key.
-- Under `DO UPDATE`, a key repeated inside **one chunk** diverges across engines exactly as the [Conflict Handling](#conflict-handling-on-conflict) rules describe: PostgreSQL raises, SQLite applies the rows in turn and every occurrence gets the final row. Dedupe on the target first.
+- Under `DO UPDATE`, a key repeated inside **one chunk** diverges across engines exactly as the [Conflict Handling](#conflict-handling-on-conflict) rules describe: PostgreSQL raises, SQLite and MySQL apply the rows in turn and every occurrence gets the final row. Dedupe on the target first.
 - Keys are compared after the field's formatter, integers and decimals by value, so an integer key loaded as strings (`"42"`, `"042"`) or a decimal the column stores as `1.50` still matches. A returned row PormG cannot match to any input row, or — outside `DO NOTHING` — an input row that did not come back, raises `QueryBuildError` rather than reporting `missing`: that happens when the column normalizes a key in a way PormG does not model, such as a case-insensitive collation. Supply such keys as the database stores them.
 - **PostgreSQL** reads the rows from `RETURNING` on each chunk's `INSERT`. **SQLite** does not: PormG never uses SQLite's `RETURNING` (it can hang inside `libsqlite3` for some table shapes), so each chunk is read back with a `SELECT` on the same transaction connection. Under `DO NOTHING` it first reads which keys already exist, so a pre-existing row is never reported as written. The results are the same on both engines; SQLite pays one or two extra statements per chunk.
 - With pre-allocated ids the duplicate-key → sequence-resync retry is **skipped**, as it is under `on_conflict`: the retry would send the same ids again. A collision there means the sequence had drifted below `MAX(pk)` before the call — run [`resync_sequences()`](../schema_conventions.md#Explicit-repair:-resync_sequences) and retry. Pre-allocation on PostgreSQL also shares `allocate_primary_keys()`'s default-schema scope (see its [limitations](#Notes-and-Limitations)).
@@ -368,8 +368,8 @@ end
 ```
 
 `IntegrityError` is what the database itself refused — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`,
-`CHECK`. Match on the **type**, never on the message: the wording differs between PostgreSQL and
-SQLite and is not part of any contract. On PostgreSQL, `e.sqlstate` narrows it further (`"23505"`
+`CHECK`. Match on the **type**, never on the message: the wording differs between engines
+and is not part of any contract. On PostgreSQL, `e.sqlstate` narrows it further (`"23505"`
 is a unique violation). The message never quotes the conflicting row, so it is safe to log or
 show. [A database error is safe to show](../errors.md#A-database-error-is-safe-to-show) lists the
 fields each driver reports.
@@ -453,7 +453,7 @@ COPY "driver" ("forename", "surname", "nationality") FROM STDIN WITH (FORMAT CSV
 
 After a `bulk_copy`, PormG automatically updates PostgreSQL `SERIAL`/`IDENTITY` sequences so that subsequent calls to `create()` do not result in primary key collisions.
 
-`bulk_insert` does the same whenever the `DataFrame` supplies the primary key. Both resync **once per call**, after the last chunk, not once per chunk. The whole call runs in one transaction, so nothing between chunks needs the sequence to be current.
+`bulk_insert` does the same whenever the `DataFrame` supplies the primary key (MySQL has nothing to resync: an explicit id moves `AUTO_INCREMENT` past it). Both resync **once per call**, after the last chunk, not once per chunk. The whole call runs in one transaction, so nothing between chunks needs the sequence to be current.
 
 ```julia
 # Bulk insert 10,000 drivers
@@ -540,7 +540,7 @@ bulk_copy(M.Result.objects, results_df)
 
 **One border crossing.** `columns=` is the only argument where DataFrame names appear; `match_on=` and `filters=` always speak the model's field language. That keeps every `=>` in the bulk API meaning the same thing — "df column *to* model field" — and it appears exactly once.
 
-PormG validates every row, then emits a multi-row `UPDATE … FROM` over a row source: one array per column expanded by `unnest(...)` on PostgreSQL, a `WITH source(...) AS (VALUES ...)` CTE on SQLite (see [How rows reach the database](#How-rows-reach-the-database)).
+PormG validates every row, then emits a multi-row `UPDATE … FROM` a row source — one array per column expanded by `unnest(...)` on PostgreSQL, a `WITH source(...) AS (VALUES ...)` CTE on SQLite — and on MySQL a multi-table `UPDATE` joined to a `VALUES ROW(?, …), …` derived table (see [How rows reach the database](#How-rows-reach-the-database)).
 
 !!! note "Migrated from a single `filters=` argument"
     Earlier versions packed both row-matching keys and constant predicates into `filters=`. Row matching now lives in `match_on=`. Passing a per-row match key in `filters=` (a bare string, or a `"df_col" => "model_field"` pair) raises an error telling you to move it to `match_on=` — there is no silent fallback.

@@ -1,15 +1,15 @@
 # PostgreSQL Guide
 
-PormG is PostgreSQL-first for production and SQLite-friendly for local development and tests. For standard relational models the same models, the same fluent query API and the same migration engine run on both, so most application code is backend-agnostic. This page is the entry point for the three things that are *not* symmetric:
+PormG is PostgreSQL-first for production and SQLite-friendly for local development and tests. For standard relational models the same models, the same fluent query API and the same migration engine run on every backend (MySQL too), so most application code is backend-agnostic. This page is the entry point for the three things that are *not* symmetric:
 
 1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL, most with a documented SQLite fallback or no-op.
-2. **PostgreSQL-only field types** — specialized types SQLite has no column for. PormG refuses them on SQLite rather than emulate them, so a model that declares one runs on PostgreSQL only.
+2. **PostgreSQL-only field types** — specialized types SQLite and MySQL have no column for. PormG refuses them there rather than emulate them, so a model that declares one runs on PostgreSQL only.
 3. **Divergences between the engines** — behaviour a power user must know when the same code runs on more than one backend.
 
 The deep-dive pages own the full reference and verified examples; this guide points you to them rather than restating them.
 
 !!! tip "Keep code backend-agnostic"
-    Where a query or write feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend. The exception is a [PostgreSQL-only field type](#PostgreSQL-only-field-types): a model that declares one has no SQLite table, so its tests run on PostgreSQL.
+    Where a query or write feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend. The exception is a [PostgreSQL-only field type](#PostgreSQL-only-field-types): a model that declares one has no SQLite or MySQL table, so its tests run on PostgreSQL.
 
 ## Server versions
 
@@ -42,7 +42,7 @@ handler = M.Result.objects
 bulk_copy(handler, results_df)   # results_df columns match the model fields by exact name
 ```
 
-- **PostgreSQL only.** On SQLite, `bulk_copy` is not available — use [`bulk_insert()`](write/bulk.md) instead (still chunked and fast, just not COPY-fast).
+- **PostgreSQL only.** On SQLite and MySQL, `bulk_copy` is not available — use [`bulk_insert()`](write/bulk.md) instead (still chunked and fast, just not COPY-fast).
 - The COPY protocol has no `ON CONFLICT` clause; when duplicates are possible use `bulk_insert(...; on_conflict=...)`.
 
 Full reference, column auto-detection rules, and `ON CONFLICT` handling: **[Bulk Insert, Copy, and Update](write/bulk.md)**.
@@ -68,7 +68,7 @@ Waiting strategies (`:poll` vs `:block`), timeouts, and async safety: **[Advisor
 
 ## PostgreSQL-native storage types
 
-These field types work on both backends, but PostgreSQL gives them a **native, indexable representation** that SQLite (which stores them as text) cannot match — worth choosing PostgreSQL for when the workload leans on them.
+These field types work on every backend, but PostgreSQL gives them a **native, indexable representation** that SQLite (which stores them as text) and MySQL cannot match — worth choosing PostgreSQL for when the workload leans on them.
 
 ### `JSONField` — `JSONB` vs `TEXT`
 
@@ -82,6 +82,7 @@ Race_config = Models.Model("race_configs",
 
 - **PostgreSQL** stores it as `JSONB` — binary, queryable, and **indexable** (GIN indexes, containment operators, key extraction).
 - **SQLite** stores it as a `TEXT` JSON string — fine for round-tripping a blob, but without server-side JSON indexing/querying.
+- **MySQL** stores it as its `JSON` type; a key or index over it is refused (`unbounded_text_indexes`).
 
 ### `UUIDField` — native `UUID` vs `TEXT`
 
@@ -94,14 +95,15 @@ Api_token = Models.Model("api_tokens",
 
 - **PostgreSQL** uses the native `UUID` type (compact 16-byte storage, type-checked).
 - **SQLite** stores the canonical 8-4-4-4-12 string as `TEXT`.
-- `auto_add=true` generates a `uuid4()` application-side on insert, so identity is the same on both backends.
+- **MySQL** stores it as `CHAR(36)`.
+- `auto_add=true` generates a `uuid4()` application-side on insert, so identity is the same on every backend.
 
 Full parameter reference and validation rules: **[Fields → JSON](fields.md) / [UUID](fields.md#UUID-Fields)**.
 
 ## PostgreSQL-only field types
 
-Some PostgreSQL types have no SQLite counterpart that keeps their semantics. PormG does not emulate
-them: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one, before
+Some PostgreSQL types have no SQLite or MySQL counterpart that keeps their semantics. PormG does not emulate
+them: on SQLite and MySQL, `makemigrations` raises `BackendCapabilityError` for a model that declares one, before
 any migration is written. Such a model runs on PostgreSQL only.
 
 ### `GenericIPAddressField` / `CIDRField` — `inet` / `cidr`
@@ -182,10 +184,12 @@ Reference: **[Fields → Array Fields](fields.md#Array-Fields)**.
 A few query features compile to PostgreSQL operators or functions that SQLite does not have. On
 SQLite each of them raises `BackendCapabilityError` when the query is built. It never quietly
 returns a different answer, so a test suite running on SQLite fails where production would diverge.
+MySQL refuses the first six groups below the same way; for the `ToChar`, `Extract` and `Cast` items,
+MySQL's own forms are in the [MySQL Guide](mysql.md#Reads).
 
 - **JSONB containment and key existence** — `@jcontains` (`@>`), `@has_key` (`?`),
   `@has_any_keys` (`?|`), `@has_keys` (`?&`) on a `JSONField` column. The `__` key-path extraction
-  (`"metadata__wins" => 121`) is **not** in this group: it works on both backends. See
+  (`"metadata__wins" => 121`) is **not** in this group: it works on every backend. See
   [Filters and Aggregates → JSON](read/filters_and_aggregates.md#Containment-and-key-existence-operators-(PostgreSQL-only)).
   ```julia
   M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
@@ -228,13 +232,13 @@ returns a different answer, so a test suite running on SQLite fails where produc
   ```
 - **`ToChar` templates beyond the portable table.** The formats listed in
   [Functions and Dates → ToChar](read/functions_and_dates.md#ToChar-—-Format-as-String) render the
-  same text on both engines. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
+  same text on every engine. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
   as written.
 - **`Extract` parts beyond the portable eleven.** SQLite supports `YEAR`, `MONTH`, `DAY`, `HOUR`,
   `MINUTE`, `SECOND`, `DOW`, `DOY`, `WEEK`, `ISOYEAR` and `ISODOW`, in any case (`"year"` works as
   well as `"YEAR"`), numbered as PostgreSQL numbers them. PostgreSQL also accepts the rest of its
-  `EXTRACT` fields (`epoch`, `century`, `quarter`, …). Code that uses those eleven runs on both. A string outside that list — including
-  PostgreSQL's synonyms such as `years` or `hr` — raises `InvalidValueError` on both engines; see
+  `EXTRACT` fields (`epoch`, `century`, `quarter`, …). Code that uses those eleven runs on every engine. A string outside that list — including
+  PostgreSQL's synonyms such as `years` or `hr` — raises `InvalidValueError` on every engine; see
   [Functions and Dates → Extract](read/functions_and_dates.md#Extract-—-Extract-Date/Time-Part).
 - **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
   [Window Functions](read/window_functions.md).
@@ -242,14 +246,14 @@ returns a different answer, so a test suite running on SQLite fails where produc
   `DateTimeField()` / `TimeField()` / `DurationField()` as a `Cast` target or as the
   `output_field` of `Case`, `Coalesce`, `Greatest` or `Least`. SQLite
   has no time types, so its `CAST` would turn the text into a number. A cast to `"date"` works on
-  both and renders `date(x)` on SQLite. See
+  every engine and renders `date(x)` on SQLite. See
   [Functions and Dates → Cast](read/functions_and_dates.md#Cast-—-Type-Conversion).
 
 ## Advanced SQL (every backend, PostgreSQL-first)
 
 These run on SQLite and MySQL too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
 
-- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) render on PostgreSQL (and MySQL) — SQLite supports only the default frame.
+- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on every backend; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) render on PostgreSQL (and MySQL) — SQLite supports only the default frame.
 - **[Subqueries and CTEs](read/subqueries_and_ctes.md)** — `.with(...)` and its `"<cte>__<column>"` columns, correlated subqueries, `Exists`/`OuterRef`, and CTE joins.
 - **[Filters and Aggregates](read/filters_and_aggregates.md)** and **[Functions and Dates](read/functions_and_dates.md)** — the `Sum`/`Count`/`Max`, date-bucket, and SQL-function surface.
 - **[Field Expressions](read/field_expressions.md)** — `F("...")` database-side arithmetic and field-to-field comparisons.
@@ -307,8 +311,8 @@ Notes:
   - **Orphans at the end:** SQLite rolls back with `UnsafeMutationError` when `check_on_exit = true`.
     PostgreSQL ignores `check_on_exit` and refuses the `COMMIT` with `IntegrityError`.
 - **Engine-pinned database defaults.** A `db_default` is raw SQL, so PormG will not translate it:
-  a NamedTuple naming only `postgres` refuses to render for SQLite rather than emit DDL SQLite
-  rejects. Give each engine a spelling, or use a portable expression (`CURRENT_TIMESTAMP`,
+  a NamedTuple naming only `postgres` refuses to render for SQLite or MySQL rather than emit DDL they
+  reject. Give each engine a spelling, or use a portable expression (`CURRENT_TIMESTAMP`,
   `CURRENT_DATE`). See [Column defaults](schema_conventions.md#Column-defaults).
 - **Decimal width on SQLite.** SQLite has no exact decimal type: a `DECIMAL(p, s)` column stores each
   value as an `Int64` or a `Float64`, and a `Float64` keeps fifteen significant digits exactly. So
@@ -319,8 +323,8 @@ Notes:
   same change; the rebuild carries it. An untouched existing column is left alone.
 
   Projected as the column itself, a `DecimalField` of at most fifteen digits reads back as a
-  `Decimals.Decimal` on both engines. A number computed over it (`Sum("points")`,
-  `F("points") * 2`, `Round`) reads back as a `Decimal` on both engines too; on SQLite it is built
+  `Decimals.Decimal` on every engine. A number computed over it (`Sum("points")`,
+  `F("points") * 2`, `Round`) reads back as a `Decimal` on every engine too; on SQLite it is built
   from the double SQLite computed, to fifteen significant digits (#1121). See
   [The type of a computed number](read/index.md#The-type-of-a-computed-number). On SQLite a value
   that does not fit the declaration (the unrounded result of an `F`-arithmetic `update`, which
@@ -334,8 +338,8 @@ Notes:
 - **Connection pooling.** Pool sizing, health, and multi-tenant/dynamic connections: **[Configuration](configuration/index.md)** and **[Advanced Configuration](configuration/advanced.md)**.
 - **Transactions & savepoints.** `run_in_transaction`, `with_savepoint`, and connection-loss semantics inside a transaction: **[Transactions](write/transaction.md)**.
 - **Statement timeouts.** A long query is cancelled by PostgreSQL's `statement_timeout` (surfacing as a query-canceled error); the `:block` advisory-lock strategy bounds its wait with `lock_timeout` instead, and leaves `statement_timeout` alone (see [Advisory Locks](advisory_lock.md)).
-- **Composite uniqueness.** Multi-column unique constraints render as a `CREATE UNIQUE INDEX` on both backends — see [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)). A table-level `UNIQUE (…)` constraint already in the schema — what Django's `unique_together` creates — is read back too, and satisfies a declaration over the same columns rather than gaining a second index beside it.
-- **Composite indexes.** Multi-column *non-unique* indexes render as a plain `CREATE INDEX`, likewise identical on both backends — see [Composite Indexes](models.md#Composite-Indexes-(Meta.indexes)).
+- **Composite uniqueness.** Multi-column unique constraints render as a `CREATE UNIQUE INDEX` on every backend — see [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)). A table-level `UNIQUE (…)` constraint already in the schema — what Django's `unique_together` creates — is read back too, and satisfies a declaration over the same columns rather than gaining a second index beside it.
+- **Composite indexes.** Multi-column *non-unique* indexes render as a plain `CREATE INDEX`, likewise identical on every backend — see [Composite Indexes](models.md#Composite-Indexes-(Meta.indexes)).
 - **Index methods, operator classes and descending columns.** `Models.Index(method = "gin")` (also `hash`, `gist`, `spgist`, `brin`), `opclasses = ("jsonb_path_ops",)` and a `"-field"` render as PostgreSQL writes them, followed by `COMMENT ON INDEX … IS 'pormg:index'` — PormG's ownership marker — in the same step ([Methods, operator classes and descending columns](models.md#Methods,-operator-classes-and-descending-columns)). The marker decides what `makemigrations` may drop: an undeclared index of one of these shapes is removed only when it carries one, so a GIN or `varchar_pattern_ops` index written by hand is never planned away, and declaring it adopts it with a `COMMENT ON INDEX` that keeps any comment already there. A `COMMENT ON INDEX` that replaces the comment later, or a `pg_restore --no-comments`, removes the marker and with it PormG's ownership — the index is then treated as hand-made. Operator classes are rendered unqualified and resolve through the connection's `search_path`, so a class from an extension (`gin_trgm_ops` from `pg_trgm`) needs the extension installed first — PormG does not manage extensions. Every `CREATE INDEX` runs inside `migrate`'s transaction and blocks writes to its table while it builds; for a large table, build it with `CREATE INDEX CONCURRENTLY` in a `run_once` step and declare it afterwards.
 - **Expression and partial indexes.** `Models.Index(expressions = ("lower(surname)",), …)` and `Models.Index(fields = …, condition = "position IS NOT NULL", …)` render their SQL text verbatim — a `WHERE` after the member list — and the marker carries a hash of that text: `pormg:index:<16 hex>` ([Expression and partial indexes](models.md#Expression-and-partial-indexes)). PostgreSQL stores a rewritten form of the text (`lower(surname::text)`, a re-parenthesised predicate), so the hash, not the text, is what `makemigrations` compares; a hand-made one is adopted only by a declaration of the catalog's own text, which `inspectdb` writes. Every function an expression or a predicate calls must be `IMMUTABLE`, or `migrate` fails at the `CREATE INDEX`.
 - **Expression column defaults.** A `db_default = (postgres = "lower('OPEN')",)` is rendered verbatim, followed in the same step by a `DO` block that writes `pormg:default:<declared hash>:<live hash>` into the column's comment — the hash of what you declared, and of what `pg_get_expr` printed for it right after it was applied ([`db_default` on PostgreSQL](schema_conventions.md#Column-defaults)). PostgreSQL re-prints a default with casts (`lower('OPEN'::text)`), so the marker, not the text, is what lets the column converge. A comment already on the column is kept and the marker appended to it. A hand change to the default, a `COMMENT ON COLUMN` that replaces the comment, or a `pg_restore --no-comments` stops the marker vouching, and the next `migrate` sets the default again and re-stamps it.

@@ -118,6 +118,24 @@ _na28_err(f) = try f(); nothing catch e; e end
             @test err !== nothing && occursin("PostgreSQL", sprint(showerror, err))
             @test isempty(live())
         end
+
+        # A `Sockets` literal is the same feature (#1372). SQLite's bind refused it as a value it cannot
+        # store, and MySQL sent it to the driver, which raised `StatementError` once the statement ran.
+        # Expected: `BackendCapabilityError` from the read itself, before any SQL, naming PostgreSQL
+        # and never the address; the same query with the address as text reads its rows.
+        @testset "a Sockets literal is refused on a backend without network types (#1372)" begin
+            q = M.Status.objects
+            q.filter("statusid" => 1)
+            q.values("statusid", "probe" => PormG.Functions.Value(parse(Sockets.IPAddr, "10.20.0.7")))
+            err = _na28_err(() -> q.list())
+            @test err isa PormG.BackendCapabilityError
+            @test err !== nothing && occursin("PostgreSQL", sprint(showerror, err)) &&
+                  !occursin("10.20.0.7", sprint(showerror, err))
+            q_text = M.Status.objects
+            q_text.filter("statusid" => 1)
+            q_text.values("statusid", "probe" => PormG.Functions.Value(string(parse(Sockets.IPAddr, "10.20.0.7"))))
+            @test only(q_text.list())[:probe] == "10.20.0.7"
+        end
     else
         drop()
         try

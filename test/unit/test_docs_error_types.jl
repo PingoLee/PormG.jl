@@ -2431,12 +2431,12 @@ const DOCERR_CASES = [
             q = m.objects; q.filter("token" => "550e"); q.list(show_query = :dict)
         end,
     ),
-    # #903. `fields.md` → *Querying network fields* and the `Value` docstring name the type a
-    # `Sockets` literal raises on SQLite, which has no network type. The PostgreSQL bind is pinned in
-    # `test_network_address_fields.jl`.
+    # #903, #1372. `fields.md` → *Querying network fields* and the `Value` docstring name the type a
+    # `Sockets` literal raises on SQLite, which has no network type: the capability refusal, at build.
+    # The PostgreSQL bind and the MySQL refusal are pinned in `test_network_address_fields.jl`.
     (
-        "fields.md + src/querybuilder/functions.jl — Value(ip\"…\") raises on SQLite (#903)",
-        InvalidValueError,
+        "fields.md + src/querybuilder/functions.jl — Value(ip\"…\") raises on SQLite (#903, #1372)",
+        BackendCapabilityError,
         () -> let q = DOCERR_STATUS_SL.objects
             q.values("statusid", "probe" => Value(Sockets.IPv4("10.0.0.1"))); q.list(show_query = :dict)
         end,

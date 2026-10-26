@@ -415,11 +415,13 @@ end
                             ("time @gt key", "time__@gt" => F("meta__round"), ">"))
     @testset "$label" begin
       @test _utt_refusal(expr; conn = _UTT_PG, filter = true) === nothing
-      e = _utt_refusal(expr; conn = _UTT_SL, filter = true)
-      @test e isa QueryBuildError
-      e isa QueryBuildError || continue
-      @test occursin("`$(op)` beside a time of day, with `meta__round` on one side, is not supported on SQLite", e.msg)
-      @test occursin("default = Time(0)", e.msg)
+      for (conn, engine) in ((_UTT_SL, "SQLite"), (_UTT_MY, "MySQL"))
+        e = _utt_refusal(expr; conn = conn, filter = true)
+        @test e isa QueryBuildError
+        e isa QueryBuildError || continue
+        @test occursin("`$(op)` beside a time of day, with `meta__round` on one side, is not supported on $(engine)", e.msg)
+        @test occursin("default = Time(0)", e.msg)
+      end
     end
   end
   for conn in (_UTT_PG, _UTT_SL, _UTT_MY)

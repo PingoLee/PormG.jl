@@ -16,7 +16,7 @@ number its digits spell. On the 2009 Australian Grand Prix (`time = 06:00:00`):
 | `values("x" => F("time") + 1)` | `7` | `QueryBuildError` | unchanged: fails at the server (no `time + bigint`) |
 | `values("x" => F("time") * 2)` | `12` | `QueryBuildError` | unchanged: fails at the server |
 | `values("x" => F("year") + F("time"))` | the year plus the hour | `QueryBuildError` | unchanged: fails at the server |
-| `filter(F("meta__round") > F("time"))`, a JSON key | text against the key's value | `QueryBuildError` (SQLite; MySQL renders no JSON lookups yet) | unchanged |
+| `filter(F("meta__round") > F("time"))`, a JSON key | text against the key's value | `QueryBuildError` | unchanged |
 | `values("x" => Coalesce("time", 0) * 2)` | the hour times two | `QueryBuildError` on every engine (#1321's mix) | refused at build (#1321) |
 | `filter("time__@lt" => Time(12))`, `F("time") > Time(12)` | built | builds, unchanged | unchanged |
 

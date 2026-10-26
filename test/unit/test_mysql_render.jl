@@ -1263,6 +1263,12 @@ end
   @test ex("dow") == "(DAYOFWEEK(`Tb`.`date`) - 1)"
   @test ex("doy") == "DAYOFYEAR(`Tb`.`date`)"
   @test ex("quarter") == "QUARTER(`Tb`.`date`)"
+  # #1337: an `Extract` quarter is an integer, as `@quarter` is: its sum is the integer `SUM(…) DIV 1`
+  # (it read back as a `Decimal`), and its quotient divides as integers (it was refused as untyped).
+  @test proj(() -> RA.objects.values("v" => QB.Sum(QB.Extract("date", "quarter")))) == "(SUM(QUARTER(`Tb`.`date`)) DIV 1)"
+  @test proj(() -> RA.objects.values("v" => QB.Extract("date", "quarter") / 2)) == "(QUARTER(`Tb`.`date`) DIV ?)"
+  @test proj(() -> RA.objects.values("v" => QB.Extract("date", "quarter") / 2)) ==
+        proj(() -> RA.objects.values("v" => F("date__@quarter") / 2))
   @test ex("epoch") == "(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`date`) / 1000000)"
   ts() = QB.Cast("date", "timestamp")
   @test proj(() -> RA.objects.values("v" => QB.Extract(ts(), "second"))) == "EXTRACT(SECOND FROM CAST(`Tb`.`date` AS DATETIME(3)))"

@@ -153,8 +153,9 @@ end
 #     -> (CASE WHEN "Tb"."year" = $1 THEN "Tb"."meta" #>> '{"round"}' ELSE "Tb"."fastestlaptime" END * $2::bigint)
 # On SQLite the same shapes built `(CASE … END * ?)`: #1301's `'00:01:30' * 2 = 0` and #1307's
 # `'2009-03-29' + 1 = 2010`, reached through a `Case` the walk cannot name, a `Coalesce`, a `Max` over
-# such a `Case`, the `Case` on the right, a date or `0` added to a number, `Floor` of a duration (the
-# floor of its text), and an ordering. Each is now refused, naming the function.
+# such a `Case`, the `Case` on the right, a window `default`, and an ordering. Each is now refused,
+# naming the function. (A `Case` over a number and a date is #1321's mix and `Floor` of a duration is
+# #1324's, both refused on every engine before this rule is asked.)
 # Why it matters: the walk names neither value, so the render cannot know the arithmetic is temporal;
 # the fact that a date or a duration is one of the values is enough to know the generic SQL is wrong.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,7 +170,6 @@ end
       ("Coalesce(key, date) + 1",   Fn.Coalesce("meta__round", "date") + 1,      false, "+", "`COALESCE(…)`"),
       ("Coalesce(key, dur) * 2",    Fn.Coalesce("meta__round", "fastestlaptime") * 2, false, "*", "`COALESCE(…)`"),
       ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1,                   false, "+", "`MAX(…)`"),
-      ("Floor(duration) / 2",       Fn.Floor(F("fastestlaptime") * 2) / 2,       false, "/", "`FLOOR(…)`"),
       ("Lag(key, default = date) + 1",
        PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1,
                                                                                   false, "+", "`LAG(…)`"),

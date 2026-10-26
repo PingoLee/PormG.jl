@@ -876,10 +876,15 @@ end
 # the one #1304 kept (it reads the walk, not the render), and no other test reached it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1304: a numeric function over an interval, cast to a number, is refused on SQLite as the interval" begin
-  for (expr, named) in ((Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()), "`ROUND(…)`"),
-                        (Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()), "`SQRT(…)`"),
-                        (Fn.Cast(Fn.Sqrt("laptime"), "numeric"), "`SQRT(…)`"))
-    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1259", named = named)
+  # #1324: the function itself is refused now, on every engine, before the cast is checked: a number
+  # function has no meaning over a duration. The #1304 arm stays for a value the walk means as an
+  # interval under a function this rule does not cover.
+  for expr in (Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()),
+               Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()),
+               Fn.Cast(Fn.Sqrt("laptime"), "numeric")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("(#1324)", _ccd_msg(err))
   end
 end
 
@@ -2262,17 +2267,16 @@ end
   for x in (_CF("laptime") * _CF("price"), _CF("laptime") / 2.0)
     _ccd_expect(Fn.Cast(x, "float8"); departs = _SL_ONLY, issue = "#1259", named = "of an interval expression")
   end
-  # #1310: under a further step the quotient is refused before the cast is checked. `Floor` names no
-  # type over an interval, and on SQLite `Floor(<interval>) / 2` divided the floor of its `HH:MM:SS`
-  # text; it is refused there with or without the `Cast`, and PostgreSQL builds it.
-  floored = Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer")
-  @test _ccd_refusal(floored; conn = _CCD_PG) === nothing
-  floor_err = _ccd_refusal(floored; conn = _CCD_SL)
-  @test floor_err isa QueryBuildError
-  @test occursin("`/` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on SQLite",
-                 _ccd_msg(floor_err))
-  # `Mod` over such arithmetic, cast to an integer, takes the refusal `Mod("laptime", 3)` already had.
-  _ccd_expect(Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"); departs = _SL_ONLY, issue = "#1028",
-              named = "`MOD(…)`")
-  _ccd_expect(Fn.Cast(Fn.Mod("laptime", 3), "integer"); departs = _SL_ONLY, issue = "#1028", named = "`MOD(…)`")
+  # #1324: `Floor` and `Mod` over a duration, under a further step or a `Cast`, are refused at the
+  # function itself, on every engine: a number function has no meaning over a duration. Before, `Floor`
+  # named no type over an interval, so only the quotient over it was refused, on SQLite (#1310), and a
+  # `Mod` of one only under a cast to a number, on SQLite (#1028).
+  for expr in (Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer"),
+               Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"),
+               Fn.Cast(Fn.Mod("laptime", 3), "integer")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("of a duration is not supported", _ccd_msg(err)) &&
+          occursin("(#1324)", _ccd_msg(err))
+  end
 end

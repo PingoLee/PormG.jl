@@ -98,7 +98,7 @@ function DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 # MySQL (#1130 phase 2c-3a): `DATE` is a type there, as on PostgreSQL.
 DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  (_refuse_date_of_time(format, "@date"); "CAST($(column) AS DATE)")
+  (_refuse_mysql_date_part(format, "@date"); "CAST($(column) AS DATE)")
 function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
 end
@@ -123,9 +123,9 @@ function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLit
 end
 # MySQL (#1130 phase 2c-3a): its own `QUARTER`, and the quadrimester from `MONTH`, each an INT.
 QUARTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  (_refuse_date_of_time(format, "@quarter"); "QUARTER($(column))")
+  (_refuse_mysql_date_part(format, "@quarter"); "QUARTER($(column))")
 QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  (_refuse_date_of_time(format, "@quadrimester"); "(((MONTH($(column)) - 1) DIV 4) + 1)")
+  (_refuse_mysql_date_part(format, "@quadrimester"); "(((MONTH($(column)) - 1) DIV 4) + 1)")
 
 # #527 — the SQL-side image of `DATETIME_FORMAT` (#79, `constants.jl`), for SQLite.
 #
@@ -1412,6 +1412,7 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   up = extract_part(part)
   kind = get(format, "temporal_kind", nothing)
   kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
+  kind === :interval && up != "EPOCH" && throw(_mysql_part_of_interval_refusal("Extract(…, \"$(part)\")"))
   template = get(_MYSQL_EXTRACT_NATIVE, up, nothing)
   template === nothing || return replace(template, "%s" => column)
   if up == "EPOCH"
@@ -1427,6 +1428,21 @@ _mysql_date_of_time_refusal(label::String) = QueryBuildError(
   "$(label) over a time is not supported on MySQL, which reads a time's date as today's: a time has no date.")
 _refuse_date_of_time(format::Dict{String,Any}, label::String) =
   get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
+# #1324 — a part of a duration EXPRESSION (a timestamp difference, interval arithmetic, a `Sum` of a
+# duration), which MySQL holds as its count of microseconds: `EXTRACT(HOUR FROM <a BIGINT>)` reads the
+# count as a date or a time, a NULL or a value with no meaning, where PostgreSQL reads the interval's
+# hours component. MySQL departs, so it refuses on itself; only `EPOCH` reads the count (its seconds).
+# A `DurationField` column is refused earlier, on every engine, by its field (#1070); this is an
+# expression.
+_mysql_part_of_interval_refusal(label::String) = QueryBuildError(
+  "$(label) over a duration expression is not supported on MySQL, which holds a duration as its count " *
+  "of microseconds there: the part would read that count as a date or a time. For a duration's seconds, " *
+  "write Extract(d, \"epoch\").")
+function _refuse_mysql_date_part(format::Dict{String,Any}, label::String)
+  _refuse_date_of_time(format, label)
+  get(format, "temporal_kind", nothing) === :interval && throw(_mysql_part_of_interval_refusal(label))
+  return nothing
+end
 
 # #636 — the ISO-8601 parts on SQLite, numbered exactly as PostgreSQL's `WEEK`, `ISOYEAR` and
 # `ISODOW` are. SQLite's own `%W` is NOT the ISO week (it counts Monday-started weeks from the first
@@ -1459,7 +1475,7 @@ function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 # MySQL's `DAYOFWEEK` is already Django's numbering, 1 = Sunday.
 WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  (_refuse_date_of_time(format, "@week_day"); "DAYOFWEEK($(column))")
+  (_refuse_mysql_date_part(format, "@week_day"); "DAYOFWEEK($(column))")
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""

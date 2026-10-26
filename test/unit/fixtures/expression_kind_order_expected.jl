@@ -4471,150 +4471,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"12:00:00\"", "String"), ("1", "Int64")]),
   ("F time > Time literal | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"12:00:00\"", "String"), ("1", "Int64")]),
-  ("Round interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(ROUND(CAST(`Tb`.`fastestlaptime` AS DECIMAL(65,30)), ?) IS NULL) ASC, ROUND(CAST(`Tb`.`fastestlaptime` AS DECIMAL(65,30)), ?) ASC", params = [("0", "Int64"), ("0", "Int64"), ("0", "Int64")]),
-  ("Round interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
-  ("Round interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
-  ("Round interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    ROUND(CAST(`R3`.`fastestlaptime` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    ROUND(CAST(`R2`.`fastestlaptime` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
-  ("Round interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64"), ("1", "Int64")]),
-  ("Round interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    ROUND(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
-  ("Round interval places | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(ROUND(CAST(`Tb`.`fastestlaptime` AS DECIMAL(65,30)), ?) IS NULL) ASC, ROUND(CAST(`Tb`.`fastestlaptime` AS DECIMAL(65,30)), ?) ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
-  ("Round interval places | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Round interval places | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Round interval places | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    ROUND(CAST(`R3`.`fastestlaptime` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    ROUND(CAST(`R2`.`fastestlaptime` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("Round interval places | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Round interval places | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    ROUND(\"R2\".\"fastestlaptime\", ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("Floor interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(FLOOR(`Tb`.`fastestlaptime`) IS NULL) ASC, FLOOR(`Tb`.`fastestlaptime`) ASC", params = Tuple{Any, String}[]),
-  ("Floor interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Floor interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Floor interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    FLOOR(`R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    FLOOR(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Floor interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Floor interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    FLOOR(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Ceil interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CEIL(`Tb`.`fastestlaptime`) IS NULL) ASC, CEIL(`Tb`.`fastestlaptime`) ASC", params = Tuple{Any, String}[]),
-  ("Ceil interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Ceil interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Ceil interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    CEIL(`R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CEIL(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Ceil interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Ceil interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    CEIL(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Sqrt interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(SQRT(`Tb`.`fastestlaptime`) IS NULL) ASC, SQRT(`Tb`.`fastestlaptime`) ASC", params = Tuple{Any, String}[]),
-  ("Sqrt interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Sqrt interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Sqrt interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    SQRT(`R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    SQRT(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Sqrt interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Sqrt interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    SQRT(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Exp interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(EXP(`Tb`.`fastestlaptime`) IS NULL) ASC, EXP(`Tb`.`fastestlaptime`) ASC", params = Tuple{Any, String}[]),
-  ("Exp interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Exp interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Exp interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    EXP(`R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    EXP(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Exp interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Exp interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    EXP(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Ln interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(LN(`Tb`.`fastestlaptime`) IS NULL) ASC, LN(`Tb`.`fastestlaptime`) ASC", params = Tuple{Any, String}[]),
-  ("Ln interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Ln interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Ln interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    LN(`R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    LN(`R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Ln interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Ln interval | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    LN(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Power interval 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
-  ("Power interval 2 | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Power interval 2 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Power interval 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Power interval 2 | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Power interval 2 | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Mod interval 3 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("3", "Int64")]),
-  ("Mod interval 3 | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
-  ("Mod interval 3 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
-  ("Mod interval 3 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("3", "Int64"), ("1", "Int64")]),
-  ("Mod interval 3 | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("3", "Int64"), ("1", "Int64")]),
-  ("Mod interval 3 | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("3", "Int64"), ("1", "Int64")]),
-  ("Abs interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Abs interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Round F interval * 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(ROUND(CAST(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) AS DECIMAL(65,30)), ?) IS NULL) ASC, ROUND(CAST(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) AS DECIMAL(65,30)), ?) ASC", params = [("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64")]),
-  ("Round F interval * 2 | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("0", "Int64")]),
-  ("Round F interval * 2 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("0", "Int64")]),
-  ("Round F interval * 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    ROUND(CAST(CAST(ROUND((`R3`.`fastestlaptime`) * (?)) AS SIGNED) AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    ROUND(CAST(CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64")]),
-  ("Round F interval * 2 | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("0", "Int64"), ("1", "Int64")]),
-  ("Round F interval * 2 | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT\n    ROUND((SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms)), ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) ASC NULLS LAST", params = [("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64")]),
-  ("Extract hour F datetime - datetime | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Extract hour F datetime - datetime | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract hour F datetime - datetime | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Extract hour F datetime - datetime | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Extract hour F datetime - datetime | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Extract hour F datetime - datetime | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Extract minute F interval * 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Extract minute F interval * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Extract minute F interval * 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Extract minute F interval * 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Extract minute F interval * 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Extract minute F interval * 2 | subquery", :sqlite, "w") =>

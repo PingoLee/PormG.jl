@@ -5187,239 +5187,239 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F time > Time literal | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Round interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round interval places | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Floor interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Floor interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a duration is not supported: a duration is not a number, so `Floor` has no meaning over one on any engine (#1"),
   ("Ceil interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Ceil interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a duration is not supported: a duration is not a number, so `Ceil` has no meaning over one on any engine (#132"),
   ("Sqrt interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Sqrt interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a duration is not supported: a duration is not a number, so `Sqrt` has no meaning over one on any engine (#132"),
   ("Exp interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Exp interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a duration is not supported: a duration is not a number, so `Exp` has no meaning over one on any engine (#1324)"),
   ("Ln interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Ln interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a duration is not supported: a duration is not a number, so `Ln` has no meaning over one on any engine (#1324). "),
   ("Power interval 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Power interval 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a duration is not supported: a duration is not a number, so `Power` has no meaning over one on any engine (#1"),
   ("Mod interval 3 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Mod interval 3 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a duration is not supported: a duration is not a number, so `Mod` has no meaning over one on any engine (#1324)"),
   ("Abs interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on SQLite: an interval has no absolute value in SQL. For the magnitude of an inter"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on MySQL: an interval has no absolute value in SQL. For the magnitude of an interv"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on SQLite: an interval has no absolute value in SQL. For the magnitude of an inter"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on MySQL: an interval has no absolute value in SQL. For the magnitude of an interv"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on SQLite: an interval has no absolute value in SQL. For the magnitude of an inter"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Abs interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`Abs` of an interval is not supported on MySQL: an interval has no absolute value in SQL. For the magnitude of an interv"),
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a duration is not supported: a duration is not a number, so `Abs` has no meaning over one on any engine (#1324)"),
   ("Round F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Extract hour F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract hour F datetime - datetime | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract hour F datetime - datetime | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
   ("Extract hour F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract hour F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract hour F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
   ("Extract hour F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract hour F datetime - datetime | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract hour F datetime - datetime | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
   ("Extract minute F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract minute F interval * 2 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract minute F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
   ("Extract minute F interval * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract minute F interval * 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract minute F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
   ("Extract minute F interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract minute F interval * 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract minute F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
   ("Extract epoch F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Extract epoch F interval * 2 | alone", :sqlite) =>
@@ -5479,130 +5479,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
-  ("Round interval | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round interval places | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Floor interval | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Floor interval | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Floor interval | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Floor interval | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Floor interval | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Floor interval | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Ceil interval | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Sqrt interval | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Sqrt interval | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Sqrt interval | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Sqrt interval | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Sqrt interval | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Sqrt interval | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Exp interval | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Ln interval | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Power interval 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Power interval 2 | alone", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Power interval 2 | alone", :mysql) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Power interval 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Power interval 2 | subquery", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Power interval 2 | subquery", :mysql) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | alone", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | alone", :mysql) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | subquery", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Mod interval 3 | subquery", :mysql) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Abs interval | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number")],
-  ("Abs interval | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
-  ("Round F interval * 2 | alone", :postgres) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round F interval * 2 | alone", :sqlite) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round F interval * 2 | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round F interval * 2 | subquery", :postgres) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round F interval * 2 | subquery", :sqlite) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Round F interval * 2 | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

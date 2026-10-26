@@ -871,7 +871,9 @@ end
   @test refused(() -> R.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
   @test refused(() -> R.objects.values("v" => F("points") + F("fastestlaptime")))
   @test refused(() -> R.objects.values("v" => F("grid") + F("fastestlaptime")))
-  @test refused(() -> R.objects.values("v" => PormG.QueryBuilder.Abs("fastestlaptime")))
+  # #1324: `Abs` of a duration has no meaning on any engine, so its refusal names none.
+  @test (e = try; _mr_inspect(R.objects.values("v" => PormG.QueryBuilder.Abs("fastestlaptime"))); nothing; catch err; err; end;
+         e isa PormG.QueryBuildError && occursin("(#1324)", sprint(showerror, e)))
   # A number compared with an interval: SQLite compares the stored text (its #881 rule); MySQL would
   # compare a count with microseconds, so it refuses an ordering and an equality alike.
   @test refused(() -> R.objects.filter(F("grid") > F("fastestlaptime")))

@@ -517,9 +517,21 @@ from it, and both are intentional divergences:
   function: it holds an interval as its microseconds, with no text to format.
 
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
-`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), a date
-times an interval, and `Abs(d)` (there is no `abs(interval)`). SQLite and MySQL refuse them at build time with
-`QueryBuildError`. For the magnitude of an interval, write `Greatest(d, d * -1)`.
+`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
+times an interval. SQLite and MySQL refuse them at build time with `QueryBuildError`.
+
+**A number function over a duration** (`Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`,
+`Abs`) raises `QueryBuildError` on every engine when the query is built (#1324): a duration is not a
+number, so none of them has a meaning over one. PostgreSQL raised at the server, SQLite computed on the
+`HH:MM:SS` text (`Round(F("fastestlaptime"))` read `0.0`), and MySQL on the count of microseconds. For
+the magnitude of an interval, write `Greatest(d, d * -1)`. For its seconds, write `Extract(d, "epoch")`
+on PostgreSQL and MySQL, and apply the function to that; SQLite has no `EPOCH` part. `Sum` and `Avg`
+mean a duration's total and mean, and keep building on every engine.
+
+On MySQL a date part of a duration expression (`Extract(F("start_at") - F("date"), "hour")`, a
+`Sum` of a duration under `Extract(…, "second")`) is refused too, since MySQL holds the duration as its
+count of microseconds and the part would read that count as a date or a time. `Extract(…, "epoch")`
+builds there.
 
 **Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
 still returns the text, but PormG sorts and compares the milliseconds behind it. Sorting the text

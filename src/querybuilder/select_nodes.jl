@@ -744,11 +744,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
     # #900: PostgreSQL has no `abs(interval)`, so the statement fails there when it runs. SQLite
     # computed the absolute value of the text's leading hours, silently. Refused, as `d * d` is (#881).
-    # MySQL (#1130) would take it of the microseconds; refused there too, with the reason that holds on
-    # every engine, since the spelling below means the magnitude everywhere.
-    (ms === nothing && !operand_interval) || throw(QueryBuildError(
-      "`Abs` of an interval is not supported on $(_backend_name(instruc.connection)): an interval has no " *
-      "absolute value in SQL. For the magnitude of an interval d, write Greatest(d, d * -1)."))
+    # MySQL (#1130) would take it of the microseconds. #1324: the refusal is the one every number
+    # function over a duration takes (`_operand_domain`), here because this arm renders the operand in
+    # milliseconds before the check after Phase 3 would see it.
+    (ms === nothing && !operand_interval) || throw(_duration_math_refusal("ABS", instruc.connection))
   elseif v isa FObject && _interval_ms_candidate(v)
     sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector
@@ -965,6 +964,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # #1200: a value of one of several operands over two temporal types, or a temporal type and text,
   # refused on every engine. After Phase 3, so a `Case`'s rendered default has filled its memo.
   v isa FObject && _check_temporal_mix(v, instruc)
+  # #1324: a number function over a duration, refused on every engine.
+  v isa FObject && _check_operand_domain(v, instruc)
   # #1217: a `Case`'s `output_field` is the same declared cast as the four above, over its branch
   # values (`_cast_divergent_operand` reads them). After Phase 3 for the same reason as #1200.
   if _declared_case(v)

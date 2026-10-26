@@ -726,6 +726,36 @@ function _check_temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstr
   return nothing
 end
 
+# #1324 — a number function over a duration (`_operand_domain` without `:interval`) has no meaning on
+# any engine, so it is refused on every one when the query is built, as `Abs` was (#900): PostgreSQL
+# raised at the server, SQLite computed on the `HH:MM:SS` text (`Round` read `0.0`, `Sqrt` NULL), MySQL
+# on the count of microseconds. Read after the operands render, from the type walk, so a column, a
+# `Sum` of one, interval arithmetic and a CTE column holding one are all seen. An operand the walk
+# cannot type is let through.
+function _check_operand_domain(p::FObject, instruc::SQLInstruction)
+  domain = _operand_domain(p)
+  (domain === nothing || :interval in domain) && return nothing
+  for x in (p.column isa AbstractVector ? p.column : (p.column,))
+    _is_null_literal(x isa SQLText ? x.field : x) && continue
+    _expression_kind(x, instruc) isa CInterval && throw(_duration_math_refusal(p.function_name, instruc.connection))
+  end
+  return nothing
+end
+_check_operand_domain(::Any, ::SQLInstruction) = nothing
+# The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
+function _duration_math_refusal(function_name::AbstractString, conn)
+  name = uppercasefirst(lowercase(function_name))
+  remedy = if function_name == "ABS"
+    "For the magnitude of a duration d, write Greatest(d, d * -1)."
+  else
+    spelling = _duration_seconds_spelling(conn)
+    spelling === nothing ? "$(_backend_name(conn)) has no spelling for a duration's seconds." :
+      "For a duration's seconds, write $(spelling), and apply `$(name)` to that."
+  end
+  return QueryBuildError("`$(name)` of a duration is not supported: a duration is not a number, so `$(name)` " *
+                         "has no meaning over one on any engine (#1324). $(remedy)")
+end
+
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
 # measurements above). The kind comes from the type walk (`_expression_kind`, #1034 step 5c): a column,
 # a joined or CTE handle, a transform, a typed function (`Max("start_at")`, `Max("lap")`), and, since

@@ -358,6 +358,13 @@ _json_numeric_operand(::PormGPostgres, column::AbstractString) = "($(column))::n
 _json_numeric_operand(::PormGSQLite, column::AbstractString) = String(column)
 _json_numeric_operand(::PormGMySQL, column::AbstractString) = String(column)
 
+# #1324 — the spelling of a duration's seconds, which the refusal of a number function over a duration
+# names (`_duration_math_refusal`): `EPOCH` reads them on PostgreSQL, and on MySQL as the count of
+# microseconds over 10^6. SQLite has no `EPOCH` part, so the refusal there names none.
+_duration_seconds_spelling(::PormGPostgres) = "Extract(d, \"epoch\")"
+_duration_seconds_spelling(::PormGSQLite) = nothing
+_duration_seconds_spelling(::PormGMySQL) = "Extract(d, \"epoch\")"
+
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
 _inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)
 _inspection_dialect(::PormGSQLite) = (:sqlite, :positional)

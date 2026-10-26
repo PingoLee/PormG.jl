@@ -49,7 +49,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `identity_columns` | reading the schema: an identity key; below the version, no column is one | from 10 | no | no |
 | `declarative_partitions` | reading the schema leaves partitions out; below the version there are none | from 10 | no | no |
 | `include_columns` | reading the schema: an index's `INCLUDE` columns; below the version every index column is a key column | from 11 | no | no |
-| `generated_columns` | a plan adding `SearchVectorField(generated_from = …)` (refused below the version); reading the schema: below the version, no column is generated | from 12 | no | no |
+| `generated_columns` | a plan adding `SearchVectorField(generated_from = …)`, a `tsvector` column `GENERATED ALWAYS AS (…) STORED` (refused below the version); reading the schema: below the version, no column is generated. SQLite and MySQL have generated columns, but not the `tsvector` this one computes | from 12 | no | no |
 | `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no | no |
 | `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no | no |
 | `supported_server` | opening a connection: a backend with a version here refuses an older server when a connection opens | yes | yes | from 8.4 |

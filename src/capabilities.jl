@@ -75,7 +75,10 @@ const _BACKEND_FEATURES = (
   :identity_columns       => "identity columns (`GENERATED … AS IDENTITY`)",
   :declarative_partitions => "declarative partitioning (`PARTITION BY`)",
   :include_columns        => "non-key index columns (`INCLUDE`)",
-  :generated_columns      => "generated columns (`GENERATED ALWAYS AS (…) STORED`)",
+  # #1358: PormG's one generated field, not the SQL construct: MySQL and SQLite have `GENERATED ALWAYS AS
+  # (…) STORED` too, but neither has the `tsvector` it computes. PostgreSQL's version row (12) is the
+  # construct's, which is why a hand-written plan step that uses it is read against this row too.
+  :generated_columns      => "a generated search vector (`SearchVectorField(generated_from = …)`, a `tsvector` column `GENERATED ALWAYS AS (…) STORED`)",
   :drop_expression        => "removing a column's generation expression (`ALTER COLUMN … DROP EXPRESSION`)",
   :input_validity         => "testing a value against a type's input function (`pg_input_is_valid`)",
   # #1264: a server PormG is verified against. Every backend has it; a backend with a version row

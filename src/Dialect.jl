@@ -4851,8 +4851,8 @@ end
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
                             temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
-  # PormG's one generated field is a tsvector, refused above; a generated declaration is a feature MySQL's
-  # row in the capability table does not have.
+  # PormG's one generated field is a tsvector, refused above. MySQL has generated columns, but not the
+  # generated search vector the capability row names (#1358), so the refusal stays if it is ever reached.
   generated_sql(field) === nothing ||
     throw(_capability_error(conn, :generated_columns, "The generated column \"$(col_name)\""))
   base_type = _get_column_type(field, conn)

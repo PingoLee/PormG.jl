@@ -88,16 +88,22 @@ correlated `EXISTS` on the row. That makes a filter a **fence** on PostgreSQL: i
 transaction changes a row so it no longer matches while the delete waits on its lock, the row is left
 alone (#765). See *Filters are a fence on PostgreSQL* in [Deleting Records](write/delete.md).
 
-On PostgreSQL, before any child statement runs, every collected model that is the parent of an
-emitted `DELETE` or `UPDATE` is locked top-down with `SELECT … FOR UPDATE` over the same predicate
-its `DELETE` uses, so a parent's own columns cannot change after its children are gone (#770). A
-root filter across a relation (`"circuitid__name" => …`) also locks the rows it reads in each
-joined table, `SELECT … FOR SHARE`, right after the root's own lock (#771) — except a table of an
-unmanaged model (`managed = false`, e.g. a view), which `FOR SHARE` may not be able to lock. A
-filter that reads another table through a subquery (`"x__@in" => M.Other.objects…`) is not
-pinned. Those lock statements appear in `show_query` and [`inspect_query`](@ref) output as
-`:operation => :lock` steps. A delete with nothing to cascade emits no lock, and SQLite emits none
-at all.
+A root filter that reads another table — across a relation (`"result__grid" => 1`,
+`"circuitid__name" => …`), or through a subquery or `Exists` — is resolved to the root's primary keys
+before anything is written, when the root has a dependent to cascade to: one
+`SELECT "Tb"."<pk>" … WHERE <filter>` (`FOR UPDATE` on PostgreSQL and MySQL), and every statement
+after it is scoped by those keys (#1342). Without that, the statements after the first would re-read
+a filter whose rows the cascade had already deleted or re-pointed, and the root could survive its own
+children. On SQLite and MySQL, which bind a list one value at a time, a large key set runs the
+cascade in chunks inside the same transaction. A filter on the root's own columns is not resolved:
+nothing the cascade writes can change what it matches.
+
+On PostgreSQL and MySQL, before any child statement runs, every collected model that is the parent of
+an emitted `DELETE` or `UPDATE` is locked top-down with `SELECT … FOR UPDATE` over the same predicate
+its `DELETE` uses, so a parent's own columns cannot change after its children are gone (#770). The
+key read above is the root's lock when it runs. Those statements appear in `show_query` and
+[`inspect_query`](@ref) output as `:operation => :lock` steps (the key read is a `:select` step on
+SQLite). A delete with nothing to cascade emits neither, and SQLite emits no lock at all.
 
 The cascade descends at most 50 levels. Beyond that it raises `QueryBuildError` naming the models it
 walked. Usually that means a foreign-key cycle — two models declaring `on_delete = CASCADE` at each
@@ -296,22 +302,52 @@ function delete(objct::SQLObjectHandler;
     # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
     # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
     # BEGIN + ROLLBACK instead of throwing before any transaction existed.
-    collector = DeletionCollector(model, settings, show_query)
-    add_objects_to_collector!(collector, objct |> deepcopy, model)
-    process_collector!(collector)
+    #
+    # #1342: a root filter that reads another table is resolved to its primary keys FIRST, and the
+    # cascade is planned from those keys. See `_root_key_plan`.
+    key_plan = _root_key_plan(connection, model, objct)
+    if key_plan === nothing
+      run_plan(conn, plan(deepcopy(objct)), false)
+      return nothing
+    end
+    root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
+    show_query === :execute && isempty(root_keys) && return nothing
+    # Every chunk is PLANNED before any statement runs, so a refusal the planner raises
+    # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
+    # one plan — a caller who catches it inside its own transaction finds nothing deleted.
+    collectors = [plan(_keyed_root(model, key_plan.entry[:key], chunk, objct))
+                  for chunk in _root_key_chunks(connection, root_keys)]
+    for collector in collectors
+      run_plan(conn, collector, true)
+    end
+    return nothing
+  end
 
+  # One plan over one root query: collect the cascade, probing each path.
+  plan = function(root_objct)
+    collector = DeletionCollector(model, settings, show_query)
+    add_objects_to_collector!(collector, root_objct, model)
+    process_collector!(collector)
+    return collector
+  end
+
+  # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
+  # the key step (#1342), so the root is not locked a second time.
+  run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
     # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
-    # PostgreSQL only: SQLite's writers are already serialized for the whole transaction (the
+    # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
     # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
     #
-    # #771: right after the root's own lock, the tables its filter JOINs are locked `FOR SHARE`, so a
-    # root filter across a relation cannot change mid-cascade either. See `lock_related_objects`.
+    # A root filter that reads another table never reaches this loop as such: it was resolved to keys
+    # first (#1342), and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
+    # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
+    # The root is locked here anyway when a self-referential cascade added entries of its own model:
+    # those rows are parents the key step did not lock.
     if _locks_cascade_parents(connection)
       for lock_model in _models_to_lock(collector)
+        root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
         res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
         push!(results, res)
-        lock_model === model &&
-          append!(results, lock_related_objects(connection, collector.objects[lock_model], show_query, conn))
       end
     end
 
@@ -415,6 +451,125 @@ function delete(objct::SQLObjectHandler;
 end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A root filter that reads another table is resolved to keys first (#1342)
+#
+# The collector runs children first and the root last, and every statement re-reads the root's
+# filter: a child is scoped by `"<fk>__@in" => <root query>`, the root by its own predicate. When that
+# filter reads rows the cascade writes — `M.Race.objects.filter("result__grid" => 1)`, or an `Exists`
+# over a child — each statement after the first sees a different set. The root's own DELETE ran after
+# its results were gone, matched nothing, and the race survived without its results; a sibling path
+# that ran after another one, or a SET_NULL child re-pointed earlier, lost rows the same way. No error
+# on any engine.
+#
+# So the root's keys are read ONCE, before any write, and the cascade is planned from
+# `"<pk>__@in" => keys` — Django's `Collector` evaluates the queryset for the same reason. On
+# PostgreSQL and MySQL the read is the root's `FOR UPDATE` lock (#770): it returns the keys instead of
+# a count, and a row that changed while it waited is re-checked against the filter, as the #765 fence
+# re-checks it. That also closes, for this shape, two gaps #770/#771 documented: a filter that reads a
+# table through a subquery, and a root set that grows mid-cascade — nothing re-reads the filter after
+# the key step.
+#
+# Only a filter that reads ANOTHER TABLE, and only when the root has a reverse relation that writes
+# (CASCADE / SET_NULL / SET_DEFAULT). A filter on the root row's own columns cannot be changed by a
+# statement of the cascade, and a delete with nothing to cascade is one statement; both keep the SQL
+# they had. "Reads another table" is read off the rendered row predicate, which holds a SELECT exactly
+# when it does: a join renders inside the predicate's `IN (SELECT …)` / `EXISTS (SELECT …)` (#765),
+# and every nested query — an `__@in` handler, `Subquery`, `Exists` — renders one. Values are bound,
+# never in the text, so a filter VALUE cannot fake one; a quoted identifier spelled `SELECT` could, and
+# that only resolves keys a delete did not need — never a wrong row.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+The root's reverse relations include one whose `on_delete` emits a statement — `CASCADE`, `SET_NULL`
+or `SET_DEFAULT` — so the cascade can write rows the root filter reads.
+"""
+function _cascade_writes(model::PormGModel)::Bool
+  for related_value in values(model.related_objects)
+    related_value isa Models.ManyToManyRelation && continue
+    rel = related_value::Models.ReverseRelation
+    rel.model_resolved.fields[String(rel.fk_field)].on_delete in (CASCADE, SET_NULL, SET_DEFAULT) && return true
+  end
+  return false
+end
+
+"""
+`nothing` when the delete keeps its own filter; otherwise the root's entry with its rendered row
+predicate, ready for the key step (#1342).
+"""
+function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObjectHandler)
+  _cascade_writes(model) || return nothing
+  # Keyless: nothing to resolve to (a filtered keyless root is refused by `resolve_delete_key`, from
+  # `add_objects_to_collector!`).
+  get_model_pk_field(model) === nothing && return nothing
+  # Decided on the rendered predicate, not on `filter`: a `cjoin` / `cjoin_on` join reads another
+  # table with no filter at all (`allow_delete_all`), and renders inside the predicate all the same.
+  key = resolve_delete_key(model)
+  root = deepcopy(objct)
+  root.values(key)
+  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => root)
+  where_sql, parameters, alias = _collector_predicate(connection, [entry])
+  occursin(r"\bSELECT\b", where_sql) || return nothing
+  return (entry = entry, where_sql = where_sql, parameters = parameters, alias = alias)
+end
+
+"""
+Read the root's primary keys, and record the step. Under `:execute` it runs on the delete's own
+connection, with `FOR UPDATE` where the engine locks a cascade's parents. Under inspection it reads
+them when the pool is a live one, as the cascade's existence probes do, so the statements that follow
+are scoped by the keys that would run; on a mock engine the list is empty.
+"""
+function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::PormGModel, plan, show_query::Symbol, conn)
+  locks = _locks_cascade_parents(connection)
+  key_column = safe_column_identifier(Models.model_column(model, plan.entry[:key]), connection)
+  select_sql = "SELECT $(plan.alias).$(key_column) FROM $(safe_table_identifier(Models.model_table_name(model), connection))" *
+    " AS $(plan.alias) WHERE $(plan.where_sql)"
+  sql = locks ? select_sql * " FOR UPDATE" : select_sql
+  if show_query !== :execute
+    push!(results, _show_query_result(show_query, sql, connection, model, locks ? :lock : :select, parameters=plan.parameters))
+    _is_live_pool(connection) || return Int[]
+    # Not locked: nothing is written under inspection, and there is no transaction to hold a lock.
+    # On `connection`, the pool the statements render for — a `connection =` override included.
+    return _key_vector(Tables.columntable(fetch(connection, select_sql, plan.parameters)))
+  end
+  result, _ = with_transaction(connection, sql, conn=conn, params=plan.parameters)
+  return _key_vector(Tables.columntable(result))
+end
+
+# The first column of a key read, as a concretely typed vector — `"<pk>__@in"` accepts a typed list,
+# not a `Vector{Any}`; an empty read is `Int[]`, which renders as the empty set on every engine.
+function _key_vector(columns)::AbstractVector
+  isempty(columns) && return Int[]
+  keys = [k for k in first(columns) if !ismissing(k)]
+  return isempty(keys) ? Int[] : identity.(keys)
+end
+
+# How many paths into one model a statement may carry within the bind limit. A cascaded statement binds
+# the root's keys once per path into its model (`"<fk>__@in" => <root>`, ORed per path, #459), so a
+# chunk of `limit ÷ 16` keys fits a model reached by up to 16 paths. A schema with more would exceed
+# the limit, and the driver refuses that statement inside the transaction, which rolls back.
+const ROOT_KEY_PATH_BUDGET = 16
+
+"""
+The key sets the cascade runs over, one plan per set, all inside the delete's transaction. One set
+where the engine binds a list as a single array (PostgreSQL); otherwise sets that keep every statement
+within the engine's bind limit.
+"""
+function _root_key_chunks(connection::_SQLEngine, keys::AbstractVector)::Vector{AbstractVector}
+  (isempty(keys) || _binds_list_as_array(connection)) && return AbstractVector[keys]
+  size = max(1, fld(_backend_parameter_limit(connection), ROOT_KEY_PATH_BUDGET))
+  return AbstractVector[collect(chunk) for chunk in Iterators.partition(keys, size)]
+end
+
+# The root query a key set stands for: a fresh query on the same model and connection key, so nothing
+# of the original filter — its joins, its subqueries — is read again.
+function _keyed_root(model::PormGModel, key::String, keys::AbstractVector, objct::SQLObjectHandler)::SQLObjectHandler
+  root = object(model)
+  root.object.connect_key = objct.object.connect_key
+  root.filter("$(key)__@in" => keys)
+  return root
+end
+
 # Ceiling on how deep `find_related_objects!` will descend before refusing (#459). See the guard
 # itself for why this is a depth cap rather than a cycle-membership test.
 const MAX_CASCADE_DEPTH = 50
@@ -514,8 +669,11 @@ function process_collector!(collector::DeletionCollector)
   collector.sorted_models = topological_sort(collector.dependencies)
 end
 
-function should_check_related_existence(collector::DeletionCollector)::Bool
-  pool = collector.settings.connections
+should_check_related_existence(collector::DeletionCollector)::Bool = _is_live_pool(collector.settings.connections)
+
+# A pool backed by a database, rather than a mock engine marker (the unit suite's), so a read on it
+# returns rows.
+function _is_live_pool(pool)::Bool
   connection_pool = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   return pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool ||
          pool isa connection_pool.MySQLConnectionPool   # #1130: a live MySQL pool probes like the others
@@ -900,12 +1058,11 @@ end
 #     child-then-parent can now deadlock against a delete, which PostgreSQL detects and raises rather
 #     than hangs on.
 #
-# This lock pins the parent's OWN row. A root filter that reads another table through a JOIN (a
-# `"circuitid__name" => …`) is pinned by `lock_related_objects`, which runs right after it — staged
-# on db_2 in the #770 review and closed by #771. Still NOT covered, and documented in delete.md: a
-# filter that reads another table through a SUBQUERY (`"x__@in" => subquery`), re-read by every later
-# statement on a fresh snapshot, a JOIN into an unmanaged model (skipped there on purpose), and a
-# parent set that GROWS (a row that starts matching mid-cascade).
+# This lock pins the parent's OWN row. A root filter that reads another table (a join, a subquery) is
+# not re-read at all: it is resolved to keys before the cascade (#1342, `_root_key_plan`), which
+# replaced #771's `FOR SHARE` on each joined table: those locks pinned what every later statement
+# re-read, and after the key step nothing re-reads it. A path the planner probed and pruned is still
+# #460's residue, as the planning comment in `delete()` says.
 #
 # Leaves are never locked, so a delete with nothing to cascade emits exactly the statements it did
 # before. The `count(*)` wrapper keeps a large cascade from shipping one row per locked parent back to
@@ -947,92 +1104,6 @@ function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormG
   return nothing
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Lock the tables a joined filter reads (#771)
-#
-# `lock_objects` pins a parent's OWN row. A root filter that crosses a relation —
-# `M.Race.objects.filter("raceid" => r, "circuitid__name" => n)` — also reads `circuit`, and every
-# statement of the cascade re-reads it on a fresh READ COMMITTED snapshot. Staged on db_2 in the #770
-# review: a concurrent rename of the circuit mid-cascade let the results go, then the race's own
-# fenced DELETE re-read the new name and skipped the race. So right after the root's own lock, every
-# table its filter JOINs is locked `FOR SHARE` too — one statement per hop, in chain order — and a
-# rename (or delete) of a row the filter read now waits for the whole cascade.
-#
-# The statement is `SELECT 1 FROM <hop table> AS "__pormg_locked" WHERE "__pormg_locked".<key_b> IN
-# (SELECT DISTINCT <alias_b>.<key_b> FROM <root> … <joins> WHERE …) FOR SHARE`, not a `FOR SHARE OF`
-# on the root's own joined SELECT: across a nullable foreign key the join is a LEFT JOIN, PostgreSQL
-# refuses to lock the nullable side of one, and it must stay LEFT (`_target_predicate`'s header says
-# why). The lock sits on a plain single-table scan instead, and the joins print verbatim inside the IN.
-#
-# Why it holds, and in which order:
-#   - The root's own FOR UPDATE runs FIRST, so its foreign keys are pinned, and the hops follow in
-#     chain order, each pinning the key the next hop is reached through. Locking the related rows
-#     first would let a root row re-pointed in between reach an unlocked row.
-#   - The IN set is computed once, on the statement's snapshot. A lock that waited re-checks the new
-#     version only against that cached set — so a hop row whose join key changed drops out, and one
-#     whose other columns changed (the rename) is locked as it now stands. Either way every later
-#     statement of the cascade reads the same version, so the parent and its children agree on
-#     whether it matches.
-#   - `FOR SHARE`, not `FOR KEY SHARE`: a rename is a non-key update, and only `FOR SHARE` blocks it.
-#
-# What it costs, beyond one statement per hop:
-#   - LOCK ORDER: a forward hop locks a parent table (circuit) after its child (race) — the reverse
-#     of #770's parents-first order. A joined race delete and a circuit delete, or a transaction that
-#     updates a circuit and then one of its races, can now deadlock with it. PostgreSQL detects that
-#     and aborts one transaction.
-#   - PRIVILEGE: `FOR SHARE` needs UPDATE privilege on the locked table, where the delete needed only
-#     SELECT on it before.
-#   - BREADTH: keyed on the hop's join column, a reverse or many-to-many hop locks every child (or
-#     through row) of each matching root, not only the ones the filter tests; a `cjoin(join_type =
-#     "RIGHT")` hop also locks rows that pair with no root. Contention only — never a wrong row set.
-#
-# Skipped on purpose: a hop into an UNMANAGED model (`ModelJoin.target_managed`). Those are views and
-# tables another system owns — `docs/src/models.md` recommends exactly that for a view — and
-# `FOR SHARE` fails outright on an aggregating or materialized view, and on a table the role may only
-# read. Locking them would turn a delete that works into an error; leaving them unpinned keeps #770's
-# documented behavior for that hop.
-#
-# Also NOT covered, and delete.md says so: a filter that reads another table through a SUBQUERY
-# (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`), an anchorless `cjoin_on` (no key column to
-# lock by), and a parent set that GROWS mid-cascade (a lock pins the rows it found, not the rows that
-# may start matching).
-#
-# Called for the ROOT only: every cascade entry below it is a join-free `"<fk>__@in"` filter, and
-# building each one just to find no hop would cost a build per level of a deep cascade, each nesting
-# its whole ancestor chain. (A self-referential root still builds its own join-free child entries
-# once each — they are entries of the root model.)
-# ─────────────────────────────────────────────────────────────────────────────
-function lock_related_objects(connection::Union{PormGPostgres, PormGMySQL}, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-    show_query::Symbol, conn)
-  results = Any[]
-  locked = quote_identifier("__pormg_locked", connection)
-  for key in keys
-    # One fresh build per statement, into its own collector: the hop statement is standalone, so its
-    # `$N` numbering starts at 1. The first build doubles as the probe — an entry with no lockable
-    # hop costs exactly one.
-    hop = 1
-    while true
-      parameters = get_parameter(connection)
-      instruction = _build_entry(connection, key, parameters)
-      rows = [r for r in instruction.row_join if r isa ModelJoin && r.target_managed]
-      hop > length(rows) && break
-      row = rows[hop]
-      sql = "SELECT count(*) FROM (SELECT 1 FROM $(safe_table_identifier(row.b, connection)) AS $(locked)" *
-        " WHERE $(_joined_key_selection(instruction, row, locked))" *
-        " FOR SHARE) AS $(quote_identifier("__pormg_lock", connection))"
-      if show_query !== :execute
-        # `:model` is the hop's physical table, which is all a `ModelJoin` carries — for a
-        # many-to-many hop it is the join table's name.
-        push!(results, _show_query_result(show_query, sql, connection, row.b, :lock, parameters=parameters))
-      else
-        with_transaction(connection, sql, conn=conn, params=parameters)
-      end
-      hop += 1
-    end
-  end
-  return results
-end
-
 """
 A collected entry's query, built fresh into `parameters` for a row predicate. The projection is
 stripped from a private copy: the entry's `:key` projection is what a child's `"<fk>__@in"` reads,
@@ -1061,7 +1132,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
     end
 
     result, _ = with_transaction(connection, sql, conn=conn, params=nothing)
-    deleted_counter[model.name] = _affected_row_count(connection, result, conn)
+    deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
     return deleted_counter
   end
 
@@ -1081,7 +1152,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
   end
   @pormg_debug false
   result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
-  deleted_counter[model.name] = _affected_row_count(connection, result, conn)
+  deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
   return deleted_counter  # Return count of deleted objects
 end
 

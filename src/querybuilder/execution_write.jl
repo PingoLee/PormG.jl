@@ -1225,17 +1225,6 @@ function _key_selection(instruction::SQLInstruction, outer_alias::String, source
   return String(take!(io))
 end
 
-# The rows of one joined table that a joined query reads, as a predicate on `outer_alias`, an alias
-# of that same table: `<outer_alias>.<key_b> IN (SELECT DISTINCT <alias_b>.<key_b> …)`. It is keyed on
-# the hop's own join column, so it names every row the join can pair with, whichever side is the
-# "one": the referenced pk on a forward hop, and every child on a reverse or many-to-many hop. The
-# deletion collector locks these rows so a joined root filter cannot change mid-cascade (#771).
-function _joined_key_selection(instruction::SQLInstruction, row::ModelJoin, outer_alias::String)::String
-  connection = instruction.connection
-  return _key_selection(instruction, outer_alias, quote_identifier(row.alias_b, connection),
-    safe_column_identifier(row.key_b, connection))   # key_b is physical on a ModelJoin (#394)
-end
-
 # The row predicate of one arm the deletion collector splices into a shared statement: the fence
 # alone when the query has no joins (or no primary key), `<pk selection> AND <fence>` otherwise.
 # `build_one()` builds a FRESH copy of the query into `parameters`; it is called once, or twice for a

@@ -1049,13 +1049,15 @@ end
   @test occursin("SELECT `Tb`.`fastestlaptime` as `v`", sql(() -> R.objects.values("v" => QB.Cast("fastestlaptime", "interval")))[1])
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "date")),
                 "of an interval is not supported on MySQL")
+  # #1321: a duration beside a number is refused on every engine, before this MySQL arm, declared or not.
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0; output_field = "text")),
-                "over an interval and a value of another type is not supported on MySQL")
+                "mixes an interval (`fastestlaptime`) and a number (an Int64 literal)")
   # Each names the function the caller wrote, not `Greatest`'s inner rotation.
   for (fn, build) in ("Greatest" => () -> R.objects.values("v" => QB.Greatest("fastestlaptime", 0)),
                       "Least" => () -> R.objects.values("v" => QB.Least("fastestlaptime", 0)),
                       "NullIf" => () -> R.objects.values("v" => QB.NullIf("fastestlaptime", 0)))
-    @test (fn, refused(build, "$(fn)(…) over an interval and a value of another type")) == (fn, true)
+    # The function's name is colourised in the message, so it is matched apart from the rest.
+    @test (fn, refused(build, fn) && refused(build, "mixes an interval (`fastestlaptime`) and a number")) == (fn, true)
   end
   # `Greatest` over durations, declared text: the `HH:MM:SS` text of the greatest, never its count.
   gt = sql(() -> R.objects.values("v" => QB.Greatest("fastestlaptime", hour; output_field = "text")))[1]
@@ -1065,15 +1067,16 @@ end
                          "NullIf(d, 0)" => () -> R.objects.values("v" => QB.NullIf("fastestlaptime", 0)),
                          "Case(d | 0)" => () -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5,
                                                    then = F("fastestlaptime")), default = 0)))
-    @test (label, refused(build, "over an interval and a value of another type is not supported on MySQL")) == (label, true)
+    @test (label, refused(build, "and does not say which type its value has (#1321)")) == (label, true)
   end
-  # A duration beside a duration, or beside NULL, builds; SQLite keeps its own answer for the mixed one.
+  # A duration beside a duration, or beside NULL, builds.
   @test occursin("COALESCE(`Tb`.`fastestlaptime`, ?)",
                  sql(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", QB.Value(Second(0)))))[1])
   @test occursin("NULLIF(`Tb`.`fastestlaptime`, ?)", sql(() -> R.objects.values("v" => QB.NullIf("fastestlaptime", hour)))[1])
   @test occursin("ELSE NULL", sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5,
                                     then = F("fastestlaptime")))))[1])
-  @test !refused(() -> _MR_SL.Result.objects.values("v" => QB.Coalesce("fastestlaptime", 0)), "")
+  # #1321: SQLite refuses the mixed one too, as every engine does.
+  @test refused(() -> _MR_SL.Result.objects.values("v" => QB.Coalesce("fastestlaptime", 0)), "(#1321)")
   @test occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END) <> 0) as `v`",
                  sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 2), default = 0; output_field = "boolean")))[1])
   # Over a boolean value too, and a NULL operand is no other type.

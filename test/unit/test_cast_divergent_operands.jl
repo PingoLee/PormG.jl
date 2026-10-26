@@ -565,10 +565,15 @@ end
   for expr in (Fn.Greatest(_CF("start_at") + Day(1), _CF("start_at") + Day(2); output_field = "text"),
                Fn.Least(_CF("start_at") + Day(1), _CF("start_at") - Day(1); output_field = "varchar(40)"),
                Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("laptime") * 2; output_field = "text"),
-               Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("number") + 1; output_field = "text"),
-               Fn.Greatest(_CF("start_at") - _CF("start_at"), _CF("number") * 2; output_field = "text"),
                Fn.Greatest("laptime", _CF("laptime") * 2; output_field = "text"))   # a typed DurationField column too
     @test _ccd_builds(expr)
+  end
+  # #1321: an interval beside a number is a mix the `output_field` does not lift, refused on every engine.
+  for expr in (Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("number") + 1; output_field = "text"),
+               Fn.Greatest(_CF("start_at") - _CF("start_at"), _CF("number") * 2; output_field = "text")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test err isa QueryBuildError && occursin("(#1321)", _ccd_msg(err))
   end
   function keyed()
     outer = CCD.Ccd_team.objects
@@ -2242,13 +2247,15 @@ end
   scaled = _CF("laptime") * 2       # an interval
   for (operand, named) in ((Fn.Case(Fn.When("active" => true, then = shifted)), "`CASE(…)` over a timestamp expression"),
                            (Fn.Lag(scaled), "`LAG(…)` over an interval expression"),
-                           (Fn.NullIf(scaled, "points"), "`NULLIF(…)` over an interval expression"),
+                           # an interval beside an interval: beside a number it is #1321's mix instead
+                           (Fn.NullIf(scaled, "laptime"), "`NULLIF(…)` over an interval expression"),
                            (Fn.Min(shifted), "`MIN(…)` over a timestamp expression"))
     _ccd_refused_everywhere(Fn.Concat(Fn.Value("-"), operand); issue = "#1028", named = named)
   end
   _ccd_expect(Fn.Cast(_CF("laptime") * 1.5, Models.FloatField()); departs = _SL_ONLY, issue = "#1259",
               named = "Cast(…, \"FLOAT\") of an interval expression")
-  _ccd_expect(Fn.Coalesce(_CF("laptime") * 1.5, 0; output_field = "numeric"); departs = _SL_ONLY, issue = "#1259",
+  # A zero duration beside it, not `0`: an interval beside a number is #1321's mix on every engine.
+  _ccd_expect(Fn.Coalesce(_CF("laptime") * 1.5, Fn.Value(Second(0)); output_field = "numeric"); departs = _SL_ONLY, issue = "#1259",
               named = "of an interval expression")
   # Any duration from arithmetic, not only a product by a float literal: by a decimal column, divided
   # by a float, and under a further step (`Floor(…) / 2`).

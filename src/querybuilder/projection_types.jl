@@ -633,6 +633,11 @@ end
 # is `'9'`) and returns a VARCHAR, PostgreSQL fails at the server. Refused on every engine, naming the
 # `Cast` that says which one is meant.
 #
+# #1321 — and a number beside a date, a time, an interval or a UUID. PostgreSQL has no common type for
+# them and fails at the server; SQLite returns whichever operand is not NULL, so `update("grid" =>
+# Coalesce("grid", "racedate"))` stored the date's text in the INTEGER column. Every two classes that
+# differ are a mix, as Django's `Expression contains mixed types` holds for any two field types.
+#
 # Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
 # and a kind of any other family are let through, and a conflict between two typed operands is refused
 # whatever the untyped one is. `(class, what, literal)` names each side by its type and its label, never
@@ -644,17 +649,17 @@ _temporal_mix_class(::CTime) = :time
 _temporal_mix_class(::CInterval) = :interval
 _temporal_mix_class(::Union{CText,CVarChar}) = :text
 _temporal_mix_class(::Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}) = :number
+_temporal_mix_class(::CUUID) = :uuid
 _temporal_mix_class(::Any) = nothing
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
 
-# The pairs of classes that are a mix: two temporal classes or one beside text (#1200), and text
-# beside a number (#1327).
-_is_mix(a::Symbol, b::Symbol) = a !== b && (:number in (a, b) ? :text in (a, b) : true)
+# The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321).
+_is_mix(a::Symbol, b::Symbol) = a !== b
 # #1327 — a declared `output_field` casts the value OUTSIDE the function (#852), so the engine still
 # meets both operands inside it: PostgreSQL raises, MySQL's `GREATEST('10', 9)` compares as strings
-# before the cast. It lifts the #1200 pairs, as it did; a pair with a number side is refused under one
-# too, since the declaration would not make the engines agree.
-_declaration_lifts(a::Symbol, b::Symbol) = !(:number in (a, b))
+# before the cast. It lifts the #1200 pairs, as it did; a pair with a number or a UUID side (#1321) is
+# refused under one too, since the declaration would not make the engines agree.
+_declaration_lifts(a::Symbol, b::Symbol) = !(:number in (a, b) || :uuid in (a, b))
 _declares_mix_type(p::FObject) = get(p.kwargs, "output_field", nothing) isa AbstractString
 _declares_mix_type(::WindowFunction) = false
 

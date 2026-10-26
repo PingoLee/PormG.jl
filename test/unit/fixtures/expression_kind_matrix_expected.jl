@@ -5043,59 +5043,59 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce text int output text | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce int hop date | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce int hop date | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and a date (`raceid__date`), and does not say which type its value has (#1321). Say it:"),
   ("Coalesce date int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce date int | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a number (`year`), and does not say which type its value has (#1321). Say it: make th"),
   ("Coalesce int interval | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce(…) over an interval and a value of another type is not supported on MySQL: it stores an interval as its count o"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce(…) over an interval and a value of another type is not supported on MySQL: it stores an interval as its count o"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("Coalesce int interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce(…) over an interval and a value of another type is not supported on MySQL: it stores an interval as its count o"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a number (`grid`) and an interval (`fastestlaptime`), and does not say which type its value has (#1321). "),
   ("F time + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F time + 1 | alone", :sqlite) =>
@@ -5133,41 +5133,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F time * 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Case time int + 1 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (TimeField and IntegerField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (TimeField and IntegerField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (TimeField and IntegerField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Case time int + 1 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say it: m"),
   ("Coalesce time int * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("Coalesce time int * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`time`) and a number (an Int64 literal), and does not say which type its value has (#1321). Say i"),
   ("F time > Time literal | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | alone", :sqlite) =>
@@ -5479,26 +5479,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
-  ("Coalesce date int | alone", :postgres) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce date int | alone", :sqlite) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce date int | alone", :mysql) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce date int | subquery", :postgres) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce date int | subquery", :sqlite) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce date int | subquery", :mysql) =>
-    [(:gap, "read=none vs formatter=date")],
-  ("Coalesce int interval | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("Coalesce int interval | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("Coalesce int interval | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("Coalesce int interval | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
   ("Round interval | alone", :postgres) =>
     [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
   ("Round interval | alone", :sqlite) =>

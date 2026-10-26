@@ -768,8 +768,8 @@ On SQLite a date or time literal binds as the same text its column stores (`Date
 on every engine (#824) when every argument is of one type: `Coalesce("date", Date(2021, 3, 28))` and
 `Greatest("date", "fp1_date")` give a `Date`, and `NullIf` takes its first argument's type. A
 `Subquery(...)` argument counts as its one column (#888). When the
-argument types are two temporal types, a temporal type and text, or text and a number, PormG does not
-guess: the call is refused on every engine (see [Mixed date, time, text and number operands](#Mixed-date,-time,-text-and-number-operands)).
+argument types differ (two temporal types, a temporal type and text, a number beside text, a temporal
+type or a UUID, or a UUID beside anything else), PormG does not guess: the call is refused on every engine (see [Mixed date, time, text and number operands](#Mixed-date,-time,-text-and-number-operands)).
 
 ### `Coalesce` — First Non-Null Value
 
@@ -903,6 +903,12 @@ M.Result.objects.values("pos" => Coalesce(Cast("positiontext", "integer"), 0))  
 
 An `output_field` does not lift this refusal. It casts the result after the engine has already met
 text and a number inside the function, so PostgreSQL still raises and MySQL still compares as strings.
+
+**A number beside a date, a time, an interval or a UUID**, and a UUID beside any other type, is
+refused the same way (#1321). PostgreSQL has no common type for them, and SQLite returns whichever
+operand is not `NULL`: `update("grid" => Coalesce("grid", "racedate"))` stored the date's text in the
+integer column on the rows where `grid` was `NULL`. Say which value you mean, for example the date's
+year, `Coalesce("grid", Extract("racedate", "year"))`. An `output_field` does not lift this one either.
 
 ### `Cast` — Type Conversion
 

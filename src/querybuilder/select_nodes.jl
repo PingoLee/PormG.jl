@@ -1026,6 +1026,8 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   interval = units && any(k -> k isa CInterval, kinds)
   label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?
             _declared_cast_label(v) : "$(_ONE_OF_NAMES[v.function_name])(…)"
+  # #1321: an operand of another type the walk names is refused before this, on every engine
+  # (`_check_temporal_mix`); what reaches it here is one the walk cannot type.
   interval && !all(k -> k isa CInterval, kinds) && throw(QueryBuildError(
     "$(label()) over an interval and a value of another type is not supported on $(engine): it stores an " *
     "interval as its count of microseconds, so one value cannot be both. Give every value the one type: " *

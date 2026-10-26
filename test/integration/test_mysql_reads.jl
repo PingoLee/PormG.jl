@@ -580,9 +580,10 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test [r[:resultid] for r in over] == sort([id for id in keys(base) if (u = us(want(id))) !== missing && u > 80_000_000])
             text = only(M.Result.objects.filter("resultid" => 1).values("t" => Coalesce("fastestlaptime", Value(Second(0)); output_field = "text")).list())
             @test text[:t] == PormG.Models.format_duration_sql(base[1][:fastestlaptime])
-            # A duration beside a number would read the duration as its count: refused before any SQL.
+            # A duration beside a number would read the duration as its count: refused before any SQL,
+            # on every engine (#1321).
             e = try; M.Result.objects.values("c" => Coalesce("fastestlaptime", 0)).list(); nothing; catch err; err; end
-            @test e isa PormG.QueryBuildError && occursin("over an interval and a value of another type", msg(e))
+            @test e isa PormG.QueryBuildError && occursin("(#1321)", msg(e))
         end
 
         # What: the date parts answer as Julia's `Dates` does over the same rows, and the `@` transforms

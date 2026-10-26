@@ -922,12 +922,13 @@ end
 #
 # #1327 — text beside a number: a cast of either operand says which comparison and which type is
 # meant, so both are named. An `output_field` is refused with the pair (`_declaration_lifts`), and the
-# message says why when one was declared.
+# message says why when one was declared. #1321 — a number beside a date, a time, an interval or a
+# UUID, and a UUID beside anything but text: no common type, as for a time beside a date.
 const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
   :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text",
-  :number => "a number")
+  :number => "a number", :uuid => "a UUID")
 const _TEMPORAL_MIX_TYPE = Dict(:date => "date", :timestamp => "timestamp", :timestamptz => "timestamptz",
-  :time => "time", :interval => "interval", :text => "text", :number => "numeric")
+  :time => "time", :interval => "interval", :text => "text", :number => "numeric", :uuid => "uuid")
 const _TEMPORAL_MIX_NAME = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
   "NULLIF" => "NullIf", "CASE" => "Case", "LAG" => "Lag", "LEAD" => "Lead")
 const _TEMPORAL_MIX_TIMESTAMPS = (:date, :timestamp, :timestamptz)
@@ -937,6 +938,7 @@ function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,St
   types = "\"$(_TEMPORAL_MIX_TYPE[a[1]])\" or \"$(_TEMPORAL_MIX_TYPE[b[1]])\""
   timestamps = a[1] in _TEMPORAL_MIX_TIMESTAMPS && b[1] in _TEMPORAL_MIX_TIMESTAMPS
   number = :number in (a[1], b[1])
+  issue = number && :text in (a[1], b[1]) ? "#1327" : number || :uuid in (a[1], b[1]) ? "#1321" : "#1200"
   # `"text"` as the output_field works on both engines for a timestamp pair (PostgreSQL unifies the
   # two inside, then casts), where SQLite cannot cast to a timestamp type (#822).
   declare = if timestamps
@@ -956,7 +958,7 @@ function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,St
     "operands." : ""
   return QueryBuildError(
     "\e[4m\e[31m$(name)\e[0m mixes $(_TEMPORAL_MIX_NOUN[a[1]]) ($(a[2])) and $(_TEMPORAL_MIX_NOUN[b[1]]) " *
-    "($(b[2])), and does not say which type its value has ($(number ? "#1327" : "#1200")). " *
+    "($(b[2])), and does not say which type its value has ($(issue)). " *
     "Say it: $(julia)$(declare).$(why)")
 end
 

@@ -6349,38 +6349,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
-  ("Coalesce int hop date | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on MySQL: PormG cannot t"),
-  ("Coalesce int hop date | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb_1\".\"date\") > \$1", params = [("10", "Int64")]),
-  ("Coalesce int hop date | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on SQLite: PormG cannot "),
-  ("Coalesce int hop date | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`grid`, `R2_1`.`date`) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce int hop date | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2_1\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce int hop date | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2_1\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce date int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce date int | alone", :postgres, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce date int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce date int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce date int | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce date int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Coalesce int interval | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb\".\"fastestlaptime\") > \$1", params = [("10", "Int64")]),
-  ("Coalesce int interval | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `COALESCE(…)` on one side, is not supported on SQLite: PormG cannot "),
-  ("Coalesce int interval | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce int interval | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"grid\", \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time + 1 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(`Tb`.`time` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time + 1 | alone", :postgres, "v__@gt", "10") =>
@@ -6405,30 +6373,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time * 2 | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" * ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`year` = ? THEN `Tb`.`time`\nELSE ?\nEND\n + ?) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$4 THEN \"Tb\".\"time\"\nELSE \$5::bigint\nEND\n + \$6::bigint) > \$7", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"time\"\nELSE ?\nEND\n + ?) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`year` = ? THEN `R2`.`time`\nELSE ?\nEND\n + ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$5 THEN \"R2\".\"time\"\nELSE \$6::bigint\nEND\n + \$7::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$8 \n) > \$9", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case time int + 1 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"time\"\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(COALESCE(`Tb`.`time`, ?) * ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"time\", \$3::bigint) * \$4::bigint) > \$5", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"time\", ?) * ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(`R2`.`time`, ?) * ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"time\", \$4::bigint) * \$5::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce time int * 2 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"time\", ?) * ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time > Time literal | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F time > Time literal | alone", :mysql, "v__@gt", "bool true") =>

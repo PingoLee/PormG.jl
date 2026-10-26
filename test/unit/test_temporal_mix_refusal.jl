@@ -23,6 +23,11 @@ ordered any text above any number, MySQL compared the two as strings, PostgreSQL
 Refused on every engine, MySQL included, naming a `Cast` of either operand; a declared `output_field`
 does not lift it, since it casts the value after the engine has met both operands.
 
+#1321 completes the rule: any two classes that differ are a mix, so a number beside a date, a time, an
+interval or a UUID, and a UUID beside anything else, are refused the same way. Neither pair has a
+common type, so the message names none, and `output_field` does not lift a pair with a number or a
+UUID side.
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia --project=test/integration test/unit/test_temporal_mix_refusal.jl
@@ -67,6 +72,7 @@ Tmx_race = Models.Model("tmx_race",
   start_at = Models.DateTimeField(null = true),                       # TIMESTAMPTZ, the default
   local_at = Models.DateTimeField(type = "TIMESTAMP", null = true),   # naive
   laptime  = Models.DurationField(null = true),
+  token    = Models.UUIDField(null = true),                           # #1321
   circuit  = Models.ForeignKey(Tmx_circuit, on_delete = "CASCADE"),
 )
 
@@ -333,6 +339,62 @@ end
                Fn.Greatest("number", "number"),
                Fn.Coalesce(F("start_at") * 2, "name"),
                Fn.Case(Fn.When("number" => 1, then = "x"), default = nothing))   # a NULL is never the value
+    @test _tmx_builds_all(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1321: a number beside a date, a time, an interval or a UUID is refused on every engine
+# PostgreSQL has no common type for these (`COALESCE types integer and date cannot be matched`, at the
+# server); SQLite returned whichever operand was not NULL, a number on one row and a date's text on
+# another, and stored that text in a number column through `update`. Refused when the query is built,
+# on every engine, naming both operands and #1321; no common type is offered, and an `output_field`
+# does not lift it. A UUID beside text is the same question as a date beside text. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1321: a number or a UUID beside another class is refused on every engine" begin
+  function refused(expr, fname, a, b; engines = _TMX_ALL, fix = _TMX_NONE, declared::Bool = false)
+    for conn in engines
+      err = _tmx_refusal(expr; conn = conn)
+      @test err isa QueryBuildError
+      err isa QueryBuildError || continue
+      msg = _tmx_msg(err)
+      @test occursin("$(fname) mixes $(a) and $(b), and does not say which type its value has (#1321)", msg)
+      @test occursin(fix, msg)
+      @test !occursin("output_field = ", msg)
+      @test occursin(_TMX_NOT_DECLARED, msg) == declared
+      @test _tmx_names_no_engine(msg) && !occursin("MySQL", msg)
+    end
+  end
+  number, token = "a number (`number`)", "a UUID (`token`)"
+  refused(Fn.Coalesce("number", "date"), "Coalesce", number, _DATE)
+  refused(Fn.Greatest("date", "number"), "Greatest", _DATE, number)
+  refused(Fn.Coalesce("fp1_time", 0), "Coalesce", "a time (`fp1_time`)", "a number (an Int64 literal)")
+  refused(Fn.Least("laptime", "number"), "Least", "an interval (`laptime`)", number)
+  refused(Fn.NullIf("number", F("start_at")), "NullIf", number, "a timestamp with time zone (`start_at`)")
+  refused(Fn.Case(Fn.When("number" => 1, then = F("date")), default = 0), "Case", _DATE, "a number (an Int64 literal)")
+  refused(Fn.Coalesce("number", "token"), "Coalesce", number, token)
+  refused(Fn.Coalesce("token", "date"), "Coalesce", token, _DATE)
+  # A UUID beside text: cast the other operand to text, as for a date beside text.
+  refused(Fn.Coalesce("token", "name"), "Coalesce", token, "text (`name`)"; fix = _TMX_TEXT)
+  # An `output_field` does not lift a pair with a number or a UUID side.
+  refused(Fn.Coalesce("number", "date"; output_field = "date"), "Coalesce", number, _DATE; declared = true)
+  refused(Fn.Coalesce("token", "name"; output_field = "text"), "Coalesce", token, "text (`name`)";
+          fix = _TMX_TEXT, declared = true)
+  # A window `default` of another class than the operand.
+  refused(Fn.Lag("number"; default = Date(2021, 1, 1), over = _tmx_over()), "Lag", number,
+          "a date (a Date literal)"; engines = _TMX_ENGINES)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1321: one class, or a spelling that states one, builds on every engine
+# Two UUIDs, a number beside the year of a date (an integer), a date cast to text beside text, and the
+# #1200 date/timestamp pair under an `output_field`, which it still lifts. Expected SQL: as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1321: one class, and the spellings that state one, build" begin
+  for expr in (Fn.Coalesce("token", "token"),
+               Fn.Coalesce("number", Fn.Extract("date", "year")),
+               Fn.Coalesce(Fn.Cast("date", "text"), "name"),
+               Fn.Coalesce("date", "start_at"; output_field = "date"))
     @test _tmx_builds_all(expr)
   end
 end

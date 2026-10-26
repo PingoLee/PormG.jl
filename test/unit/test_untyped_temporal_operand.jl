@@ -165,12 +165,9 @@ end
   for (label, expr, filter, op, named) in (
       ("Case(key | duration) * 2",  _utt_case_lap() * 2,                         false, "*", "`CASE(…)`"),
       ("Case(key | date) + 1",      _utt_case_date() + 1,                        false, "+", "`CASE(…)`"),
-      ("Case(year | date) + 1",     _utt_case_year_date() + 1,                   false, "+", "`CASE(…)`"),
-      ("year + Case(year | date)",  F("year") + _utt_case_year_date(),           false, "+", "`CASE(…)`"),
       ("Coalesce(key, date) + 1",   Fn.Coalesce("meta__round", "date") + 1,      false, "+", "`COALESCE(…)`"),
       ("Coalesce(key, dur) * 2",    Fn.Coalesce("meta__round", "fastestlaptime") * 2, false, "*", "`COALESCE(…)`"),
       ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1,                   false, "+", "`MAX(…)`"),
-      ("year + Coalesce(date, 0)",  F("year") + Fn.Coalesce("date", 0),          false, "+", "`COALESCE(…)`"),
       ("Floor(duration) / 2",       Fn.Floor(F("fastestlaptime") * 2) / 2,       false, "/", "`FLOOR(…)`"),
       ("Lag(key, default = date) + 1",
        PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1,
@@ -189,6 +186,18 @@ end
         @test m isa QueryBuildError
         @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side, is not " *
                        "supported on MySQL", m.msg)
+      end
+    end
+  end
+  # #1321: a `Case` or a `Coalesce` over a number and a date is a mix of two types the walk names, so
+  # it is refused when it is built, on every engine and before any arithmetic over it, naming #1321.
+  for (label, expr) in (("Case(year | date) + 1", _utt_case_year_date() + 1),
+                        ("year + Case(year | date)", F("year") + _utt_case_year_date()),
+                        ("year + Coalesce(date, 0)", F("year") + Fn.Coalesce("date", 0)))
+    @testset "$label" begin
+      for conn in (_UTT_PG, _UTT_SL, _UTT_MY)
+        e = _utt_refusal(expr; conn = conn)
+        @test e isa QueryBuildError && occursin("(#1321)", e.msg)
       end
     end
   end

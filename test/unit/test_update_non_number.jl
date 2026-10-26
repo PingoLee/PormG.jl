@@ -176,3 +176,28 @@ end
     end
   end
 end
+
+@testset "update: a Coalesce of a number and a date or a UUID is refused on every engine (#1321)" begin
+  # What: `Coalesce("grid", "racedate")`, `Coalesce("racedate", "grid")` into the IntegerField `grid`,
+  # and `Coalesce("grid", "token")` into the DecimalField `points`, raise `QueryBuildError` when the
+  # statement is built, naming both operands and #1321. Why: the type walk left such a `Coalesce`
+  # untyped, so #1297's guard did not see it; SQLite stored the date's text in the number column on
+  # the rows where `grid` was NULL, and PostgreSQL failed only at execute ("COALESCE types integer
+  # and date cannot be matched").
+  for (field, value, a, b) in (
+      ("grid", Fn.Coalesce("grid", "racedate"), "a number (`grid`)", "a date (`racedate`)"),
+      ("grid", Fn.Coalesce("racedate", "grid"), "a date (`racedate`)", "a number (`grid`)"),
+      ("points", Fn.Coalesce("grid", "token"), "a number (`grid`)", "a UUID (`token`)"))
+    for conn in (_UNN_PG, _UNN_SL)
+      err = _unn_refusal(field, value; conn = conn)
+      msg = err === nothing ? "" : _unn_msg(err)
+      @test err isa QueryBuildError
+      @test occursin("Coalesce mixes $(a) and $(b), and does not say which type its value has (#1321)", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
+    end
+  end
+  # The spellings that state one type build: the year of the date beside the number.
+  for conn in (_UNN_PG, _UNN_SL)
+    @test occursin("SET \"grid\" = ", _unn_update("grid", Fn.Coalesce("grid", Fn.Extract(_NF("racedate"), "year")); conn = conn))
+  end
+end

@@ -151,7 +151,7 @@ end
 
 # What: MySQL's error numbers classify into the taxonomy; lost connections are recognised from the
 #   number, MySQL.jl's own closed-connection text, the transport, or a wrapper's cause.
-# Why: SQLSTATE `HY000` covers 1205 (lock wait), 3024 (statement timeout) and 2006 (server gone), so
+# Why: SQLSTATE `HY000` covers 1205 (lock wait), 3572 (NOWAIT), 3024 (statement timeout) and 2006 (server gone), so
 #   only the number classifies them; a wrongly "operational" constraint violation would be retried by
 #   a caller that backs off on `OperationalError`.
 @testset "MySQL errors classify by error number (#1130)" begin
@@ -162,6 +162,8 @@ end
   @test classify(_my_err(1048, "23000")) === :integrity
   @test classify(_my_err(3819)) === :integrity              # CHECK constraint, SQLSTATE HY000
   @test classify(_my_err(1205)) === :operational            # lock wait timeout, HY000
+  # a row another transaction holds, under NOWAIT (HY000; PostgreSQL's 55P03 is operational too)
+  @test classify(MySQL.StmtError(3572, "lock(s) could not be acquired immediately", "HY000")) === :operational
   @test classify(_my_err(1213, "40001")) === :operational   # deadlock
   @test classify(_my_err(3024)) === :operational            # MAX_EXECUTION_TIME
   @test classify(_my_err(1317, "70100")) === :operational   # KILL QUERY
@@ -211,6 +213,8 @@ end
   @test f.sqlstate == "23000" && f.message === nothing
   @test PormG.backend_error_fields(_my_err(1292, "22007"; msg = "Incorrect datetime value: 'x1991'")).message === nothing
   @test PormG.backend_error_fields(_my_err(1064, "42000"; msg = "near 'SELECT secret'")).message === nothing
+  nowait = "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."
+  @test PormG.backend_error_fields(_my_err(3572; msg = nowait)).message == nowait   # names no value
   f = PormG.backend_error_fields(_my_err(1146, "42S02"; msg = "Table 'f1.nope' doesn't exist"))
   @test f.message == "Table 'f1.nope' doesn't exist"
   @test (f.constraint, f.table, f.column) === (nothing, nothing, nothing)   # the ERR packet has none

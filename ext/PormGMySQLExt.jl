@@ -514,10 +514,11 @@ end
 # 1169 duplicate on a unique constraint, 1761 / 1762 duplicate key through a foreign key, 1451 / 1452
 # foreign key (parent / child row), 1216 / 1217 the older foreign-key numbers, 1048 NOT NULL, 3819 CHECK.
 const _INTEGRITY_ERRNOS = (1062, 1022, 1586, 1557, 1169, 1761, 1762, 1451, 1452, 1216, 1217, 1048, 3819)
-# The server or the session, not the statement: 1205 lock wait timeout, 1213 deadlock, 3024 statement
-# timeout, 1317 interrupted (`KILL QUERY`), 1040 too many connections, 1203 / 1226 a user's connection or
-# resource limit, 1053 server shutdown.
-const _OPERATIONAL_ERRNOS = (1205, 1213, 3024, 1317, 1040, 1203, 1226, 1053)
+# The server or the session, not the statement: 1205 lock wait timeout, 3572 a row another transaction
+# holds under `NOWAIT` (PostgreSQL's 55P03), 1213 deadlock, 3024 statement timeout, 1317 interrupted
+# (`KILL QUERY`), 1040 too many connections, 1203 / 1226 a user's connection or resource limit, 1053
+# server shutdown.
+const _OPERATIONAL_ERRNOS = (1205, 3572, 1213, 3024, 1317, 1040, 1203, 1226, 1053)
 
 # The operational numbers that mean the statement was CANCELLED (#1277): 1317 `KILL QUERY`, which is
 # also PormG's own cancel here (`backend_cancel_query!` below), and 3024 `max_execution_time`. The
@@ -544,7 +545,7 @@ end
 # never a value or the statement. Every other text stays in `cause`: 1062 quotes the duplicate value
 # (`Duplicate entry 'Senna' for key …`), 1292 and 1366 the rejected value, 1064 the SQL.
 const _SAFE_MESSAGE_ERRNOS = (1044, 1046, 1048, 1049, 1050, 1051, 1054, 1091, 1146, 1205, 1213, 1317,
-                              1364, 1406, 1451, 1452, 2006, 2013, 3024, 3819, 4031)
+                              1364, 1406, 1451, 1452, 2006, 2013, 3024, 3572, 3819, 4031)
 
 function PormG.backend_error_fields(e::MySQL.Protocol.ServerError)
   sqlstate = isempty(e.sqlstate) ? nothing : e.sqlstate

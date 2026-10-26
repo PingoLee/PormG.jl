@@ -18,6 +18,11 @@ and gives the spellings that say it: an `output_field`, a `Cast` of one operand 
 `Lead` take no `output_field`), or the literal converted in Julia. A naive and a zoned timestamp are
 two types here, as the issue sets it. A number beside a number is #1150's, not this rule's.
 
+#1327 widens the rule to text beside a number (an integer, a float and a decimal are one class): SQLite
+ordered any text above any number, MySQL compared the two as strings, PostgreSQL failed at the server.
+Refused on every engine, MySQL included, naming a `Cast` of either operand; a declared `output_field`
+does not lift it, since it casts the value after the engine has met both operands.
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia --project=test/integration test/unit/test_temporal_mix_refusal.jl
@@ -239,5 +244,95 @@ end
                Fn.Coalesce("number", 1.5),
                Fn.Coalesce("name", "name"))
     @test _tmx_builds(expr)
+  end
+end
+
+# ── #1327: text beside a number ───────────────────────────────────────────────────────────────────
+# MySQL renders the conditionals since #1130 phase 2c-1, so the #1327 rows assert on all three engines.
+# Window functions are a later MySQL phase, so `Lag`/`Lead` stay on the two engines above.
+struct TmxMockMySQL <: PormG.PormGMySQL end
+const _TMX_MY = TmxMockMySQL()
+const _TMX_ALL = (_TMX_PG, _TMX_SL, _TMX_MY)
+const _TMX_NUMBER_FIX = ("Cast(x, \"text\")", "Cast(x, \"integer\")")
+const _TMX_NOT_DECLARED = "An `output_field` does not say it"
+function _tmx_number_refused(expr, fname, a, b; engines = _TMX_ALL, declared::Bool = false)
+  for conn in engines
+    err = _tmx_refusal(expr; conn = conn)
+    @test err isa QueryBuildError
+    err isa QueryBuildError || continue
+    msg = _tmx_msg(err)
+    @test occursin("$(fname) mixes $(a) and $(b), and does not say which type its value has (#1327)", msg)
+    # Both casts are named: either one says which comparison, and which type, is meant.
+    @test all(f -> occursin(f, msg), _TMX_NUMBER_FIX)
+    @test !occursin("output_field = ", msg)
+    @test occursin(_TMX_NOT_DECLARED, msg) == declared
+    @test _tmx_names_no_engine(msg) && !occursin("MySQL", msg)
+  end
+end
+_tmx_builds_all(expr) = all(conn -> _tmx_refusal(expr; conn = conn) === nothing, _TMX_ALL)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: a conditional over text and a number is refused on every engine
+# `Coalesce`, `Greatest`, `Least`, `NullIf` and a `Case` whose values include text and a number, a
+# column or a literal on either side. SQLite answered by its type order (any text above any number),
+# MySQL compared as strings (`GREATEST('10', 9)` is `'9'`) and returned a VARCHAR, PostgreSQL failed
+# at the server: the query does not say which comparison or which type it means (explicit intent), so
+# each engine refuses it when it is built, naming both operands and both casts. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: text beside a number is refused on every engine" begin
+  name, number = "text (`name`)", "a number (`number`)"
+  _tmx_number_refused(Fn.Coalesce("name", "number"), "Coalesce", name, number)
+  _tmx_number_refused(Fn.Coalesce("name", 0), "Coalesce", name, "a number (an Int64 literal)")
+  _tmx_number_refused(Fn.Greatest("name", Fn.Value(9)), "Greatest", name, "a number (an Int64 literal)")
+  _tmx_number_refused(Fn.Least("number", "name"), "Least", number, name)
+  _tmx_number_refused(Fn.NullIf("name", F("number")), "NullIf", name, number)
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = 1), default = "x"), "Case",
+                      "a number (an Int64 literal)", "text (a String literal)")
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = "x"), default = F("number")), "Case",
+                      "text (a String literal)", number)
+  # A float or a decimal is a number as an integer is.
+  _tmx_number_refused(Fn.Coalesce("name", 1.5), "Coalesce", name, "a number (a Float64 literal)")
+  # A third, untyped operand does not hide the conflict between the two typed ones.
+  _tmx_number_refused(Fn.Coalesce(F("start_at") * 2, "name", "number"), "Coalesce", name, number)
+  # A window default is a literal, as in #1200: text beside the operand's number.
+  _tmx_number_refused(Fn.Lag("number"; default = "x", over = _tmx_over()), "Lag", number,
+                      "text (a String literal)"; engines = _TMX_ENGINES)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: an `output_field` does not lift the refusal for text beside a number
+# Since #852 `output_field` casts the result outside the call: `(COALESCE("name", 0))::text`. The
+# engine still meets text and a number inside it, so PostgreSQL still raises and MySQL still compares
+# as strings before the cast. Refused as without one, and the message says why the declaration is not
+# the spelling. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: output_field does not lift text beside a number" begin
+  _tmx_number_refused(Fn.Coalesce("name", 0; output_field = "text"), "Coalesce", "text (`name`)",
+                      "a number (an Int64 literal)"; declared = true)
+  _tmx_number_refused(Fn.Greatest("name", "number"; output_field = "integer"), "Greatest", "text (`name`)",
+                      "a number (`number`)"; declared = true)
+  _tmx_number_refused(Fn.Case(Fn.When("number" => 1, then = 1), default = "x", output_field = "text"), "Case",
+                      "a number (an Int64 literal)", "text (a String literal)"; declared = true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1327: a cast on the operand that differs builds on every engine; numbers and untyped operands too
+# The spellings the refusal names (a `Cast` of the number to text, or of the text to an integer) give
+# both operands one class, so each engine meets one type. An integer beside a float or a decimal keeps
+# the widening it has (`:promoting`, #1150), and an operand the walk cannot type is let through, as in
+# #1200. Expected SQL on PostgreSQL: `COALESCE("Tb"."name", CAST($1 AS TEXT))`-shaped, not pinned here
+# beyond building.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1327: the explicit spellings, numbers and untyped operands build" begin
+  for expr in (Fn.Coalesce("name", Fn.Cast(Fn.Value(0), "text")),
+               Fn.Coalesce(Fn.Cast("name", "integer"), 0),
+               Fn.Greatest(Fn.Cast("number", "text"), "name"),
+               Fn.Case(Fn.When("number" => 1, then = "1"), default = "x"),
+               Fn.Coalesce("number", 1.5),
+               Fn.Coalesce("number", Fn.Value(2)),
+               Fn.Greatest("number", "number"),
+               Fn.Coalesce(F("start_at") * 2, "name"),
+               Fn.Case(Fn.When("number" => 1, then = "x"), default = nothing))   # a NULL is never the value
+    @test _tmx_builds_all(expr)
   end
 end

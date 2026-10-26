@@ -752,10 +752,15 @@ end
       (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
       (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),
       # no shared type: the output_field's, as before
-      (case(_CF("number"); default = "none", output_field = "text"), "text", "text"),
       (case(_CF("born"); default = "2009-01-01", output_field = "date"), "date", "date"))
     sql = _ccd_render(expr; conn = _CCD_PG)
     @test occursin("ELSE \$2::$(bind) END)::$(cast) as \"x\"", sql)
+  end
+  # #1327: a text default beside an integer branch is text beside a number, refused on every engine
+  # under any `output_field` (the server rejected it when it ran).
+  for conn in _CCD_ENGINES
+    err = _ccd_refusal(case(_CF("number"); default = "none", output_field = "text"); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1327)", _ccd_msg(err))
   end
   # #1316: every branch a literal binds the default as the literals' type too. Each literal binds as
   # its own type, so the `output_field`'s beside it was rejected by the server unless the two met:
@@ -941,7 +946,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1221: a DecimalField declaration renders and refuses as its numeric(p, s) string" begin
   d(p, s) = Models.DecimalField(max_digits = p, decimal_places = s)
-  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = 0, output_field = output_field)
+  # A path is the column: a string in a `Case` branch is a text literal, which #1327 refuses beside `0`.
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then isa String ? _CF(then) : then), default = 0,
+                                     output_field = output_field)
   shapes = (
     (op, t) -> Fn.Cast(op, t),
     (op, t) -> Fn.Coalesce(op, 0; output_field = t),
@@ -1959,9 +1966,10 @@ end
   text_err = _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_PG)
   @test text_err isa QueryBuildError && occursin("#1061", _ccd_msg(text_err))
   @test _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_SL) isa PormG.BackendCapabilityError
-  # Text behind a decimal branch: a scale-0 ask stopped at `price` and built (review of #1167).
+  # Text behind a decimal branch: a scale-0 ask stopped at `price` and built (review of #1167). Since
+  # #1327 the `Coalesce` itself is refused first, as text beside a number.
   mixed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "surname"), -1); conn = _CCD_PG)
-  @test mixed_err isa QueryBuildError && occursin("#1061", _ccd_msg(mixed_err))
+  @test mixed_err isa QueryBuildError && occursin("(#1327)", _ccd_msg(mixed_err))
   # An integer literal: its own value binds first, then the places — text order, `[125, -1]`.
   lit = (q = CCD.Ccd_driver.objects; q.values("x" => Fn.Round(Fn.Value(125), -1)); q)
   lit_pg = inspect_query(lit; connection = _CCD_PG)

@@ -919,23 +919,31 @@ end
 # other operand is cast to text; any other pair has no common type to name. For a date/timestamp pair
 # with a literal side the Julia conversion is offered too, and leads: it works on every engine, where
 # a cast to a timestamp is a feature SQLite lacks (#822), refused there by its own rule.
+#
+# #1327 — text beside a number: a cast of either operand says which comparison and which type is
+# meant, so both are named. An `output_field` is refused with the pair (`_declaration_lifts`), and the
+# message says why when one was declared.
 const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
-  :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text")
+  :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text",
+  :number => "a number")
 const _TEMPORAL_MIX_TYPE = Dict(:date => "date", :timestamp => "timestamp", :timestamptz => "timestamptz",
-  :time => "time", :interval => "interval", :text => "text")
+  :time => "time", :interval => "interval", :text => "text", :number => "numeric")
 const _TEMPORAL_MIX_NAME = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
   "NULLIF" => "NullIf", "CASE" => "Case", "LAG" => "Lag", "LEAD" => "Lead")
 const _TEMPORAL_MIX_TIMESTAMPS = (:date, :timestamp, :timestamptz)
 function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,String,Bool},
-                               b::Tuple{Symbol,String,Bool})
+                               b::Tuple{Symbol,String,Bool}; declared::Bool = false)
   name = _TEMPORAL_MIX_NAME[function_name]
   types = "\"$(_TEMPORAL_MIX_TYPE[a[1]])\" or \"$(_TEMPORAL_MIX_TYPE[b[1]])\""
   timestamps = a[1] in _TEMPORAL_MIX_TIMESTAMPS && b[1] in _TEMPORAL_MIX_TIMESTAMPS
+  number = :number in (a[1], b[1])
   # `"text"` as the output_field works on both engines for a timestamp pair (PostgreSQL unifies the
   # two inside, then casts), where SQLite cannot cast to a timestamp type (#822).
   declare = if timestamps
     name in ("NullIf", "Lag", "Lead") ? "cast one operand to the other's type, \e[32mCast(x, $(types))\e[0m" :
       "pass \e[32moutput_field = \"$(_TEMPORAL_MIX_TYPE[a[1]])\", \"$(_TEMPORAL_MIX_TYPE[b[1]])\" or \"text\"\e[0m"
+  elseif number && :text in (a[1], b[1])
+    "cast the number to text, \e[32mCast(x, \"text\")\e[0m, or the text to a number, \e[32mCast(x, \"integer\")\e[0m"
   elseif :text in (a[1], b[1])
     "cast the other operand to text, \e[32mCast(x, \"text\")\e[0m"
   else
@@ -944,9 +952,12 @@ function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,St
   # Converting a literal in Julia resolves a date/timestamp mix only (a `Date(zdt)` beside a date).
   julia = timestamps && (a[3] || b[3]) ? "convert the literal in Julia first (\e[32mDate(zdt)\e[0m, " *
     "\e[32mDateTime(zdt, UTC)\e[0m, \e[32mZonedDateTime(dt, tz\"UTC\")\e[0m), or " : ""
+  why = declared ? " An `output_field` does not say it: it casts the value after the engine has met both " *
+    "operands." : ""
   return QueryBuildError(
     "\e[4m\e[31m$(name)\e[0m mixes $(_TEMPORAL_MIX_NOUN[a[1]]) ($(a[2])) and $(_TEMPORAL_MIX_NOUN[b[1]]) " *
-    "($(b[2])), and does not say which type its value has (#1200). Say it: $(julia)$(declare).")
+    "($(b[2])), and does not say which type its value has ($(number ? "#1327" : "#1200")). " *
+    "Say it: $(julia)$(declare).$(why)")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form

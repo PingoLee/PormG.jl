@@ -3383,54 +3383,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
   ("Case bool output text default false | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64")]),
-  ("Case int output text default text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :postgres, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case int output text default text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
-  ("Case int output text default text | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
-  ("Case int output text default text | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
-  ("Case float output text default text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :postgres, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String")]),
-  ("Case float output text default text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
-  ("Case float output text default text | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
-  ("Case float output text default text | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64")]),
   ("Case int output integer default float | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | alone", :postgres, "v") =>
@@ -4499,78 +4451,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64")]),
   ("Case then Q | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64")]),
-  ("Coalesce text int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
-  ("Coalesce text int | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
-  ("Coalesce text int | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce text int | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Greatest text int literal | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("9", "Int64"), ("9", "Int64")]),
-  ("Greatest text int literal | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("9", "Int64")]),
-  ("Greatest text int literal | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("9", "Int64"), ("9", "Int64")]),
-  ("Greatest text int literal | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("9", "Int64"), ("9", "Int64"), ("1", "Int64")]),
-  ("Greatest text int literal | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("9", "Int64"), ("1", "Int64")]),
-  ("Greatest text int literal | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("9", "Int64"), ("9", "Int64"), ("1", "Int64")]),
-  ("Case int text literal | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String")]),
-  ("Case int text literal | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String")]),
-  ("Case int text literal | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String")]),
-  ("Case int text literal | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64")]),
-  ("Case int text literal | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64")]),
-  ("Case int text literal | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64")]),
-  ("NullIf text int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
-  ("NullIf text int | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("NullIf text int | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("NullIf text int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
-  ("NullIf text int | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("NullIf text int | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce text int output text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :postgres, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Coalesce text int output text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
-  ("Coalesce text int output text | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce text int output text | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Coalesce int hop date | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Coalesce int hop date | alone", :postgres, "v") =>

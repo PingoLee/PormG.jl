@@ -768,8 +768,8 @@ On SQLite a date or time literal binds as the same text its column stores (`Date
 on every engine (#824) when every argument is of one type: `Coalesce("date", Date(2021, 3, 28))` and
 `Greatest("date", "fp1_date")` give a `Date`, and `NullIf` takes its first argument's type. A
 `Subquery(...)` argument counts as its one column (#888). When the
-argument types are two temporal types, or a temporal type and text, PormG does not guess: the call is
-refused on every engine (see [Mixed date, time and text operands](#Mixed-date,-time-and-text-operands)).
+argument types are two temporal types, a temporal type and text, or text and a number, PormG does not
+guess: the call is refused on every engine (see [Mixed date, time, text and number operands](#Mixed-date,-time,-text-and-number-operands)).
 
 ### `Coalesce` — First Non-Null Value
 
@@ -836,7 +836,7 @@ A single argument is refused (see the start of this section). On SQLite, `MAX(x)
 one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
 row.
 
-### Mixed date, time and text operands
+### Mixed date, time, text and number operands
 
 `Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case` with no `output_field`, and a `Lag`/`Lead` with a
 `default` all return one of their operands' own values. Their operands must therefore be of one
@@ -887,6 +887,22 @@ function then has no type PormG can name either: used in arithmetic or an orderi
 duration, it is refused on SQLite and MySQL ([A value PormG cannot type beside a date or a duration](field_expressions.md#A-value-PormG-cannot-type-beside-a-date-or-a-duration)).
 A number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on every
 engine.
+
+**Text beside a number** is refused the same way, on every engine (#1327): `Coalesce("positiontext", 0)`,
+`Greatest("positiontext", "grid")`, `Case(When("grid" => 1, then = 1), default = "x")`. The query does
+not say whether the text is compared as text or the number as a number, and the engines disagree:
+SQLite places any text above any number, MySQL compares the two as strings (`GREATEST('10', 9)` is
+`'9'`), and PostgreSQL fails at the server. Cast the operand that differs, so both have one type:
+
+```julia
+using PormG.Functions: Coalesce, Cast, Value
+
+M.Result.objects.values("pos" => Coalesce("positiontext", Cast(Value(0), "text")))   # text
+M.Result.objects.values("pos" => Coalesce(Cast("positiontext", "integer"), 0))       # a number
+```
+
+An `output_field` does not lift this refusal. It casts the result after the engine has already met
+text and a number inside the function, so PostgreSQL still raises and MySQL still compares as strings.
 
 ### `Cast` — Type Conversion
 

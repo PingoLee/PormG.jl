@@ -3783,41 +3783,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case bool output text default false | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1`"),
   ("Case int output text default text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case int output text default text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`laps`) and text (a String literal), and does not say which type its value has (#1327). Say it: cas"),
   ("Case float output text default text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case float output text default text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (`points`) and text (a String literal), and does not say which type its value has (#1327). Say it: c"),
   ("Case int output integer default float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case int output integer default float | alone", :sqlite) =>
@@ -4953,95 +4953,95 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case then Q | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce text int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Greatest text int literal | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Greatest text int literal | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes text (`positiontext`) and a number (an Int64 literal), and does not say which type its value has (#1327)."),
   ("Case int text literal | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (IntegerField and CharField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (IntegerField and CharField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (IntegerField and CharField)"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("Case int text literal | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a number (an Int64 literal) and text (a String literal), and does not say which type its value has (#1327). S"),
   ("NullIf text int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("NullIf text int | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: cas"),
   ("Coalesce text int output text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce text int output text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a number (`grid`), and does not say which type its value has (#1327). Say it: c"),
   ("Coalesce int hop date | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Coalesce int hop date | alone", :sqlite) =>

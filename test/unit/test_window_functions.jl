@@ -1182,6 +1182,12 @@ end
       err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = "none")); nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("(#1327)", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+      # The CTE column's own mixed-types arm, reached by a pair #1327 does not classify (a number
+      # beside a boolean, #1147's question): it names both fields and `output_field`.
+      err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = true)); nothing catch e; e end
+      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+      @test err isa PormG.QueryBuildError && occursin("CTE column top", msg) && occursin("output_field", msg)
+      @test occursin("(IntegerField and BooleanField)", msg)
     end
   end
 

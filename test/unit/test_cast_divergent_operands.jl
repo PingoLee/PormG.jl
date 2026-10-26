@@ -1980,6 +1980,10 @@ end
   # #1327 the `Coalesce` itself is refused first, as text beside a number.
   mixed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "surname"), -1); conn = _CCD_PG)
   @test mixed_err isa QueryBuildError && occursin("(#1327)", _ccd_msg(mixed_err))
+  # The #1061 arm behind a decimal branch stays reachable through a JSON key, which the #1327 mix
+  # check lets through (its type is the data's): the scale-0 ask must still look past `price`.
+  keyed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "payload__driver"), -1); conn = _CCD_PG)
+  @test keyed_err isa QueryBuildError && occursin("#1061", _ccd_msg(keyed_err))
   # An integer literal: its own value binds first, then the places — text order, `[125, -1]`.
   lit = (q = CCD.Ccd_driver.objects; q.values("x" => Fn.Round(Fn.Value(125), -1)); q)
   lit_pg = inspect_query(lit; connection = _CCD_PG)

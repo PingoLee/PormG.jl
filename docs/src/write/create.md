@@ -44,14 +44,15 @@ RETURNING *
 -- Parameters: ["test", 1]
 ```
 
-!!! note "SQLite does not use `RETURNING`"
+!!! note "SQLite and MySQL do not use `RETURNING`"
     The SQL above is the PostgreSQL form. On SQLite, PormG deliberately issues a plain `INSERT`
     and then reads the row back with a follow-up `SELECT` on the **same** connection — SQLite's
     `last_insert_rowid()` is per-connection session state, so the read-back has to share the
     connection. `RETURNING` is avoided because it can hang inside `libsqlite3` for some table
     shapes (observed with an `AUTOINCREMENT` primary key that migrations left in a non-first
-    column position). The returned `PormGRow` is identical either way; only the statement count
-    differs.
+    column position). MySQL has no `RETURNING`: PormG issues the `INSERT` and reads the row back
+    by its primary key on the same connection. The returned `PormGRow` is identical either way; only
+    the statement count differs.
 
 ### Return Value
 
@@ -186,7 +187,7 @@ the column cannot store.
 
 A column holds a single value. A `Vector` or a tuple given to a text-like field (`CharField`,
 `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements (`[1.5, 2.5]` and
-`["Ayrton", nothing]` too), on both backends — in `create`, `get_or_create` and
+`["Ayrton", nothing]` too), on every backend — in `create`, `get_or_create` and
 `update_or_create` alike, and the same way the [bulk writers](bulk.md) refuse it. `JSONField` and
 `BinaryField` values are unaffected: each is serialized to one value first. To *match* several
 values, use a lookup such as `"surname__@in" => ["Senna", "Prost"]` in `filter(...)`.
@@ -266,7 +267,7 @@ RETURNING *
 
 ## Update or Create
 
-`update_or_create` is a Django-style row-level upsert: it inserts a row when the lookup doesn't exist yet, or updates it when it does — in a single atomic `INSERT ... ON CONFLICT ... DO UPDATE` statement (PostgreSQL and SQLite ≥ 3.24). It returns a `(row, created)` tuple, where `row` is a [`PormGRow`](../read/index.md) (dot-access + `.save()`, just like `get()`/`first()`) and `created` is `true` when a new row was inserted, `false` when an existing one was updated.
+`update_or_create` is a Django-style row-level upsert: it inserts a row when the lookup doesn't exist yet, or updates it when it does — in a single atomic `INSERT ... ON CONFLICT ... DO UPDATE` statement (PostgreSQL and SQLite ≥ 3.24; MySQL's `ON DUPLICATE KEY UPDATE` and its limits are below). It returns a `(row, created)` tuple, where `row` is a [`PormGRow`](../read/index.md) (dot-access + `.save()`, just like `get()`/`first()`) and `created` is `true` when a new row was inserted, `false` when an existing one was updated.
 
 ```julia
 # Idempotently seed a status: insert it the first time, refresh its label on re-runs.
@@ -373,7 +374,7 @@ row, created = M.Status.objects.get_or_create(
   one) raises `StatementError`, and so does MySQL's (its re-read after a successful `INSERT`), as does
   MySQL's `update_or_create` when its row cannot be read back. None is a `UsageError`, so a handler that
   maps `UsageError` to a bad request does not catch them.
-- **A `JSONField` lookup matches the whole document by equality.** A `Vector` or `Dict` lookup value is serialized to one JSON string, and the `SELECT` compares the column with that string. The `INSERT` binds the same string, so the read and the `ON CONFLICT` target use one comparison, as `update_or_create` does. The comparison differs by backend: **PostgreSQL compares `jsonb`**, so key order and whitespace do not matter. **SQLite compares the serialized text**, so the lookup finds a row written from the same value, but not one whose keys were stored in a different order. On SQLite, build a document key with a stable key order (an `OrderedDict`, or the same `Dict`) when you match on it. The create path still needs a UNIQUE constraint on the JSON column, like any other lookup.
+- **A `JSONField` lookup matches the whole document by equality.** A `Vector` or `Dict` lookup value is serialized to one JSON string, and the `SELECT` compares the column with that string. The `INSERT` binds the same string, so the read and the `ON CONFLICT` target use one comparison, as `update_or_create` does. The comparison differs by backend: **PostgreSQL compares `jsonb`**, so key order and whitespace do not matter. **SQLite compares the serialized text**, so the lookup finds a row written from the same value, but not one whose keys were stored in a different order. On SQLite, build a document key with a stable key order (an `OrderedDict`, or the same `Dict`) when you match on it. **MySQL compares the parsed document** (`CAST(? AS JSON)`), so key order does not matter, as on PostgreSQL; but there `makemigrations` refuses a unique `JSONField` (`unbounded_text_indexes`), and `get_or_create` needs the lookup declared unique on the model. The create path still needs a UNIQUE constraint on the JSON column, like any other lookup.
 
 ## Creating with Relationships
 
@@ -487,12 +488,12 @@ end
 `NOT NULL`, `CHECK`. It is a `DatabaseError`, so it means the statement *reached* the database and
 was rejected there; a value PormG rejects before sending raises `InvalidValueError` instead (see
 the null-field example above). Its `error_message(e)` says which kind of constraint refused the
-row (on PostgreSQL, with the SQLSTATE and the constraint's name) but never the row's values, so it
+row (on PostgreSQL, with the SQLSTATE and the constraint's name; on MySQL, with the SQLSTATE and, for a foreign key, the server's text) but never the row's values, so it
 is safe to show a user — see
 [A database error is safe to show](../errors.md#A-database-error-is-safe-to-show).
 
-!!! note "Foreign keys are enforced on both backends"
-    The insert above raises `IntegrityError` on SQLite as well as PostgreSQL: PormG issues
+!!! note "Foreign keys are enforced on every backend"
+    The insert above raises `IntegrityError` on SQLite and MySQL as well as PostgreSQL (MySQL's InnoDB enforces them itself): PormG issues
     `PRAGMA foreign_keys = ON` on every SQLite connection (#276). SQLite itself defaults the pragma
     to **off**, which used to mean a dangling reference stored silently there while failing in
     production PostgreSQL — a bug shape that passed its own test suite.
@@ -512,7 +513,7 @@ is safe to show a user — see
     connection. It is still one transaction, and it must be the outermost one (`TransactionError`
     otherwise). On SQLite it checks the result with `PRAGMA foreign_key_check` before committing
     when `check_on_exit = true`; PostgreSQL only defers the check, so its `COMMIT` still refuses an
-    orphan.
+    orphan. On MySQL it raises `BackendCapabilityError` (`deferred_foreign_keys`).
 
 **Generated SQL (PostgreSQL):**
 ```sql

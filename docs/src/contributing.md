@@ -130,13 +130,13 @@ expression that reflects the specific scenario you are investigating:
    julia -O0 --project=. -e 'using Pkg; Pkg.test()'
    ```
    This is what CI runs, and the `-e` matters: handing the test script straight to
-   `julia --project=.` does *not* work. The `LibPQ`, `Postgres` and `SQLite` drivers are weak
+   `julia --project=.` does *not* work. The `LibPQ`, `Postgres`, `SQLite` and `MySQL` drivers are weak
    dependencies, so the package environment never installs them; `Pkg.test()` resolves
    them from the test target instead. `-O0` is optional but worth it: the suite spends most
    of its time compiling code that mostly runs once, and skipping LLVM optimization makes the
    whole run about 40% faster. `Pkg.test()` passes the flag on to the process that runs the
    tests.
-5. Run the integration tests (requires a live PostgreSQL or SQLite database). Use
+5. Run the integration tests (requires a live PostgreSQL, SQLite or MySQL database). Use
    `--project=test/integration` — that environment carries the drivers:
    ```
    julia -t auto --project=test/integration test/integration/runtests.jl
@@ -188,7 +188,7 @@ expression that reflects the specific scenario you are investigating:
   never falls through an `else`, because a backend added later would inherit that
   `else` without a decision. An engine's own text (a plan, an error's fields, a
   placeholder) or how the test drives the engine is written as
-  `by_engine(postgres = …, sqlite = …)`. It raises an error for an engine with no
+  `by_engine(postgres = …, sqlite = …, mysql = …)`. It raises an error for an engine with no
   row. A testset that exercises one engine's own machinery (its catalog, its server
   sessions) is guarded with `only_on(:postgres, "why")`, which records the skip like
   `requires` does. A value is never keyed by engine: it is checked against an oracle

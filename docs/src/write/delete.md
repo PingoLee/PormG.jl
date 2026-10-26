@@ -51,7 +51,7 @@ delete(query)
 ```sql
 DELETE FROM "just_a_test_deletion" AS "Tb"
 WHERE "Tb"."test_result" = ANY($1) AND "Tb"."test_result2" IS NULL
--- Parameters: [[11, 12]]   (SQLite renders IN (?, ?) with two values)
+-- Parameters: [[11, 12]]   (SQLite and MySQL render IN (?, ?) with two values)
 ```
 
 Using `show_query=:sql` reveals the statements without executing them — a `String` for a single
@@ -169,12 +169,13 @@ delete(query)
     |---|---|
     | PostgreSQL | `NO ACTION` is enforced — the delete fails with a foreign-key violation |
     | SQLite | `NO ACTION` is enforced — the delete fails the same way (#276) |
+    | MySQL | `NO ACTION` is enforced by InnoDB at the statement — the delete fails the same way |
 
     Declare the behaviour you want explicitly on every `ForeignKey`.
 
-!!! note "Both backends enforce foreign keys"
-    PormG issues `PRAGMA foreign_keys = ON` on every SQLite connection (#276), so a delete the
-    database should refuse is refused on both. Before that, SQLite defaulted the pragma to **off**
+!!! note "Every backend enforces foreign keys"
+    PormG issues `PRAGMA foreign_keys = ON` on every SQLite connection (#276), and InnoDB enforces
+    MySQL's, so a delete the database should refuse is refused on every backend. Before that, SQLite defaulted the pragma to **off**
     and enforced nothing: an `on_delete` PormG's own collector did not handle (unset, or
     `DO_NOTHING`) silently orphaned the child there while raising on PostgreSQL, so the same schema
     and the same `delete()` could pass a SQLite test run and fail in production.
@@ -248,7 +249,7 @@ another session renames a race while its delete is in progress:
 
 The race survives, but its results are already gone.
 
-To prevent this, `delete()` on PostgreSQL first **locks every parent in the cascade**, from the root
+To prevent this, `delete()` on PostgreSQL and MySQL first **locks every parent in the cascade**, from the root
 down, with `SELECT … FOR UPDATE`. Each lock uses the same predicate as that model's `DELETE`. A
 locked parent row cannot change until the delete commits, so children are selected from parents
 whose own columns stay fixed. If another session already changed a parent while the lock was
@@ -377,7 +378,7 @@ transaction. What that is worth differs by backend:
 | PostgreSQL | `BEGIN` at READ COMMITTED | Possible — every statement takes a fresh snapshot, even inside a transaction |
 | MySQL | `START TRANSACTION`, the parents locked `FOR UPDATE` before the cascade, as on PostgreSQL | Possible, as on PostgreSQL. InnoDB checks a foreign key at each statement, so the database's own action on such a row runs at the parent's `DELETE`, not at `COMMIT` |
 
-So on PostgreSQL two sessions can interleave like this:
+So on PostgreSQL (and MySQL) two sessions can interleave like this:
 
 1. Session A calls `delete()` on a `race`. Planning probes `lap_times`, finds nothing, drops the path.
 2. Session B inserts a `lap_times` row for that race and commits.
@@ -393,7 +394,10 @@ depends on the action:
   the row is removed, nulled or defaulted anyway and the delete succeeds. What you lose is the
   **accounting**, not the rows: the per-table counts in the returned `(total, Dict)` tally only
   statements PormG issued, so work the database did on a pruned path is not counted. Treat those
-  counts as a report of what the ORM did, not an audit of the transaction.
+  counts as a report of what the ORM did, not an audit of the transaction. MySQL performs
+  `CASCADE` and `SET NULL` at the parent's `DELETE` rather than at `COMMIT`, and enforces
+  `SET DEFAULT` as `RESTRICT`, so there a row on a pruned `SET_DEFAULT` path fails the delete
+  ([MySQL Guide](../mysql.md#Migrations)).
 - **`PROTECT` / `RESTRICT`** — pruning applies here too, because the probe runs for *every* reverse
   relation before PormG looks at the action at all; that is what makes `PROTECT` existence-driven.
   So a row inserted after the probe means [`ProtectedError`](../errors.md) is *not* raised, and the

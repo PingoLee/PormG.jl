@@ -46,7 +46,7 @@ When a lock is already held by another session, you can choose how PormG should 
 
 1.  **Non-blocking (`wait=false`)**: Immediately raises [`OperationalError`](errors.md) if the lock cannot be acquired. The same type is raised when a `:poll` or `:block` acquisition exceeds `timeout_ms`.
 2.  **Client Polling (`strategy=:poll`)**: (Default) PormG will try to acquire the lock, wait for a few milliseconds, and try again until the `timeout_ms` is reached.
-3.  **Server Blocking (`strategy=:block`)**: PormG tells PostgreSQL to block the connection until the lock is granted. This is more efficient as it reduces network traffic, but it ties up a database connection from the pool.
+3.  **Server Blocking (`strategy=:block`)**: PormG tells the server (PostgreSQL, or MySQL through `GET_LOCK`'s timeout) to block the connection until the lock is granted. This is more efficient as it reduces network traffic, but it ties up a database connection from the pool.
 
 ### Timeouts
 
@@ -62,7 +62,7 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
 - **PostgreSQL**: Implementation uses `pg_try_advisory_lock` (non-blocking) or `pg_advisory_lock` (blocking).
 - **MySQL**: `GET_LOCK` and `RELEASE_LOCK`, session-level like PostgreSQL's, so a dropped connection releases the lock. A MySQL lock name is server-wide, where a PostgreSQL advisory lock is scoped to its database, so PormG hashes the database name in with the key: two databases on one server do not block each other, as on PostgreSQL. A contention error names the holder by its MySQL connection id.
 - **SQLite**: `with_advisory_lock` is a **no-op** — see the warning below.
-- **Async Safety**: `with_advisory_lock` uses `LibPQ.async_execute` and `fetch()` to ensure that the Julia task yields while waiting for the database, keeping the event loop unblocked.
+- **Async Safety**: `with_advisory_lock` runs its lock queries through the backend's async execution (`LibPQ.async_execute` on PostgreSQL, a task of its own on MySQL) and `fetch()`, so the Julia task yields while waiting for the database, keeping the event loop unblocked.
 
 !!! warning "Advisory locks are a no-op on SQLite"
     On a SQLite connection the body of `with_advisory_lock` runs with **no mutual exclusion at
@@ -73,13 +73,13 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
     is not a substitute for a named application lock, and it protects nothing for the non-SQL
     critical sections this page recommends locks for — report generation, external API calls,
     scheduled jobs. Treat SQLite as single-instance for these, and rely on advisory locks only where
-    PostgreSQL is the production backend. (`migrate()` needs no named lock on SQLite: a plan is one
+    PostgreSQL or MySQL is the production backend. (`migrate()` needs no named lock on SQLite: a plan is one
     SQL transaction, which the write lock already serializes — see
     [Deploying → SQLite](migrations/deploying.md#SQLite).)
 
 ### Choosing what SQLite does: `on_missing_lock`
 
-The no-op stays the default — it is what lets one codebase run PostgreSQL in production and SQLite
+The no-op stays the default — it is what lets one codebase run PostgreSQL or MySQL in production and SQLite
 in tests. But because what degrades here is a *guarantee* rather than a query, the SQLite path is
 not silent, and `on_missing_lock` lets you pick (#277):
 
@@ -89,10 +89,10 @@ not silent, and `on_missing_lock` lets you pick (#277):
 | `:ignore` | Body runs, silently | You have read this page and accepted the no-op |
 | `:error` | Raises [`BackendCapabilityError`](errors.md); the body does **not** run | The exclusion is genuinely required for correctness |
 
-The same call site works on both backends — that is the point of the keyword:
+The same call site works on every backend — that is the point of the keyword:
 
 ```julia
-# Default: a real lock on PostgreSQL, a warning once per key on SQLite.
+# Default: a real lock on PostgreSQL and MySQL, a warning once per key on SQLite.
 PormG.with_advisory_lock(connection_key, "driver_update_$(driver_id)") do
     # rebuild this driver's standings
 end

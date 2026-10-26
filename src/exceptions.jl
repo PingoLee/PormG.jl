@@ -259,7 +259,7 @@ with_location(e::InvalidValueError; op = nothing, model = nothing, field = nothi
 Two cases, each named by its message. A connection object that is none of PormG's engine pools
 reached an execution path — a PormG internal dispatch bug; the message asks the user to report it.
 Or MySQL has no faithful SQL for what was asked: a `Cast` to a type with no MySQL target that holds
-its meaning (`boolean`, `interval`, `bytea`, a type of your own), or a default on a binary column.
+its meaning (`interval`, `bytea`, a type of your own), or a default on a binary column.
 The catchable replacement for the internal `ErrorException` from #197.
 
 Narrowed in the pre-publish naming pass: it previously also covered backend capability limits

@@ -16,6 +16,7 @@ PormG supports multiple environments within the same `connection.yml`. Common va
 ### 3. Supported Adapters
 - **PostgreSQL:** Primary adapter using `LibPQ.jl`. Supports high-performance async operations. The pure-Julia `Postgres.jl` driver is an experimental alternative — see [Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver).
 - **SQLite:** Fully supported via `SQLite.jl`. PormG uses a unique **Contextual Buckets Strategy** to enable complex joins and CTEs that are normally difficult in SQLite.
+- **MySQL:** MySQL 8.4 or newer via `MySQL.jl` 2.0 — see [Using MySQL](@ref) and the [MySQL Guide](../mysql.md).
 
 ## Philosophy
 The server application should keep:

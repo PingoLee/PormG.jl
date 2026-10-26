@@ -328,12 +328,12 @@ any resync would run, on both the automatic bulk paths and an explicit `resync_s
 
 ### What differs between the engines
 
-| | PostgreSQL | SQLite |
-| :--- | :--- | :--- |
-| Mechanism | resolve the column's owned sequence, then `setval` it to `MAX(pk) + 1` | upsert into `sqlite_sequence`; skipped when the database has no `sqlite_sequence` (no `AUTOINCREMENT` table), where SQLite already assigns `MAX(rowid) + 1` |
-| `bulk_copy` | supported | not supported — raises `BackendCapabilityError` |
-| `bulk_insert` self-heal | on an unexpected duplicate-key error, repairs and retries the chunk once | no retry; the error propagates |
-| A failed repair | see below | always propagates |
+| | PostgreSQL | SQLite | MySQL |
+| :--- | :--- | :--- | :--- |
+| Mechanism | resolve the column's owned sequence, then `setval` it to `MAX(pk) + 1` | upsert into `sqlite_sequence`; skipped when the database has no `sqlite_sequence` (no `AUTOINCREMENT` table), where SQLite already assigns `MAX(rowid) + 1` | none: an explicit id moves the table's `AUTO_INCREMENT` past it, so there is nothing to repair |
+| `bulk_copy` | supported | not supported — raises `BackendCapabilityError` | not supported — raises `BackendCapabilityError` |
+| `bulk_insert` self-heal | on an unexpected duplicate-key error, repairs and retries the chunk once | no retry; the error propagates | no retry; the error propagates |
+| A failed repair | see below | always propagates | no repair runs |
 
 ### When the repair itself fails
 

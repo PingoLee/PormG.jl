@@ -183,17 +183,17 @@ version 1: re-hashing a committed v1 migration must reproduce its stored checksu
 The history table name is **fixed** (`pormg_migrations`, not configurable) and is created
 automatically by `migrate()` or `init_migrations()`. Its frozen v1 columns:
 
-| Column | PostgreSQL type | SQLite type | Notes |
-| :--- | :--- | :--- | :--- |
-| `id` | `SERIAL PRIMARY KEY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | surrogate key |
-| `version` | `VARCHAR(17) NOT NULL UNIQUE` | same | timestamp id, `yyyymmddHHMMSSsss` (17 chars) |
-| `name` | `VARCHAR(255) NOT NULL` | same | human-readable migration name |
-| `checksum` | `VARCHAR(64) NOT NULL` | same | SHA-256 hex |
-| `sql_content` | `TEXT NOT NULL DEFAULT ''` | same | full SQL applied |
-| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | apply time; on SQLite the canonical text every `DateTimeField` stores |
-| `status` | `VARCHAR(20) NOT NULL DEFAULT 'applied'` | same | `applied` or `failed` |
-| `is_destructive` | `BOOLEAN NOT NULL DEFAULT FALSE` | `BOOLEAN … DEFAULT 0` | contained a DROP/destructive op |
-| `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | migration-format contract version |
+| Column | PostgreSQL type | SQLite type | MySQL type | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `id` | `SERIAL PRIMARY KEY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | `BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY` | surrogate key |
+| `version` | `VARCHAR(17) NOT NULL UNIQUE` | same | same | timestamp id, `yyyymmddHHMMSSsss` (17 chars) |
+| `name` | `VARCHAR(255) NOT NULL` | same | same | human-readable migration name |
+| `checksum` | `VARCHAR(64) NOT NULL` | same | same | SHA-256 hex |
+| `sql_content` | `TEXT NOT NULL DEFAULT ''` | same | `LONGTEXT NOT NULL DEFAULT ('')` | full SQL applied |
+| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | `DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)` | apply time; on SQLite the canonical text every `DateTimeField` stores |
+| `status` | `VARCHAR(20) NOT NULL DEFAULT 'applied'` | same | same | `applied` or `failed` |
+| `is_destructive` | `BOOLEAN NOT NULL DEFAULT FALSE` | `BOOLEAN … DEFAULT 0` | `TINYINT(1) NOT NULL DEFAULT 0` | contained a DROP/destructive op |
+| `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | `INT NOT NULL DEFAULT 1` | migration-format contract version |
 
 The `version` string is generated as `Dates.format(now(), "yyyymmddHHMMSSsss")` — date, time, and
 milliseconds, giving collision-resistant ordering for rapid successive migrations.
@@ -219,13 +219,13 @@ created on first use, so the `pormg_migrations` columns above are untouched (#74
 under the `pormg_migrations` prefix that every introspection ignore list carries, so `makemigrations`
 and `check` never plan anything for it.
 
-| Column | PostgreSQL type | SQLite type | Notes |
-| :--- | :--- | :--- | :--- |
-| `id` | `SERIAL PRIMARY KEY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | surrogate key; the order steps were applied in |
-| `name` | `VARCHAR(255) NOT NULL UNIQUE` | same | the step name passed to `run_once`, its identity |
-| `transactional` | `BOOLEAN NOT NULL` | same | whether the step ran in a transaction |
-| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | apply time |
-| `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | data-step table contract version |
+| Column | PostgreSQL type | SQLite type | MySQL type | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `id` | `SERIAL PRIMARY KEY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | `BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY` | surrogate key; the order steps were applied in |
+| `name` | `VARCHAR(255) NOT NULL UNIQUE` | same | same | the step name passed to `run_once`, its identity |
+| `transactional` | `BOOLEAN NOT NULL` | same | `TINYINT(1) NOT NULL` | whether the step ran in a transaction |
+| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | `DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)` | apply time |
+| `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | `INT NOT NULL DEFAULT 1` | data-step table contract version |
 
 It holds one row per applied step and nothing else: a step that failed is not recorded.
 

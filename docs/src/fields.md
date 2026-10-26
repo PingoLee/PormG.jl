@@ -218,10 +218,10 @@ digits, which PormG never does.
 Two fields hold IP addresses, as PostgreSQL's native network types. The first is Django's field of
 the same name, so a Django project imports into it unchanged; the second follows django-netfields.
 
-| Field | Holds | PostgreSQL | SQLite |
-|---|---|---|---|
-| `GenericIPAddressField()` | one host address, IPv4 or IPv6 | `inet` | not supported |
-| `CIDRField()` | one network in CIDR notation | `cidr` | not supported |
+| Field | Holds | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|---|
+| `GenericIPAddressField()` | one host address, IPv4 or IPv6 | `inet` | not supported | not supported |
+| `CIDRField()` | one network in CIDR notation | `cidr` | not supported | not supported |
 
 **PostgreSQL only.** SQLite has no type that stores an address with these semantics: it cannot
 compare by network, and it would store each spelling of an address as different text. PormG refuses
@@ -388,9 +388,9 @@ M.Pit_wall_session.objects.
 `SearchVectorField` stores a full-text document, PostgreSQL's `tsvector`. It is Django's
 `SearchVectorField`, from `django.contrib.postgres.search`.
 
-| Field | Holds | PostgreSQL | SQLite |
-|---|---|---|---|
-| `SearchVectorField()` | a parsed document: lexemes, their positions and weights | `tsvector` | not supported |
+| Field | Holds | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|---|
+| `SearchVectorField()` | a parsed document: lexemes, their positions and weights | `tsvector` | not supported | not supported |
 
 **PostgreSQL only.** SQLite's full-text search is a separate index table, and PormG does not emulate
 it: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one.
@@ -427,9 +427,9 @@ Race_report = Models.Model("race_report",
 `ArrayField` holds a one-dimensional PostgreSQL array of another field's values. It is Django's
 `ArrayField`, from `django.contrib.postgres.fields`.
 
-| Field | Holds | PostgreSQL | SQLite |
-|---|---|---|---|
-| `ArrayField(base_field)` | a list of `base_field` values | the base type followed by `[]`, e.g. `integer[]` | not supported |
+| Field | Holds | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|---|
+| `ArrayField(base_field)` | a list of `base_field` values | the base type followed by `[]`, e.g. `integer[]` | not supported | not supported |
 
 **PostgreSQL only.** SQLite has no array type, and PormG does not emulate one: on SQLite,
 `makemigrations` raises `BackendCapabilityError` for a model that declares an `ArrayField`. To keep
@@ -934,7 +934,7 @@ width); `DECIMAL(max_digits, decimal_places)` on SQLite.
     and every column it does create holds its values exactly — and reads back as a
     `Decimals.Decimal`, as on PostgreSQL, rather than the `Int64`/`Float64` SQLite stored. PostgreSQL
     accepts any width. See
-    [PostgreSQL ↔ SQLite divergences](postgres.md#PostgreSQL-SQLite-divergences).
+    [Divergences between the engines](postgres.md#Divergences-between-the-engines).
 
 ```julia
 # Financial data

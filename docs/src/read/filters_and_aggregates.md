@@ -447,6 +447,16 @@ PostgreSQL compares `jsonb` values, so key order and spacing do not matter, and 
 values too (PormG binds the document as `CAST(? AS JSON)` there). SQLite compares the stored text, so
 it matches a document written from the same value.
 
+A projection alias over the column and an `F` comparison with it (`==` or `!=`) compare the same way:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "meta" => F("metadata"))
+q.filter("meta" => """{"principal": "Toto Wolff", "wins": 121}""")
+
+M.Constructor.objects.filter(F("metadata") == """{"principal": "Toto Wolff", "wins": 121}""")
+```
+
 ### Containment and key-existence operators (PostgreSQL only)
 
 These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).

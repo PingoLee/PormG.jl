@@ -132,6 +132,24 @@ end
             @test q.count() == 0
         end
 
+        # The same comparison through a projection alias and through `F("payload") ==` (#1360). Both
+        # bound a bare marker on MySQL, a JSON string no stored document equals, so each matched no
+        # row with no error. Expected: the seeded document matches its own row through either spelling
+        # on every engine, a different document matches none, and `!=` is the complement.
+        @testset "a whole JSON document through an alias or F(...) == (#1360)" begin
+            doc = PormG.Models.format_json_sql(seeded)
+            other = PormG.Models.format_json_sql(merge(seeded, Dict("points" => 16)))
+            via_alias(d) = (q = base(); q.values("id", "p" => F("payload")); q.filter("p" => d); q)
+            @test length(via_alias(doc).list()) == 1
+            @test length(via_alias(other).list()) == 0
+            q = base(); q.filter(F("payload") == doc)
+            @test q.count() == 1
+            q = base(); q.filter(F("payload") == other)
+            @test q.count() == 0
+            q = base(); q.filter(F("payload") != other)
+            @test q.count() == 1
+        end
+
         # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.
         # Before, PostgreSQL's jsonb rejected the `\u0000` escape on the server (a StatementError,
         # under LibPQ and Postgres.jl alike) while SQLite stored it — so this is the one place a real

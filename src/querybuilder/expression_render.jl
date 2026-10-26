@@ -1041,7 +1041,10 @@ end
 
 # A `String` operand names a FIELD when it is a path or one of the model's own fields; otherwise it
 # is a text literal. The rule `_set_update_query_operand`'s String arm applies.
-_is_field_path(s::String, instruc::SQLInstruction) = contains(s, "__") || s in instruc.object.model.field_names
+# No path starts with `{`, `[` or `"`, so a text that does is a literal even when it holds `__`: a JSON
+# document such as `{"__typename": …}` (review of #1360: it was resolved as the column `{"`).
+_is_field_path(s::String, instruc::SQLInstruction) =
+  !startswith(lstrip(s), r"[{\[\"]") && (contains(s, "__") || s in instruc.object.model.field_names)
 
 # #814 — A DAY COUNT COMBINED WITH A DATE: `date ± count` and `count + date`, where the count is a
 # `DATE - DATE` difference (`CInt32`). PostgreSQL has `date ± integer` and `integer + date` as whole-
@@ -1488,8 +1491,13 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
       sql_type=sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference
-    if contains(operand, "__") || operand in instruc.object.model.field_names
+    if _is_field_path(operand, instruc)
       return _set_update_query(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
+    elseif operation in ("=", "!=") && _json_document_operand(field_name, instruc)
+      # #1360: a whole JSON document compares the literal as JSON, as `filter("payload" => doc)` does
+      # (`_json_document_marker`). Uncast on PostgreSQL, which types `$n` from the jsonb column: the
+      # `::text` below made `jsonb = text`, which has no operator.
+      return _json_document_marker(instruc.connection, add_parameter!(instruc, operand))
     else
       # Keep scalar literals parameterized with an explicit SQL type on PostgreSQL so
       # expressions like integer_column / 2.0 don't get inferred back to integer.

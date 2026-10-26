@@ -78,7 +78,6 @@ Every read the query API builds renders on MySQL, from `filter`, joins along rel
 These are open issues, each of which will close with a fix or a documented rule:
 
 - An integer cast of a value outside the target's range returns the value, or wraps past 64 bits, where the cast means an error ([#1356](https://github.com/PingoLee/PormG.jl/issues/1356)).
-- A JSON document compared through a projection alias or `F(…) ==` binds a bare marker and matches no row ([#1360](https://github.com/PingoLee/PormG.jl/issues/1360)).
 - A conditional over text and a number (`Greatest`, `Case`, `Coalesce`) builds, and MySQL compares and returns text there (`GREATEST('10', 9)` is `'9'`), although the query does not say which of the two it means. Declare it with `Cast` on one side ([#1327](https://github.com/PingoLee/PormG.jl/issues/1327)).
 - The many-to-many manager's `remove` builds one statement however many targets it gets, so with 4096 targets or more (MySQL.jl's parameter limit) it raises `QueryBuildError` before the statement is sent, rather than splitting it; so does `set` when it removes that many ([#1355](https://github.com/PingoLee/PormG.jl/issues/1355)).
 - A double-quoted name in a `CheckConstraint` condition or an `Index(expressions = …)` is a string literal on MySQL, so the constraint or index is over a constant; write the names bare ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)).

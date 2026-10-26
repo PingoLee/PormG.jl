@@ -61,7 +61,8 @@ function _ekr_observe(id::String)
           read = kind === nothing ? nothing : replace(string(kind), "PormG.Kernel." => ""))
 end
 
-# Measured on both engines. `read` is the kind the build recorded (`nothing`: no read parser runs).
+# Measured on every engine (MySQL's rows on 8.4, #1130 phase 5c). `read` is the kind the build recorded
+# (`nothing`: no read parser runs).
 # An interval reads back `==` on both engines, in different units (PostgreSQL's driver delivers
 # milliseconds, the SQLite parser nanoseconds), so only its printed text differs. The CTE columns that
 # were flagged only because the CTE model typed them another field than they mean (`Sum` of a float, a
@@ -75,14 +76,18 @@ end
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("F date - date | alone", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("F date - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   # #1307: a `Case` over a date column minus a date is the same day count, through the `DateField`
   # column's render, so it reads back as `F date - date` does.
   ("Case untyped date col - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | alone", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   # #1111: a `Sum` over an operand the walk does not type, divided — PostgreSQL's quotient is a
   # `numeric`, which keeps the half, over an `integer` column as over a `bigint` one; the division
   # view fails closed on it since #1034 phase 3 step 2a. SQLite has no `EPOCH` part, so the shape
@@ -95,10 +100,10 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum F int + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
 )
 
-# The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. One family is left,
+# The cells whose value comes back as a DIFFERENT TYPE on two engines, by the table above. Every
+# other disagreeing cell reads back the same type on every engine, with `==` values. One family is left,
 # representation, not meaning (#1196): `F date - date` (and, since #1307, the same day count through a
-# `Case` over a date column) is an integer on both engines and records
+# `Case` over a date column) is an integer on every engine and records
 # `CInt32`, which no read parser undoes, so each driver's integer WIDTH comes through (`Int32` vs
 # `Int64`) — the same value spelled in two widths, as an `IntegerField` column itself reads on each.
 # An integer's width follows the engine, for a column and a computed value alike; the testset after
@@ -153,21 +158,20 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Expression-kind matrix: the type-divergence verdict matches the recorded table
 # A consistency check of the conclusion, not of behaviour (the testset above checks behaviour): the
-# cells whose PostgreSQL and SQLite types differ in `_EKR_EXPECTED` must be exactly
+# cells whose engines' types differ in `_EKR_EXPECTED` must be exactly
 # `_EKR_TYPE_DIVERGENT`, and every disagreeing cell must be recorded on every engine that builds it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression-kind matrix: which disagreements change the type read back (#1034)" begin
-  # The engines this file reads back on: MySQL's column (#1130 phase 2b) has no seeded F1 fixture
-  # until phase 4, so a cell that disagrees only there is not read back yet.
-  ids = Set(id for (id, engine) in keys(_EKM_DISAGREEMENTS) if engine in (:postgres, :sqlite))
+  # Every engine this file reads back on, MySQL's included since its F1 fixture seeds (#1130 phase 5).
+  ids = Set(id for (id, engine) in keys(_EKM_DISAGREEMENTS) if engine in ENGINE_KEYS)
   @test Set(id for (id, _) in keys(_EKR_EXPECTED)) == ids
   # #1147: a cell the engine that departs from its meaning refuses has nothing to read back there
   # (`Cast(points, "numeric(10,1)")` on SQLite); every engine that builds it is recorded.
   builds(id, engine) = _EKM_EXPECTED[(id, engine)].stage === :ok
-  @test all(id -> all(e -> !builds(id, e) || haskey(_EKR_EXPECTED, (id, e)), (:postgres, :sqlite)), ids)
+  @test all(id -> all(e -> !builds(id, e) || haskey(_EKR_EXPECTED, (id, e)), ENGINE_KEYS), ids)
+  # A cell is divergent when two engines that read it back give different types.
   divergent = Set(id for id in ids
-                  if haskey(_EKR_EXPECTED, (id, :postgres)) && haskey(_EKR_EXPECTED, (id, :sqlite)) &&
-                     _EKR_EXPECTED[(id, :postgres)].type != _EKR_EXPECTED[(id, :sqlite)].type)
+                  if length(unique(_EKR_EXPECTED[(id, e)].type for e in ENGINE_KEYS if haskey(_EKR_EXPECTED, (id, e)))) > 1)
   @test divergent == _EKR_TYPE_DIVERGENT
 end
 
@@ -297,7 +301,7 @@ end
         q, name = ekm_query(M, base, build, ctx)
         q.filter(EKM_PK[base] => _EKR_ROW[base])
         # Each engine's expectation, stated: a backend added later gets a missing-row error (#1179).
-        if by_engine(postgres = false, sqlite = true)
+        if by_engine(postgres = false, sqlite = true, mysql = false)   # MySQL's DECIMAL rounds to the scale
           # The #1040 refusal itself, not any build error a CTE or Subquery wrapping could raise.
           err = try q.list(); nothing catch e; e end
           @test err isa PormG.QueryBuildError
@@ -344,7 +348,7 @@ const _EKR_INTEGER = [
         v = only(q.list())[name]
         @test v isa Integer
         @test v == value
-        @test string(nameof(typeof(v))) == by_engine(postgres = pg_width, sqlite = "Int64")
+        @test string(nameof(typeof(v))) == by_engine(postgres = pg_width, sqlite = "Int64", mysql = "Int64")
       end
     end
   end

@@ -336,7 +336,8 @@ end
     q = M.Driver.objects
     q.values("surname", "lower_surname" => Subquery(inner))
     sql = inspect_query(q)[:sql_text]
-    @test occursin(r"LOWER\(\"Tb\"\.\"surname\"\)"i, sql)
+    Q = engine_quote()
+    @test occursin(Regex("LOWER\\($(Q)Tb$(Q)\\.$(Q)surname$(Q)\\)", "i"), sql)
 
     df = q |> DataFrame
     @test nrow(df) == M.Driver.objects.count()

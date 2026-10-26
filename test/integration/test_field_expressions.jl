@@ -820,7 +820,7 @@ end
       return q
     end
     over_case = FN.Case(FN.When("lap" => 1, then = F("time")), default = F("time")) * 2
-    if by_engine(sqlite = true, postgres = false)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # MySQL computes a duration as its microseconds
       err = try laps(over_case) |> DataFrame; nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("not supported on SQLite", sprint(showerror, err))
@@ -839,7 +839,7 @@ end
     over.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 2,
                 FN.Case(FN.When("lap" => 1, then = F("time")), default = F("time")) > Dates.Minute(2))
     over.values("milliseconds")
-    if by_engine(sqlite = true, postgres = false)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # MySQL computes a duration as its microseconds
       err = try over |> DataFrame; nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("no millisecond form", sprint(showerror, err))
@@ -893,7 +893,7 @@ end
     by_ms(sign) = [r.driverid for r in sort(eachrow(totals); by = r -> (sign * r.ms, r.driverid))]
     over = seasons(); over.filter("t__@gt" => Dates.Hour(100))
     sorted = seasons(); sorted.order_by("-t", "driverid")
-    if by_engine(sqlite = true, postgres = false)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # MySQL computes a duration as its microseconds
       for q in (over, sorted)
         err = try q |> DataFrame; nothing catch e; e end
         @test err isa PormG.QueryBuildError

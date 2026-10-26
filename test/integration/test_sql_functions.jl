@@ -483,6 +483,10 @@ end
     q4.values("driverid", "q_label" => "dob__@yyyy_q")
     q4.filter("dob__@month" => 4)
     q4.order_by("dob__@yyyy_q")          # projected under ANOTHER name: not an alias hit
+    q5 = M.Driver.objects
+    q5.values("driverid", "dob")
+    q5.filter("dob__@month" => 4)
+    q5.order_by("-dob__@yyyy_q")
     df4 = q4 |> DataFrame
     @test nrow(df4) == nrow(df2)
     @test sort(df4.driverid) == sort(df2.driverid)
@@ -490,11 +494,17 @@ end
     @test all(endswith.(df4.q_label, "-Q2"))
 
     # The unprojected spelling, descending, with the WHERE value bound through a joined path — a
-    # second value the misbind would have displaced.
-    q5 = M.Driver.objects
-    q5.values("driverid", "dob")
-    q5.filter("dob__@month" => 4)
-    q5.order_by("-dob__@yyyy_q")
+    # second value the misbind would have displaced. A backend with no `NULLS FIRST`/`NULLS LAST`
+    # refuses it, since placing the expression's NULLs would bind its values twice (#1271); the
+    # projected name its message gives orders the same rows there.
+    if !requires(:nulls_order)
+      err = try q5 |> DataFrame; nothing catch e; e end
+      @test err isa PormG.BackendCapabilityError && occursin("NULLS FIRST", err.msg)
+      q5 = M.Driver.objects
+      q5.values("driverid", "dob", "q" => "dob__@yyyy_q")
+      q5.filter("dob__@month" => 4)
+      q5.order_by("-q")
+    end
     df5 = q5 |> DataFrame
     @test sort(df5.driverid) == sort(df2.driverid)
     years5 = [Dates.year(Dates.Date(string(x)[1:10])) for x in df5.dob]
@@ -1966,7 +1976,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: a cast SQLite computes differently is refused there and builds on PostgreSQL" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)   # this test's own oracle, per engine
+    # This test's own oracle, per engine and per cast: MySQL's cast of a fraction to an integer rounds it,
+    # and it writes a boolean as the `1` / `0` it stores (engine_departures.jl).
+    int_departs = (sqlite = true, postgres = false, mysql = false)
+    bool_departs = (sqlite = true, postgres = false, mysql = true)
     refusal(f) = try f(); nothing catch e; e end
     is_1028(e) = e isa PormG.QueryBuildError && occursin("#1028", sprint(showerror, e))
     # Race 2, the 2009 Malaysian GP, scored half points: the fractional rows are exercised.
@@ -1974,18 +1987,19 @@ end
     race(expr) = () -> (q = M.Race.objects; q.filter("raceid" => 1); q.values("x" => expr); q |> DataFrame)
     # A fraction cast to an integer, directly and through an output_field.
     for expr in (Cast("points", PormG.Models.IntegerField()), Greatest("points", 0; output_field = "integer"))
-        if departs[engine]
+        if int_departs[engine]
             @test is_1028(refusal(points(expr)))
         else
             df = points(expr)()
             @test any(p -> !isinteger(p), df.points)
-            # PostgreSQL's `float8` → `integer` rounds half to even.
+            # PostgreSQL's `float8` → `integer` and MySQL's `DOUBLE` → `SIGNED` both round half to even
+            # (measured on 8.4: `0.5` → `0`, `2.5` → `2`; its `DECIMAL` cast rounds half away instead).
             @test isempty([r.resultid for r in eachrow(df) if r.x != round(Int, max(r.points, 0), RoundNearest)])
         end
     end
     # A boolean cast to text.
     bool_text = () -> (q = M.New_join_position.objects; q.values("id", "boolean_field", "x" => Cast("boolean_field", "text")); q |> DataFrame)
-    if departs[engine]
+    if bool_departs[engine]
         @test is_1028(refusal(bool_text))
     else
         df = bool_text()
@@ -2036,7 +2050,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1040: a cast to numeric(p, s) is refused on SQLite and rounds on PostgreSQL" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)
+    departs = (sqlite = true, postgres = false, mysql = false)
     refusal(f) = try f(); nothing catch e; e end
     is_1040(e) = e isa PormG.QueryBuildError && occursin("#1040", sprint(showerror, e))
     proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "points", "x" => expr); q |> DataFrame)
@@ -2138,7 +2152,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1215: a cast to real is refused on SQLite and reads a Float32 on PostgreSQL" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)
+    departs = (sqlite = true, postgres = false, mysql = false)
     refusal(f) = try f(); nothing catch e; e end
     is_1215(e) = e isa PormG.QueryBuildError && occursin("#1215", sprint(showerror, e))
     proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "points", "x" => expr); q |> DataFrame)
@@ -2168,7 +2182,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1259: an interval cast to a number is refused on SQLite and rejected by PostgreSQL" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)
+    departs = (sqlite = true, postgres = false, mysql = true)
     refusal(f) = try f(); nothing catch e; e end
     proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "x" => expr); q |> DataFrame)
     for expr in (Cast("fastestlaptime", PormG.Models.IntegerField()), Cast("fastestlaptime", "bigint"),
@@ -2197,7 +2211,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1260: a date, a timestamp or a time cast to a number is refused on SQLite and rejected by PostgreSQL" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)
+    departs = (sqlite = true, postgres = false, mysql = true)
     refusal(f) = try f(); nothing catch e; e end
     proj(expr) = () -> (q = M.Race.objects; q.filter("raceid" => 2); q.values("raceid", "x" => expr); q |> DataFrame)
     for (expr, pg_type) in ((Cast("date", PormG.Models.IntegerField()), "date"), (Cast("date", "numeric(10,2)"), "date"),
@@ -2234,7 +2248,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1222: a declared Case's literal default binds as its branches' type" begin
     engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
-    departs = (sqlite = true, postgres = false)   # #1217/#1028 refuse the boolean and the float default
+    # #1217/#1028: SQLite refuses the boolean and the float default; MySQL only the boolean (#1028).
+    departs = (sqlite = (bool_text = true, int_float = true), postgres = (bool_text = false, int_float = false),
+               mysql = (bool_text = true, int_float = false))
     marker = "case1222"
     purge() = (p = M.New_join_position.objects; p.filter("description" => marker); p.exists() && p.delete())
     refusal(f) = try f(); nothing catch e; e end
@@ -2247,19 +2263,20 @@ end
         bool_text = Case(When("result" => 1, then = F("boolean_field")), default = false, output_field = "text")
         int_float = Case(When("result" => 1, then = F("result")), default = 1.5, output_field = "integer")
         int_text = Case(When("result" => 1, then = F("result")), default = "none", output_field = "text")
-        if departs[engine]
-            for expr in (bool_text, int_float)
+        for (name, expr, want) in ((:bool_text, bool_text, ["true", "false"]), (:int_float, int_float, [1, 2]))
+            if departs[engine][name]
                 @test refusal(rows(expr)) isa PormG.QueryBuildError
+            else
+                @test rows(expr)().x == want
             end
-        else
-            @test rows(bool_text)().x == ["true", "false"]
-            @test rows(int_float)().x == [1, 2]
         end
-        # No shared type: PostgreSQL's server rejects the CASE (its own message), SQLite builds it.
+        # No shared type: PostgreSQL's server rejects the CASE (its own message); SQLite and MySQL build it,
+        # the integer branch read as its text.
         e = refusal(rows(int_text))
         @test by_engine(postgres = () -> e !== nothing && !(e isa PormG.QueryBuildError) &&
                                          occursin(r"CASE types \w+ and \w+ cannot be matched", sprint(showerror, e)),
-                        sqlite = () -> e === nothing && rows(int_text)().x == ["1", "none"])()
+                        sqlite = () -> e === nothing && rows(int_text)().x == ["1", "none"],
+                        mysql = () -> e === nothing && rows(int_text)().x == ["1", "none"])()
     finally
         purge()
     end
@@ -2352,12 +2369,13 @@ end
     to_int = () -> (q = M.Result.objects; q.filter("raceid" => 18);
                     q.values("resultid", "grid", "x" => Cast(Coalesce("grid", 0.5) / 2, PormG.Models.IntegerField()));
                     q.order_by("resultid"); q |> DataFrame)
-    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # this engine departs from the meaning: it refuses
         err = try to_int(); nothing catch e; e end
         @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1028)", sprint(showerror, err))
     else
         df = to_int()
-        # `Coalesce(<integer>, 0.5)` is a `float8` there, whose cast rounds a tie to even (`2.5` → `2`).
+        # `Coalesce(<integer>, 0.5)` is a `float8` there, whose cast rounds a tie to even (`2.5` → `2`), and so
+        # is MySQL's `DOUBLE` cast: the literals bind as doubles there.
         @test Int.(df.x) == round.(Int, df.grid ./ 2, RoundNearest)
     end
 end
@@ -2384,7 +2402,7 @@ end
     end
     # One with more places means the value rounded to the scale (#1147): SQLite, which keeps every
     # digit, refuses it, and PostgreSQL builds it.
-    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # this engine departs from the meaning: it refuses
         @test err isa PormG.QueryBuildError && occursin("a Float64 literal with 3 decimal places", sprint(showerror, err))
     else
         @test err === nothing
@@ -2405,7 +2423,7 @@ end
     proj(m, expr) = () -> (q = m.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
     @test is_1061(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Round("driverref", 2)); q |> DataFrame)))
     tens() = (q = M.Driver.objects; q.filter("number__@isnull" => false); q.values("number", "x" => Round("number", -1)); q |> DataFrame)
-    if by_engine(sqlite = true, postgres = false)   # SQLite's ROUND has no negative precision
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite's ROUND has no negative precision
         err = refusal(tens)
         @test err isa PormG.BackendCapabilityError && occursin("which SQLite does not support", sprint(showerror, err))
     else
@@ -2624,7 +2642,7 @@ end
     @test Float64(total) == sum(r -> floor(Float64(r[:raw])), rows)
     # A fraction cast to an integer means the nearest one (#1147): PostgreSQL rounds `3.5` to `4`, and
     # SQLite, whose cast truncates it to `3`, refuses it.
-    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # this engine departs from the meaning: it refuses
         @test_throws PormG.QueryBuildError over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
     else
         for r in over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))

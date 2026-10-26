@@ -30,11 +30,11 @@ using Test
             push!(tasks, fetch_async(settings, "SELECT 1"))
         end
         # (1) Real concurrency + no premature release: N connections held SIMULTANEOUSLY.
-        # Guarded to PostgreSQL — SQLite serializes work through a shared async worker/queue, so N
+        # Guarded to the server engines — SQLite serializes work through a shared async worker/queue, so N
         # concurrent fetches may not check out N distinct slots there (the check would fail spuriously
-        # with no leak). The baseline invariant (2) below still runs on both backends. Engine
+        # with no leak). The baseline invariant (2) below still runs on every backend. Engine
         # mechanics, a row per engine (#1179): whether concurrent fetches hold distinct slots.
-        if by_engine(postgres = true, sqlite = false)
+        if by_engine(postgres = true, sqlite = false, mysql = true)
             @test count(!, pool.available) >= N
         end
     finally
@@ -60,7 +60,8 @@ end
     pool = by_engine(
         # the fixture pool's driver too (#788), or a run through Postgres.jl would test LibPQ here
         postgres = () -> PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 2, driver = PormG.postgres_driver(cfg)),
-        sqlite = () -> PormG.ConnectionPool.SQLiteConnectionPool(cfg.connection_string; pool_size = 2))()
+        sqlite = () -> PormG.ConnectionPool.SQLiteConnectionPool(cfg.connection_string; pool_size = 2),
+        mysql = () -> PormG.ConnectionPool.MySQLConnectionPool(cfg.connection_string; pool_size = 2))()
     try
         N = 40                                  # ≫ ceiling (20) → guaranteed parking + handoff
         ok = fill(false, N)

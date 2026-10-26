@@ -102,9 +102,10 @@ end
 
         # Engine mechanics (#1179): positional (`?`) parameters are collected per clause, so the
         # HAVING value has its own bucket; numbered (`$n`) parameters are not bucketed at all.
-        if by_engine(postgres = false, sqlite = true)   # bucketed by clause
-            @test first(insp[:parameter_buckets][:having]) isa Number
-            @test first(insp[:parameter_buckets][:having]) == 10.0
+        if by_engine(postgres = false, sqlite = true, mysql = true)   # bucketed by clause
+            # The value is bound as the alias's kind: SQLite's `AVG` is a float, MySQL's (over an integer) a
+            # `DECIMAL`, whose value binds as its text (representation, the same number).
+            @test isequal(first(insp[:parameter_buckets][:having]), by_engine(sqlite = 10.0, mysql = "10"))
         end
         
         @test size(df, 1) > 0
@@ -354,8 +355,11 @@ end
         q = M.Result.objects.values("constructorid", "best" => Max("points"))
         q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(Max("points"), "o");
                                                orientation = "DESC"))
-        # The statement groups by the projected column alone.
-        @test occursin(r"GROUP BY 1\s+ORDER BY MAX\(", PormG.QueryBuilder.inspect_query(q)[:sql_text])
+        # The statement groups by the projected column alone. MySQL leads with the key that places the
+        # NULLs as PostgreSQL does (`(<x> IS NULL) DESC`, #1271), each engine's own text.
+        @test occursin(by_engine(postgres = r"GROUP BY 1\s+ORDER BY MAX\(", sqlite = r"GROUP BY 1\s+ORDER BY MAX\(",
+                                 mysql = r"GROUP BY 1\s+ORDER BY \(MAX\([^)]*\) IS NULL\) DESC, MAX\("),
+                       PormG.QueryBuilder.inspect_query(q)[:sql_text])
         df = q |> DataFrame
         # One row per constructor with its own maximum, and the rows come back highest first.
         @test Dict(Int(r.constructorid) => Float64(r.best) for r in eachrow(df)) == best
@@ -377,7 +381,9 @@ end
         q = M.Result.objects.values("constructorid", "best" => Max("points"), "n" => Count("resultid"))
         q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(Count("resultid"), "best");
                                                orientation = "DESC"))
-        @test occursin(r"ORDER BY COUNT\(", PormG.QueryBuilder.inspect_query(q)[:sql_text])
+        @test occursin(by_engine(postgres = r"ORDER BY COUNT\(", sqlite = r"ORDER BY COUNT\(",
+                                 mysql = r"ORDER BY \(COUNT\([^)]*\) IS NULL\) DESC, COUNT\("),
+                       PormG.QueryBuilder.inspect_query(q)[:sql_text])
         df = q |> DataFrame
         @test Dict(Int(r.constructorid) => Int(r.n) for r in eachrow(df)) == starts
         # Highest count first — and NOT highest best score first, which is what the alias gave.

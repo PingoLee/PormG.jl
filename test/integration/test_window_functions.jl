@@ -314,7 +314,7 @@ end
 # instead of skipped with an `@info`. A per-engine fact, not an `else`: a backend added later
 # states its row (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if !by_engine(postgres = true, sqlite = false)   # PormG renders an explicit window frame here
+if !by_engine(postgres = true, sqlite = false, mysql = true)   # PormG renders an explicit window frame here
     @testset "an explicit window frame is refused where PormG does not render one" begin
         query = M.Result.objects
         query.filter("raceid" => 841)
@@ -371,27 +371,38 @@ else
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "#713: rebuilt frame spellings execute with PostgreSQL's semantics" begin
         # ROWS / EXCLUDE / GROUPS over one race's finishing order (positionorder is unique per race).
+        # EXCLUDE and GROUPS are frame forms a backend can lack beside ROWS and RANGE: where it does,
+        # the frame is refused naming the feature, and the other frames still run.
+        excludes, groups = requires(:window_frame_exclusion), requires(:window_groups_frame)
+        frame_window(fn, frame) = fn("points", over=WindowOver(order_by=["positionorder"], frame=frame))
+        # the current row excluded, so the first visible row is the next one (NULL on the last)
+        exclude_frame = "ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE CURRENT ROW"
+        # one peer group back — each group is one row here, so this is the previous row
+        groups_frame = "GROUPS BETWEEN 1 PRECEDING AND 1 PRECEDING"
+        columns = Any["positionorder", "points",
+            # the caller's lower case is re-spelled; the frame reaches one row back
+            "prev_or_own" => frame_window(FirstValue, "rows between 1 preceding and 1 following")]
+        excludes && push!(columns, "next" => frame_window(FirstValue, exclude_frame))
+        groups && push!(columns, "prev_group" => frame_window(LastValue, groups_frame))
         query = M.Result.objects
         query.filter("raceid" => 841)
-        query.values(
-            "positionorder", "points",
-            # the caller's lower case is re-spelled; the frame reaches one row back
-            "prev_or_own" => FirstValue("points", over=WindowOver(order_by=["positionorder"],
-                frame="rows between 1 preceding and 1 following")),
-            # the current row excluded, so the first visible row is the next one (NULL on the last)
-            "next" => FirstValue("points", over=WindowOver(order_by=["positionorder"],
-                frame="ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE CURRENT ROW")),
-            # one peer group back — each group is one row here, so this is the previous row
-            "prev_group" => LastValue("points", over=WindowOver(order_by=["positionorder"],
-                frame="GROUPS BETWEEN 1 PRECEDING AND 1 PRECEDING"))
-        )
+        query.values(columns...)
         query.order_by("positionorder")
         rows = query.list()
         pts = [row[:points] for row in rows]
         @test length(rows) > 2
         @test isequal([row[:prev_or_own] for row in rows], [i == 1 ? pts[1] : pts[i - 1] for i in eachindex(pts)])
-        @test isequal([row[:next] for row in rows], [i == length(pts) ? missing : pts[i + 1] for i in eachindex(pts)])
-        @test isequal([row[:prev_group] for row in rows], [i == 1 ? missing : pts[i - 1] for i in eachindex(pts)])
+        excludes && @test isequal([row[:next] for row in rows], [i == length(pts) ? missing : pts[i + 1] for i in eachindex(pts)])
+        groups && @test isequal([row[:prev_group] for row in rows], [i == 1 ? missing : pts[i - 1] for i in eachindex(pts)])
+        for (has, fn, frame, feature) in ((excludes, FirstValue, exclude_frame, "an `EXCLUDE` clause"),
+                                          (groups, LastValue, groups_frame, "a `GROUPS` window frame"))
+            has && continue
+            q = M.Result.objects
+            q.filter("raceid" => 841)
+            q.values("w" => frame_window(fn, frame))
+            err = try q.list(); nothing catch e; e end
+            @test err isa PormG.BackendCapabilityError && occursin(feature, err.msg)
+        end
 
         # RANGE with a decimal offset, measured in the ORDER BY column's own type (points is float).
         query = M.Result.objects

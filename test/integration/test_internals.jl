@@ -42,7 +42,7 @@ end
   query.filter("positionorder__@in" => [1, 2])
   instruc = PormG.QueryBuilder.build(query.object)
   
-  if by_engine(postgres = true, sqlite = false)   # binds an IN list as one array parameter
+  if by_engine(postgres = true, sqlite = false, mysql = false)   # binds an IN list as one array parameter
     @test length(instruc.parameters.parameters) == 1
     @test isa(instruc.parameters.parameters[1], AbstractVector)
     @test instruc.parameters.parameters[1] == [1, 2]

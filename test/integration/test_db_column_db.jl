@@ -84,8 +84,9 @@ end
 end
 
 # allocate_primary_keys pre-reserves ids for a db_column PK — exercises _allocate_pg_ids /
-# _allocate_sqlite_ids against the physical column, then proves the reserved ids insert.
-@testset "db_column: allocate_primary_keys on a db_column PK" begin
+# _allocate_sqlite_ids against the physical column, then proves the reserved ids insert. A backend
+# that cannot draw keys ahead refuses the call (test_inserts.jl pins that refusal).
+requires(:preallocated_keys) && @testset "db_column: allocate_primary_keys on a db_column PK" begin
     M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
     try
         allocated = allocate_primary_keys(M.Db_column_pk_scratch.objects, DataFrame(label=["x", "y", "z"]))

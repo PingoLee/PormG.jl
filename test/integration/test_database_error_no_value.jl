@@ -26,9 +26,13 @@ using Logging
 const ERR987_POOL = PormG.config[PORMG_DB_FOLDER].connections
 # A row per engine (#1179), never an `else` a backend added later inherits:
 # - the driver this run goes through (the LibPQ-only checks below key on it — a driver, not an engine);
-# - whether the driver reports the server's SQLSTATE, structured fields and DETAIL (representation).
-const ERR987_DRIVER = by_engine(postgres = () -> PormG.postgres_driver(ERR987_POOL), sqlite = () -> :sqlite)()
-const ERR987_STRUCTURED = by_engine(postgres = true, sqlite = false)
+# - which reason the driver reports for a unique violation (representation):
+const ERR987_DRIVER = by_engine(postgres = () -> PormG.postgres_driver(ERR987_POOL), sqlite = () -> :sqlite,
+                                mysql = () -> :mysql)()
+#   `:structured` — the SQLSTATE, the server's message, and the constraint and table it names;
+#   `:message` — no SQLSTATE, and the driver's message, which names the column and quotes no value;
+#   `:key` — the SQLSTATE and the key and table the server names, and no message (MySQL's quotes the value).
+const ERR987_REASON = by_engine(postgres = :structured, sqlite = :message, mysql = :key)
 const ERR987_SECRET = "s3cr3t987"
 
 err987_raised(f) = try f(); nothing catch e e end
@@ -86,20 +90,29 @@ err987_renderings(e) = [PormG.error_message(e), sprint(showerror, e), string(e),
         # The reason, as data — what each driver can report. Both PostgreSQL drivers name the
         # constraint and the table: Postgres.jl keeps the fields on its exception, and the LibPQ
         # extension reads them off the failed result before LibPQ closes it (#1000).
-        if ERR987_STRUCTURED
+        if ERR987_REASON === :structured
             @test e.sqlstate == "23505"
             @test e.message !== nothing   # the server's primary message, in whatever locale it speaks
             @test e.constraint !== nothing && occursin("slug", e.constraint)
             @test e.table == "field_validation_scratch"
             @test e.column === nothing    # a unique violation names its constraint, not a column
-        else
+        elseif ERR987_REASON === :message
             @test e.sqlstate === nothing
             @test e.message == "UNIQUE constraint failed: field_validation_scratch.slug"
+        elseif ERR987_REASON === :key
+            @test e.sqlstate == "23000"
+            @test e.message === nothing   # `Duplicate entry '<value>' for key …` quotes the value
+            @test e.constraint !== nothing && occursin("slug", e.constraint)
+            @test e.table == "field_validation_scratch"
+            @test e.column === nothing
+        else
+            error("no expectation for the reason kind $(ERR987_REASON)")
         end
 
-        # The driver's full text is still one hop away — on PostgreSQL, DETAIL and value included.
+        # The driver's full text is still one hop away: on PostgreSQL its DETAIL, and on MySQL its
+        # message, value included.
         @test e.cause !== nothing
-        ERR987_STRUCTURED && @test occursin(ERR987_SECRET, sprint(showerror, e.cause))
+        ERR987_REASON !== :message && @test occursin(ERR987_SECRET, sprint(showerror, e.cause))
     finally
         err987_clear!()
     end

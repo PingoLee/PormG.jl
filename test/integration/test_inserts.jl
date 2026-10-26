@@ -462,7 +462,22 @@ end
 #   - on SQLite, repeated pre-allocation before any insert still yields disjoint
 #     id ranges because the reserved range is reflected in sqlite_sequence.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "allocate_primary_keys" begin
+const INS_PREALLOCATES = requires(:preallocated_keys)
+if !INS_PREALLOCATES
+    # A backend that cannot draw keys ahead of the INSERT refuses the call, naming the feature, and
+    # writes nothing (#1266).
+    @testset "allocate_primary_keys is refused where keys cannot be drawn ahead (#1266)" begin
+        err = try
+            allocate_primary_keys(M.Django_contract_scratch.objects, DataFrame(label = ["alloc-pk-refused"]))
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.BackendCapabilityError && occursin("drawing auto-increment keys", err.msg)
+        @test !M.Django_contract_scratch.objects.filter("label" => "alloc-pk-refused").exists()
+    end
+end
+INS_PREALLOCATES && @testset "allocate_primary_keys" begin
     labels_a = ["alloc-pk-no-col-a", "alloc-pk-no-col-b"]
     labels_b = ["alloc-pk-blank-a",  "alloc-pk-blank-b"]
     labels_c = ["alloc-pk-after-c"]
@@ -799,7 +814,7 @@ end
         # value. This is the one check that actually fails if the constant is wrong.
         # SQLite: the shipped SQLite.jl is ≥3.32.0, so the default is 32766 (a regression
         # to 999 on an ancient build would fail here, which is the correct signal).
-        @test limit == by_engine(sqlite = 32766, postgres = 65535)   # each engine's own ceiling (#1179)
+        @test limit == by_engine(sqlite = 32766, postgres = 65535, mysql = 4096)   # each engine's own ceiling (#1179); MySQL.jl binds 4096
 
         ncols = 8                              # all payload columns, incl. the explicit id
         nrows = fld(limit, ncols) + 1          # one row past a single capped chunk

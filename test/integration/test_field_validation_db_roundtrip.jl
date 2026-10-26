@@ -356,7 +356,7 @@ end
                 e
             end
 
-            @test err !== nothing
+            @test err isa PormG.IntegrityError
             @test any(token -> occursin(token, lowercase(string(err))), ["unique", "duplicate", "constraint"])
             @test M.Field_validation_scratch.objects.filter("slug" => scratch_slug).count() == 1
             @test M.Field_validation_scratch.objects.filter("uuid_token" => duplicate_uuid).count() == 0
@@ -393,7 +393,7 @@ end
                 e
             end
 
-            @test err !== nothing
+            @test err isa PormG.IntegrityError
             @test any(token -> occursin(token, lowercase(string(err))), ["unique", "duplicate", "constraint"])
             @test M.Field_validation_scratch.objects.filter("slug" => original_slug).count() == 1
             @test M.Field_validation_scratch.objects.filter("slug" => conflicting_slug).count() == 1
@@ -651,7 +651,9 @@ end
                 postgres = () -> PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = \$1 WHERE slug = \$2",
                                              ["\\x010203040506070809", scratch_slug]),
                 sqlite = () -> PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
-                                           [oversize, scratch_slug]))
+                                           [oversize, scratch_slug]),
+                mysql = () -> PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
+                                          [oversize, scratch_slug]))
             raw_err = try
                 raw_update()
                 nothing
@@ -659,8 +661,8 @@ end
                 e
             end
             @test raw_err !== nothing
-            # PostgreSQL: `violates check constraint "…"`. SQLite: `CHECK constraint failed: …`.
-            # Both contain "check constraint" once case is normalized.
+            # PostgreSQL: `violates check constraint "…"`. SQLite: `CHECK constraint failed: …`. MySQL:
+            # `Check constraint '…' is violated.` Each contains "check constraint" once case is normalized.
             @test occursin("check constraint", lowercase(sprint(showerror, raw_err)))
             # And the row is unchanged, so the failed statement wrote nothing.
             @test collect((scratch_query.values("bounded_blob").list() |> first)[:bounded_blob]) == at_bound

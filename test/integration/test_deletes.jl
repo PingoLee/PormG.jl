@@ -49,14 +49,17 @@ end
 _strip_ansi(text::AbstractString) = replace(String(text), r"\e\[[0-9;]*m" => "")
 
 """Return the appropriate SQL type for an explicit-ID primary key column (a row per engine, #1179)."""
-_scratch_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER")
+_scratch_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER", mysql = "INTEGER AUTO_INCREMENT")
+
+"""Run one scratch statement, written with double-quoted names, in this engine's own quote."""
+_scratch_sql(pool, sql::AbstractString) = PormG.ConnectionPool.fetch(pool, engine_sql(sql; conn = pool))
 
 # ── Schema helpers: delete_protect_scratch ──────────────────────────────────
 
 function _drop_delete_protect_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"delete_protect_child_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"delete_protect_parent_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"delete_protect_child_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"delete_protect_parent_scratch\";")
     return nothing
 end
 
@@ -66,19 +69,21 @@ function _reset_delete_protect_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "delete_protect_parent_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
     );
     """)
 
-    # Inline REFERENCES is valid on both SQLite and PostgreSQL.
-    PormG.ConnectionPool.fetch(pool, """
+    # A foreign key is a table constraint on every engine: MySQL 8.4 parses an inline column
+    # REFERENCES and ignores it, which would leave the child with no foreign key at all.
+    _scratch_sql(pool, """
     CREATE TABLE "delete_protect_child_scratch" (
         "id" $id_type PRIMARY KEY,
-        "parent_id" INTEGER REFERENCES "delete_protect_parent_scratch" ("id"),
-        "label" TEXT
+        "parent_id" INTEGER,
+        "label" TEXT,
+        FOREIGN KEY ("parent_id") REFERENCES "delete_protect_parent_scratch" ("id")
     );
     """)
 
@@ -89,7 +94,7 @@ end
 
 function _drop_keyless_delete_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_delete_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"keyless_delete_scratch\";")
     return nothing
 end
 
@@ -97,7 +102,7 @@ function _reset_keyless_delete_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
     _drop_keyless_delete_scratch_schema!()
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "keyless_delete_scratch" (
         "bucket" TEXT NOT NULL,
         "label" TEXT
@@ -111,8 +116,8 @@ end
 
 function _drop_keyless_related_delete_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_related_child_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_related_parent_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"keyless_related_child_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"keyless_related_parent_scratch\";")
     return nothing
 end
 
@@ -122,17 +127,18 @@ function _reset_keyless_related_delete_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "keyless_related_parent_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
     );
     """)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "keyless_related_child_scratch" (
-        "parent_id" INTEGER NOT NULL REFERENCES "keyless_related_parent_scratch" ("id"),
-        "label" TEXT NOT NULL
+        "parent_id" INTEGER NOT NULL,
+        "label" TEXT NOT NULL,
+        FOREIGN KEY ("parent_id") REFERENCES "keyless_related_parent_scratch" ("id")
     );
     """)
 
@@ -143,8 +149,8 @@ end
 
 function _drop_do_nothing_delete_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"do_nothing_child_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"do_nothing_parent_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"do_nothing_child_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"do_nothing_parent_scratch\";")
     return nothing
 end
 
@@ -154,18 +160,19 @@ function _reset_do_nothing_delete_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "do_nothing_parent_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
     );
     """)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "do_nothing_child_scratch" (
         "id" $id_type PRIMARY KEY,
-        "parent_id" INTEGER NOT NULL REFERENCES "do_nothing_parent_scratch" ("id"),
-        "label" TEXT
+        "parent_id" INTEGER NOT NULL,
+        "label" TEXT,
+        FOREIGN KEY ("parent_id") REFERENCES "do_nothing_parent_scratch" ("id")
     );
     """)
 
@@ -176,9 +183,9 @@ end
 
 function _drop_multipath_set_null_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_leaf_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_mid_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_root_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_leaf_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_mid_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_root_scratch\";")
     return nothing
 end
 
@@ -188,7 +195,7 @@ function _reset_multipath_set_null_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "mp_root_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
@@ -197,22 +204,25 @@ function _reset_multipath_set_null_scratch_schema!()
 
     # Two nullable foreign keys to the SAME parent — the shape that makes `mp_mid_scratch` reachable
     # by two cascade paths, so its SET_NULL child is resolved twice.
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "mp_mid_scratch" (
         "id" $id_type PRIMARY KEY,
-        "owner" INTEGER REFERENCES "mp_root_scratch" ("id"),
-        "backup" INTEGER REFERENCES "mp_root_scratch" ("id"),
-        "label" TEXT NOT NULL
+        "owner" INTEGER,
+        "backup" INTEGER,
+        "label" TEXT NOT NULL,
+        FOREIGN KEY ("owner") REFERENCES "mp_root_scratch" ("id"),
+        FOREIGN KEY ("backup") REFERENCES "mp_root_scratch" ("id")
     );
     """)
 
     # The constraint is what makes the pre-fix failure loud rather than silent: a leaf the collector
     # forgot to null still references an `mp_mid_scratch` row the same delete then removes.
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "mp_leaf_scratch" (
         "id" $id_type PRIMARY KEY,
-        "mid" INTEGER REFERENCES "mp_mid_scratch" ("id"),
-        "label" TEXT NOT NULL
+        "mid" INTEGER,
+        "label" TEXT NOT NULL,
+        FOREIGN KEY ("mid") REFERENCES "mp_mid_scratch" ("id")
     );
     """)
 
@@ -223,8 +233,8 @@ end
 
 function _drop_set_null_guard_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_null_guard_child_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_null_guard_parent_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"set_null_guard_child_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"set_null_guard_parent_scratch\";")
     return nothing
 end
 
@@ -234,18 +244,19 @@ function _reset_set_null_guard_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "set_null_guard_parent_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
     );
     """)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "set_null_guard_child_scratch" (
         "id" $id_type PRIMARY KEY,
-        "parent_id" INTEGER NOT NULL REFERENCES "set_null_guard_parent_scratch" ("id"),
-        "label" TEXT
+        "parent_id" INTEGER NOT NULL,
+        "label" TEXT,
+        FOREIGN KEY ("parent_id") REFERENCES "set_null_guard_parent_scratch" ("id")
     );
     """)
 
@@ -256,8 +267,8 @@ end
 
 function _drop_set_default_guard_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_default_guard_child_scratch\";")
-    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_default_guard_parent_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"set_default_guard_child_scratch\";")
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"set_default_guard_parent_scratch\";")
     return nothing
 end
 
@@ -267,18 +278,19 @@ function _reset_set_default_guard_scratch_schema!()
 
     id_type = _scratch_id_type(pool)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "set_default_guard_parent_scratch" (
         "id" $id_type PRIMARY KEY,
         "name" TEXT NOT NULL
     );
     """)
 
-    PormG.ConnectionPool.fetch(pool, """
+    _scratch_sql(pool, """
     CREATE TABLE "set_default_guard_child_scratch" (
         "id" $id_type PRIMARY KEY,
-        "parent_id" INTEGER NOT NULL REFERENCES "set_default_guard_parent_scratch" ("id"),
-        "label" TEXT
+        "parent_id" INTEGER NOT NULL,
+        "label" TEXT,
+        FOREIGN KEY ("parent_id") REFERENCES "set_default_guard_parent_scratch" ("id")
     );
     """)
 
@@ -350,6 +362,39 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Test suites
 # ─────────────────────────────────────────────────────────────────────────────
+
+# What: every scratch child table above refuses a row whose parent does not exist, on every engine.
+# Expected: an `IntegrityError` for each orphan, and no row stored.
+# Why: the DO_NOTHING, PROTECT and multi-path tests below read their result off these foreign keys, so a
+#   table created without one (MySQL 8.4 ignores an inline column REFERENCES) would pass them for the
+#   wrong reason. This pins that the keys exist before any of them runs.
+@testset "the scratch child tables enforce their foreign keys" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    count_rows(t) = DataFrame(PormG.ConnectionPool.fetch(pool, engine_sql("SELECT COUNT(*) AS n FROM \"$t\""))).n[1]
+    for (reset!, drop!, table, columns) in (
+            (_reset_delete_protect_scratch_schema!, _drop_delete_protect_scratch_schema!, "delete_protect_child_scratch", "\"parent_id\", \"label\""),
+            (_reset_keyless_related_delete_scratch_schema!, _drop_keyless_related_delete_scratch_schema!, "keyless_related_child_scratch", "\"parent_id\", \"label\""),
+            (_reset_do_nothing_delete_scratch_schema!, _drop_do_nothing_delete_scratch_schema!, "do_nothing_child_scratch", "\"parent_id\", \"label\""),
+            (_reset_multipath_set_null_scratch_schema!, _drop_multipath_set_null_scratch_schema!, "mp_mid_scratch", "\"owner\", \"label\""),
+            (_reset_multipath_set_null_scratch_schema!, _drop_multipath_set_null_scratch_schema!, "mp_mid_scratch", "\"backup\", \"label\""),
+            (_reset_multipath_set_null_scratch_schema!, _drop_multipath_set_null_scratch_schema!, "mp_leaf_scratch", "\"mid\", \"label\""),
+            (_reset_set_null_guard_scratch_schema!, _drop_set_null_guard_scratch_schema!, "set_null_guard_child_scratch", "\"parent_id\", \"label\""),
+            (_reset_set_default_guard_scratch_schema!, _drop_set_default_guard_scratch_schema!, "set_default_guard_child_scratch", "\"parent_id\", \"label\""))
+        reset!()
+        try
+            err = try
+                _scratch_sql(pool, "INSERT INTO \"$table\" ($columns) VALUES (999999, 'orphan')")
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.IntegrityError
+            @test count_rows(table) == 0
+        finally
+            drop!()
+        end
+    end
+end
 
 @testset "Delete Operations with FK Constraints" begin
 
@@ -440,7 +485,7 @@ end
         @test isempty(inspection[:parameters])
         # Table identifier is QUOTED since #59 (db_table) — it used to be written bare, which was
         # indistinguishable from this while every table name was lowercase.
-        @test occursin("delete from \"lap_times\"", lowercase(inspection[:sql_text]))
+        @test occursin(engine_sql("delete from \"lap_times\""), lowercase(inspection[:sql_text]))
 
         # Now exercise the actual delete-all path against the scratch table so
         # we do not touch the seeded F1 fixture data.
@@ -533,7 +578,7 @@ end
 
             @test inspection isa Dict
             @test inspection[:operation] == :delete
-            @test occursin("delete from \"do_nothing_parent_scratch\"", lowercase(inspection[:sql_text]))
+            @test occursin(engine_sql("delete from \"do_nothing_parent_scratch\""), lowercase(inspection[:sql_text]))
 
             # Live delete — the database refuses it on both backends since #276.
             delete_q = DoNothingM.Do_nothing_parent_scratch.objects
@@ -712,7 +757,7 @@ end
             # `\w+` assumes the FK column is a word — a `db_column` like "race-id" would miss and
             # drop the count. That fails loudly here rather than passing wrongly, which is the right
             # direction for a brittle anchor, but it is an assumption about the F1 naming.
-            _mp_fragments = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(\"Tb\"\.\"(\w+)\" IN \(SELECT",
+            _mp_fragments = [m.captures[1] for m in eachmatch(Regex("(?:WHERE|OR)\\s+\\($(engine_quote())Tb$(engine_quote())\\.$(engine_quote())(\\w+)$(engine_quote()) IN \\(SELECT"),
                                                                deletion_step[:sql_text])]
             @test length(_mp_fragments) == 2
             @test Set(_mp_fragments) == Set(["test_result", "test_result2"])
@@ -861,13 +906,13 @@ end
             # `("Tb".` for the reason spelled out in the #452 testset above: since #765 each arm is a
             # parenthesized predicate on the leaf's OWN foreign key, and nested subqueries are
             # aliased `R1`, `R2`, …, so only the top-level fragments match.
-            _sn_fragments = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(\"Tb\"\.\"(\w+)\" IN \(SELECT",
+            _sn_fragments = [m.captures[1] for m in eachmatch(Regex("(?:WHERE|OR)\\s+\\($(engine_quote())Tb$(engine_quote())\\.$(engine_quote())(\\w+)$(engine_quote()) IN \\(SELECT"),
                                                               update_step[:sql_text])]
             @test length(_sn_fragments) == 2
             @test all(==("mid"), _sn_fragments)
             # Both paths are present, not the same path twice.
-            @test occursin("\"owner\" IN", update_step[:sql_text])
-            @test occursin("\"backup\" IN", update_step[:sql_text])
+            @test occursin(engine_sql("\"owner\" IN"), update_step[:sql_text])
+            @test occursin(engine_sql("\"backup\" IN"), update_step[:sql_text])
             # #452's invariant on a statement shape that did not exist before this fix.
             @test marker_count(update_step[:sql_text]) == length(update_step[:parameters])
 
@@ -1117,7 +1162,7 @@ end
 
             @test inspection isa Dict
             @test inspection[:operation] == :delete
-            @test occursin("delete from \"delete_protect_parent_scratch\"", lowercase(inspection[:sql_text]))
+            @test occursin(engine_sql("delete from \"delete_protect_parent_scratch\""), lowercase(inspection[:sql_text]))
 
             # Live delete of the orphaned parent must succeed.
             delete_q = ProtectM.Delete_protect_parent_scratch.objects

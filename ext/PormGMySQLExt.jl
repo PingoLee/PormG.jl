@@ -549,7 +549,30 @@ const _SAFE_MESSAGE_ERRNOS = (1044, 1046, 1048, 1049, 1050, 1051, 1054, 1091, 11
 function PormG.backend_error_fields(e::MySQL.Protocol.ServerError)
   sqlstate = isempty(e.sqlstate) ? nothing : e.sqlstate
   message = Int(e.errno) in _SAFE_MESSAGE_ERRNOS && !isempty(e.msg) ? e.msg : nothing
-  return (sqlstate = sqlstate, constraint = nothing, table = nothing, column = nothing, message = message)
+  table, constraint = Int(e.errno) == 1062 ? _duplicate_key_name(e.msg) : (nothing, nothing)
+  return (sqlstate = sqlstate, constraint = constraint, table = table, column = nothing, message = message)
+end
+
+# 1062's text is `Duplicate entry '<value>' for key '<table>.<key>'` (the table since 8.0.19). The key
+# is the quoted name that ends the text: anchored there, the value before it cannot supply one, and a
+# key name holding a quote reads as no name rather than part of one. The value itself is never read.
+# Every case that could be ambiguous reads as no name at all, never as a guess:
+# - a text at MySQL's message limit (`MYSQL_ERRMSG_SIZE`, 512 bytes with its terminator) may have been
+#   cut inside a long value, and then what ends it is the value's own text;
+# - a part longer than an identifier can be (64 characters) cannot be a name;
+# - a quoted table or key name can hold a `.`, so a name with more than one cannot be split;
+# - `*UNKNOWN*` is MySQL's word for a key it could not name.
+const _MYSQL_ERRMSG_LIMIT = 511
+function _duplicate_key_name(msg::AbstractString)
+  ncodeunits(msg) >= _MYSQL_ERRMSG_LIMIT && return (nothing, nothing)
+  m = match(r" for key '([^']+)'\z", msg)
+  m === nothing && return (nothing, nothing)
+  parts = split(m.captures[1], '.')
+  length(parts) > 2 && return (nothing, nothing)
+  any(p -> isempty(p) || length(p) > 64, parts) && return (nothing, nothing)
+  key = String(last(parts))
+  key == "*UNKNOWN*" && return (nothing, nothing)
+  return (length(parts) == 2 ? String(first(parts)) : nothing, key)
 end
 
 # ── Cancellation (#315) ──────────────────────────────────────────────────────

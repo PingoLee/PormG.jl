@@ -19,8 +19,9 @@ functions in `PormG.Functions`:
 !!! warning "PostgreSQL only"
     SQLite has no `tsvector` or `tsquery`. Its FTS5 extension is a separate index table with its
     own query syntax and ranking. PormG does not emulate it, because an emulation would answer a
-    different question. On SQLite the lookup and each function raise `BackendCapabilityError` when
-    the query is built, so a test suite on SQLite fails where production would diverge. See the
+    different question. MySQL has no `tsvector` or `tsquery` either. On SQLite and MySQL the lookup
+    and each function raise `BackendCapabilityError` when the query is built, so a test suite on
+    either fails where production would diverge. See the
     [PostgreSQL Guide](../postgres.md).
 
 ```julia
@@ -376,7 +377,7 @@ M.Race_report.objects.
 - `SearchVector`, `SearchHeadline` and the pattern lookups (`@contains`, …) do not take the column.
   It is already a document, so they raise `QueryBuildError` or `FilterError`. So does a
   `SearchVector` written to any other column, or a `SearchQuery` written to any column.
-- PostgreSQL only: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that
+- PostgreSQL only: on SQLite and MySQL, `makemigrations` raises `BackendCapabilityError` for a model that
   declares one. A retype from text into `tsvector` is refused, because `CAST(text AS tsvector)`
   reads the text as a document literal rather than parsing its words. Add a new column and fill it
   with `update` instead.
@@ -428,7 +429,7 @@ the same way.
   `SearchVectorField`. Declare `generated_from` and PormG re-creates it as its own.
 - A plan that adds a generated column needs PostgreSQL 12, and one that removes `generated_from`
   (`DROP EXPRESSION`) needs 13; `makemigrations` and `migrate` refuse it on an older server with
-  `BackendCapabilityError`. On SQLite the column is refused, as every `SearchVectorField` is.
+  `BackendCapabilityError`. On SQLite and MySQL the column is refused, as every `SearchVectorField` is.
 
 ## Indexing
 

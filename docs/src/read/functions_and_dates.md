@@ -34,7 +34,7 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 `@quarter` and `@quadrimester` extract a **number** — `1`–`4` and `1`–`3` — so they answer "which
 quarter", independently of the year. That is what makes `filter("date__@quarter" => 1)` select Q1 of
 every season. It is the same shape as Django's `__quarter` lookup and SQL's
-`EXTRACT(QUARTER FROM …)` (cast `::integer` on PostgreSQL, so it reads back as an integer on both engines).
+`EXTRACT(QUARTER FROM …)` (cast `::integer` on PostgreSQL, so it reads back as an integer on every engine; MySQL's own `QUARTER(…)` is an integer already).
 
 `@yyyy_q` and `@yyyy_quad` build the **year-qualified label** (`"1991-Q1"`), the form you want as a
 `values()` grouping key when each year's periods must not be merged. They sit beside `@yyyy_mm`,
@@ -116,14 +116,14 @@ transform itself.
 
 A date part is NULL exactly when its date is, so `"sprint_date__@year__@isnull" => false` selects
 the same rows as `"sprint_date__@isnull" => false`. The year-qualified labels follow the same rule:
-`"sprint_date__@yyyy_q"` reads `missing` for a race without a sprint on both engines, never a
+`"sprint_date__@yyyy_q"` reads `missing` for a race without a sprint on every engine, never a
 partial `"-Q"`.
 
 ### Time of day (`@hour`, `@minute`, `@second`)
 
 The time parts work on a `DateTimeField` and on a `TimeField`, in `filter()` and `values()` alike.
-They read back as integers on both engines. `@second` is the **whole** second: PostgreSQL truncates
-a fractional `45.6` to `45`, as SQLite does, instead of rounding it to `46`.
+They read back as integers on every engine. `@second` is the **whole** second: PostgreSQL truncates
+a fractional `45.6` to `45`, as SQLite and MySQL do, instead of rounding it to `46`.
 
 ```julia
 # Races that started at 13:00-13:59 (`start_at` is a DateTimeField; see the time-zone note below)
@@ -144,16 +144,16 @@ minute or second outside `0`–`59`, a fraction, or a value that is not a number
 instead of building SQL that silently matches nothing.
 
 !!! note "Transforms read a timestamp in UTC"
-    Every transform reads a `DateTimeField` in **UTC**, on both engines. SQLite stores the
-    timestamp in UTC. On PostgreSQL a `DateTimeField` is a `timestamptz` by default, read in the
+    Every transform reads a `DateTimeField` in **UTC**, on every engine. SQLite stores the
+    timestamp in UTC, and MySQL a `DATETIME(3)` in the UTC each connection runs in. On PostgreSQL a `DateTimeField` is a `timestamptz` by default, read in the
     connection's session time zone, and both PostgreSQL drivers open every connection with
     `TimeZone=UTC`. So `start_at__@hour` is the UTC hour, and `@date` and `@day` are the UTC day.
     A `DateTimeField(type="TIMESTAMP")` and a `TimeField` carry no time zone, so they return the
-    stored wall-clock value on both engines.
+    stored wall-clock value on every engine.
 
     Do not add `-c TimeZone=…` to the connection's `options`. PostgreSQL would then read every
     `timestamptz` in that zone, and `@hour`, `@date`, `@day` and `ToChar` would return different
-    values from SQLite. With the `LibPQ` driver, **any** `options=` in the connection string
+    values from SQLite and MySQL. With the `LibPQ` driver, **any** `options=` in the connection string
     replaces the driver's own session settings, even one that only sets `search_path`. If you
     need `options`, start it with all three:
     `-c DateStyle=ISO,YMD -c IntervalStyle=iso_8601 -c TimeZone=UTC`. Without the first two,
@@ -168,7 +168,7 @@ instead of building SQL that silently matches nothing.
 
 ### Weeks (`@week`, `@week_day`, `@iso_week_day`, `@iso_year`)
 
-The week parts use Django's numbering, and they return the same number on PostgreSQL and SQLite:
+The week parts use Django's numbering, and they return the same number on every engine:
 
 | Transform | Returns | Numbering |
 | :--- | :--- | :--- |
@@ -177,9 +177,9 @@ The week parts use Django's numbering, and they return the same number on Postgr
 | `@iso_week_day` | the ISO day of the week | `1` = Monday … `7` = Sunday |
 | `@week_day` | the day of the week | `1` = Sunday … `7` = Saturday |
 
-The engines' own functions do not agree on these numbers. SQLite's `%W` is not the ISO week, and
-PostgreSQL's `DOW` counts from `0`. PormG renders each part to the numbering in the table, not to
-either engine's default.
+The engines' own functions do not agree on these numbers. SQLite's `%W` is not the ISO week, nor is
+MySQL's default `WEEK` mode, and PostgreSQL's `DOW` counts from `0`. PormG renders each part to the
+numbering in the table, not to any engine's default.
 
 `@week` and `@iso_year` belong together. Near New Year a date can sit in a week of the neighbouring
 year: 2021-01-01 is in ISO week 53 of **2020**, and 2024-12-30 is in week 1 of **2025**. To group by
@@ -367,7 +367,7 @@ a `Bool` raises an `InvalidValueError` under every lookup, and so does a `@yyyy_
 not exist (`"1991-13"`). The range 1–9999 follows the date-part rule above: `=` and `@in` raise
 `InvalidValueError` for a year outside it, on any date or timestamp column. A comparison treats it
 as a bound. No date bound can express year 99999, so `"date__@year__@gte" => 99999` skips the
-rewrite and compares the extracted year: it selects no race on either backend, and `@lt` selects
+rewrite and compares the extracted year: it selects no race on any backend, and `@lt` selects
 every race.
 
 !!! note "Scope of the rewrite"
@@ -448,10 +448,10 @@ Output:
    5 │ Heikki Kovalainen  KOVALAINEN           10
 ```
 
-A NULL operand is **skipped** — read as an empty string — on both engines, as in Django, so a
+A NULL operand is **skipped** — read as an empty string — on every engine, as in Django, so a
 `Concat` is never NULL: a driver with no `number` gives `"# "` for
-`Concat(Value("#"), "number", Value(" "))`. PostgreSQL's `CONCAT` skips a NULL itself; on SQLite
-each operand renders as `COALESCE(operand, '')`, joined with `||`. To get NULL instead, say so with
+`Concat(Value("#"), "number", Value(" "))`. PostgreSQL's `CONCAT` and MySQL's `CONCAT_WS('', …)` skip
+a NULL themselves; on SQLite each operand renders as `COALESCE(operand, '')`, joined with `||`. To get NULL instead, say so with
 a `Case`, which is NULL when no branch matches:
 
 ```julia
@@ -461,7 +461,7 @@ q = M.Driver.objects
 q.values("driverref", "car" => Case(When("number__@isnull" => false, then = Concat(Value("#"), "number"))))
 ```
 
-Text, integer and date operands read the same on both engines and pass. Any other operand is
+Text, integer and date operands read the same on every engine and pass. Any other operand is
 refused with `QueryBuildError` on **every** engine, because the query does not say which text it
 means: a boolean, a float, a decimal, a timestamp, an interval or a whole JSON document has a text
 only once you choose one, and each engine writes its own (the table below). This is Django's rule
@@ -478,7 +478,7 @@ refusal covers:
 - a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so
   `Case(When("grid" => 1, then = 1.5), default = 0)` is a float (#1187). A `Case` whose branches are
   all text, integers or dates passes, and so does one with `output_field = "text"`, unless a branch
-  is a boolean: that `Case` is refused on SQLite by its own check (#1217).
+  is a boolean: that `Case` is refused on SQLite and MySQL by its own check (#1217).
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
@@ -488,31 +488,31 @@ Say which text you mean:
 
 - **cast it to text**, `Cast("points", "text")`, which writes the engine's own text:
 
-  | Operand | PostgreSQL | SQLite |
-  |---|---|---|
-  | a float `25.0` | `25` | `25.0` |
-  | a `numeric(10,2)` decimal `3` | `3.00` | `3` |
-  | a timestamp | `2009-03-29 06:00:00+00` | `2009-03-29T06:00:00.000+00:00` |
-  | an interval | its `IntervalStyle`: `PT25.021S`, `1 day 02:00:00` | `00:00:25.021` |
-  | a whole JSON document | `{"a": [1, 2]}` | `{"a":[1,2]}` |
+  | Operand | PostgreSQL | SQLite | MySQL |
+  |---|---|---|---|
+  | a float `25.0` | `25` | `25.0` | `25` |
+  | a `numeric(10,2)` decimal `3` | `3.00` | `3` | `3.00` |
+  | a timestamp | `2009-03-29 06:00:00+00` | `2009-03-29T06:00:00.000+00:00` | `2009-03-29 06:00:00.000` |
+  | an interval | its `IntervalStyle`: `PT25.021S`, `1 day 02:00:00` | `00:00:25.021` | `00:00:25.021` |
+  | a whole JSON document | `{"a": [1, 2]}` | `{"a":[1,2]}` | `{"a": [1, 2]}` |
 
   It is the same value written two ways, so PormG builds it on every engine and leaves the
-  spelling to each, a quotient over a decimal (`F("price") / 2`) included: it is `7.5` on both
-  engines (#1150). A boolean is the exception: SQLite has no boolean and writes `1`, so a
-  boolean's cast to text is refused there;
+  spelling to each, a quotient over a decimal (`F("price") / 2`) included: it is `7.5` on every
+  engine (#1150). A boolean is the exception: SQLite and MySQL have no boolean and write `1`, so a
+  boolean's cast to text is refused on both;
 - **for a boolean**, name its two texts with a `Case`;
 - **for a timestamp**, name the format with `ToChar`: `ToChar("start_at", "YYYY-MM-DD HH:MI:SS")`
-  gives `2009-03-29 06:00:00` on both engines;
+  gives `2009-03-29 06:00:00` on every engine;
 - or **fetch the value and format it in Julia**, where you choose the digits.
 
-`Floor`, `Ceil` and `Abs` over an integer, and `Sum` of integers, are integers on both engines
+`Floor`, `Ceil` and `Abs` over an integer, and `Sum` of integers, are integers on every engine
 (#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. An integer
 here includes a bitwise operator or a shift over integers (`F("grid") & 3`, `F("resultid") << 1`,
 which has its left operand's type) and a `Subquery` projecting one (#1153). One integer quotient is
 a question of meaning rather than of text: a `Sum` over a number PormG cannot type (arithmetic
 with a JSON key's value, an `Extract` part it states no type for) may be a `bigint` or a `numeric`
-sum, which PostgreSQL computes as `numeric` and so keeps the half. It is refused on PostgreSQL only
-(#1111), whatever the sum holds: PormG cannot tell, so it does not guess. Give the dividend a type
+sum, which PostgreSQL computes as `numeric` and MySQL as a `DECIMAL`, and so keep the half. It is
+refused on PostgreSQL and MySQL (#1111), whatever the sum holds: PormG cannot tell, so it does not guess. Give the dividend a type
 (`Cast(Sum(…), BigIntegerField()) / 2`) or divide by a float to say which quotient you mean. A sum
 PormG types as a float or a decimal is that kind's quotient (#1157), and a sum of temporal arithmetic
 (`Sum(F("fastestlaptime") * 2)`) is an interval, not a number.
@@ -524,7 +524,7 @@ holds. A `Subquery` is classified by the one expression it projects (#1124): one
 column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
 or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by the type its body
 expression means: an `Avg` column is a float (or a decimal, or an interval), as the `Avg` is, and a
-column that is an integer quotient PostgreSQL computes as `numeric` is refused as that quotient is
+column that is an integer quotient PostgreSQL or MySQL computes as a decimal is refused as that quotient is
 (#1127).
 
 ```julia
@@ -536,7 +536,7 @@ q.filter("raceid" => 18)
 q.values("driverid__driverref", "points",
          "outcome" => Concat("driverid__driverref", Value(": "),
                              Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")),
-         # A number: the engine writes its own text, `10` on PostgreSQL and `10.0` on SQLite.
+         # A number: the engine writes its own text, `10` on PostgreSQL and MySQL and `10.0` on SQLite.
          "label" => Concat("driverid__driverref", Value("-"), Cast("points", "text")))
 df = q |> DataFrame
 # Or choose the digits yourself, in Julia.
@@ -610,7 +610,8 @@ q.filter("driverid" => 1)
 q.update("code" => LPad(Cast("number", "text"), 3, "0"))   # "HAM" becomes "044"
 ```
 
-Both engines give the same value. PostgreSQL renders its own `LPAD`/`RPAD`. SQLite has neither, so
+Every engine gives the same value, but for a fill column that is empty on a row, which gives `""` on MySQL. PostgreSQL and MySQL render
+their own `LPAD`/`RPAD`. SQLite has neither, so
 PormG registers `pormg_lpad`/`pormg_rpad` on every SQLite connection it opens, and SQLite's
 `show_query` output names them. Those functions follow PostgreSQL's rules:
 
@@ -620,7 +621,7 @@ PormG registers `pormg_lpad`/`pormg_rpad` on every SQLite connection it opens, a
 - A NULL string is NULL.
 - Lengths count characters, not bytes.
 
-These are refused when the query is built, on both engines:
+These are refused when the query is built, on every engine:
 - **A value that is not text** raises `QueryBuildError`, because PostgreSQL has no `lpad` over one:
   a number, a date, a time, a timestamp, an interval, a boolean, a uuid or a whole JSON document. A
   JSON key lookup (`"payload__driver"`) is text and passes. Convert the rest to text first:
@@ -764,12 +765,11 @@ column with `F("points")` directly.
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
 `DateField` column picks the same rows as on PostgreSQL. The *result* reads back as the column does
-on both engines (#824) when every argument is of one type: `Coalesce("date", Date(2021, 3, 28))` and
+on every engine (#824) when every argument is of one type: `Coalesce("date", Date(2021, 3, 28))` and
 `Greatest("date", "fp1_date")` give a `Date`, and `NullIf` takes its first argument's type. A
 `Subquery(...)` argument counts as its one column (#888). When the
-argument types differ, PormG does not guess: PostgreSQL resolves one result type itself
-(`Coalesce("date", "start_at")` is a timestamp there), or refuses the call outright (a date beside a
-text column), while SQLite returns the stored text of whichever argument won.
+argument types are two temporal types, or a temporal type and text, PormG does not guess: the call is
+refused on every engine (see [Mixed date, time and text operands](#Mixed-date,-time-and-text-operands)).
 
 ### `Coalesce` — First Non-Null Value
 
@@ -812,7 +812,7 @@ query.filter("year" => 2020)
 query.values("name", "not_before_2021" => Greatest("date", Date(2021, 1, 1)))
 ```
 
-`Greatest` and `Least` skip a `NULL` argument on both engines. The result is `NULL` only when
+`Greatest` and `Least` skip a `NULL` argument on every engine. The result is `NULL` only when
 every argument is `NULL`. The 2018 Hungarian Grand Prix has a race date and no practice dates:
 
 ```julia
@@ -873,7 +873,7 @@ The ways to say the type:
   is refused;
 - **an `output_field`** on `Coalesce`, `Greatest`, `Least` or `Case`, for a date beside a timestamp.
   It casts the function's result, so the operands inside must still have a common type, which a
-  date and a timestamp do on PostgreSQL. `"date"` works on both engines; a timestamp type cannot be
+  date and a timestamp do on PostgreSQL. `"date"` works on every engine; a timestamp type cannot be
   cast on SQLite (`BackendCapabilityError`, see `output_field` below). `NullIf`, `Lag` and `Lead` take
   no `output_field`: cast one operand instead;
 - **beside text, cast the other operand to text**: `Coalesce("name", Cast(Value(zdt), "text"))`. Each
@@ -885,8 +885,8 @@ The ways to say the type:
 An operand whose type PormG cannot name (a JSON key lookup) is not checked by this rule, and the
 function then has no type PormG can name either: used in arithmetic or an ordering beside a date or a
 duration, it is refused on SQLite and MySQL ([A value PormG cannot type beside a date or a duration](field_expressions.md#A-value-PormG-cannot-type-beside-a-date-or-a-duration)).
-A number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on both
-engines.
+A number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on every
+engine.
 
 ### `Cast` — Type Conversion
 
@@ -902,7 +902,8 @@ query.values(
 ```
 
 A field object is the preferred target, as in Django: PormG renders it in each engine's spelling
-(`BinaryField()` is `bytea` on PostgreSQL and `BLOB` on SQLite). A type **string** is accepted
+(`BinaryField()` is `bytea` on PostgreSQL and `BLOB` on SQLite; MySQL has no binary cast target that
+reads back as bytes, so there it raises `UnsupportedConnectionError`). A type **string** is accepted
 when it has this shape:
 
 - a single type name — `"integer"`, `"bigint"`, `"text"`, `"timestamptz"`, or your own type such
@@ -911,12 +912,15 @@ when it has this shape:
   `"time without time zone"` (any case);
 - optionally followed by a size, `(n)` or `(n, m)`: `"varchar(20)"`, `"numeric(10,2)"`,
   `"timestamp(3) with time zone"`;
-- on PostgreSQL only, optionally followed by array brackets: `"integer[]"`. SQLite has no array
-  types and raises `BackendCapabilityError`.
+- on PostgreSQL only, optionally followed by array brackets: `"integer[]"`. SQLite and MySQL have no
+  array types and raise `BackendCapabilityError`.
+
+On MySQL a name with no MySQL `CAST` target that holds its meaning (`interval`, `bytea`, a type of
+your own) raises `UnsupportedConnectionError` before any SQL ([MySQL Guide](../mysql.md#Reads)).
 
 SQLite has no date or time types either. There, a cast to `"date"` (or `DateField()`) renders
 `date(x)`, which returns the `YYYY-MM-DD` text a `DateField` stores and cuts a timestamp to its
-date, as PostgreSQL's `::date` does. Both engines read the result back as a `Date`. Cast a date or
+date, as PostgreSQL's `::date` does. Every engine reads the result back as a `Date`. Cast a date or
 timestamp column: on other input SQLite does not raise where PostgreSQL does. Text that is no date
 gives `NULL`, an impossible date rolls over (`'2020-02-30'` is 1 March), and a number is read as a
 Julian day (`0` is in 4714 BC). Every other
@@ -926,7 +930,8 @@ SQLite `CAST` to one of them returns a number (`2020` for `'2020-03-29 10:11:12'
 different spelling of the value. Project the column itself instead. The same holds for `"bytea"`
 (#1194): SQLite has no type of that name, and `CAST(… AS BYTEA)` turns `'abc'` into `0`. Cast to
 `BinaryField()` (or `"blob"`) instead, which renders `CAST(… AS BLOB)` on SQLite and `::bytea` on
-PostgreSQL.
+PostgreSQL. MySQL has no binary cast target that reads back as bytes, so both raise
+`UnsupportedConnectionError` there.
 
 On PostgreSQL a cast to a time, timestamp, interval or binary type is typed as that type (#1194),
 as a column of it is: it reads back as a `Time`, `DateTime`/`ZonedDateTime`, `Dates.CompoundPeriod`
@@ -937,11 +942,11 @@ or interval cast is refused (name its text with `ToChar` or `Cast(…, "text")`)
 ```julia
 using PormG.Functions: Cast
 
-# The race date as a Date, on both engines
+# The race date as a Date, on every engine
 M.Race.objects.filter("year" => 2020).values("raceid", "day" => Cast("date", "date"))
 ```
 
-Any other string raises `InvalidValueError` when the expression is built, on both engines. A type
+Any other string raises `InvalidValueError` when the expression is built, on every engine. A type
 name is a keyword in the SQL and cannot be a bind parameter, so PormG only writes a spelling it has
 parsed, never the text it was given. That also refuses a few spellings PostgreSQL itself accepts: a
 schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to month`, a negative
@@ -971,11 +976,11 @@ explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite
 
 The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
 is documented, not refused: the `Concat` section above lists each engine's text. A quotient is the
-number it means on both engines: over a decimal, or over a value that is one of several where one is
+number it means on every engine: over a decimal, or over a value that is one of several where one is
 a fraction, SQLite would divide its integer rows as integers, so PormG casts the dividend to `REAL`
-there (#1150, see [Field Expressions](field_expressions.md#Core-Syntax)). `Cast(F("price") / 2, "text")` therefore builds on both,
+there (#1150, see [Field Expressions](field_expressions.md#Core-Syntax)). `Cast(F("price") / 2, "text")` therefore builds on every engine,
 and `Cast(F("price") / 2, IntegerField())` is the fraction-to-integer row above. A cast refused only
-on SQLite cannot run on the development engine, so its test belongs on PostgreSQL. That is the
+on SQLite cannot run on the development engine, so its test belongs on PostgreSQL or MySQL. That is the
 intended trade: the engine that cannot give the meaning says so, rather than answering differently.
 
 What each row covers:
@@ -983,10 +988,10 @@ What each row covers:
 - **text**: `CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, and the `output_field` of
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
-  boolean casts to `1`/`0` on both engines, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
+  boolean casts to `1`/`0` on every engine, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
   `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine.
   An interval (a `DurationField`, its `Sum` or `Avg`, a duration literal, temporal arithmetic) is refused on
-  SQLite, here and under any other number type (#1259). For a number from a duration, fetch it and
+  SQLite and MySQL, here and under any other number type (#1259). For a number from a duration, fetch it and
   take the number in Julia. So is a date, a timestamp or a time (a column, `Max` of one, a cast to
   `date`, date arithmetic, a literal), whose number is a part: `"date__@year"` or
   `Extract("date", "year")`, `"time__@hour"` (#1260). A part and a day count
@@ -995,7 +1000,7 @@ What each row covers:
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as
   `numeric` (`Round(x, d)` with `d` above `s` included, over a non-integer `x`), a decimal with more places than `s` or of
-  unknown scale, and text, which PostgreSQL parses and rounds. A JSON value counts as text. An
+  unknown scale, and text, which PostgreSQL and MySQL parse and round. A JSON value counts as text. An
   integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
   of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass. So does a `Case`
   with no `output_field` whose every branch passes (#1187): `then = 1.5` at scale 2 passes, a
@@ -1008,7 +1013,7 @@ What each row covers:
   and a `Float32` holds an integer exactly only up to 2^24 (16 777 216): unlike a scaled `numeric`,
   which lets a whole operand through (#1040), single precision changes an integer's value (#1258).
   For a float on every engine, cast to a double: `"float8"`, `"float(25)"` to `"float(53)"`,
-  `"double precision"` or `FloatField()`, a `Float64` on both;
+  `"double precision"` or `FloatField()`, a `Float64` on every engine;
 - **an overflow**: only a literal is certain to overflow, so only a literal is refused when the query
   is built (#1087). A column or a computed value overflows on the rows that hold a large value and
   not on the others. PostgreSQL raises "numeric field overflow" on such a row when the query runs.
@@ -1031,23 +1036,23 @@ of its own, since its value on a row is one of them (#1151, #1187):
   with places is a fraction, so the cast is refused on SQLite; a `DecimalField` with
   `decimal_places = 0` is whole and passes;
 - **to `numeric(p, s)`**, each branch is held to the scale: a `FloatField` branch at `numeric(10,0)`
-  is refused on SQLite, a `1.5` branch at `numeric(10,2)` passes on both (#1050).
+  is refused on SQLite, a `1.5` branch at `numeric(10,2)` passes on every engine (#1050).
 
 A `Case` with an `output_field` is that cast, taken on whichever branch a row matches, so its
 branches are held to it the same way (#1217): `Case(When("grid" => 1, then = F("points")), default = 0;
-output_field = "numeric(10,1)")` is refused on SQLite, and `then = Round("points", 1)` passes on both.
+output_field = "numeric(10,1)")` is refused on SQLite, and `then = Round("points", 1)` passes on every engine.
 A `Cast` over such a `Case` reads its declared scale, so `numeric(10,1)` under a `numeric(10,2)` cast
 passes. An operand PormG cannot type (a JSON key lookup) passes every row. A `Subquery` is
 classified by the expression it projects (#1124).
 
 To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
-the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the
-`numeric` one, half away from zero, as SQLite's is). Over an integer, `Floor`, `Ceil` and `Abs` are
-that integer on both engines, and so is integer arithmetic (#1147): `Floor(F("grid") + 1) / 2`
-divides as integers on both (`7`). `Round(x, 2)` keeps a fraction, so a cast to an integer over it
+the same whole number on every engine for every stored value measured (PostgreSQL's `round` is the
+`numeric` one, and MySQL rounds a float as a `DECIMAL`, half away from zero, as SQLite's is). Over an
+integer, `Floor`, `Ceil` and `Abs` are that integer on every engine, and so is integer arithmetic
+(#1147): `Floor(F("grid") + 1) / 2` divides as integers on every engine (`7`). `Round(x, 2)` keeps a fraction, so a cast to an integer over it
 is refused on SQLite. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
-there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a value
+there and down on SQLite and MySQL. The same conversion reaches a float cast to a scaled `numeric`: a value
 with more than 15 significant digits (`12345678901234.56` becomes `12345678901234.6`) differs in its
 16th digit, where PostgreSQL is the less exact side. Like `Round`'s tie, that is representation,
 documented rather than refused (#1087).
@@ -1069,19 +1074,21 @@ text conversion, and `Concat` refuses the result if you then use it as text.
 using PormG.Functions: Cast, Ceil, Floor, Round
 using PormG.Models: IntegerField
 
-# Cast("points", IntegerField()) builds on PostgreSQL (1.5 → 2) and is refused on SQLite, which
-# would truncate it to 1. Say how to round, and it builds on both.
+# Cast("points", IntegerField()) builds on PostgreSQL and MySQL (1.5 → 2) and is refused on SQLite,
+# which would truncate it to 1. Say how to round, and it builds on every engine.
 # Race 2, the 2009 Malaysian GP, was stopped early and scored half points.
 M.Result.objects.filter("raceid" => 2).values(
     "resultid", "points",
-    "nearest" => Cast(Round("points"), IntegerField()),   # 1.5 → 2 on both engines
+    "nearest" => Cast(Round("points"), IntegerField()),   # 1.5 → 2 on every engine
     "down"    => Cast(Floor("points"), IntegerField()),   # 1.5 → 1
     "up"      => Cast(Ceil("points"), IntegerField()))    # 1.5 → 2
 ```
 
 A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, a `DecimalField`) reads back
 as a `Decimals.Decimal` on every engine when its operand is a number (#1212). PostgreSQL's driver delivers
-one, already rounded to the declared scale. SQLite computes a REAL, or an INTEGER when the operand is
+one, already rounded to the declared scale. MySQL computes a `numeric(p, s)` cast at `DECIMAL(65, s)`,
+rounded to the scale, and PormG applies `p` as it reads the value (#1110); a bare `"numeric"` is
+`DECIMAL(65, 30)`. SQLite computes a REAL, or an INTEGER when the operand is
 whole, and ignores the declaration, so PormG applies it as it reads the value (#1110): rounded to `s`
 places, half away from zero as PostgreSQL rounds, and refused with `StatementError` (SQLSTATE
 `22003`) when it then needs more than `p - s` digits before the point. A cast with no declared width
@@ -1097,14 +1104,14 @@ using PormG.Models: DecimalField
 
 # Result 1 is Lewis Hamilton's win at the 2008 Australian GP: grid 1, 10 points.
 M.Result.objects.filter("resultid" => 1).values(
-    "grid"   => Cast("grid", DecimalField()),                         # numeric(10,2): Decimal 1 on both engines
-    "scaled" => Cast(Round(F("points") * 1.5, 2), "numeric(10,2)"))   # Decimal 15 on both engines
+    "grid"   => Cast("grid", DecimalField()),                         # numeric(10,2): Decimal 1 on every engine
+    "scaled" => Cast(Round(F("points") * 1.5, 2), "numeric(10,2)"))   # Decimal 15 on every engine
 ```
 
 #### `output_field`
 
 `Case`, `Coalesce`, `Greatest` and `Least` cast their result to the `output_field` they are given, on
-both engines, as `Cast` does. The SQLite date rule above applies to them too: a `date` renders
+every engine, as `Cast` does. The SQLite date rule above applies to them too: a `date` renders
 `date(…)`, and a timestamp, time, interval or array type raises `BackendCapabilityError` on SQLite.
 The value, a filter on it, and a CTE column typed by it therefore all agree. The cast applies to the
 result only: a `Case`'s literal `default` beside a column branch binds as that branch's type on
@@ -1114,8 +1121,9 @@ Before the #852 fix, `Coalesce`, `Greatest` and `Least` rendered no cast on SQLi
 and `Least` rendered none on PostgreSQL either:
 
 ```julia
-# The best of a result's grid slot and one, as a bigint on both engines:
-# (GREATEST(…))::bigint on PostgreSQL, CAST(MAX(…) AS BIGINT) on SQLite
+# The best of a result's grid slot and one, as a bigint on every engine:
+# (GREATEST(…))::bigint on PostgreSQL, CAST(MAX(…) AS BIGINT) on SQLite,
+# CAST(GREATEST(…) AS SIGNED) on MySQL
 M.Result.objects.values("resultid", "slot" => Greatest("grid", 1; output_field = "bigint"))
 ```
 
@@ -1133,12 +1141,12 @@ on the engine that departs. `Greatest("points", 0; output_field = "integer")` is
 and `Greatest(Floor("points"), 0; output_field = "integer")` passes. A `Case` is held to it branch by
 branch, each `then` and its default (#1217): `Case(When("grid" => 1, then = F("points") * 1.5),
 default = 0; output_field = "numeric(10,1)")` is refused on SQLite, which would keep every digit
-where PostgreSQL rounds. Round the branches to the scale (`then = Round(F("points") * 1.5, 1)`), or
+where PostgreSQL and MySQL round. Round the branches to the scale (`then = Round(F("points") * 1.5, 1)`), or
 leave the scale off.
 
 An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on every engine, as a
 `Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = "numeric")` is a
-`Decimal` on PostgreSQL and on SQLite. With `output_field = DecimalField()`, which is
+`Decimal` on every engine. With `output_field = DecimalField()`, which is
 `numeric(10,2)` (#1221), the float arithmetic is held to two places and refused on SQLite; round it
 first, `Coalesce(Round(F("points") * 1.5, 2), 0; output_field = DecimalField())`. The type is the same, and so is the value wherever PormG can
 type the operand: a scale an engine would not round to is refused there, as described just above.
@@ -1147,7 +1155,7 @@ width (`Coalesce("points", "points"; output_field = DecimalField())` over `Decim
 holds a value SQLite stored, so on SQLite it reads as the column itself does. Declared at another width,
 or as a bare `"numeric"`, it reads as the computed 15-digit `Decimal` (#1276).
 
-`Concat` renders no cast on either engine, because its result is always text. Its `output_field`
+`Concat` renders no cast on any engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other
 type raises `InvalidValueError` when the expression is built, since the SQL would never apply it.
 To get a number out of a concatenation, cast the result:
@@ -1203,7 +1211,7 @@ uncast by default:
 ```julia
 using PormG.Functions: Cast, Extract
 
-# PostgreSQL: seconds since 1970 for each race date, as a bigint
+# PostgreSQL and MySQL: seconds since 1970 for each race date, as a bigint
 M.Race.objects.values("raceid", "start_epoch" => Cast(Extract("date", "epoch"), "bigint"))
 ```
 
@@ -1270,7 +1278,7 @@ No `Value()` wrapper is required.
 A `When` with no `otherwise` is a `Case` branch, not a value. Used on its own, for example
 `Count(When("positionorder" => 1, then = 1))` or `"c" => When(…)` in `values`, it raises
 `QueryBuildError` when the query is built: alone it would render `WHEN … THEN …` with no `ELSE` and no
-`END`, which neither engine parses. Give it its own `otherwise`, or put it in a `Case` with a `default`.
+`END`, which no engine parses. Give it its own `otherwise`, or put it in a `Case` with a `default`.
 
 ### Binary When (single condition, two outcomes)
 

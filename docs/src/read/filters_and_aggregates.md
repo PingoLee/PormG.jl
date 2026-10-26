@@ -41,10 +41,13 @@ These work in both `filter()` and `values()`.
 | `@regex` | `~ pattern` | POSIX regular expression, case-sensitive (PostgreSQL only) | `"surname__@regex" => "^Ver"` |
 | `@iregex` | `~* pattern` | POSIX regular expression, case-insensitive (PostgreSQL only) | `"surname__@iregex" => "^ver"` |
 
-Exact match, `@contains`, `@startswith` and `@endswith` compare case-sensitively on PostgreSQL and
-SQLite. PostgreSQL's default collation is deterministic. On SQLite, `=` uses the default `BINARY`
+Exact match, `@contains`, `@startswith` and `@endswith` compare case-sensitively on every engine.
+PostgreSQL's default collation is deterministic. On SQLite, `=` uses the default `BINARY`
 collation, and `LIKE` is case-sensitive because PormG sets `PRAGMA case_sensitive_like = ON` on every
-connection ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature)).
+connection. On MySQL, the tables PormG creates and each connection use the `utf8mb4_0900_bin`
+collation, which compares code points; a table PormG did not create compares by its own collation
+([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature),
+[MySQL Guide](../mysql.md#Reads)).
 
 Three field types have lookups of their own, beyond this table: a `JSONField` (see
 [JSON / JSONB Lookups and Operators](#JSON-/-JSONB-Lookups-and-Operators) below), an `ArrayField`
@@ -78,8 +81,8 @@ without inverting the logic by hand.
     predicate is always false and the query returns no rows. `@nin` over an empty list is the
     mirror — everything is outside the empty set — so it matches every row.
 
-    Both engines agree on that result. Their SQL differs, as it already does for a non-empty list
-    (`IN (?, ?)` on SQLite against `= ANY($1)` on PostgreSQL): the empty case renders a constant
+    Every engine agrees on that result. Their SQL differs, as it already does for a non-empty list
+    (`IN (?, ?)` on SQLite and MySQL against `= ANY($1)` on PostgreSQL): the empty case renders a constant
     predicate rather than an empty `IN ()`, which is a syntax error in SQLite.
 
 !!! note "NULL semantics"
@@ -172,7 +175,7 @@ df = query |> DataFrame
 The `contains`, `startswith` and `endswith` lookups, with their case-insensitive, accent-insensitive
 and negated twins, match a **text value**. PormG wraps the value in `%` and escapes any `%` or `_`
 inside it, so it matches literally. That cannot be done to a column, so a column expression on the
-right (`"surname__@contains" => F("forename")`) raises a `FilterError` on both backends. The
+right (`"surname__@contains" => F("forename")`) raises a `FilterError` on every backend. The
 `@iexact` pair and the PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column,
 because they use their right-hand side as it is.
 
@@ -205,12 +208,12 @@ A timestamp, duration, boolean or binary column raises a `FilterError` on every 
 does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`, a duration such as
 `F("start_at") - F("start_at")` or `F("fastestlaptime") * 2`, a timestamp such as `F("date") + Hour(1)`). Their text differs per engine: a
 timestamp prints in the session's time zone on PostgreSQL and as PormG's UTC text on SQLite, a
-duration follows PostgreSQL's `IntervalStyle`, and a boolean is `true` on PostgreSQL and `1` on
-SQLite. A binary column holds bytes, not text. Match a part of a timestamp through a transform
+duration follows PostgreSQL's `IntervalStyle` and is a count of microseconds on MySQL, and a
+boolean is `true` on PostgreSQL and `1` on SQLite and MySQL. A binary column holds bytes, not text. Match a part of a timestamp through a transform
 (`"start_at__@date__@startswith" => "2009-03"`, `"start_at__@year" => 2009`), or compare the value
 itself: `"start_at__@gte" => DateTime(2009)`, a duration with `@gte` and a `Dates.Period`, a
 boolean with `=> true`. The engine's own text of a timestamp or a duration is matched through a
-cast, as for a float; a boolean's text cast is itself refused on SQLite, so write the text you mean
+cast, as for a float; a boolean's text cast is itself refused on SQLite and MySQL, so write the text you mean
 with a `Case`.
 
 ### Case-Sensitive (`@contains`)
@@ -232,8 +235,9 @@ count = query.count()
 !!! note
     `@icontains` uses `ILIKE` on PostgreSQL. On SQLite it renders `pormg_lower(col) LIKE pormg_lower(val)`,
     where `pormg_lower` is a Unicode-aware case-folding function PormG registers on every SQLite
-    connection — so accented text folds case on SQLite as it does on PostgreSQL
-    (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
+    connection — so accented text folds case on SQLite as it does on PostgreSQL. On MySQL, which has
+    no `ILIKE`, it renders `LOWER(col) LIKE LOWER(val)`
+    (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on every backend). It folds case but
     preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
 
 ### Prefix / Suffix (`@startswith`, `@endswith`, `@istartswith`, `@iendswith`)
@@ -258,8 +262,8 @@ All four escape `%` and `_` in the bound value, so user input is matched literal
 
 !!! note
     `@istartswith` / `@iendswith` fold case exactly as [`@icontains`](#Case-Insensitive-(@icontains)) does:
-    `ILIKE` on PostgreSQL, `pormg_lower(col) LIKE pormg_lower(val)` on SQLite. So accented text folds
-    the same way on both backends, and accents are preserved — for accent-insensitive prefix matching
+    `ILIKE` on PostgreSQL, `pormg_lower(col) LIKE pormg_lower(val)` on SQLite and `LOWER(col) LIKE
+    LOWER(val)` on MySQL. So accented text folds the same way on every backend, and accents are preserved — for accent-insensitive prefix matching
     there is no `@iunaccent_startswith`; use `@iunaccent_contains` or the PostgreSQL-only
     `@iunaccent_exact` below.
 
@@ -275,18 +279,20 @@ All four escape `%` and `_` in the bound value, so user input is matched literal
     [`@iunaccent_contains`](#Accent-Insensitive-(@iunaccent_contains,-@iunaccent_exact)). On SQLite the
     wrapper is the `pormg_lower` UDF, which PormG registers per connection; an index over it would only
     be usable by clients that register the same function, so treat the `i` forms as unindexed there.
+    On MySQL they wrap the column in `LOWER(…)`, which no plain index covers either.
 
     A `UUIDField`, `GenericIPAddressField` or `CIDRField` column is wrapped too on PostgreSQL, which has
     no `LIKE` for those types: every pattern lookup reads the column's printed text
-    (`CAST(col AS text)`, or `HOST(col)` for an `inet`). See [UUID Fields](../fields.md#UUID-Fields) and
-    [Querying network fields](../fields.md#Querying-network-fields).
+    (`CAST(col AS text)`, or `HOST(col)` for an `inet`). On MySQL a `UUIDField` is a `CHAR(36)` column,
+    matched as the text it holds, and the network fields are refused with `BackendCapabilityError`. See
+    [UUID Fields](../fields.md#UUID-Fields) and [Querying network fields](../fields.md#Querying-network-fields).
 
 ### Case-Insensitive Equality (`@iexact`)
 
 `@iexact` matches the **whole** value, ignoring case. It is `LOWER(col) = LOWER(val)` on PostgreSQL
-and `pormg_lower(col) = pormg_lower(val)` on SQLite, so accented text folds the same way on both
-backends, as with [`@icontains`](#Case-Insensitive-(@icontains)). `@niexact` is its negated twin
-(`<>`). Both work on PostgreSQL and SQLite.
+and MySQL and `pormg_lower(col) = pormg_lower(val)` on SQLite, so accented text folds the same way
+on every backend, as with [`@icontains`](#Case-Insensitive-(@icontains)). `@niexact` is its negated
+twin (`<>`). Both work on every backend.
 
 ```julia
 # Finds "Hamilton" whatever case the query term is in, but only as the whole surname
@@ -313,7 +319,7 @@ M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")
 M.Driver.objects.filter("surname__@iunaccent_exact" => "RAIKKONEN")
 ```
 
-They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise a `BackendCapabilityError`.
+They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite and MySQL these lookups raise a `BackendCapabilityError`.
 
 There is no `@iunaccent_in`; OR the equality lookup with [`Qor`](q_objects.md) for accent-insensitive set membership:
 
@@ -352,11 +358,11 @@ M.Driver.objects.filter("surname__@nregex" => "nen\$")
 - **An invalid pattern is reported by PostgreSQL when the query runs**, as a
   [`StatementError`](../errors.md) carrying the server's `invalid regular expression` message.
   PormG does not parse the pattern itself.
-- **On SQLite these lookups raise a [`BackendCapabilityError`](../errors.md)** when the query is
-  built. SQLite has no built-in regular expressions. PormG does not emulate them, because an
-  emulation would evaluate the pattern in a different regex dialect than PostgreSQL does. The
-  same filter would then silently return different rows on the two engines, and an error is
-  safer than that. If an app must run on both engines, use `@contains` / `@startswith` /
+- **On SQLite and MySQL these lookups raise a [`BackendCapabilityError`](../errors.md)** when the
+  query is built. SQLite has no built-in regular expressions, and MySQL has no POSIX ones. PormG does
+  not emulate them, because an emulation would evaluate the pattern in a different regex dialect than
+  PostgreSQL does. The same filter would then silently return different rows on different engines,
+  and an error is safer than that. If an app must run on more than one engine, use `@contains` / `@startswith` /
   `@endswith`: they behave the same everywhere.
 
 !!! note "Indexing a regex filter"
@@ -444,7 +450,7 @@ it matches a document written from the same value.
 ### Containment and key-existence operators (PostgreSQL only)
 
 These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).
-On SQLite they raise a `BackendCapabilityError`:
+On SQLite and MySQL they raise a `BackendCapabilityError`:
 
 | Lookup | JSONB operator | Meaning | Example |
 | :--- | :--- | :--- | :--- |
@@ -464,14 +470,14 @@ M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
 `@jcontains` accepts a `Dict`, `Vector`, `NamedTuple`, or a raw JSON string (validated at build
 time). `@has_any_keys` / `@has_keys` take a vector of keys. All values are sent as bound
 parameters. A column expression on the right (`"metadata__@has_key" => F("name")`) raises a
-`FilterError` on both backends.
+`FilterError` on every backend.
 
 ---
 
 ## Array Lookups (PostgreSQL only)
 
 An [`ArrayField`](../fields.md) takes Django's array lookups. Like the JSON operators they are
-PostgreSQL only, and on SQLite they raise a `BackendCapabilityError`:
+PostgreSQL only, and on SQLite and MySQL they raise a `BackendCapabilityError`:
 
 | Lookup | SQL | Meaning | Example |
 | :--- | :--- | :--- | :--- |
@@ -811,8 +817,8 @@ query.order_by("nationality", "surname")
 
 ### Where NULLs land
 
-Nullable sort keys are normalized to sort **the same way on PostgreSQL and SQLite** (the two
-backends have *opposite* native defaults, which used to make `order_by(...).first()` return
+Nullable sort keys are normalized to sort **the same way on every engine** (PostgreSQL's native
+default is the *opposite* of SQLite's and MySQL's, which used to make `order_by(...).first()` return
 different rows on each). PormG standardizes on PostgreSQL's convention — **NULL sorts as the
 largest value** — on every backend:
 
@@ -823,7 +829,7 @@ largest value** — on every backend:
 
 ```julia
 # nationality is nullable. Ascending → the rows with a NULL nationality come LAST,
-# identically on PostgreSQL and SQLite.
+# identically on every engine.
 M.Driver.objects.values("surname", "nationality").order_by("nationality").list()
 ```
 
@@ -859,7 +865,7 @@ SQL rather than the name, which those engines would read as the column there.
     When a query uses `distinct()`, every `order_by(...)` column must be part of the
     projection (`values(...)`). Ordering a `DISTINCT` result by an unprojected column — or by a
     *function* of a projected column, e.g. `order_by("created_at__@date")` while only `created_at` is
-    selected — is rejected by PostgreSQL and the SQL standard, so PormG raises on both backends rather
+    selected — is rejected by PostgreSQL, MySQL and the SQL standard, so PormG raises on every backend rather
     than let SQLite return nondeterministic rows. Add the exact ordering expression to `values(...)`,
     or drop `distinct()`.
 
@@ -957,8 +963,9 @@ You do **not** write `GROUP BY` manually — PormG handles it.
 
 ### What a `Sum` returns
 
-`Sum` over integers is an integer on both engines, as Django's `Sum` of an integer field is. SQLite
-sums integers as integers. PostgreSQL sums a `smallint` or an `integer` column to a `bigint`, but
+`Sum` over integers is an integer on every engine, as Django's `Sum` of an integer field is. SQLite
+sums integers as integers. MySQL sums any integer to a `DECIMAL`, so PormG renders `(SUM(x) DIV 1)`
+there for every integer sum. PostgreSQL sums a `smallint` or an `integer` column to a `bigint`, but
 widens the sum of a `bigint` to `numeric`, which would keep the half once divided. So when what it
 sums is a `bigint` (an `IDField`, a `BigIntegerField`, a `ForeignKey`, an integer literal such as
 the `1` of a conditional count, or integer arithmetic over one), PormG renders `SUM(x)::bigint`
@@ -970,15 +977,15 @@ using PormG.Functions: Sum, Case, When
 query = M.Result.objects
 query.filter("raceid" => 18)
 query.values(
-    "id_sum"  => Sum("resultid"),                                                  # Int64 on both engines
-    "half"    => Sum("resultid") / 2,                                              # integer division on both
-    "podiums" => Sum(Case(When("positionorder__@lte" => 3, then = 1), default = 0)))  # Int64 on both
+    "id_sum"  => Sum("resultid"),                                                  # Int64 on every engine
+    "half"    => Sum("resultid") / 2,                                              # integer division on every engine
+    "podiums" => Sum(Case(When("positionorder__@lte" => 3, then = 1), default = 0)))  # Int64 on every engine
 df = query |> DataFrame
 # PostgreSQL: SUM("Tb"."resultid")::bigint as "id_sum", (SUM("Tb"."resultid")::bigint / $1::bigint) as "half", …
 ```
 
 A sum beyond the `bigint` range then raises on PostgreSQL (`bigint out of range`), as it does on
-SQLite (`integer overflow`). A sum of floats or decimals is not cast: it stays a `double precision`
+SQLite (`integer overflow`) and on MySQL (a `StatementError` with SQLSTATE 22003). A sum of floats or decimals is not cast: it stays a `double precision`
 or a `numeric`.
 
 !!! tip
@@ -1030,7 +1037,7 @@ These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid")
 
 ### Aggregating a Boolean Column
 
-Over a `BooleanField`, `Max` answers "is any row true?" and `Min` answers "are all rows true?". Both read back as a `Bool` on either engine. PostgreSQL has no `max(boolean)`, so PormG renders its boolean aggregates there, `BOOL_OR` and `BOOL_AND`. SQLite stores a boolean as `0`/`1`, where `MAX`/`MIN` already give the same answer.
+Over a `BooleanField`, `Max` answers "is any row true?" and `Min` answers "are all rows true?". Both read back as a `Bool` on every engine. PostgreSQL has no `max(boolean)`, so PormG renders its boolean aggregates there, `BOOL_OR` and `BOOL_AND`. SQLite and MySQL store a boolean as `0`/`1` (a `TINYINT(1)` on MySQL), where `MAX`/`MIN` already give the same answer.
 
 `Sum` and `Avg` over a boolean raise `QueryBuildError` on every engine: the query does not say which number a flag counts as. To count the true rows, turn the flag into a number explicitly with a standalone `When`, one that sets `otherwise`:
 
@@ -1049,10 +1056,10 @@ query.values(
 df = query |> DataFrame
 ```
 
-`Sum("is_rookie")` is refused rather than answered differently on the two engines. A `NULL` flag counts as not true in `rookies` and `share`, while `Max`/`Min` skip it.
+`Sum("is_rookie")` is refused rather than answered differently on different engines. A `NULL` flag counts as not true in `rookies` and `share`, while `Max`/`Min` skip it.
 
-These boolean values read back as a `Bool` on both engines: the column itself, a comparison projected as a value (`"gained" => F("grid") > F("positionorder")`), `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Lag`/`Lead`/`FirstValue` over a boolean, a projected `Exists(...)`, a `Value(true)`/`Value(false)` literal (alone, under a CTE or inside a `Subquery`), a `Case` whose branches are all `true`/`false`, and a function over a condition (`Max(Q("grid__@gt" => 1))`,
-`Coalesce(Q(…), false)`). A `Coalesce`, `Greatest` or `Least` is a boolean only when every operand is. SQLite stores each of them as `0`/`1`, and PormG reads that back as a `Bool`. Such a `Case`, and a function over a condition, is a boolean for the rules above too: `Max` of it renders `BOOL_OR` on PostgreSQL, and `Sum`/`Avg` of it raise `QueryBuildError`. A `Case` that mixes `true` with a number is not a boolean, and PostgreSQL rejects it.
+These boolean values read back as a `Bool` on every engine: the column itself, a comparison projected as a value (`"gained" => F("grid") > F("positionorder")`), `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Lag`/`Lead`/`FirstValue` over a boolean, a projected `Exists(...)`, a `Value(true)`/`Value(false)` literal (alone, under a CTE or inside a `Subquery`), a `Case` whose branches are all `true`/`false`, and a function over a condition (`Max(Q("grid__@gt" => 1))`,
+`Coalesce(Q(…), false)`). A `Coalesce`, `Greatest` or `Least` is a boolean only when every operand is. SQLite and MySQL store each of them as `0`/`1`, and PormG reads that back as a `Bool`. Such a `Case`, and a function over a condition, is a boolean for the rules above too: `Max` of it renders `BOOL_OR` on PostgreSQL, and `Sum`/`Avg` of it raise `QueryBuildError`. A `Case` that mixes `true` with a number is not a boolean, and PostgreSQL rejects it.
 
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 
@@ -1392,7 +1399,7 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
   `F("start_at") - F("start_at")` and `F("fastestlaptime") * 2` durations;
 - `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
   number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. The SQL casts the value
-  to that type on both engines, so the filter compares like with like. On PostgreSQL a `uuid`, `inet`
+  to that type on every engine (a boolean is `((x) <> 0)` on MySQL, which casts to no boolean type), so the filter compares like with like. On PostgreSQL a `uuid`, `inet`
   or `cidr` type counts too, and a pattern lookup (`@startswith`, `@contains`, …) on such an alias
   reads it as text, as it does on a column of that type, because PostgreSQL has no `LIKE` for them.
   SQLite casts those three to text, so there the value is checked as text. For any other type, such as
@@ -1676,7 +1683,7 @@ Three further consequences worth knowing:
   built, naming the lookup and the alias. Filter the underlying field instead.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
   `@iunaccent_contains`, `@iunaccent_exact` and the `@regex` family raise
-  [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.
+  [`BackendCapabilityError`](../errors.md) on SQLite and MySQL from `HAVING` exactly as they do from `WHERE`.
 - An operator PormG does not implement is refused when the query is built, naming the operator —
   it is never passed through to the database as a bare token.
 

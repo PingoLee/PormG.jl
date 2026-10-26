@@ -20,7 +20,7 @@ what happened, and none of the five is an error:
 
 | `outcome` | What happened | At boot |
 | :--- | :--- | :--- |
-| `:applied` | This instance ran the plan in one transaction and recorded it in `pormg_migrations`. | Continue. |
+| `:applied` | This instance ran the plan in one transaction (on MySQL, with `atomic = false`, statement by statement) and recorded it in `pormg_migrations`. | Continue. |
 | `:already_applied` | The plan is already the latest applied migration: another instance got there first, or an earlier run committed it and then failed to archive the file. Nothing ran. | Continue. |
 | `:nothing_pending` | There is no `pending_migrations.jl`, or it holds no statements. The history table and any configured [extensions](../configuration/connection_yml.md) were still ensured. | Continue. |
 | `:disabled` | The connection is `change_db: false`. Nothing was read or written. | Continue if this environment is meant to be read-only; otherwise fix the configuration. |
@@ -163,7 +163,7 @@ What that does not give you:
 - **The wait is SQLite's busy timeout, 30 seconds, not `lock_wait`.** A migration that runs longer
   makes the waiting process fail with a "database is locked" `OperationalError`. `lock_wait`,
   `lock_timeout` and `statement_timeout` are accepted and ignored on SQLite, so one deploy script
-  can run on both engines.
+  can run on PostgreSQL and SQLite (MySQL refuses `statement_timeout`, below).
 - **Application writes wait too.** While the plan runs, every other writer to the file queues on
   the same lock, within the same 30 seconds.
 - **Not over a network filesystem.** SQLite's locking is unreliable on NFS and similar, and the

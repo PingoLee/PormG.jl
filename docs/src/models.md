@@ -3,7 +3,7 @@
 PormG models describe the structure of your database tables using Julia code, inspired by Django ORM but tailored for Julia's syntax and performance.
 
 ## What is a Model?
-A model is a Julia object that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL or SQLite database.
+A model is a Julia object that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL, SQLite or MySQL database.
 
 !!! note "How model and field names become a schema"
     The rules that turn a model into table/column names — table naming, foreign-key columns, primary
@@ -157,7 +157,7 @@ Each `UniqueConstraint` takes:
   [Index names](#Index-names) for how a name is matched, renamed and length-checked.
 
 A model may carry several constraints (each its own tuple). At migration time each becomes a
-`CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite:
+`CREATE UNIQUE INDEX` — the same statement on every engine (MySQL quotes the names with backticks):
 
 ```sql
 CREATE UNIQUE INDEX "uniq_constructor_year"
@@ -203,8 +203,8 @@ COMMENT ON INDEX "driver_ref_ci_uniq" IS 'pormg:index:35ba2c95a4f30f95';
 ```
 
 The text follows the `Index` rules exactly: `fields` or `expressions`, not both; a **`name`** is
-required; the SQL is checked only for what would change the statement it lands in; both engines
-support both kinds. It is owned the same way too — through the hash of its text in the
+required; the SQL is checked only for what would change the statement it lands in; PostgreSQL and SQLite
+support both kinds, and MySQL the functional one (a `condition` raises `BackendCapabilityError`, `partial_indexes`). It is owned the same way too — through the hash of its text in the
 `pormg:index:<hash>` marker — so changing the condition or an expression is a drop and a create,
 and a hand-made unique partial or functional index is adopted by a declaration of its own text and
 never planned away undeclared.
@@ -212,7 +212,7 @@ never planned away undeclared.
 `migrate` counts a new partial constraint's duplicates **among the rows its condition matches** before
 it runs, as it does for a plain one. A functional one is not counted ahead of time — it has no
 columns to group by — so duplicates surface as the database's own error when the plan runs, which
-rolls the migration back.
+rolls the migration back (on MySQL, whose DDL commits each statement, the statements before it stay applied).
 
 ## Composite Indexes (`Meta.indexes`)
 
@@ -248,7 +248,7 @@ Each `Index` takes:
 An `Index` speeds up reads and constrains nothing. For a composite *uniqueness guarantee*, use
 [Composite Uniqueness](#Composite-Uniqueness-(unique_together)) instead — that is a
 `CREATE UNIQUE INDEX` and rejects duplicate rows. Each `Index` becomes a plain `CREATE INDEX`,
-identical on PostgreSQL and SQLite:
+the same statement on every engine (MySQL quotes the names with backticks):
 
 ```sql
 CREATE INDEX "lap_times_race_lap_idx"
@@ -293,7 +293,7 @@ Driver = Models.Model("driver",
 )
 ```
 
-- **A leading `-`** makes that column descending. It works on both engines, and only with the
+- **A leading `-`** makes that column descending. It works on every engine, and only with the
   b-tree method: PostgreSQL orders no other kind of index.
 - **`method`** is the PostgreSQL access method: `"btree"` (the default), `"hash"`, `"gist"`,
   `"spgist"`, `"gin"` or `"brin"`; a `Symbol` works too. `hash` and `spgist` index one column.
@@ -302,7 +302,7 @@ Driver = Models.Model("driver",
   lower-case, unqualified name such as `jsonb_path_ops`, and an index that names one needs a `name`
   (Django's rule: a derived name would not say which class it uses).
 
-`method` and `opclasses` are PostgreSQL features. On SQLite `makemigrations` refuses a model that
+`method` and `opclasses` are PostgreSQL features. On SQLite and MySQL `makemigrations` refuses a model that
 declares either with `BackendCapabilityError` — it does not create a plain index in its place, which
 would give the model an index other than the one it declared. A descending column is portable.
 
@@ -371,19 +371,19 @@ Result = Models.Model("result",
   `opclasses` is refused beside `expressions`. PostgreSQL requires every function used to be
   `IMMUTABLE`.
   A `NULLS` placement other than the direction's default is spelled the same way:
-  `"points DESC NULLS LAST"` (PostgreSQL only — SQLite's `CREATE INDEX` has no `NULLS`).
+  `"points DESC NULLS LAST"` (PostgreSQL only — neither SQLite's nor MySQL's `CREATE INDEX` has `NULLS`).
 - **`condition`** makes the index *partial*: only the rows it matches are indexed. It combines with
   either `fields` or `expressions`, and with one field too — a partial one-column index is a
   different index from `db_index`.
 - Either one needs a **`name`** (Django's rule: a derived name could not say what the text indexes).
 
-The text is **SQL, sent to both engines as written** — over the table's physical, unqualified column
+The text is **SQL, sent to every engine as written** (on MySQL each expression in parentheses of its own, above) — over the table's physical, unqualified column
 names, and never a `Q(...)`, because DDL takes no bind parameters. PormG checks it only for what would
 silently change the statement it lands in: a `--` or `/*` comment, an unterminated quote, a top-level
 `;` — or a top-level `,`, so each entry of `expressions` is exactly one member — and an `E'…'` string,
 a backslash right before a quote, a dollar quote or a backtick, whose end only one engine can find.
-Both engines have
-expression and partial indexes; write SQL both understand when a model runs on both.
+PostgreSQL and SQLite have
+expression and partial indexes, and MySQL expression indexes only (`partial_indexes`). Write SQL that every engine the model runs on understands. On MySQL, write column names bare: without `ANSI_QUOTES`, a double-quoted name is a string literal there ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)).
 
 ```sql
 CREATE INDEX "driver_surname_lower_idx" ON "driver" (lower(surname));
@@ -394,7 +394,7 @@ COMMENT ON INDEX "result_finishers_idx" IS 'pormg:index:837d515127295d74';
 ```
 
 The marker carries a **hash of the declared text**. PostgreSQL stores a rewritten form of it —
-`lower(surname::text)` — so a declaration can never be compared with the catalog's text; the hash
+`lower(surname::text)`, and MySQL ```lower(`surname`)``` — so a declaration can never be compared with the catalog's text; the hash
 is what `makemigrations` compares instead. So:
 
 - **Changing the text** — an expression, or the condition — is a drop and a create of the index,
@@ -439,8 +439,8 @@ COMMENT ON INDEX "result_race_points_cov" IS 'pormg:index';
 - A field is either part of the key or included, not both. `include` works with the `btree`, `gist`
   and `spgist` methods (`spgist` from PostgreSQL 14); `hash`, `gin` and `brin` refuse it.
 - The payload is part of the index: changing it, or its order, is a drop and a create.
-- It is **PostgreSQL-only**: SQLite has no covering indexes, so `makemigrations` refuses a model that
-  declares one there with `BackendCapabilityError`, as it does a `method` or an operator class.
+- It is **PostgreSQL-only**: SQLite and MySQL have no covering indexes, so `makemigrations` refuses a model that
+  declares one on either with `BackendCapabilityError`, as it does a `method` or an operator class.
 
 A covering index is owned the way an index with a `method` is: PormG marks the ones it creates, a
 hand-made one is adopted by its declaration and never planned away undeclared, and `inspectdb` writes
@@ -454,9 +454,9 @@ it diffs columns — on a table that already exists, not only when the table is 
 | You change | `makemigrations` plans |
 |---|---|
 | add a `UniqueConstraint` / `Index` | `CREATE UNIQUE INDEX` / `CREATE INDEX` |
-| remove one | `DROP INDEX` — or, when a table constraint backs the index, `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL and a table rebuild on SQLite |
+| remove one | `DROP INDEX` — or, when a table constraint backs the index, `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL and a table rebuild on SQLite; on MySQL `DROP INDEX … ON <table>`, a unique key included |
 | change its `fields`, a direction, its `method`, its `opclasses`, its `expressions` or its `condition` | the drop, then the create |
-| change an explicit `name` | `ALTER INDEX … RENAME TO` on PostgreSQL (`ALTER TABLE … RENAME CONSTRAINT` for a constraint); a drop and a create on SQLite, which cannot rename an index |
+| change an explicit `name` | `ALTER INDEX … RENAME TO` on PostgreSQL (`ALTER TABLE … RENAME CONSTRAINT` for a constraint); `ALTER TABLE … RENAME INDEX` on MySQL; a drop and a create on SQLite, which cannot rename an index |
 
 A declaration is matched to a live index by **what it is** — unique or not, its columns in order,
 and each column's direction, the access method and each column's operator class, and for an
@@ -488,11 +488,11 @@ matches a live index built with that default.
     the database spells it — `inspectdb`'s text, which PostgreSQL rewrites (`lower(surname::text)`).
     When a declaration asks for such an index's name with other text, the refusal prints the
     declaration that would adopt it instead, ready to paste. MySQL re-prints an expression with
-    backtick-quoted names (``lower(`surname`)``), which a declaration cannot hold, so a hand-made
+    backtick-quoted names (```lower(`surname`)```), which a declaration cannot hold, so a hand-made
     expression index there matches no declaration, and one asking for its name is refused.
 
-    An index adopted on SQLite stays unmarked, so removing its declaration later leaves it in place;
-    an explicit `name=` that renames it re-creates it, marked. A declaration cannot take the *name*
+    An index adopted on SQLite or MySQL stays unmarked, so removing its declaration later leaves it in place.
+    An explicit `name=` that renames it re-creates it, marked, on SQLite, and renames it in place, still unmarked, on MySQL. A declaration cannot take the *name*
     of a hand-made index for a different shape: `makemigrations` refuses it with
     `InvalidMigrationError`, since `CREATE INDEX` would fail on the name. The marker lives in the
     index's comment on PostgreSQL, so a later `COMMENT ON INDEX` that replaces it — or a restore
@@ -509,7 +509,7 @@ matches a live index built with that default.
     never dropped either — including a one-column `EXCLUDE` constraint (see
     [What `makemigrations` manages](migrations/index.md#What-makemigrations-Manages,-Ignores,-and-Would-Drop)).
 
-A composite over a column you are dropping goes with the column — nothing extra is planned for it.
+A composite over a column you are dropping goes with the column — nothing extra is planned for it — except on MySQL, which would narrow it to the columns that remain: there it is dropped first ([MySQL Guide](mysql.md#Migrations)).
 
 ### Index names
 
@@ -518,14 +518,14 @@ A composite over a column you are dropping goes with the column — nothing extr
 - An **explicit** `name` is intent: a live index over the same columns under another name is renamed
   to it.
 - Index names share one namespace per PostgreSQL schema (with tables and sequences) and per SQLite
-  database. `makemigrations` refuses a plan that would create (or rename to) one name twice on any
+  database. MySQL scopes them per table, but PormG keeps them unique across the database there too. `makemigrations` refuses a plan that would create (or rename to) one name twice on any
   tables, or a name an index on another table still holds — move a name between tables in two
   migrations, freeing it first. On SQLite it also refuses an explicit name starting with the reserved
   `sqlite_`. PormG creates composites without `IF NOT EXISTS`, so a name some object PormG cannot
   see already holds fails the migration instead of silently leaving the table without its index.
 - PostgreSQL stores at most 63 bytes of a name and truncates the rest. `makemigrations` compares the
   truncated form, so a long name does not re-plan a rename on every run, and warns when it creates
-  one — two long names that share their first 63 bytes collide, so shorten one.
+  one — two long names that share their first 63 bytes collide, so shorten one. MySQL refuses a name longer than 64 characters instead (error 1059), and there a name PormG derives is cut to 55 characters and 8 hex digits of its hash.
 
 ## Check Constraints
 
@@ -548,10 +548,10 @@ Result = Models.Model(
 )
 ```
 
-- **`condition` is SQL**, sent to both engines as written. It names the table's *physical* columns
+- **`condition` is SQL**, sent to every engine as written (MySQL's with PormG's marker as an extra term, [below](#How-a-CHECK-migrates)). It names the table's *physical* columns
   (`db_column`, where a field sets one), unqualified: `grid >= 0`, never `result.grid >= 0`, which
   does not survive a SQLite table rebuild. It is not a `Q(...)` — a CHECK is DDL, which takes no bind
-  parameters. Write SQL both engines accept, as you would for `db_default`. PormG checks it only for
+  parameters. Write SQL that every engine you run on accepts, as you would for `db_default`. On MySQL, write column names bare: a double-quoted name is a string literal there ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)). PormG checks it only for
   the typos that would silently change the statement it lands in: a `--` or `/*` comment, an
   unterminated quote, a `;` or a `,` outside parentheses — and for quoting whose end only one engine
   can find: an `E'…'` string, a backslash right before a quote, a dollar quote or a backtick. The
@@ -569,7 +569,7 @@ PostgreSQL rewrites a stored condition (`grid >= 0 AND grid <= 40` comes back as
 `((grid >= 0) AND (grid <= 40))`), so the text in the database cannot be compared with your
 declaration. Instead PormG stores a short hash of the declared condition beside every CHECK it
 creates — as the constraint's `COMMENT` on PostgreSQL, as an SQL comment inside the constraint on
-SQLite — and `makemigrations` reads it back:
+SQLite, as an always-true term of the condition on MySQL — and `makemigrations` reads it back:
 
 | Change | PostgreSQL | SQLite | MySQL |
 |---|---|---|---|
@@ -598,24 +598,25 @@ Moving a name from one table to another takes two migrations there.
   [the migrations guide](migrations/index.md#SQLite:-Table-Recreation). To keep one, declare it: a
   `CheckConstraint` under the CHECK's own name and with the same condition is adopted as it stands —
   PormG writes its marker (on PostgreSQL at once, as a `COMMENT`, which changes nothing about the
-  constraint; on SQLite at the table's next rebuild), and from then on the CHECK is PormG's, re-created
+  constraint; on SQLite at the table's next rebuild; on MySQL at once, re-creating it in one `ALTER TABLE`), and from then on the CHECK is PormG's, re-created
   by every rebuild and dropped when the declaration goes. `generate_models_from_db` writes those
-  declarations for you: on PostgreSQL every CHECK other than PormG's own column CHECKs (PostgreSQL
-  names each one), on SQLite every CHECK written with `CONSTRAINT <name>`, on the table or on a column.
+  declarations for you: on PostgreSQL and MySQL every CHECK other than PormG's own column CHECKs (both
+  name each one), on SQLite every CHECK written with `CONSTRAINT <name>`, on the table or on a column.
   An unnamed SQLite CHECK has no name to declare it under.
 
   One shape is not adopted in place: a hand-written CHECK that reads exactly like PormG's own column
   CHECK (`col >= 0` on an integer column, `octet_length(col) <= n` on a binary one) on a field that
   does not declare that fact. The column diff removes it as a stray and the declaration adds it back,
-  marked — a drop and an add on PostgreSQL, a rebuild on SQLite, destructive either way. On a field that
+  marked — a drop and an add on PostgreSQL and MySQL, a rebuild on SQLite, destructive either way. On a field that
   *does* declare the fact (a `PositiveIntegerField`), the column already keeps that CHECK: declare
   nothing more, or pick another name. PostgreSQL requires that (constraint names are unique per
-  table, and `makemigrations` refuses the clash); SQLite has no such rule and would simply keep both —
+  table, and `makemigrations` refuses the clash), and so does MySQL, which names the column's CHECK
+  `<table>_chk_<n>`, a prefix `makemigrations` refuses; SQLite has no such rule and would simply keep both —
   the column's own CHECK and the declared one.
 - **A renamed or removed column must leave the condition too.** `makemigrations` refuses a plan that
   renames or removes a column a declared condition still names, with `InvalidMigrationError`. For a
   rename, PostgreSQL would keep the old condition working, but the next time the declaration is
-  rendered it would name a column that no longer exists; for a removal, PostgreSQL drops the CHECK with
+  rendered it would name a column that no longer exists, and MySQL refuses the rename (error 3959); for a removal, PostgreSQL drops the CHECK with
   the column and SQLite refuses the `DROP COLUMN`.
 - A declared `condition = "grid >= 0"` is a table CHECK, not the column CHECK a
   `PositiveIntegerField` renders, even where the two read the same — the stored marker is what tells

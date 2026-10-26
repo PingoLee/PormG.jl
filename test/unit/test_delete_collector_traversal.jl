@@ -324,7 +324,7 @@ end
 # the marker count are what is left to pin here, and the PostgreSQL arm of the testset above counts
 # one key array per fragment.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a multi-path SET_NULL binds in text order on SQLite (#459 / #432)" begin
+@testset "a multi-path SET_NULL keeps both fragments, and the root's values bind in text order in the key read (#459 / #432)" begin
   # SQLite only: PostgreSQL's `$N` travels with the text by construction, which is why every bug in
   # this family has been SQLite-only.
   q = DctDiamond.Dct_root.objects

@@ -1432,8 +1432,18 @@ end
         # Counted inline rather than through helper_marker_alignment.jl: this file predates that
         # helper and does not include it, and the helper's own header says not to retrofit the
         # hand-written counts already here.
+        #
+        # Since #1370 only the key read binds a value on this mock: the root's filter renders there,
+        # and every later step is scoped by the keys, which a mock reads none of (`(1 = 0)`). So the
+        # count below is 0 == 0 after the key read, and the two-path shape is pinned by its text.
         @test count(==('?'), step[:sql_text]) == length(step[:parameters])
     end
+    @test insp[1][:parameters] == [5]
+    # Two top-level arms, one per foreign key to Result, on the multi-path statement: a dropped or
+    # doubled path changes the count (`(?:WHERE|OR) ("Tb"."<fk>" IN`).
+    jatd = insp[findfirst(s -> s[:model] == "just_a_test_deletion" && s[:operation] == :delete, insp)]
+    arms = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR) \(\"Tb\"\.\"(\w+)\" IN", jatd[:sql_text])]
+    @test Set(arms) == Set(["test_result", "test_result2"]) && length(arms) == 2
 end
 
 @testset "Alignment Verification - INSERT Inspection" begin

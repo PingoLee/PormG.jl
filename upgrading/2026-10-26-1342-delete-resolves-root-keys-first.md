@@ -68,9 +68,11 @@ statements and the counts they had.
 
 Code that calls `delete()` with a filter on a model with `CASCADE`, `SET_NULL` or `SET_DEFAULT`
 dependents. Its counts change when the filter crosses a relation (any `__` path or `cjoin`) or holds a
-query (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`), or when a `SET_NULL` / `SET_DEFAULT`
-foreign key declared on another model points into the root's table from a model the cascade reaches.
-Any test that pins such a delete's `show_query` output changes, whatever its filter reads.
+query (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`), or when a second model mapped to the
+root's table (`db_table = …`) declares a `SET_NULL` / `SET_DEFAULT` foreign key to a model the
+cascade reaches. Any test that pins such a delete's `show_query` output changes, whatever its filter
+reads: there is one more step, so `show_query = :sql` returns a `Vector{String}` where a delete whose
+dependents had no rows used to return one `String`.
 
 ### How to find the calls to migrate
 

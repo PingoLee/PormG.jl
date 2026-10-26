@@ -15,10 +15,14 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "just_a_test_deletion" AS "Tb" 
-WHERE "Tb"."test_result" = $1
+SELECT "Tb"."id" FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."test_result" = $1 FOR UPDATE
 -- Parameters: [10]
+DELETE FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."id" = ANY($1)
+-- Parameters: [<the keys the SELECT returned>]
 ```
+
+`just_a_test_deletion` has a `CASCADE` dependent, so its keys are read first (see
+[A filtered delete that cascades reads its keys first](#A-filtered-delete-that-cascades-reads-its-keys-first)).
 
 **Return Value:**
 The function returns a tuple containing the total count of deleted rows and a dictionary of counts per table (useful when cascades are involved):
@@ -56,7 +60,7 @@ DELETE FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."id" = ANY($1)
 -- Parameters: [<the keys the SELECT returned>]
 ```
 
-`just_a_test_deletion` has rows to cascade to, so the filter is read once, by the key read, and the
+`just_a_test_deletion` has a `CASCADE` dependent, so the filter is read once, by the key read, and the
 `DELETE` (with every statement of the cascade) is scoped by the keys it returns; see
 [A filtered delete that cascades reads its keys first](#A-filtered-delete-that-cascades-reads-its-keys-first).
 A model with nothing to cascade to is deleted by one statement that carries the filter itself.
@@ -137,18 +141,22 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "result" AS "Tb"
+SELECT "Tb"."resultid" FROM "result" AS "Tb"
 WHERE "Tb"."resultid" IN (SELECT DISTINCT "Tb"."resultid"
   FROM "result" as "Tb"
   INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
   WHERE "Tb_1"."year" < $1)
   AND EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor"
   INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
-  WHERE "Tb_1"."year" < $2)
+  WHERE "Tb_1"."year" < $2) FOR UPDATE
 -- Parameters: [1960, 1960]
+DELETE FROM "result" AS "Tb" WHERE "Tb"."resultid" = ANY($1)
+-- (plus a DELETE or UPDATE per dependent table with rows, scoped by the same keys)
 ```
 
-A filter that crosses a relation renders twice, and both halves matter. The `IN (…)` selects the rows
+`result` has dependents to cascade to, so the filter renders in the key read. On a model with nothing
+to cascade to it renders the same way in the `DELETE` itself. A filter that crosses a relation renders
+twice, and both halves matter. The `IN (…)` selects the rows
 through the primary key, which is what the planner uses an index for. The correlated `EXISTS` puts
 the same filter on the row being deleted, which is what PostgreSQL re-checks if that row changes
 while the delete waits on its lock (see
@@ -213,8 +221,9 @@ WHERE "Tb"."raceid" = ANY($1)
 
 !!! note "A delete whose rows reference each other is refused"
     When the rows a delete reaches reference rows of a model already in the cascade — a
-    self-referencing foreign key with dependent rows, of any `on_delete`, or a team whose favourite
-    driver races for a team being deleted — no order of statements is valid, and the delete raises
+    self-referencing foreign key with dependent rows (`PROTECT` / `RESTRICT` raise `ProtectedError`
+    first; every other `on_delete` reaches this check), or a team whose favourite driver races for a
+    team being deleted — no order of statements is valid, and the delete raises
     `QueryBuildError` ("Circular dependency detected in model relationships") while it plans, before
     anything is written, on every engine. Delete such rows in stages: clear the references first
     (`update("predecessor" => nothing)`), then delete. The check reads the rows, so the same schema
@@ -420,8 +429,10 @@ So on PostgreSQL two sessions can interleave like this:
 depends on the action:
 
 - **`CASCADE` / `SET_NULL` / `SET_DEFAULT`** — the three that emit statements. PostgreSQL performs
-  the skipped action itself at `COMMIT` (these constraints are `DEFERRABLE INITIALLY DEFERRED`), so
-  the row is removed, nulled or defaulted anyway and the delete succeeds. What you lose is the
+  the skipped action itself when PormG deletes the parent row (a referential action other than
+  `NO ACTION` is not deferred, even on these `DEFERRABLE INITIALLY DEFERRED` constraints), so the row
+  is removed, nulled or defaulted anyway and the delete succeeds. A filtered root's own `DELETE` is
+  scoped by the keys it read first, so a row such an action re-points is not deleted on its account. What you lose is the
   **accounting**, not the rows: the per-table counts in the returned `(total, Dict)` tally only
   statements PormG issued, so work the database did on a pruned path is not counted. Treat those
   counts as a report of what the ORM did, not an audit of the transaction.

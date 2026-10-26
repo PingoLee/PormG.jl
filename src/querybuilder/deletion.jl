@@ -275,10 +275,12 @@ function delete(objct::SQLObjectHandler;
     # `lap_times.raceid` is `ON DELETE CASCADE`, `lap_times.driverid` is `ON DELETE RESTRICT`.
     #
     # INFERRED, not measured (no PostgreSQL was available): that the database then performs the
-    # skipped CASCADE / SET NULL / SET DEFAULT at COMMIT. That is PostgreSQL's documented
-    # deferred-referential-action behavior, and it is the half worth re-checking on a live two-session
-    # setup before anyone leans further on it. If it holds, a pruned path costs only the per-table
-    # count in the return value, which tallies statements PormG itself issued.
+    # skipped CASCADE / SET NULL / SET DEFAULT itself. Not at COMMIT, as this comment first said:
+    # PostgreSQL documents that a referential action other than NO ACTION is not deferred, even on a
+    # DEFERRABLE constraint, so it runs when PormG deletes the parent row. It is the half worth
+    # re-checking on a live two-session setup before anyone leans further on it. If it holds, a pruned
+    # path costs only the per-table count in the return value, which tallies statements PormG itself
+    # issued (a filtered root's DELETE is scoped by its keys, so such an action cannot widen it, #1370).
     #
     # Note pruning is NOT limited to the actions that emit statements. The `_exists` probe below runs
     # for EVERY reverse relation, before `handle_on_delete!` sees the action — that is exactly what
@@ -344,7 +346,8 @@ function delete(objct::SQLObjectHandler;
     # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
     # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
     # The root is locked here anyway when a self-referential cascade added entries of its own model:
-    # those rows are parents the key step did not lock.
+    # those rows are parents the key step did not lock. (Unreached while `topological_sort` refuses
+    # such a cycle, #1272; kept so lifting that refusal does not silently drop the lock.)
     if _locks_cascade_parents(connection)
       for lock_model in _models_to_lock(collector)
         root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
@@ -714,7 +717,7 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
   #   - A self-referential CASCADE foreign key (category tree, org chart) is a legitimate Django
   #     shape, and it puts the same model on the path at every level. A membership test refuses it
   #     outright. PormG deletes a row of one that nothing references; where the probes read rows, one
-  #     with dependent rows is refused after the walk, by `topological_sort` (#1370), a refusal that
+  #     with dependent rows is refused after the walk, by `topological_sort` (#1272), a refusal that
   #     is not this guard's.
   #   - A membership test is not sufficient either. Termination is a property of the DATA, not the
   #     schema: cyclic rows keep every `_exists` probe non-empty while the nested subquery grows

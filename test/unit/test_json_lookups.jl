@@ -364,4 +364,54 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test _sql(none; conn = _JL_MY)[:sql_text] == replace(_sql(none; conn = _JL_SL)[:sql_text], '"' => '`')
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The same document through a projection alias and through `F("payload") ==` (#1360)
+  # Both bound a bare marker on MySQL, so each matched no row with no error; and `F ==` bound
+  # `$1::text` on PostgreSQL, `jsonb = text`, which has no operator (measured: SQLSTATE 42883).
+  # Expected SQL: MySQL `CAST(? AS JSON)` for `=`, `@ne`, `@in` on the alias and for `F ==`/`!=`; a
+  # pattern lookup on the alias and a key lookup either way stay bare; PostgreSQL binds an uncast `$1`
+  # (typed from the jsonb column, as the filter arm binds it) and SQLite a bare `?`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a whole JSON document through an alias or F(...) == (#1360)" begin
+    doc = "{\"driver\":\"hamilton\"}"
+    other = "{\"driver\":\"max\"}"
+    aliased(key, value) = (q = JL.Json_scratch.objects; q.values("id", "p" => F("payload")); q.filter(key => value); q)
+    my = _sql(aliased("p", doc); conn = _JL_MY)
+    @test occursin("WHERE `Tb`.`payload` = CAST(? AS JSON)", my[:sql_text])
+    @test my[:parameters] == Any[doc]
+    @test occursin(r"`Tb`.`payload` (<>|!=) CAST\(\? AS JSON\)", _sql(aliased("p__@ne", doc); conn = _JL_MY)[:sql_text])
+    my_in = _sql(aliased("p__@in", [doc, other]); conn = _JL_MY)
+    @test occursin("IN (CAST(? AS JSON), CAST(? AS JSON))", my_in[:sql_text]) && my_in[:parameters] == Any[doc, other]
+    # A pattern lookup on the alias binds text, as on the column.
+    @test !occursin("AS JSON", _sql(aliased("p__@contains", "ham"); conn = _JL_MY)[:sql_text])
+    # PostgreSQL and SQLite keep the bare marker: they compare the document already.
+    @test occursin("WHERE \"Tb\".\"payload\" = \$1\n", _sql(aliased("p", doc); conn = _JL_PG)[:sql_text])
+    @test occursin("WHERE \"Tb\".\"payload\" = ?\n", _sql(aliased("p", doc); conn = _JL_SL)[:sql_text])
+
+    compared(expr) = (q = JL.Json_scratch.objects; q.filter(expr); q.values("id"); q)
+    my_eq = _sql(compared(F("payload") == doc); conn = _JL_MY)
+    @test occursin("WHERE (`Tb`.`payload` = CAST(? AS JSON))", my_eq[:sql_text])
+    @test my_eq[:parameters] == Any[doc]
+    @test occursin("WHERE (`Tb`.`payload` != CAST(? AS JSON))", _sql(compared(F("payload") != doc); conn = _JL_MY)[:sql_text])
+    @test occursin("WHERE (\"Tb\".\"payload\" = \$1)", _sql(compared(F("payload") == doc); conn = _JL_PG)[:sql_text])
+    @test occursin("WHERE (\"Tb\".\"payload\" = ?)", _sql(compared(F("payload") == doc); conn = _JL_SL)[:sql_text])
+    # A document holding `__` is still a document, not a field path (review of #1360: it raised
+    # `UnknownFieldError: the column {" not found`); a JSON scalar document is one too.
+    typename = "{\"__typename\":\"Driver\"}"
+    my_tn = _sql(compared(F("payload") == typename); conn = _JL_MY)
+    @test occursin("WHERE (`Tb`.`payload` = CAST(? AS JSON))", my_tn[:sql_text]) && my_tn[:parameters] == Any[typename]
+    @test occursin("CAST(? AS JSON)", _sql(compared(F("payload") == "5"); conn = _JL_MY)[:sql_text])
+    # A column name on the right is still that column (`F("payload") == "name"`), not a document.
+    @test occursin("WHERE (`Tb`.`payload` = `Tb`.`name`)", _sql(compared(F("payload") == "name"); conn = _JL_MY)[:sql_text])
+    # An alias that is not the document (a COUNT) keeps the bare marker: the wrap is the document's only.
+    counted = (q = JL.Json_scratch.objects; q.values("name", "n" => PormG.QueryBuilder.Count("id")); q.filter("n" => 2); q)
+    my_n = _sql(counted; conn = _JL_MY)[:sql_text]
+    @test occursin("HAVING COUNT(`Tb`.`id`) = ?", my_n) && !occursin("CAST(? AS JSON)", my_n)
+    # A key lookup is that key's text, not a document: bare on MySQL, `::text` on PostgreSQL as before.
+    # (The extraction itself holds `CAST('null' AS JSON)`, so the needle is the bound marker.)
+    my_key = _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_MY)[:sql_text]
+    @test !occursin("CAST(? AS JSON)", my_key) && occursin("utf8mb4_0900_bin) = ?)", my_key)
+    @test occursin("= \$1::text)", _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_PG)[:sql_text])
+  end
+
 end

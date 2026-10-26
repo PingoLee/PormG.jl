@@ -22,7 +22,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 |---|---|---|---|---|
 | `jsonb_operators` | `@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys` | yes | no | no |
 | `arrays` | `ArrayField`, its lookups (`@acontains`, `@contained_by`, `@overlap`), `@len`, an index or slice, a cast to an array type | yes | no | no |
-| `network_types` | `GenericIPAddressField`, `CIDRField`, the `@net_*`, `@family` and `@prefixlen` lookups | yes | no | no |
+| `network_types` | `GenericIPAddressField`, `CIDRField`, the `@net_*`, `@family` and `@prefixlen` lookups, a `Sockets.IPv4`/`IPv6` literal (`Value(ip"…")`) | yes | no | no |
 | `full_text_search` | `SearchVectorField`, the `@search` lookup, `SearchVector`, `SearchQuery`, `SearchRank`, `SearchHeadline` | yes | no | no |
 | `regex` | `@regex`, `@iregex` and their negations | yes | no | no |
 | `unaccent` | `@iunaccent_contains`, `@iunaccent_exact` and their negations | yes | no | no |

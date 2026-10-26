@@ -1596,6 +1596,13 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # different sets (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
   placeholder = _bind_predicate_value(instruc, v.operator,
                   _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
+  # #1360: an alias over the whole JSON document compares as JSON, as the column's own filter arm does
+  # (`filter_nodes.jl`); a pattern lookup binds text. A range binds a pair and `@isnull` a Bool, so
+  # only a marker string is wrapped. An alias over a key lookup holds that key's value, not a document.
+  source = _projected_source(having_key, instruc)
+  placeholder isa AbstractString && !(v.operator in PATTERN_LOOKUP_OPERATORS) &&
+    source isa SQLTypeField && _json_document_operand(source.field, instruc) &&
+    (placeholder = _json_document_marker(instruc.connection, placeholder))
   # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
   # `IN`/`NOT IN` membership case this branch used to special-case, adds the
   # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the

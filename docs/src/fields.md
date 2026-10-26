@@ -322,7 +322,9 @@ M.Pit_wall_session.objects.
 - A **projection alias** over a network column filters the same way. A pattern lookup on
   `"top_ip" => Max("client_ip")` reads `HOST(MAX(…))`, and the fragment is bound as text.
 - `Value(ip"…")` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints for it
-  (`::ffff:10.0.0.1`). On SQLite it raises `InvalidValueError`, and on MySQL it currently reaches the driver, which refuses to bind it (`StatementError`; see the [MySQL Guide](mysql.md#Known-gaps)).
+  (`::ffff:10.0.0.1`). SQLite and MySQL have no network type, so there the literal raises
+  `BackendCapabilityError` while the query is built, as an `inet` cast does — projected, inside a
+  function, or in a `Case` branch. Pass `string(address)` if you only need its text.
 
 ```julia
 # The highest address each team used, kept only when it is on the 10.20.x.x garage network.

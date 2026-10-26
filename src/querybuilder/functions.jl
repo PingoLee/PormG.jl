@@ -607,8 +607,8 @@ integer beyond `Int64`, an arbitrary struct) raises `InvalidValueError` there in
 as a serialized Julia object.
 
 A `Sockets.IPv4` / `Sockets.IPv6` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints
-for it: `Value(ip"::FFFF:10.0.0.1")` is `::ffff:10.0.0.1`. SQLite has no network type, so there it
-raises `InvalidValueError`.
+for it: `Value(ip"::FFFF:10.0.0.1")` is `::ffff:10.0.0.1`. SQLite and MySQL have no network type, so
+there it raises `BackendCapabilityError` while the query is built.
 
 ```julia
 using PormG.Functions: Value

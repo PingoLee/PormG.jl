@@ -517,6 +517,23 @@ function add_parameter!(pq::PormGPostgresParam, value::Sockets.IPAddr; contains:
 end
 
 # --- SQLInstruction convenience (works for both backends) ---
+# #1372: a scalar `Sockets.IPAddr` literal is a network type, a feature only some backends have, so a
+# backend without it refuses the literal while the query is built, as it refuses an `inet` cast or a
+# `@net_*` lookup. Every literal site binds through here (a `Value`, a function operand, a `Case`
+# branch, a window default); a filter value is text by then. A vector holding an address
+# (`Value([ip"…", nothing])`) is the same literal; the scan runs only where the feature is missing. The
+# address is never printed (#971).
+function add_parameter!(instruc::SQLInstruction, value::Union{Sockets.IPAddr,AbstractVector};
+                        contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
+  if !_supports(instruc.connection, :network_types) && (value isa Sockets.IPAddr || any(x -> x isa Sockets.IPAddr, value))
+    throw(_capability_error(instruc.connection, :network_types,
+      "A `Sockets.$(value isa Sockets.IPAddr ? nameof(typeof(value)) : :IPAddr)` literal " *
+      "(a `Value(ip\"…\")`, a function operand or a `Case` branch)";
+      why = "PormG refuses it rather than bind its text, which would not compare as an address; " *
+            "pass `string(address)` if you only need the text."))
+  end
+  return add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
+end
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) = add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ struct _MockPgNet28 <: PormG.PormGPostgres end
 struct _MockSlNet28 <: PormG.PormGSQLite end
 const PG_NET28 = _MockPgNet28()
 const SL_NET28 = _MockSlNet28()
+struct _MockMyNet1372 <: PormG.PormGMySQL end
 # The constraint-name lookups `alter_field` asks a PostgreSQL catalog for.
 PormG.get_constraints_pk(::_MockPgNet28, t::String, f::String) = nothing
 PormG.get_constraints_unique(::_MockPgNet28, t::String, f::String) = nothing
@@ -467,13 +468,77 @@ const NET28_CIDR_CORPUS = [
     @test res_co[:parameters] == ["10.0.0.1"]
     @test occursin("\$1::inet", res_co[:sql_text])
 
-    # SQLite refuses the literal rather than store a serialized Julia object.
+    # SQLite has no network type: the literal is refused through the capability table (#1372).
     _sl = NA.Model("pit_wall_probe", id = NA.IDField())
     PormG.config["net28_sl"] = PormG.Configuration.Settings(connections = SL_NET28, change_data = true)
     _sl.connect_key = "net28_sl"
     q_sl = _sl.objects
     q_sl.values("id", "probe" => Value(ip"10.0.0.1"))
-    @test_throws PormG.InvalidValueError q_sl.list(show_query = :dict)
+    @test_throws PormG.BackendCapabilityError q_sl.list(show_query = :dict)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A `Sockets` literal on a backend without network types is a capability refusal (#1372)
+  # SQLite raised `InvalidValueError` from its bind ("would store a serialized Julia object") and MySQL
+  # sent the struct to the driver, which refused it as a `StatementError` once the statement ran.
+  # Neither said the backend has no network type. Expected: `BackendCapabilityError` naming the feature,
+  # the backend at hand and PostgreSQL, at build (`show_query`, no SQL), at every literal site —
+  # projected, inside a function, in a `Case` branch, and a function compared in a filter — and the
+  # message never shows the address (#971). PostgreSQL still binds the `inet` text.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a Sockets literal is refused where there is no network type (#1372)" begin
+    probe = NA.Model("pit_wall_probe_1372", id = NA.IDField(), relay = NA.CharField(null = true))
+    shapes = [
+      "projected" => q -> q.values("id", "p" => Value(ip"10.20.0.7")),
+      "a function operand" => q -> q.values("id", "p" => Coalesce("relay", Value(ip"10.20.0.7"))),
+      "a Case branch" => q -> q.values("id", "p" => Case([When(Q("id__@gt" => 1), then = ip"10.20.0.7")], default = "none")),
+      "in a filter" => q -> (q.filter(Coalesce("relay", Value(ip"10.20.0.7")) == "10.20.0.7"); q.values("id")),
+      "an IPv6 literal" => q -> q.values("id", "p" => Value(ip"2001:db8::7")),
+    ]
+    # A vector holding an address is the same literal (review of #1372): on MySQL it bound the structs
+    # raw. Whatever the vector's element type: a Union of the two families (whose eltype has no name),
+    # one with a `nothing`, and an `Any` vector.
+    vectors = [
+      [ip"10.20.0.7", ip"10.20.0.8"],
+      Union{Sockets.IPv4,Sockets.IPv6}[ip"10.20.0.7", ip"2001:db8::7"],
+      [ip"10.20.0.7", nothing],
+      Any[ip"10.20.0.7"],
+    ]
+    for (key, conn, backend) in (("net1372_sl", SL_NET28, "SQLite"), ("net1372_my", _MockMyNet1372(), "MySQL"))
+      PormG.config[key] = PormG.Configuration.Settings(connections = conn, change_data = true)
+      probe.connect_key = key
+      for (shape, build!) in shapes
+        q = probe.objects
+        build!(q)
+        err = try q.list(show_query = :dict); nothing catch e; e end
+        @test (backend, shape, err isa PormG.BackendCapabilityError) == (backend, shape, true)
+        msg = sprint(showerror, err)
+        @test occursin("network address types", msg) && occursin("which $(backend) does not support", msg) &&
+              occursin("supported on PostgreSQL", msg)
+        @test !occursin("10.20.0.7", msg) && !occursin("2001:db8", msg)   # #971: the address is never shown
+      end
+      for v in vectors
+        q = probe.objects
+        q.values("id", "p" => Value(v))
+        err = try q.list(show_query = :dict); nothing catch e; e end
+        @test (backend, typeof(v), err isa PormG.BackendCapabilityError) == (backend, typeof(v), true)
+        @test !occursin("10.20.0.", sprint(showerror, err))
+      end
+      # A vector with no address in it is not this feature (an `@in` list of text), and binds as before.
+      q = probe.objects
+      q.filter("relay__@in" => ["10.20.0.7", "10.20.0.8"])
+      q.values("id")
+      @test q.list(show_query = :dict)[:parameters] == ["10.20.0.7", "10.20.0.8"]
+    end
+    # PostgreSQL binds the same shapes as the `inet` text, unchanged.
+    probe.connect_key = "net28_pg_1372"
+    PormG.config["net28_pg_1372"] = PormG.Configuration.Settings(connections = PG_NET28, change_data = true)
+    for (shape, build!) in shapes
+      q = probe.objects
+      build!(q)
+      res = q.list(show_query = :dict)
+      @test (shape, occursin("::inet", res[:sql_text])) == (shape, true)
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

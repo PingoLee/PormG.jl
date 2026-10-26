@@ -1441,6 +1441,9 @@ end
     @test insp[1][:parameters] == [5]
     # Two top-level arms, one per foreign key to Result, on the multi-path statement: a dropped or
     # doubled path changes the count (`(?:WHERE|OR) ("Tb"."<fk>" IN`).
+    # One statement for that model: a path emitted as a second statement would hide behind the arm
+    # count of the first.
+    @test count(s -> s[:model] == "just_a_test_deletion" && s[:operation] == :delete, insp) == 1
     jatd = insp[findfirst(s -> s[:model] == "just_a_test_deletion" && s[:operation] == :delete, insp)]
     arms = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR) \(\"Tb\"\.\"(\w+)\" IN", jatd[:sql_text])]
     @test Set(arms) == Set(["test_result", "test_result2"]) && length(arms) == 2

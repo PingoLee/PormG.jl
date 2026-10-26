@@ -71,8 +71,8 @@ dependents. Its counts change when the filter crosses a relation (any `__` path 
 query (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`), or when a second model mapped to the
 root's table (`db_table = …`) declares a `SET_NULL` / `SET_DEFAULT` foreign key to a model the
 cascade reaches. Any test that pins such a delete's `show_query` output changes, whatever its filter
-reads: there is one more step, so `show_query = :sql` returns a `Vector{String}` where a delete whose
-dependents had no rows used to return one `String`.
+reads. A delete whose dependents had no rows has one more step, the key read, so its
+`show_query = :sql` now returns a `Vector` of `String`s where it used to return one `String`.
 
 ### How to find the calls to migrate
 

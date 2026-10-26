@@ -66,7 +66,7 @@ DELETE FROM "just_a_test_deletion" AS "Tb" WHERE "Tb"."id" = ANY($1)
 A model with nothing to cascade to is deleted by one statement that carries the filter itself.
 
 Using `show_query=:sql` reveals the statements without executing them — a `String` for a single
-statement, a `Vector{String}` when the delete cascades:
+statement, a `Vector` of `String`s when the delete cascades:
 ```julia
 sql = delete(query, show_query=:sql)
 # ["SELECT \"Tb\".\"id\" FROM \"just_a_test_deletion\" AS \"Tb\" WHERE \"Tb\".\"test_result\" = ANY(\$1) AND \"Tb\".\"test_result2\" IS NULL FOR UPDATE",

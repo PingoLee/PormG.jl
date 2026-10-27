@@ -1,9 +1,9 @@
-## A cast to `smallint` or `integer` raises 22003 on SQLite for a value outside the type (#1356)
+## A cast to `smallint` or `integer` raises 22003 on SQLite for a value outside the type (#1356, #1405)
 
 - **Version**: Unreleased
-- **PormG ref**: #1356 ; `src/Dialect.jl` (`integer_cast_guard_sql`), `src/querybuilder/select_nodes.jl` (`_integer_cast_guard`), `ext/PormGSQLiteExt.jl` (`backend_error_fields`)
+- **PormG ref**: #1356, #1405 ; `src/Dialect.jl` (`integer_cast_guard_sql`), `src/querybuilder/select_nodes.jl` (`_integer_cast_guard`, `_guarded_integer_type`), `ext/PormGSQLiteExt.jl` (`backend_error_fields`)
 - **Recorded**: 2026-10-27
-- **Severity**: behavior change, SQLite. `Cast(x, "smallint")` / `Cast(x, "integer")` (and `IntegerField()`) over a value outside the type raises `StatementError` with `sqlstate == "22003"` where it returned the value. Any SQLite "integer overflow" error now carries `sqlstate == "22003"`. PostgreSQL is unchanged. MySQL is unreleased.
+- **Severity**: behavior change, SQLite. `Cast(x, "smallint")` / `Cast(x, "integer")` (and `IntegerField()`), and a `Coalesce`, `Greatest`, `Least` or `Case` declaring the same `output_field`, over a value outside the type raises `StatementError` with `sqlstate == "22003"` where it returned the value. Any SQLite "integer overflow" error now carries `sqlstate == "22003"`. PostgreSQL is unchanged. MySQL is unreleased.
 
 ### What changed
 
@@ -34,15 +34,26 @@ guard.
 Every SQLite "integer overflow" error (also `abs()` of the smallest integer, or a `sum()` past 64 bits)
 now carries `sqlstate == "22003"`; before it had no SQLSTATE.
 
-A declared `output_field = "integer"` (`Coalesce`, `Greatest`, `Case`) is not guarded: it stays a plain
-cast. A `bigint` cast is not guarded on SQLite either. SQLite stores 64-bit integers, and past 64 bits its cast
+A declared `output_field = "smallint"` or `"integer"` (or a field struct declaring one) on `Coalesce`,
+`Greatest`, `Least` or `Case` is the same cast over the whole function, and renders the same guard (#1405):
+
+| `Greatest(F("driverid") * 100_000_000, 1; output_field = "integer")`, SQLite | before | now |
+|---|---|---|
+| driver 21 | `2_100_000_000` | `2_100_000_000` |
+| driver 22 | `2_200_000_000` | `StatementError`, `sqlstate == "22003"` |
+
+The guard names its operand three times, so every value the function binds is bound three times, and a
+`Subquery` inside it runs three times per row.
+
+A `bigint` cast is not guarded on SQLite. SQLite stores 64-bit integers, and past 64 bits its cast
 saturates to the largest (or smallest) integer, which nothing can tell from a real value. That is
 documented on the Backends page (`docs/src/backends.md`).
 
 ### How to find the calls to migrate
 
 Look for `Cast(…, "smallint")`, `Cast(…, "integer")`, `Cast(…, "int"/"int2"/"int4")` and a field struct
-that declares one (`IntegerField()`, `PositiveSmallIntegerField()`, `PositiveIntegerField()`) in queries that run on SQLite over values that can leave the type's range: a product, a
+that declares one (`IntegerField()`, `PositiveSmallIntegerField()`, `PositiveIntegerField()`), and for the
+same types as an `output_field =` on `Coalesce`, `Greatest`, `Least` or `Case`, in queries that run on SQLite over values that can leave the type's range: a product, a
 sum, a text column holding large numbers. Also look for a `catch` that tests `e.sqlstate === nothing` on
 a SQLite "integer overflow" error.
 
@@ -54,4 +65,7 @@ M.Driver.objects.values("x" => Cast(F("driverid") * 100_000_000, "integer"))
 
 # ✓ cast to the type that holds the value
 M.Driver.objects.values("x" => Cast(F("driverid") * 100_000_000, "bigint"))
+
+# ✓ the same for a declared output_field
+M.Driver.objects.values("x" => Greatest(F("driverid") * 100_000_000, 1; output_field = "bigint"))
 ```

@@ -1150,7 +1150,9 @@ end
 # match nothing. SQLite goes through `sqlite_cast_sql`, so a `date` is `date(…)` and the other
 # temporal and array types raise `BackendCapabilityError`, as for `Cast` and `Case` (#822).
 # The single-`When` `CASE` arm uses it too; the vector arms keep their own spelling, because their
-# multi-line text is pinned (`END)::type`).
+# multi-line text is pinned (`END)::type`). An integer declaration an engine's own cast does not apply the
+# range of (#1405) never reaches these: the build renders the function undeclared and wraps it in
+# `integer_cast_guard_sql`, as for `Cast`.
 function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   (isnothing(output_field) || output_field == "") && return sql

@@ -78,11 +78,13 @@ construction: `F("grid") / 2` divides integers as integers, a NULL `Concat` oper
 `Cast(x, "smallint" | "integer" | "bigint")` raises `StatementError` with `sqlstate == "22003"` on a value
 outside the type, on the row, in every clause. PostgreSQL's cast does that itself; MySQL's `SIGNED` is
 64-bit and SQLite's `INTEGER` applies no range below 64 bits, so there PormG renders a guard that raises
-it ([#1356](https://github.com/PingoLee/PormG.jl/issues/1356)). Two limits: SQLite saturates a value past
+it ([#1356](https://github.com/PingoLee/PormG.jl/issues/1356)). A declared `output_field` of the same type
+on `Coalesce`, `Greatest`, `Least` or `Case` is the same cast over the whole function, and renders the same
+guard ([#1405](https://github.com/PingoLee/PormG.jl/issues/1405)). One limit: SQLite saturates a value past
 64 bits to the largest integer, which nothing can tell from a real one, so a `bigint` cast there is not
-guarded; and a declared `output_field` (`Coalesce(…; output_field = "integer")`) is a plain cast on MySQL
-and SQLite, not guarded. The guard names its operand three times, so a `Subquery` operand runs three
-times per row.
+guarded. The guard names its operand three times, so every value it binds is bound three times, and a
+`Subquery` operand runs three times per row. The cost compounds when declarations nest: a declared
+`Coalesce` over a declared `Case` binds the `Case`'s values nine times.
 A backend whose operator computes something else gets a different rendering, not a different answer
 ([Functions and Dates](read/functions_and_dates.md)).
 

@@ -497,3 +497,75 @@ end
   @test !occursin("BETWEEN", proj(Cast("points", "numeric(10,2)"), _CMY)[:sql_text])
   @test !occursin("BETWEEN", proj(Cast("points", "text"), _CSL)[:sql_text])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1405: a declared integer `output_field` applies its range on MySQL and SQLite, as `Cast` does
+# What: `Coalesce`, `Greatest`, `Least` and `Case` with `output_field = "smallint" | "integer" | "bigint"`
+# (or a field struct declaring one) rendered on each engine.
+# Expected SQL: the #1356 guard above, over the whole function rendered without its declaration — MySQL
+# `CAST(IF(CAST(COALESCE(x, ?) AS SIGNED) BETWEEN lo AND hi, …) AS SIGNED)` at every width, SQLite
+# `CASE WHEN CAST(COALESCE(x, ?) AS INTEGER) BETWEEN lo AND hi THEN … END` at 16 and 32 bits;
+# PostgreSQL's `(COALESCE(x, $1::bigint))::integer` and SQLite's `bigint` stay the plain cast. Every value
+# the function binds (a `Case`'s `then` and `else` too) is bound once per occurrence, in text order.
+# Why: the declaration names the same type as `Cast` and means the same thing, but rendered the plain
+# cast, so `Greatest(F("positionorder") * 100_000, 1; output_field = "smallint")` raised on PostgreSQL
+# and returned the number on MySQL and SQLite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1405: a declared integer output_field applies its range on MySQL and SQLite" begin
+  F = PormG.QueryBuilder.F
+  proj(expr, conn) = inspect_query((q = Cast696Models.Cast696_result.objects; q.values("id", "c" => expr); q);
+                                   connection = conn)
+  co_my, co_sl = "CAST(COALESCE(`Tb`.`positionorder`, ?) AS SIGNED)", "CAST(COALESCE(\"Tb\".\"positionorder\", ?) AS INTEGER)"
+  for (type, lo, hi) in (("integer", -2147483648, 2147483647), ("smallint", -32768, 32767))
+    my = proj(Coalesce("positionorder", 0; output_field = type), _CMY)
+    @test occursin("CAST(IF($(co_my) BETWEEN $(lo) AND $(hi), $(co_my), ~0 + ABS($(co_my))) AS SIGNED) as `c`",
+                   my[:sql_text])
+    @test my[:parameters] == Any[0, 0, 0]
+    sl = proj(Coalesce("positionorder", 0; output_field = type), _CSL)
+    @test occursin("CASE WHEN $(co_sl) BETWEEN $(lo) AND $(hi) THEN $(co_sl) " *
+                   "ELSE abs($(co_sl) * 0 - 9223372036854775807 - 1) END as \"c\"", sl[:sql_text])
+    @test sl[:parameters] == Any[0, 0, 0]
+    # PostgreSQL's own cast is the meaning.
+    @test occursin("(COALESCE(\"Tb\".\"positionorder\", \$1::bigint))::$(type) as \"c\"",
+                   proj(Coalesce("positionorder", 0; output_field = type), _CPG)[:sql_text])
+  end
+  # bigint: guarded on MySQL as `DECIMAL(65,0)`; SQLite is 64-bit natively, and saturates past it: no guard.
+  @test occursin("CAST(IF(CAST(COALESCE(`Tb`.`positionorder`, ?) AS DECIMAL(65,0)) BETWEEN -9223372036854775808 AND " *
+                 "9223372036854775807, $(co_my), ~0 + ABS($(co_my)) + 1) AS SIGNED) as `c`",
+                 proj(Coalesce("positionorder", 0; output_field = "bigint"), _CMY)[:sql_text])
+  @test occursin("$(co_sl) as \"c\"", proj(Coalesce("positionorder", 0; output_field = "bigint"), _CSL)[:sql_text])
+  # A field struct declares the same width.
+  @test occursin("BETWEEN -32768 AND 32767", proj(Coalesce("positionorder", 0; output_field = PositiveSmallIntegerField()), _CMY)[:sql_text])
+  @test occursin("BETWEEN -2147483648 AND 2147483647", proj(Coalesce("positionorder", 0; output_field = IntegerField()), _CSL)[:sql_text])
+  # Greatest and Least: the NULL-skipping rotations (#844) inside the guard, each bound value repeated in step.
+  for conn in (_CMY, _CSL)
+    g = proj(Greatest(F("positionorder") * 100_000, 1; output_field = "smallint"), conn)
+    @test occursin("BETWEEN -32768 AND 32767", g[:sql_text])
+    @test (count(==('?'), g[:sql_text]), g[:parameters]) == (12, repeat(Any[100000, 1, 1, 100000], 3))
+    l = proj(Least("positionorder", 3; output_field = "integer"), conn)
+    @test occursin("BETWEEN -2147483648 AND 2147483647", l[:sql_text])
+    @test (count(==('?'), l[:sql_text]), l[:parameters]) == (6, repeat(Any[3, 3], 3))
+  end
+  @test occursin("(GREATEST((\"Tb\".\"positionorder\" * \$1::bigint), \$2::bigint))::smallint as \"c\"",
+                 proj(Greatest(F("positionorder") * 100_000, 1; output_field = "smallint"), _CPG)[:sql_text])
+  # Case, a vector of `When` and a single one: the condition's, the `then`'s and the `else`'s values in step.
+  for conn in (_CMY, _CSL)
+    c = proj(Case([When("positionorder__@gte" => 1, then = F("positionorder") * 7)], default = 0, output_field = "integer"), conn)
+    @test occursin("BETWEEN -2147483648 AND 2147483647", c[:sql_text])
+    @test (count(==('?'), c[:sql_text]), c[:parameters]) == (9, repeat(Any[1, 7, 0], 3))
+    c1 = proj(Case(When("positionorder__@gte" => 1, then = 5), default = 0, output_field = "smallint"), conn)
+    @test occursin("BETWEEN -32768 AND 32767", c1[:sql_text])
+    @test (count(==('?'), c1[:sql_text]), c1[:parameters]) == (9, repeat(Any[1, 5, 0], 3))
+  end
+  @test !occursin("BETWEEN", proj(Case([When("positionorder__@gte" => 1, then = 5)], default = 0, output_field = "integer"), _CPG)[:sql_text])
+  # In a filter, the guard and the comparison's own value, in text order.
+  for conn in (_CMY, _CSL)
+    f = inspect_query((q = Cast696Models.Cast696_result.objects;
+                       q.filter(Coalesce(F("positionorder") * 2, 0; output_field = "smallint") > 5); q.values("id"); q);
+                      connection = conn)
+    @test (count(==('?'), f[:sql_text]), f[:parameters]) == (7, Any[2, 0, 2, 0, 2, 0, 5])
+  end
+  # A declaration of anything but an integer is untouched.
+  @test !occursin("BETWEEN", proj(Coalesce("points", 0; output_field = "numeric(10,2)"), _CMY)[:sql_text])
+  @test !occursin("BETWEEN", proj(Greatest("points", 1; output_field = "float8"), _CSL)[:sql_text])
+end

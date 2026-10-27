@@ -753,7 +753,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms = interval = false
   # #1356: an integer cast an engine guards names its operand more than once (`_integer_cast_guard`), so
   # the values the operand binds are read back from here and bound again for each further occurrence.
-  cast_marks = v.function_name == "CAST" ? (parameter_mark(instruc), nested_parameter_mark(instruc)) : nothing
+  # #1405: a declared `output_field` is the same cast over the whole function, whose values (a `Case`'s
+  # `then`/`else` too, bound in Phase 3) are all bound after this mark.
+  cast_marks = v.function_name == "CAST" || _declared_output_function(v) ?
+    (parameter_mark(instruc), nested_parameter_mark(instruc)) : nothing
   fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
   if v isa FObject && v.function_name == "ABS" && _interval_as_ms(instruc.connection) && !(v.column isa AbstractVector)
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
@@ -996,46 +999,69 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # to no type). Decided by `_mysql_declared_output`, before any SQL: `nothing` everywhere else, and for
   # an undeclared function that passes its check, which renders as it always has.
   declared_sql = _mysql_declared_output(v, instruc)
-  cast_type = get(resolved_kwargs, "type", nothing)
-  guarded = declared_sql === nothing && cast_marks !== nothing && cast_type isa AbstractString &&
-            resolved_column isa AbstractString ?
-    _integer_cast_guard(resolved_column, cast_type, cast_marks, instruc) : nothing
-  if guarded !== nothing
-    sql = guarded
-  elseif declared_sql === nothing
+  # #1356, #1405: an integer `Cast` or `output_field` this engine's own cast does not apply the range of.
+  guard_type = declared_sql === nothing && cast_marks !== nothing &&
+               (v.function_name != "CAST" || resolved_column isa AbstractString) ?
+    _guarded_integer_type(v, instruc.connection) : nothing
+  if declared_sql === nothing && guard_type === nothing
     sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   else
-    # The function with no declaration (`Cast`'s is the operand itself), handed to the decided form.
+    # The function with no declaration (`Cast`'s is the operand itself), handed to the decided form, or
+    # to the integer guard, which casts it to the declared type itself.
     undeclared = copy(resolved_kwargs)
     delete!(undeclared, "output_field")
-    sql = declared_sql(v.function_name == "CAST" ? resolved_column :
-                       getfield(Dialect, Symbol(v.function_name))(resolved_column, undeclared, instruc.connection))
+    x = v.function_name == "CAST" ? resolved_column :
+        getfield(Dialect, Symbol(v.function_name))(resolved_column, undeclared, instruc.connection)
+    sql = guard_type === nothing ? declared_sql(x) :
+          _integer_cast_guard(x, guard_type, cast_marks, instruc, String(v.function_name))
   end
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).
   interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
-# #1356 — `Cast(x, <integer>)` on an engine whose cast does not apply the integer's range: the guard
-# `Dialect.integer_cast_guard_sql` spells, which raises 22003 per row on a value outside it, or `nothing`
-# where the engine's own cast is the meaning (`_guards_integer_cast`). The guard names `x` several times,
-# and a positional backend binds a value once per marker, so the values `x` bound (`marks`, taken before it
-# rendered) are bound again for each further occurrence, in text order — nothing binds between them. Fails
-# closed when that cannot be done exactly: values bound in another clause's bucket, or a marker count that
-# is not the number of values.
-function _integer_cast_guard(x::AbstractString, type::AbstractString, marks::Tuple{ParameterMark,NestedMark},
-                             instruc::SQLInstruction)::Union{String,Nothing}
-  conn = instruc.connection
+# #1405 — a `Coalesce`, `Greatest`, `Least` or `Case` that declares its `output_field`, which casts the
+# whole function to it as `Cast` casts its operand. A NULL-skipping rotation (#844) declares nothing.
+_declared_output_function(v::SQLTypeFunction)::Bool =
+  v isa FObject && v.function_name in ("COALESCE", "GREATEST", "LEAST", "CASE") && !haskey(v.kwargs, "rotation_of") &&
+  _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v))
+
+# #1356, #1405 — the integer type a `Cast` or a declared `output_field` names, where this engine's own cast
+# does not apply that integer's range (`_guards_integer_cast`), or `nothing`: any other type, and an engine
+# whose cast is the meaning.
+function _guarded_integer_type(v::SQLTypeFunction, conn::_SQLEngine)::Union{String,Nothing}
+  v isa FObject || return nothing
+  type = _declared_cast(v)
+  (type isa AbstractString && !isempty(type)) || return nothing
   bits = Dialect.integer_cast_bits(type)
   (bits === nothing || !_guards_integer_cast(conn, bits)) && return nothing
+  return String(type)
+end
+
+# #1356 — `x` cast to the integer `type` (`_guarded_integer_type`) on an engine whose cast does not apply
+# its range: the guard `Dialect.integer_cast_guard_sql` spells, which raises 22003 per row on a value
+# outside it. `x` is `Cast`'s operand, or the function `fname` a declared `output_field` casts (#1405); the
+# refusal names what the caller wrote, built from these two strings only when it is raised, so the render
+# reads no untyped `kwargs` slot (#1346). The guard names `x` several times, and a positional backend binds
+# a value once per marker, so the values `x` bound (`marks`, taken before it rendered) are bound again for
+# each further occurrence, in text order — nothing binds between them. Fails closed when that cannot be done exactly:
+# values bound in another clause's bucket, or a marker count that is not the number of values.
+function _integer_cast_guard(x::AbstractString, type::AbstractString, marks::Tuple{ParameterMark,NestedMark},
+                             instruc::SQLInstruction, fname::String)::String
+  conn = instruc.connection
+  bits = Dialect.integer_cast_bits(type)::Int
   sql, occurrences = Dialect.integer_cast_guard_sql(conn, x, bits)
   operand = bound_since(first(marks))
   before, now = last(marks), nested_parameter_mark(instruc)
   bound = (before === nothing || now === nothing) ? 0 : sum(now) - sum(before)
-  (bound == length(operand) && count(==('?'), x) == length(operand)) || throw(QueryBuildError(
-    "Cast to $(type) cannot be rendered on $(_backend_name(conn)) over this operand: the cast names it " *
-    "more than once to apply the integer's range, and the values it binds cannot be bound again in step. " *
-    "Cast a simpler expression, or compute the value before the cast."))
+  if !(bound == length(operand) && count(==('?'), x) == length(operand))
+    label = fname == "CAST" ? "Cast(…, \"$(type)\")" :
+            "$(uppercasefirst(lowercase(fname)))(…; output_field = \"$(type)\")"
+    throw(QueryBuildError(
+      "$(label) cannot be rendered on $(_backend_name(conn)) over this operand: the cast to $(type) names it " *
+      "more than once to apply the integer's range, and the values it binds cannot be bound again in step. " *
+      "Cast a simpler expression, or compute the value before the cast."))
+  end
   for _ in 2:occurrences
     reattach_parameters!(instruc, copy(operand))
   end

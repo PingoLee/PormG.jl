@@ -151,3 +151,25 @@ julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.in
 - Docs and examples use the Formula 1 dataset, not generic `User`/`Post` placeholders.
 - Every `@testset` says what it tests, the expected SQL, and why it matters
   (`docs/src/contributing.md` → *Testing conventions*).
+- **Concrete types and fewer allocations (#1346).** Code that is added or refactored moves toward
+  concrete types and never away from them. Untyped code costs a dynamic dispatch and an allocation on
+  every call, and it is what a static compiler (`juliac --trim`) cannot follow. This is a ratchet,
+  not a target: nothing gets worse, and what is touched gets better.
+  - A struct field has a concrete type, never `Any` or an abstract type left open. A mutable box is
+    `Base.RefValue{T}`, not `Ref{T}` (which is abstract).
+  - A new function takes typed arguments or a `NamedTuple`/struct, not a new `Dict{String,Any}`.
+  - A choice between behaviors dispatches on a type, not on a name looked up at run time
+    (`getfield(Dialect, Symbol(name))`).
+  - No `repr`/`string`/`sprint(show, …)` of a value whose type is not inferred, on a path a query
+    takes (error messages included): it is the costliest single pattern for a static compiler.
+  - Where an untyped value cannot be avoided, a function barrier keeps it at the edge.
+  - A hot path (the query build, row parsing) does not allocate per row what it can allocate once.
+  - A change made for typing that slows the JIT path more than noise needs a measurement that
+    justifies it.
+
+  `test/unit/test_type_ratchet.jl` holds the reviewed count, per file, of the three patterns that
+  remain: struct fields typed `Any` or left abstract, `getfield(<x>, Symbol(…))` lookups and
+  `format::Dict{String,Any}` parameters. A rise fails. A fall fails too, until the count is lowered
+  in the same change, so each improvement is recorded. A change to the query build or row read
+  compares against `test/performance/alloc_baseline.jl` (allocations and warm build time; not a CI
+  gate, since the numbers move between Julia versions).

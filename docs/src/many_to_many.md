@@ -369,7 +369,7 @@ driver.sponsors.add(Dict(:id => 4))
 
 ### `.remove(targets...)` — Removing relationships
 
-Unlink specific items from the relationship. It takes the exact same arguments as `.add`. On MySQL, 4096 targets or more raise `QueryBuildError` for now ([#1355](https://github.com/PingoLee/PormG.jl/issues/1355)).
+Unlink specific items from the relationship. It takes the exact same arguments as `.add`. Any number of targets works: a `remove` that binds more parameters than one statement takes on the connection is split into several statements, run in one transaction, as `bulk_insert` splits its rows.
 
 ```julia
 # Remove sponsor with ID 2

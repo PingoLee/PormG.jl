@@ -173,15 +173,22 @@ function _is_blank_bulk_primary_key_value(value)
   return value isa AbstractString && isempty(strip(value))
 end
 
-function _is_auto_generated_bulk_primary_key(field_meta)
-  return field_meta.primary_key &&
-    hasfield(typeof(field_meta), :auto_increment) &&
-    getfield(field_meta, :auto_increment)
-end
+# "May the database generate this key?" — `Models._database_generates`, the fact the DDL renders on
+# every engine (#1393), asked of a key. Every write reader goes through here: leaving a key out of an
+# INSERT, allocating ids for it, matching `returning` rows by pre-allocated ids, reading back an
+# insert's id. It read the `auto_increment` slot until #1393, which is `true` on every `IDField`, so an
+# `IDField(generated = false)` key counted as generated: PostgreSQL allocated `nextval(NULL)`, and a
+# blank key column was left out of the INSERT.
+_is_auto_generated_bulk_primary_key(field_meta::PormGField)::Bool =
+  field_meta.primary_key && Models._database_generates(field_meta)
+
+# #1393: an `IDField` key the caller supplies (`generated = false`), which no engine fills.
+_is_caller_supplied_id_key(field_meta::PormGField)::Bool =
+  field_meta isa Models.sIDField && field_meta.primary_key && !Models._database_generates(field_meta)
 
 # #334: a UUIDField(primary_key = true, auto_add = true) is also PormG-minted, but through
-# `auto_add` rather than `auto_increment`. `_is_auto_generated_bulk_primary_key` alone must stay
-# auto_increment-only — `allocate_primary_keys` uses it to find a pk to reserve sequence values
+# `auto_add` rather than the database. `_is_auto_generated_bulk_primary_key` alone must stay
+# database-only — `allocate_primary_keys` uses it to find a pk to reserve sequence values
 # for, and a UUID pk has no sequence to reserve from. This is the wider "the DataFrame may leave
 # this pk column out or blank; PormG can mint it" check, used only by the blank-rescue below.
 function _is_pormg_minted_bulk_primary_key(field_meta)
@@ -238,6 +245,11 @@ auto-generated primary key, and return the DataFrame with the pk column populate
 
 Use this when you need the assigned ids **before** inserting—for example, to wire up
 foreign key columns in related tables that must be bulk-inserted in the same transaction.
+
+It serves a key the database generates, `IDField()`. On a model whose key is
+`IDField(generated = false)`, a key the caller supplies, it raises `QueryBuildError` whatever `df`
+holds: no engine has ids to allocate for such a key, so supply them in the DataFrame. A model with
+no `IDField` key (a `UUIDField` or `CharField` key, or none) gets `df` back unchanged.
 
 If `df` already contains the primary key column with at least one non-blank value it is
 returned unchanged and no ids are reserved. If the column is absent, or **every** value in
@@ -321,6 +333,18 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   settings, connection, conn_key = get_settings(objct)
   ensure_transaction_scope(model, connection)
   !settings.change_data && throw(_write_not_allowed("allocate_primary_keys", conn_key))
+
+  # #1393: a key the caller supplies has nothing to allocate from — no identity, no sequence, no rowid
+  # — and before this the call returned the frame with the ids missing (PostgreSQL's `nextval(NULL)`),
+  # or allocated ids a NOT NULL column without a default would never have drawn. Refused whatever the
+  # frame holds, so the outcome does not depend on the data.
+  for f in model.field_names
+    _is_caller_supplied_id_key(model.fields[f]) || continue
+    throw(QueryBuildError("allocate_primary_keys: the primary key $(f) of model $(model.name) is " *
+      "IDField(generated = false), a key the caller supplies, so $(_backend_name(connection)) has no " *
+      "ids to allocate for it. Supply the key in the DataFrame, or declare IDField() for a key the " *
+      "database generates."))
+  end
 
   # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
   # frame is RETURNED to the caller, so shared vectors would be user-visible aliasing —
@@ -499,6 +523,15 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   """
   result = fetch(settings, sql) |> DataFrames.DataFrame
   max_id = result[1, :max_id]
+  # #1393: a key PormG did not create can hold a non-integer (a REAL key declared `IDField()` by hand,
+  # or text). There is no next integer after it, so the call is refused here, never as `InexactError`.
+  # inspectdb declares such a key `IDField(generated = false)`, which `allocate_primary_keys` refuses
+  # before this read.
+  (ismissing(max_id) || isnothing(max_id) ||
+   (max_id isa Real && isinteger(max_id) && typemin(Int64) <= max_id <= typemax(Int64))) ||
+    throw(QueryBuildError("allocate_primary_keys: the primary key $(pk_field) of model $(model.name) " *
+      "holds a value that is not a 64-bit integer, so SQLite has no next id to allocate from. Supply the key " *
+      "in the DataFrame, or declare it IDField(generated = false)."))
   max_id = (ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id)
   reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field, connection)
   max_id = max(max_id, something(reserved_max, Int64(0)))

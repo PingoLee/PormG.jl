@@ -156,14 +156,14 @@ end
 
 # What: the spellings the refusal points at build, with their DDL on all three engines.
 # Expected DDL below. Why: the advice must be a declaration that works, and `IDField(generated =
-# false)` is the one with no identity on PostgreSQL. SQLite and MySQL auto-increment every IDField
-# key (a rowid alias, AUTO_INCREMENT): `generated` is PostgreSQL's identity keyword.
+# false)` is a key no engine fills: no identity, a SQLite `BIGINT` key (not a rowid alias), no MySQL
+# AUTO_INCREMENT. (Moved by #1393: SQLite and MySQL auto-incremented it, ignoring `generated`.)
 @testset "the spellings the refusal names build, with their DDL" begin
   natural = FUK_M.IDField(generated = false)
   @test natural.primary_key && !natural.generated
   @test _fuk_ddl(natural, FukPg()) == "\"circuitid\" bigint PRIMARY KEY UNIQUE NOT NULL"
-  @test _fuk_ddl(natural, FukSl()) == "\"circuitid\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL"
-  @test _fuk_ddl(natural, FukMy()) == "`circuitid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY"
+  @test _fuk_ddl(natural, FukSl()) == "\"circuitid\" BIGINT PRIMARY KEY UNIQUE NOT NULL"
+  @test _fuk_ddl(natural, FukMy()) == "`circuitid` BIGINT NOT NULL PRIMARY KEY"
 
   text_key = FUK_M.CharField(primary_key = true, max_length = 10)
   @test _fuk_ddl(text_key, FukPg()) == "\"circuitid\" varchar(10) PRIMARY KEY NOT NULL"

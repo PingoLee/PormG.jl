@@ -1136,7 +1136,7 @@ end
 
   # A key PormG would not write (an `INT`, no `AUTO_INCREMENT`) is an IDField, said out loud.
   key = _MM._mysql_live_table(_mm_my, "lap", [_mm_col("lap", "lapid", "int", "NO", missing, "", "PRI")], Any[], Any[], Any[])
-  @test (@test_logs (:warn, r"IDField is BIGINT AUTO_INCREMENT") _MM.field_from_spec(key.columns["lapid"], key, _mm_my)) isa Models.sIDField
+  @test (@test_logs (:warn, r"IDField is BIGINT on MySQL") _MM.field_from_spec(key.columns["lapid"], key, _mm_my)) isa Models.sIDField
 
   # A stamped default whose re-print has no declarable form is left out, said out loud, not raised.
   raw = "lower(`order`)"

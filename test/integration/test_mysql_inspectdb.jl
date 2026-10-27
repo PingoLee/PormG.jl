@@ -127,7 +127,7 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
             # its literal, and the view.
             named(l) = (d = Dict(l.kwargs); string(something(get(d, :column, nothing), get(d, :check, nothing), get(d, :view, ""))))
             warned(re) = sort!([named(l) for l in logs if l.level == Base.CoreLogging.Warn && occursin(re, string(l.message))])
-            @test warned(r"IDField is BIGINT AUTO_INCREMENT") == ["legacyid"]
+            @test warned(r"IDField is BIGINT on MySQL") == ["legacyid"]
             @test warned(r"no PormG field type") == ["e", "u"]
             @test warned(r"generated column made by hand") == ["hid", "twice"]
             @test warned(r"CHECK whose condition MySQL prints") == ["m4c_legacy_order_pos"]

@@ -5492,6 +5492,276 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract quarter F datetime - date | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract quarter F datetime - date | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+  ("Extract quarter F datetime - date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract quarter F datetime - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract quarter F datetime - date | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+  ("Extract quarter F datetime - date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract quarter F datetime - date | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract quarter F datetime - date | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+  ("Extract quarter F datetime - date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract year F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract year F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract year F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract month F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract month F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract month F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+  ("Extract month F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract month F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract month F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+  ("Extract month F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract month F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract month F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+  ("Extract century F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract century F interval * 2 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+  ("Extract century F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract century F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract century F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+  ("Extract century F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract century F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract century F interval * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+  ("Extract century F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+  ("Extract dow Sum interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract dow Sum interval | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract dow Sum interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+  ("Extract dow Sum interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract dow Sum interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract dow Sum interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+  ("Extract dow Sum interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract dow Sum interval | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract dow Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+  ("Extract week F datetime - datetime | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract week F datetime - datetime | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract week F datetime - datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract week F datetime - datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract week F datetime - datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract week F datetime - datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract week F datetime - datetime | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract week F datetime - datetime | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract week F datetime - datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("DATE F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("DATE F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("DATE F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+  ("DATE F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("DATE F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("DATE F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+  ("DATE F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("DATE F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("DATE F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+  ("DATE CTE interval col | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
+  ("DATE CTE interval col | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("DATE CTE interval col | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
+  ("DATE CTE interval col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
+  ("DATE CTE interval col | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("DATE CTE interval col | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
+  ("DATE CTE interval col | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("DATE CTE interval col | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("DATE CTE interval col | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("WEEK_DAY Sum interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("WEEK_DAY Sum interval | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("WEEK_DAY Sum interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+  ("WEEK_DAY Sum interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function WEEK_DAY is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("WEEK_DAY Sum interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function WEEK_DAY is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("WEEK_DAY Sum interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+  ("WEEK_DAY Sum interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("WEEK_DAY Sum interval | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("WEEK_DAY Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+  ("QUARTER F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("QUARTER F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("QUARTER F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+  ("QUARTER F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUARTER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("QUARTER F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUARTER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("QUARTER F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+  ("QUARTER F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("QUARTER F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("QUARTER F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+  ("QUADRIMESTER F datetime - datetime | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("QUADRIMESTER F datetime - datetime | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("QUADRIMESTER F datetime - datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+  ("QUADRIMESTER F datetime - datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUADRIMESTER is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("QUADRIMESTER F datetime - datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUADRIMESTER is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("QUADRIMESTER F datetime - datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+  ("QUADRIMESTER F datetime - datetime | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("QUADRIMESTER F datetime - datetime | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("QUADRIMESTER F datetime - datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+  ("ToChar YYYY-MM F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+  ("ToChar YYYY-MM F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar YYYY-MM F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar YYYY-MM F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+  ("ToChar YYYY-MM F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+  ("Extract hour F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract second Sum interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract second Sum interval | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second Sum interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract second Sum interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract second Sum interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract second Sum interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract second Sum interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract second Sum interval | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract year F hop date + interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F hop date + interval | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year F hop date + interval | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year F hop date + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F hop date + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F hop date + interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F hop date + interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F hop date + interval | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year F hop date + interval | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
   ("Round date | alone", :sqlite) =>

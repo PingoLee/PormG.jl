@@ -268,6 +268,7 @@ const _EKM_FORMATTER_FAMILY = Dict(
   "format_year_sql" => :int, "format_hour_sql" => :int, "format_minute_sql" => :int,
   "format_second_sql" => :int, "format_month_sql" => :int, "format_day_sql" => :int,
   "format_quarter_sql" => :int, "format_week_sql" => :int, "format_week_day_sql" => :int,
+  "format_dow_sql" => :int, "format_quadrimester_sql" => :int,   # #1388
   "format_yyyy_mm" => :text)   # `ToChar(…, "YYYY-MM")`
 const _EKM_TEXTLESS_FAMILY = Dict(
   "bool" => :bool, "float" => :float, "decimal" => :decimal, "numeric" => :numeric,

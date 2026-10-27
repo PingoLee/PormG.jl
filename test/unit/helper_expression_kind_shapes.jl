@@ -396,6 +396,25 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Extract hour F datetime - datetime", :Race,     m -> _EKM_FN.Extract(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"), "hour")),
   ("Extract minute F interval * 2", :Result,        m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "minute")),
   ("Extract epoch F interval * 2", :Result,         m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "epoch")),
+  # ── #1388: a date part over a duration expression ─────────────────────────────────────────────────
+  # A calendar part: a duration has no calendar date on any engine.
+  ("Extract quarter F datetime - date", :Race,      m -> _EKM_FN.Extract(_EKM_Q.F("start_at") - _EKM_Q.F("date"), "quarter")),
+  ("Extract year F interval * 2", :Result,          m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "year")),
+  ("Extract month F interval * 2", :Result,         m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "month")),
+  ("Extract century F interval * 2", :Result,       m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "century")),
+  ("Extract dow Sum interval", :Result,             m -> _EKM_FN.Extract(_EKM_FN.Sum("fastestlaptime"), "dow")),
+  ("Extract week F datetime - datetime", :Race,     m -> _EKM_FN.Extract(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"), "week")),
+  ("DATE F interval * 2",     :Result,              m -> _EKM_Q.DATE(_EKM_Q.F("fastestlaptime") * 2)),
+  ("DATE CTE interval col",   :Result,              m -> _EKM_Q.DATE(PormG.CTE("c", "d"))),
+  ("WEEK_DAY Sum interval",   :Result,              m -> _EKM_Q.WEEK_DAY(_EKM_FN.Sum("fastestlaptime"))),
+  ("QUARTER F interval * 2",  :Result,              m -> _EKM_Q.QUARTER(_EKM_Q.F("fastestlaptime") * 2)),
+  ("QUADRIMESTER F datetime - datetime", :Race,     m -> _EKM_Q.QUADRIMESTER(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"))),
+  ("ToChar YYYY-MM F interval * 2", :Result,        m -> _EKM_FN.ToChar(_EKM_Q.F("fastestlaptime") * 2, "YYYY-MM")),
+  # A clock part reads the duration's components on PostgreSQL; it is not decided here. And a date plus
+  # a duration is a timestamp, which has a calendar date.
+  ("Extract hour F interval * 2", :Result,          m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "hour")),
+  ("Extract second Sum interval", :Result,          m -> _EKM_FN.Extract(_EKM_FN.Sum("fastestlaptime"), "second")),
+  ("Extract year F hop date + interval", :Result,   m -> _EKM_FN.Extract(_EKM_Q.F("raceid__date") + _EKM_Q.F("fastestlaptime"), "year")),
   # ── #1387: a number function over a date, a timestamp, a time or a UUID ─────────────────────────
   ("Round date",              :Race,                m -> _EKM_FN.Round("date")),
   ("Floor datetime",          :Race,                m -> _EKM_FN.Floor("start_at")),
@@ -434,7 +453,11 @@ _ekm_cte_scaled!(q, mod) = q.with("c" => mod.Result.objects.values("resultid",
                                   join_field = "resultid" => "resultid")
 _ekm_cte_decimal!(q, mod) = q.with("c" => mod.Constructor_results.objects.values("constructorresultsid", "p" => "points"),
                                    join_field = "constructorresultsid" => "constructorresultsid")
+# #1388: a CTE `c` whose column `d` is a duration expression.
+_ekm_cte_interval!(q, mod) = q.with("c" => mod.Result.objects.values("resultid", "d" => _EKM_FN.Cast(_EKM_Q.F("fastestlaptime") * 2, "interval")),
+                                    join_field = "resultid" => "resultid")
 const EKM_PREP = Dict{String,Function}(
+  "DATE CTE interval col" => _ekm_cte_interval!,
   "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!,
   "Cast CTE scale 1 col to scale 2" => _ekm_cte_scaled!, "Cast CTE scale 3 col to scale 2" => _ekm_cte_scaled!,
   "Cast CTE decimal col to scale 2" => _ekm_cte_decimal!, "Cast CTE decimal col to scale 1" => _ekm_cte_decimal!)

@@ -79,4 +79,3 @@ These are open issues, each of which will close with a fix or a documented rule:
 
 - An integer cast of a value outside the target's range returns the value, or wraps past 64 bits, where the cast means an error ([#1356](https://github.com/PingoLee/PormG.jl/issues/1356)).
 - A conditional over text and a number (`Greatest`, `Case`, `Coalesce`) builds, and MySQL compares and returns text there (`GREATEST('10', 9)` is `'9'`), although the query does not say which of the two it means. Declare it with `Cast` on one side ([#1327](https://github.com/PingoLee/PormG.jl/issues/1327)).
-- The importer's corpus of catalog shapes and its index-catalog checks have no MySQL rows in the test suite yet ([#1362](https://github.com/PingoLee/PormG.jl/issues/1362)).

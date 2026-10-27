@@ -14,6 +14,16 @@ using Test, DataFrames, Dates, Decimals
 const _MY_T = "pormg_my_phase1_values"
 const _MY_PARENT = "pormg_my_phase1_driver"
 const _MY_CHILD = "pormg_my_phase1_result"
+# A model over a table this file drops first and never creates (#1365): the server refuses every statement
+# on it, whatever the database holds. The F1 `status` table a full `runtests.jl` builds is not one of those.
+const _MY_ABSENT = "pormg_my_phase1_absent"
+module P1Models
+import PormG
+import PormG.Models
+Absent = Models.Model("pormg_my_phase1_absent",
+  statusid = Models.IDField(),
+  status = Models.CharField(max_length = 20))
+end
 
 @testset "MySQL backend, phase 1 (#1130)" begin
 if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
@@ -22,7 +32,7 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
     rows(sql; params = nothing) = DataFrame(run(sql; params = params))
     msg(e) = sprint(showerror, e)
 
-    for t in (_MY_CHILD, _MY_PARENT, _MY_T)
+    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT)
         run("DROP TABLE IF EXISTS $(t)")
     end
 
@@ -145,17 +155,26 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
     end
 
     # What: a model read and a model write reach the server.
-    # SQL: `SELECT … FROM \`status\` …`, `COUNT(*)` and `INSERT INTO \`status\` …`, which the server
-    # refuses (this database has no `status` table).
+    # SQL: `SELECT … FROM \`pormg_my_phase1_absent\` …`, `COUNT(*)` and `INSERT INTO …`, which the server
+    # refuses: the file drops that table first and never creates it.
     # Why: reads render for MySQL since phase 2a and single-row writes since phase 3a
     # (`test_mysql_reads.jl` and `test_mysql_writes.jl` run them on real tables); each one reaches the
-    # server as a statement, and its refusal arrives as a PormG error naming the table.
+    # server as a statement, and its refusal arrives as a PormG error naming the table. The model is the
+    # file's own (#1365): the F1 `status` table it used to read exists after a full `runtests.jl`, which
+    # turned all three refusals into rows and wrote one into the fixture.
     @testset "a model read and a model write reach the server" begin
-        for q in (() -> M.Status.objects.filter("statusid" => 1).list(),
-                  () -> M.Status.objects.count(),
-                  () -> M.Status.objects.create("status" => "x"))
-            e = try q(); nothing catch err; err end
-            @test e isa PormG.PormGError && occursin("status", msg(e))
+        PormG.config["p1_my"] = PormG.Configuration.Settings(connections = pool, change_data = true, db_def_folder = "p1_my")
+        try
+            Base.invokelatest(PormG.Models.set_models, P1Models, "p1_my")
+            for q in (() -> P1Models.Absent.objects.filter("statusid" => 1).list(),
+                      () -> P1Models.Absent.objects.count(),
+                      () -> P1Models.Absent.objects.create("status" => "x"))
+                e = try q(); nothing catch err; err end
+                # The server's refusal (1146), not one PormG made before sending: a StatementError.
+                @test e isa PormG.StatementError && occursin(_MY_ABSENT, msg(e))
+            end
+        finally
+            delete!(PormG.config, "p1_my")
         end
     end
 
@@ -371,7 +390,7 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test rows("SELECT 1 AS one WHERE 1 IN ($(join(fill("?", limit), ", ")))"; params = collect(1:limit)).one == [1]
     end
 
-    for t in (_MY_CHILD, _MY_PARENT, _MY_T)
+    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT)
         run("DROP TABLE IF EXISTS $(t)")
     end
 end

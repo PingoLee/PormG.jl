@@ -6433,4 +6433,408 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb`.`date` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round date | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb`.`date` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"date\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"date\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"date\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round date | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"date\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2`.`date` AS DECIMAL(65,30)), ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round date | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2`.`date` AS DECIMAL(65,30)), ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2\".\"date\")::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2\".\"date\")::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2\".\"date\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round date | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2\".\"date\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Floor datetime | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on MySQL: PormG cannot type"),
+  ("Floor datetime | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"start_at\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Floor datetime | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"start_at\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Floor datetime | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on SQLite: PormG cannot typ"),
+  ("Floor datetime | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(`R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor datetime | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((\"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor datetime | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((\"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Floor datetime | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ceil time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `CEIL(…)` on one side, is not supported on MySQL: PormG cannot type `CEIL(…)`, and the SQ"),
+  ("Ceil time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CEIL((\"Tb\".\"time\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Ceil time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CEIL((\"Tb\".\"time\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Ceil time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `CEIL(…)` on one side, is not supported on SQLite: PormG cannot type `CEIL(…)`, and the S"),
+  ("Ceil time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL(`R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ceil time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ceil time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Ceil time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sqrt date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "SQRT(`Tb`.`date`) > ?", params = [("10", "Int64")]),
+  ("Sqrt date | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "SQRT(`Tb`.`date`) > ?", params = [("\"10.5\"", "String")]),
+  ("Sqrt date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "SQRT((\"Tb\".\"date\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Sqrt date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "SQRT((\"Tb\".\"date\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Sqrt date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"date\") > ?", params = [("10", "Int64")]),
+  ("Sqrt date | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"date\") > ?", params = [("10.5", "Float64")]),
+  ("Sqrt date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sqrt date | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Sqrt date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT((\"R2\".\"date\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sqrt date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT((\"R2\".\"date\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Sqrt date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(\"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sqrt date | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(\"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Exp datetime | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXP(`Tb`.`start_at`) > ?", params = [("10", "Int64")]),
+  ("Exp datetime | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "EXP(`Tb`.`start_at`) > ?", params = [("\"10.5\"", "String")]),
+  ("Exp datetime | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXP((\"Tb\".\"start_at\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Exp datetime | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXP((\"Tb\".\"start_at\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Exp datetime | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXP(\"Tb\".\"start_at\") > ?", params = [("10", "Int64")]),
+  ("Exp datetime | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "EXP(\"Tb\".\"start_at\") > ?", params = [("10.5", "Float64")]),
+  ("Exp datetime | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP(`R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Exp datetime | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP(`R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Exp datetime | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP((\"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Exp datetime | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP((\"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Exp datetime | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Exp datetime | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXP(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Ln time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "LN(`Tb`.`time`) > ?", params = [("10", "Int64")]),
+  ("Ln time | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "LN(`Tb`.`time`) > ?", params = [("\"10.5\"", "String")]),
+  ("Ln time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "LN((\"Tb\".\"time\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Ln time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "LN((\"Tb\".\"time\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Ln time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "LN(\"Tb\".\"time\") > ?", params = [("10", "Int64")]),
+  ("Ln time | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "LN(\"Tb\".\"time\") > ?", params = [("10.5", "Float64")]),
+  ("Ln time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN(`R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ln time | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN(`R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Ln time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ln time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Ln time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Ln time | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    LN(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Power date 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER(`Tb`.`date`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "POWER(`Tb`.`date`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power date 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER((\"Tb\".\"date\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "POWER((\"Tb\".\"date\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power date 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"date\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"date\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Power date 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`date`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`date`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Power date 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER((\"R2\".\"date\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER((\"R2\".\"date\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Power date 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(\"R2\".\"date\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Power date 2 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(\"R2\".\"date\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Mod datetime 3 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD(`Tb`.`start_at`, ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "MOD(`Tb`.`start_at`, ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod datetime 3 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD((\"Tb\".\"start_at\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "MOD((\"Tb\".\"start_at\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("3", "Int64"), ("3", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod datetime 3 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"start_at\", ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"start_at\", ?) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10.5", "Float64")]),
+  ("Mod datetime 3 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`start_at`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`start_at`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod datetime 3 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD((\"R2\".\"start_at\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD((\"R2\".\"start_at\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod datetime 3 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(\"R2\".\"start_at\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod datetime 3 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(\"R2\".\"start_at\", ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Abs date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `ABS(…)` on one side, is not supported on MySQL: PormG cannot type `"),
+  ("Abs date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"date\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Abs date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"date\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Abs date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `ABS(…)` on one side, is not supported on SQLite: PormG cannot type "),
+  ("Abs date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Abs date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((\"R2\".\"date\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Abs date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((\"R2\".\"date\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Abs date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(\"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Abs time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `ABS(…)` on one side, is not supported on MySQL: PormG cannot type `ABS(…)`, and the SQL "),
+  ("Abs time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"time\")::numeric) > \$1", params = [("10", "Int64")]),
+  ("Abs time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"time\")::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Abs time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `ABS(…)` on one side, is not supported on SQLite: PormG cannot type `ABS(…)`, and the SQL"),
+  ("Abs time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Abs time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Abs time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((\"R2\".\"time\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Abs time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `SUM(…)` on one side, is not supported on MySQL: PormG cannot type `"),
+  ("Sum date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"date\") > \$1", params = [("10", "Int64")]),
+  ("Sum date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `SUM(…)` on one side, is not supported on SQLite: PormG cannot type "),
+  ("Sum date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Avg datetime | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "AVG(`Tb`.`start_at`) > ?", params = [("10", "Int64")]),
+  ("Avg datetime | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "AVG(\"Tb\".\"start_at\") > \$1", params = [("10", "Int64")]),
+  ("Avg datetime | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "AVG(\"Tb\".\"start_at\") > ?", params = [("10", "Int64")]),
+  ("Avg datetime | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :having, sql = "AVG(\"Tb\".\"start_at\") > ?", params = [("10.5", "Float64")]),
+  ("Avg datetime | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Avg datetime | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Avg datetime | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Avg datetime | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Avg datetime | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(`R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Avg datetime | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Avg datetime | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Avg datetime | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Sum time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `SUM(…)` on one side, is not supported on MySQL: PormG cannot type `SUM(…)`, and the SQL "),
+  ("Sum time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"time\") > \$1", params = [("10", "Int64")]),
+  ("Sum time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a time of day, with `SUM(…)` on one side, is not supported on SQLite: PormG cannot type `SUM(…)`, and the SQL"),
+  ("Sum time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum time | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(`R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round hop date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb_1`.`date` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round hop date | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb_1`.`date` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round hop date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb_1\".\"date\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round hop date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb_1\".\"date\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round hop date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb_1\".\"date\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round hop date | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb_1\".\"date\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round hop date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2_1`.`date` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round hop date | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2_1`.`date` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round hop date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2_1\".\"date\")::numeric, \$3::integer) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round hop date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2_1\".\"date\")::numeric, \$3::integer) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round hop date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2_1\".\"date\", ?) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round hop date | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2_1\".\"date\", ?) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Round F date + Day(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST((`Tb`.`date` + INTERVAL ? DAY) AS DECIMAL(65,30)), ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST((`Tb`.`date` + INTERVAL ? DAY) AS DECIMAL(65,30)), ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round F date + Day(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((((\"Tb\".\"date\" + make_interval(days => \$3::integer)))::date)::numeric, \$4::integer) > \$5", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND((((\"Tb\".\"date\" + make_interval(days => \$3::integer)))::date)::numeric, \$4::integer) > \$5", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round F date + Day(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(date(\"Tb\".\"date\", '+' || ? || ' days'), ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "ROUND(date(\"Tb\".\"date\", '+' || ? || ' days'), ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round F date + Day(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST((`R2`.`date` + INTERVAL ? DAY) AS DECIMAL(65,30)), ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST((`R2`.`date` + INTERVAL ? DAY) AS DECIMAL(65,30)), ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round F date + Day(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((((\"R2\".\"date\" + make_interval(days => \$4::integer)))::date)::numeric, \$5::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((((\"R2\".\"date\" + make_interval(days => \$4::integer)))::date)::numeric, \$5::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round F date + Day(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(date(\"R2\".\"date\", '+' || ? || ' days'), ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round F date + Day(1) | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(date(\"R2\".\"date\", '+' || ? || ' days'), ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Floor Max date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on MySQL: PormG cannot type"),
+  ("Floor Max date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "FLOOR((MAX(\"Tb\".\"date\"))::numeric) > \$1", params = [("10", "Int64")]),
+  ("Floor Max date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :having, sql = "FLOOR((MAX(\"Tb\".\"date\"))::numeric) > \$1", params = [("\"10.5\"", "String")]),
+  ("Floor Max date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "`>` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on SQLite: PormG cannot typ"),
+  ("Floor Max date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(MAX(`R2`.`date`)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor Max date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((MAX(\"R2\".\"date\"))::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor Max date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((MAX(\"R2\".\"date\"))::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Floor Max date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(MAX(\"R2\".\"date\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round uuid | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb`.`uuid_token` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round uuid | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND(CAST(`Tb`.`uuid_token` AS DECIMAL(65,30)), ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round uuid | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"uuid_token\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round uuid | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"uuid_token\")::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round uuid | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"uuid_token\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round uuid | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"uuid_token\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round uuid | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2`.`uuid_token` AS DECIMAL(65,30)), ?) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round uuid | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2`.`uuid_token` AS DECIMAL(65,30)), ?) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round uuid | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2\".\"uuid_token\")::numeric, \$3::integer) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round uuid | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((\"R2\".\"uuid_token\")::numeric, \$3::integer) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Round uuid | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2\".\"uuid_token\", ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round uuid | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(\"R2\".\"uuid_token\", ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Sum uuid | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(`Tb`.`uuid_token`) > ?", params = [("10", "Int64")]),
+  ("Sum uuid | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"uuid_token\") > \$1", params = [("10", "Int64")]),
+  ("Sum uuid | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"uuid_token\") > ?", params = [("10", "Int64")]),
+  ("Sum uuid | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum uuid | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum uuid | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum uuid | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(`R2`.`uuid_token`) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum uuid | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"uuid_token\") as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum uuid | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"uuid_token\") as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM `Tb`.`date`) + 0)) > ?", params = [("10", "Int64")]),
+  ("Round Extract year | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM \"Tb\".\"date\")::integer)::numeric)::integer > \$1", params = [("10", "Int64")]),
+  ("Round Extract year | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Round Extract year | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((EXTRACT(YEAR FROM `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((EXTRACT(YEAR FROM \"R2\".\"date\")::integer)::numeric)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(strftime('%Y', \"R2\".\"date\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM(EXTRACT(HOUR FROM `Tb`.`time`)) DIV 1) > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(EXTRACT(HOUR FROM \"Tb\".\"time\")::integer) > \$1", params = [("10", "Int64")]),
+  ("Sum Extract hour time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(CAST(strftime('%H', \"Tb\".\"time\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM(EXTRACT(HOUR FROM `R2`.`time`)) DIV 1) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(EXTRACT(HOUR FROM \"R2\".\"time\")::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(CAST(strftime('%H', \"R2\".\"time\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
 )

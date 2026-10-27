@@ -1313,10 +1313,13 @@ end
                        "@date" => QB.DATE)
     @test (name, date_of_time(() -> RA.objects.values("v" => node(tm())))) == (name, true)
   end
-  @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "YYYY-MM-DD")))
-  # A key with a date component — a year, a month, a day — is refused; a minute (`MI`, `%i`) is not.
-  for key in ("DD/MM/YYYY", "MM", "DD", "YYYY")
-    @test (key, date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), key)))) == (key, true)
+  # `ToChar` with a date component — a year, a month, a day — is refused on every engine (#1336), before
+  # this MySQL arm, which stays its backstop; a minute (`MI`, `%i`) is not.
+  tochar_of_time(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                           e isa PormG.QueryBuildError && occursin("a time of day has no date", sprint(showerror, e)) &&
+                           occursin("(#1336)", sprint(showerror, e)))
+  for key in ("YYYY-MM-DD", "DD/MM/YYYY", "MM", "DD", "YYYY")
+    @test (key, tochar_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), key)))) == (key, true)
   end
   @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%i')"
   @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "HH:MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%H:%i')"

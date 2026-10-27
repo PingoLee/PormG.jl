@@ -628,6 +628,23 @@ function _check_temporal_expression(v::FObject, row::_TemporalRow, part::String,
   throw(Dialect._duration_calendar_refusal("The \e[31m$(part)\e[0m part"))
 end
 
+# #1336: `ToChar` whose format writes a year, a month or a day (`Dialect._tochar_reads_date`) over a time
+# of day, which has no date: SQLite's `strftime` reads one as `2000-01-01`, PostgreSQL's `to_char` reads
+# it as an interval, and MySQL's `DATE_FORMAT` gives it today's date. No engine has the meaning, so it is
+# refused on every engine, as `Extract`'s calendar parts are over a `TimeField` (#1070). The operand is
+# the walk's: a column, `Max` of one, any operand it names a time. Its clock keys build. The
+# `"YYYY-MM"` key meets the #1070 row first, over a column. A native PostgreSQL template is no key and
+# passes (fails open, as the #1070 check does).
+function _check_tochar_date_of_time(v::FObject, instruc::SQLInstruction)
+  format = get(v.kwargs, "format", nothing)
+  (format isa AbstractString && Dialect._tochar_reads_date(format)) || return nothing
+  _expression_kind(v.column, instruc) isa CTime || return nothing
+  throw(QueryBuildError(
+    "\e[4m\e[31mToChar(…, \"$(format)\")\e[0m over a time is not supported: a time of day has no date, so " *
+    "the year, month or day in the format has no value on any engine (#1336). Format its clock alone " *
+    "(\e[32m\"HH:MI:SS\"\e[0m), or take the date from a date or a timestamp column."))
+end
+
 # #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a
 # uuid, a timestamp, an interval or a JSON document, nor one whose fill is any of those, and fails the
 # statement — while SQLite's `pormg_lpad` pads whatever text the value converts to. So a typed operand
@@ -820,6 +837,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # the same point as `@len` above, for the same reason, but it fails OPEN — see
   # `_check_temporal_operand`.
   v isa FObject && _check_temporal_operand(v, instruc)
+  # #1336: `ToChar` with a date in its format over a time of day, at the same point.
+  v isa FObject && v.function_name == "EXTRACT_DATE" && _check_tochar_date_of_time(v, instruc)
   # #1027: a `Concat` operand that is not text — a boolean, a float or a decimal column, a timestamp,
   # or an expression of one — read once the operands render, as the checks around it are. A literal
   # was refused when the `Concat` was built. This is the one site every `Concat` renders through, the

@@ -248,8 +248,9 @@ M.Result.objects.values("y" => Extract(F("raceid__date") + F("fastestlaptime"), 
 A foreign key's value is the related row's key, so a part over it is
 checked against that key's field: on `M.Result`, `"raceid__@year"` raises `QueryBuildError`,
 because `raceid` holds the race's integer id. Read the race's date through the relation instead,
-with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
-`to_char` also formats numbers on PostgreSQL.
+with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked by this row only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
+`to_char` also formats numbers on PostgreSQL; any portable format that writes a date is refused over a
+time (#1336, see [`ToChar`](#ToChar-—-Format-as-String)).
 
 A date part's value has a range: `@month` and `MONTH` `1`–`12`, `@day` and `DAY` `1`–`31`, the
 clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and `DOY` `1`–`366`. An
@@ -1299,6 +1300,12 @@ instant. PormG spells the format for each engine itself: `HH` is the 24-hour clo
 `T` separator and the `.SSS` milliseconds render as written. On MySQL `ToChar` over a `DurationField`
 raises `QueryBuildError`, since a duration is its microseconds there: `Cast(x, "text")` gives its
 `HH:MM:SS` text.
+
+A time of day has no date, so over a `TimeField` (or `Max` of one) a format that writes a year, a
+month or a day raises `QueryBuildError` on every engine (#1336). SQLite would write `2000-01-01`,
+PostgreSQL would read the time as an interval, and MySQL would give it today's date. The clock formats
+(`"HH"`, `"MI"`, `"SS"`, `"HH:MI"`, `"HH:MI:SS"`, `"HH:MI:SS.SSS"`) format a time on every engine:
+`ToChar("time", "HH:MI")` on `M.Race`.
 
 | `format` | renders as |
 |---|---|

@@ -6231,23 +6231,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast time to date | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
   ("ToChar time YYYY-MM-DD | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported on MySQL, which reads a time's date as today's: a time has no date."),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported on MySQL, which reads a time's date as today's: a time has no date."),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time YYYY-MM-DD | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported on MySQL, which reads a time's date as today's: a time has no date."),
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
   ("ToChar time HH:MI | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | alone", :sqlite) =>

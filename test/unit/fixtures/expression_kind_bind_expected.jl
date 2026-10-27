@@ -6569,22 +6569,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast time to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\")::date as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
-  ("ToChar time YYYY-MM-DD | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "to_char(\"Tb\".\"time\", 'YYYY-MM-DD') > \$1", params = [("\"10\"", "String")]),
-  ("ToChar time YYYY-MM-DD | alone", :postgres, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "to_char(\"Tb\".\"time\", 'YYYY-MM-DD') > \$1", params = [("\"pole\"", "String")]),
-  ("ToChar time YYYY-MM-DD | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%d', \"Tb\".\"time\") > ?", params = [("\"10\"", "String")]),
-  ("ToChar time YYYY-MM-DD | alone", :sqlite, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%d', \"Tb\".\"time\") > ?", params = [("\"pole\"", "String")]),
-  ("ToChar time YYYY-MM-DD | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    to_char(\"R2\".\"time\", 'YYYY-MM-DD') as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("ToChar time YYYY-MM-DD | subquery", :postgres, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    to_char(\"R2\".\"time\", 'YYYY-MM-DD') as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("ToChar time YYYY-MM-DD | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%d', \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("ToChar time YYYY-MM-DD | subquery", :sqlite, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%d', \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("ToChar time HH:MI | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "DATE_FORMAT(`Tb`.`time`, '%H:%i') > ?", params = [("\"10\"", "String")]),
   ("ToChar time HH:MI | alone", :mysql, "v__@gt", "text pole") =>

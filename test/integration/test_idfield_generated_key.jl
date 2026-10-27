@@ -104,12 +104,8 @@ _ig1393_auto() = Models.Model(IG1393.auto;
     pool = PormG.config[PORMG_DB_FOLDER].connections
     q(sql) = PormG.ConnectionPool.fetch(pool, engine_sql(sql)) |> DataFrame
     exec(sql) = (PormG.ConnectionPool.fetch(pool, engine_sql(sql)); nothing)
-    # Child first (#276), so no engine needs CASCADE or suspended key checks. Not `Dialect.drop_table`:
-    # on MySQL that is three statements meant for one connection, which `fetch` cannot run, so a
-    # swallowed error there left the tables behind for the next run.
-    drop_all() = for t in (IG1393.lap, IG1393.circuit, IG1393.auto)
-        exec("""DROP TABLE IF EXISTS "$(t)" """)
-    end
+    # Child first (#276); `drop_scratch_tables!` (common_setup.jl) says why not `Dialect.drop_table`.
+    drop_all() = drop_scratch_tables!(pool, IG1393.lap, IG1393.circuit, IG1393.auto)
     connected(m) = (m.connect_key = PORMG_DB_FOLDER; m)
 
     drop_all()

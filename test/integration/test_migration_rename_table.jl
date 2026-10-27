@@ -121,9 +121,7 @@ end
     # A write returns no columns, which `DataFrame` cannot build on SQLite — so writes skip it.
     exec(sql) = (PormG.ConnectionPool.fetch(pool, engine_sql(sql)); nothing)
     # Child before parents: SQLite enforces foreign keys outside a migration (#276).
-    drop_all() = for t in (RT615.child, RT615.old, RT615.new, RT615.parent)
-        try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, t)); catch; end
-    end
+    drop_all() = drop_scratch_tables!(pool, RT615.child, RT615.old, RT615.new, RT615.parent)
 
     drop_all()
     try

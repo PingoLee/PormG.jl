@@ -1582,6 +1582,31 @@ end
     end
 end
 
+@testset "An expression too wide for its DecimalField raises 22003 on every engine and writes nothing (#1330)" begin
+    # What: `update("price" => Round(F("price") * 100_000_000, 2))` over 10.50 (1050000000.00, ten digits
+    # before the point of a DecimalField(10, 2)) raises StatementError with sqlstate 22003 on every
+    # engine, and the row keeps 10.50; `Round(F("price") * 1000, 2)` stores 10500.00. Expected SQL,
+    # PostgreSQL: `SET "price" = ROUND((("Tb"."price" * $2::bigint))::numeric, $3::integer)`, the column
+    # refusing the value; MySQL: no guard either, its strict sql_mode refusing it (measured: SQLSTATE 22003);
+    # SQLite: `SET "price" = CASE WHEN abs(CAST(replace(printf('%.14e', ROUND(…)), 'Inf', '9e999') AS REAL))
+    # < 99999999.995 THEN ROUND(…) ELSE abs(… - 1) END`. Why: SQLite stored the value, and every later read
+    # of the row raised 22003 (#1110).
+    label = "decimal-width-1330"
+    q() = M.Django_contract_scratch.objects.filter("label" => label)
+    price() = (q().values("price").list() |> first)[:price]
+    q().exists() && q().delete()
+    M.Django_contract_scratch.objects.create("label" => label, "price" => "10.50")
+    try
+        err = try q().update("price" => Round(F("price") * 100_000_000, 2)); nothing catch e; e end
+        @test err isa PormG.StatementError && err.sqlstate == "22003"
+        @test price() == Decimals.decimal("10.50")   # nothing was written
+        @test q().update("price" => Round(F("price") * 1000, 2)) == 1
+        @test price() == Decimals.decimal("10500")
+    finally
+        q().exists() && q().delete()
+    end
+end
+
 @testset "update writes Value, a joined column and a Subquery into a number field (#1320)" begin
     # What: on result 1, `update("grid" => Value(3))` stores 3; through
     # `cjoin_on("Driver", alias = "d", …)`, `update("grid" => Joined("d", "driverid"))` stores the

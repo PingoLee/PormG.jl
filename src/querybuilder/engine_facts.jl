@@ -272,6 +272,17 @@ _unapplied_decimal_width(::PormGPostgres) = 0
 _unapplied_decimal_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
 _unapplied_decimal_width(::PormGMySQL) = 65
 
+# #1330 — the widest `DecimalField(max_digits = p, …)` whose assignment the engine leaves unchecked, so an
+# expression `update` writes the value through PormG's width guard (`Dialect.decimal_assignment_guard_sql`);
+# `0`: the engine checks it. Assigning to `numeric(p, s)` means the value fits: PostgreSQL refuses a value
+# needing more than `p - s` digits before the point ("numeric field overflow", SQLSTATE 22003) and writes
+# nothing. MySQL's strict `sql_mode` refuses it too (error 1264, SQLSTATE 22003). SQLite's NUMERIC
+# affinity stores it, and the #1110 read then raises 22003 on every read of the row; up to
+# `SQLITE_EXACT_DECIMAL_DIGITS` that read applies the width, and a wider field is read unchecked too.
+_unchecked_decimal_assignment_width(::PormGPostgres) = 0
+_unchecked_decimal_assignment_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
+_unchecked_decimal_assignment_width(::PormGMySQL) = 0
+
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true

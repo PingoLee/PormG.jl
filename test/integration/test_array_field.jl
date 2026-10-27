@@ -88,7 +88,7 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
 
 @testset "ArrayField, live ($(PORMG_DB_FOLDER)) (#28)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, AF28_TABLE)); catch; end
+    drop() = drop_scratch_tables!(pool, AF28_TABLE)
 
     model = _af28_model()
     model.connect_key = PORMG_DB_FOLDER

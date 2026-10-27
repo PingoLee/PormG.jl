@@ -96,7 +96,7 @@ _na28_err(f) = try f(); nothing catch e; e end
 
 @testset "Network address fields, live ($(PORMG_DB_FOLDER)) (#28)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, NA28_TABLE)); catch; end
+    drop() = drop_scratch_tables!(pool, NA28_TABLE)
 
     model = _na28_model()
     model.connect_key = PORMG_DB_FOLDER

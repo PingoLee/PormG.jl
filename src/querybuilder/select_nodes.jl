@@ -1040,21 +1040,17 @@ end
 
 # #1356 — `x` cast to the integer `type` (`_guarded_integer_type`) on an engine whose cast does not apply
 # its range: the guard `Dialect.integer_cast_guard_sql` spells, which raises 22003 per row on a value
-# outside it. `x` is `Cast`'s operand, or the function `fname` a declared `output_field` casts (#1405); the
-# refusal names what the caller wrote, built from these two strings only when it is raised, so the render
-# reads no untyped `kwargs` slot (#1346). The guard names `x` several times, and a positional backend binds
-# a value once per marker, so the values `x` bound (`marks`, taken before it rendered) are bound again for
-# each further occurrence, in text order — nothing binds between them. Fails closed when that cannot be done exactly:
-# values bound in another clause's bucket, or a marker count that is not the number of values.
+# outside it. `x` is `Cast`'s operand, or the function `fname` a declared `output_field` casts (#1405). The
+# guard names `x` several times, so the values `x` bound (`marks`, taken before it rendered) are bound again
+# for each further occurrence (`_bind_operand_again!`), and it fails closed when that cannot be done exactly.
+# The refusal names what the caller wrote, built from these two strings only when it is raised, so the render
+# reads no untyped `kwargs` slot (#1346).
 function _integer_cast_guard(x::AbstractString, type::AbstractString, marks::Tuple{ParameterMark,NestedMark},
                              instruc::SQLInstruction, fname::String)::String
   conn = instruc.connection
   bits = Dialect.integer_cast_bits(type)::Int
   sql, occurrences = Dialect.integer_cast_guard_sql(conn, x, bits)
-  operand = bound_since(first(marks))
-  before, now = last(marks), nested_parameter_mark(instruc)
-  bound = (before === nothing || now === nothing) ? 0 : sum(now) - sum(before)
-  if !(bound == length(operand) && count(==('?'), x) == length(operand))
+  if !_bind_operand_again!(x, marks, occurrences, instruc)
     label = fname == "CAST" ? "Cast(…, \"$(type)\")" :
             "$(uppercasefirst(lowercase(fname)))(…; output_field = \"$(type)\")"
     throw(QueryBuildError(
@@ -1062,10 +1058,23 @@ function _integer_cast_guard(x::AbstractString, type::AbstractString, marks::Tup
       "more than once to apply the integer's range, and the values it binds cannot be bound again in step. " *
       "Cast a simpler expression, or compute the value before the cast."))
   end
+  return sql
+end
+
+# A guard that names its operand `x` `occurrences` times binds the values `x` bound (since `marks`) once per
+# occurrence, in text order: nothing binds between them. `false`, binding nothing, when that cannot be done
+# exactly: values bound in another clause's bucket, or a marker count that is not the number of values.
+# Shared by the #1356 integer cast and the #1330 decimal assignment.
+function _bind_operand_again!(x::AbstractString, marks::Tuple{ParameterMark,NestedMark}, occurrences::Int,
+                              instruc::SQLInstruction)::Bool
+  operand = bound_since(first(marks))
+  before, now = last(marks), nested_parameter_mark(instruc)
+  bound = (before === nothing || now === nothing) ? 0 : sum(now) - sum(before)
+  (bound == length(operand) && count(==('?'), x) == length(operand)) || return false
   for _ in 2:occurrences
     reattach_parameters!(instruc, copy(operand))
   end
-  return sql
+  return true
 end
 
 # #1130 — a value of several (`Coalesce`, `Greatest`/`Least`, `NullIf`, a `Case`'s branches) or a declared

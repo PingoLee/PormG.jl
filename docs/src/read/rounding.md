@@ -53,11 +53,8 @@ declaration reads back rounded to its scale, as PostgreSQL's column would hold i
 digits before the point than the declaration allows raises `StatementError` with
 `sqlstate == "22003"` on every read of it, the error PostgreSQL raises when such a value is written
 (#1110). On MySQL a column made wider than its field by hand raises the same error for a value the
-field cannot hold ([MySQL Guide](../mysql.md#Reads)). Such a cell can only come from a write PormG did not check: a tool other than PormG, or an
-expression `update` (*Writing a decimal* below), whose value's width SQLite does not check: an
-integer expression such as `F("grid") * 100` assigned to a `DecimalField(max_digits = 4,
-decimal_places = 2)` builds on SQLite and stores `2000` for a grid of `20`, where PostgreSQL and
-MySQL refuse the `UPDATE`.
+field cannot hold ([MySQL Guide](../mysql.md#Reads)). Such a cell can only come from a write PormG did not check, such as a tool other than PormG. An
+expression `update` (*Writing a decimal* below) is checked as it writes.
 
 `Sum` and `Avg` of a `DecimalField` read back as a `Decimal` on every engine. `Avg` of an integer reads
 back as a `Float64`:
@@ -227,7 +224,28 @@ q.update("points" => Round(F("points") / 3, 2))   # 4.67 on every engine
 
 An expression with nothing to round builds on every engine: the column itself, an integer column,
 `Round(x, d)` with `d` at most the field's places, or a `DecimalField` with fewer places. A
-`FloatField` or an `IntegerField` takes any number expression. An operand that is no number, such as a
+`FloatField` or an `IntegerField` takes any number expression.
+
+The expression's width is checked as it is written, on each row. A value that needs more than
+`max_digits - decimal_places` digits before the point raises `StatementError` with
+`sqlstate == "22003"` on every engine, and the `UPDATE` writes nothing. PostgreSQL and MySQL refuse
+it themselves. On SQLite PormG renders the check into the statement (#1330), so a value the column
+cannot hold is not stored only to fail on every later read. Whether a row overflows depends on its
+value, so the error comes when the statement runs, not when it is built:
+
+```julia
+# Constructor_results.points is a DecimalField(max_digits = 10, decimal_places = 2): up to 99999999.99
+# Its row 1 is race 18, and `raceid` is an integer column.
+M.Constructor_results.objects.filter("constructorresultsid" => 1).
+    update("points" => F("raceid") * 10_000_000)   # 180000000: nine digits before the point
+#   StatementError, sqlstate == "22003", on every engine; the row still holds 14.00
+M.Constructor_results.objects.filter("constructorresultsid" => 1).
+    update("points" => F("raceid") * 1_000_000)    # stores 18000000.00 on every engine
+```
+
+The check rounds first, as PostgreSQL does: into a `DecimalField(max_digits = 4, decimal_places = 2)`,
+`99.995` rounds to `100.00`, which is too wide. A `DecimalField` wider than 15 digits is not checked on SQLite, which stores
+none of its values exactly (#648). An operand that is no number, such as a
 UUID or a date, is refused into every number field on every engine
 ([Updating Records](../write/update.md#Basic-F-Expression-Usage), #1297).
 

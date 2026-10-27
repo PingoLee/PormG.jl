@@ -237,10 +237,12 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_GETFIELD = r"(?<!`)\bget(?:field|property|global)\b(?:\(|\s*,)\s*[@\w.]+\s*,\s*Symbol\("
 const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
-  # #1346 baseline (19 sites).
+  # #1346 baseline (19 sites); 20 since #1333.
   "src/Models.jl" => 2,                          # a relation's target model by binding name (#211)
   "src/migrations/importers.jl" => 3,            # a field constructor by its name, from introspection
-  "src/models/fields.jl" => 1,                   # a field type's default instance by its name
+  "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
+                                                 # type's accepted keywords by a name that arrives as a
+                                                 # string (#1333: the importers, the refusal message)
   "src/querybuilder/build_helpers.jl" => 1,      # a lookup transform by name
   "src/querybuilder/execution_write.jl" => 1,    # a foreign key's target model by binding name (#211)
   "src/querybuilder/filter_nodes.jl" => 1,       # Dialect operator by name

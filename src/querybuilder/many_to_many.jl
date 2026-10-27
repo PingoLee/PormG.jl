@@ -165,6 +165,22 @@ function add(manager::ManyToManyManager, targets...)
   return nothing
 end
 
+# #1355: the target ids of one write in groups that each fit one statement under the connection's bind
+# limit (`_backend_parameter_limit`, as the bulk writers size theirs, #84) — `per_target` parameters for
+# each id plus `fixed` for the statement. A write of more groups than one runs them in one transaction,
+# the caller's if one is open (`transaction_connection_for`), so a later group that fails leaves none
+# of them behind.
+function _m2m_id_chunks(connection, target_ids::Vector{Any}, per_target::Int, fixed::Int, op::Symbol)
+  per_statement = _effective_chunk_size(0, per_target, fixed, _backend_parameter_limit(connection), op,
+                                        _backend_name(connection))
+  return collect(Iterators.partition(target_ids, per_statement))
+end
+function _m2m_in_one_transaction(f, settings, statements::Int)
+  statements <= 1 && return f()
+  transaction_connection_for(settings) === nothing || return f()
+  return run_in_transaction(f, settings)
+end
+
 # Insert each (owner, target) pair that is not there yet, one method per engine.
 # PostgreSQL and MySQL: INSERT ... SELECT ... WHERE NOT EXISTS, idempotent whether or not the through
 # table has a unique constraint (auto-generated through tables have one; explicit through models
@@ -190,18 +206,24 @@ function _m2m_add!(connection::Union{PormGPostgres, PormGMySQL}, settings, table
   return nothing
 end
 
+# SQLite: one `INSERT OR IGNORE … VALUES (?, ?), …` per group of targets, two parameters each (#1355).
 function _m2m_add!(connection::PormGSQLite, settings, table_name, owner_column, related_column, owner_value,
                    target_ids)
-  parameters = get_parameter(connection)
-  set_context!(parameters, :select)
-  groups = String[]
-  for target_id in target_ids
-    owner_placeholder = add_parameter!(parameters, owner_value)
-    target_placeholder = add_parameter!(parameters, target_id)
-    push!(groups, "($owner_placeholder, $target_placeholder)")
+  chunks = _m2m_id_chunks(connection, target_ids, 2, 0, :many_to_many_add)
+  _m2m_in_one_transaction(settings, length(chunks)) do
+    for chunk in chunks
+      parameters = get_parameter(connection)
+      set_context!(parameters, :select)
+      groups = String[]
+      for target_id in chunk
+        owner_placeholder = add_parameter!(parameters, owner_value)
+        target_placeholder = add_parameter!(parameters, target_id)
+        push!(groups, "($owner_placeholder, $target_placeholder)")
+      end
+      sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+      fetch(settings, sql, parameters)
+    end
   end
-  sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
-  fetch(settings, sql, parameters)
   return nothing
 end
 
@@ -218,18 +240,19 @@ function remove(manager::ManyToManyManager, targets...)
   related_column = safe_column_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
 
-  parameters = get_parameter(connection)
-  set_context!(parameters, :where)
-  owner_placeholder = add_parameter!(parameters, owner_value)
-  
-  target_placeholders = String[]
-  for target_id in target_ids
-    push!(target_placeholders, add_parameter!(parameters, target_id))
+  # #1355: one `DELETE … IN (…)` per group of targets, one parameter each plus the owner's.
+  chunks = _m2m_id_chunks(connection, target_ids, 1, 1, :many_to_many_remove)
+  _m2m_in_one_transaction(settings, length(chunks)) do
+    for chunk in chunks
+      parameters = get_parameter(connection)
+      set_context!(parameters, :where)
+      owner_placeholder = add_parameter!(parameters, owner_value)
+      target_placeholders = String[add_parameter!(parameters, target_id) for target_id in chunk]
+      sql = "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder AND " *
+            "$related_column IN ($(join(target_placeholders, ", ")));"
+      fetch(settings, sql, parameters)
+    end
   end
-
-  sql = "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder AND $related_column IN ($(join(target_placeholders, ", ")));"
-  fetch(settings, sql, parameters)
-
   return nothing
 end
 

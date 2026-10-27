@@ -1050,7 +1050,8 @@ What each row covers:
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on every engine, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
-  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine.
+  `Mod` of whole numbers, `+`, `-`, `*` of them, an integer cast to a `numeric`) has nothing to round;
+  both pass on every engine (#1167).
   An interval (a `DurationField`, its `Sum` or `Avg`, a duration literal, temporal arithmetic) is refused on
   SQLite and MySQL, here and under any other number type (#1259). For a number from a duration, fetch it and
   take the number in Julia. So is a date, a timestamp or a time (a column, `Max` of one, a cast to

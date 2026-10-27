@@ -6597,14 +6597,20 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED), ~0 + ABS(CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to integer | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::integer > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) ELSE abs(CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to integer | cte", :mysql, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to integer | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED), ~0 + ABS(CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Cast int numeric to integer | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to integer | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) ELSE abs(CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
@@ -6613,6 +6619,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::numeric(10,2) > \$1", params = [("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::numeric(10,2) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) > ?", params = [("10.5", "Decimal")]),
   ("Cast Cast int numeric to scale 2 | cte", :mysql, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
@@ -6621,6 +6631,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Cast Cast int numeric to scale 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -6629,4 +6643,8 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::numeric(10,2) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::numeric(10,2) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
 )

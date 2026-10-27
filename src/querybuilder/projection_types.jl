@@ -928,6 +928,19 @@ function _integral_valued(p, instruc::SQLInstruction)
       return precision isa Integer && precision == 0 && _divided_whole_operand(p, instruc) === nothing
     end
     p.function_name == "MOD" && p.column isa AbstractVector && return all(x -> _whole_number(x, instruc), p.column)
+    # #1167: a cast to a `numeric` keeps a whole number whole, scaled or not (`grid::numeric` is `1`,
+    # `CAST(1 AS NUMERIC(10,2))` too), so it is whole when its operand is. It read as a decimal of
+    # unknown places, and `Cast(Cast("grid", "numeric"), IntegerField())` was refused on SQLite. Whole
+    # here is a whole function, or what the type walk names an integer or a zero-scale decimal, not
+    # `_whole_number`'s "no fractional kind": text has none, and `'1.5'` cast to a `numeric` is a
+    # fraction, also through arithmetic (`F("surname") * 1`), which `_integral_valued` reads by that
+    # rule; the walk types integer arithmetic itself. A literal too large for the precision is #1087's.
+    if p.function_name == "CAST" && !(p.column isa AbstractVector)
+      declared = get(p.kwargs, "type", nothing)
+      declared isa AbstractString && _sql_type_field(declared) isa Models.sDecimalField &&
+        return (p.column isa FObject && _integral_valued(p.column, instruc)) ||
+               _whole_kind(_expression_kind(p.column, instruc))
+    end
     return false
   end
   p isa SQLField && return _integral_valued(p.field, instruc)
@@ -936,6 +949,10 @@ function _integral_valued(p, instruc::SQLInstruction)
   return false
 end
 _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _concat_textless_operand(x, instruc) === nothing
+# #1167: a kind whose every value is whole: an integer, or a decimal declared with no places.
+_whole_kind(::Union{CInt16,CInt32,CInt64}) = true
+_whole_kind(k::CDecimal) = k.scale == 0
+_whole_kind(::Any) = false
 
 # #1040 — the scale a declared numeric type rounds to, or `nothing` for a type with none. PostgreSQL
 # rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
@@ -1374,7 +1391,8 @@ end
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
 # #1196 — the functions that keep an integer operand that integer on every engine (`integer_kind`,
 # `_integer_operand_kind`): the three above, and `Round`, whose places add nothing to an integer (a
-# negative precision is refused when the expression is built, #1044). `Round` is not one of the three:
+# negative precision rounds it to tens, still an integer, on a backend with the capability; SQLite
+# refuses it when the expression is built, #1044, #1167). `Round` is not one of the three:
 # over any other operand it is a `numeric` function's value, not its operand's, so it carries no
 # operand's division answer (`_whole_numeric_operand`).
 const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")

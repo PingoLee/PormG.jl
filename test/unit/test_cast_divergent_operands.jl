@@ -607,7 +607,9 @@ _is_1040(e) = e isa QueryBuildError && occursin("(#1040)", _ccd_msg(e))
     _CF("points") * 2     => "arithmetic over the FloatField `points`",
     Fn.Avg("number")      => "`AVG(…)`",
     Fn.Cast("points", "numeric") => "a value cast to numeric",
-    Fn.Cast(Fn.Round("price", 0), "numeric(10,3)") => "a value cast to numeric(10,3)",
+    # A nested declaration wider than the target, over a value with places. (Over a whole number, as
+    # `Round("price", 0)` is, the cast has nothing to round: #1167.)
+    Fn.Cast("price", "numeric(10,3)") => "a value cast to numeric(10,3)",
     "surname"             => "text column `surname`",        # PostgreSQL parses '1.555' and rounds it
     Fn.Value("1.555")     => "a string literal",
     Fn.Lower("surname")   => "a text expression",
@@ -1039,6 +1041,41 @@ end
     @test _ccd_builds(expr)
     @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1167 §2.3: a whole number cast to a numeric stays whole under a further cast
+# MEANING: `Cast(x, "numeric")`, scaled or not, keeps a whole number whole on every engine (`3::numeric`
+# is `3`, `CAST(3 AS NUMERIC(10,2))` too), so a further cast to an integer or a scale has nothing to
+# round. It read as a decimal of unknown places, and SQLite refused it under #1028 and #1040 although
+# every engine gives the same value. Whole is an integer column, a zero-scale `DecimalField`, or a
+# whole function (`Floor`). A decimal with places, a float and text still have a fraction to round,
+# and are still refused on SQLite: `'1.5'` cast to a `numeric` and then to an integer is `2` on
+# PostgreSQL and `1` on SQLite. Expected SQL, SQLite: CAST(CAST("Tb"."number" AS NUMERIC) AS INTEGER)
+# Why: an over-refusal of a value every engine computes alike.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1167: a whole number cast to a numeric stays whole under a further cast" begin
+  for expr in (Fn.Cast(Fn.Cast("grid", "numeric"), Models.IntegerField()),
+               Fn.Cast(Fn.Cast("grid", "numeric"), "numeric(10,2)"),
+               Fn.Cast(Fn.Cast("number", "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("number", "decimal"), "numeric(10,0)"),
+               Fn.Cast(Fn.Cast("number", "numeric(10,2)"), "integer"),
+               Fn.Cast(Fn.Cast(Fn.Floor("points"), "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("number", "numeric") * 2, "integer"),
+               Fn.Cast(Fn.Cast(_CF("number") * 2, "numeric"), "integer"))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+  @test occursin("CAST(CAST(\"Tb\".\"number\" AS NUMERIC) AS INTEGER)",
+                 _ccd_render(Fn.Cast(Fn.Cast("number", "numeric"), "integer"); conn = _CCD_SL))
+  # A fraction is still one through the inner cast: refused on SQLite only, as before.
+  # Text through arithmetic is still text: no integer the walk names (review of #1167).
+  for expr in (Fn.Cast(Fn.Cast("price", "numeric"), "integer"), Fn.Cast(Fn.Cast("points", "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("surname", "numeric"), "integer"), Fn.Cast(Fn.Cast(_CF("surname") * 1, "numeric"), "integer"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1028")
+  end
+  _ccd_expect(Fn.Cast(Fn.Cast("price", "numeric"), "numeric(10,1)"); departs = _SL_ONLY, issue = "#1040")
+  _ccd_expect(Fn.Cast(Fn.Cast("surname", "numeric"), "numeric(10,1)"); departs = _SL_ONLY, issue = "#1040")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

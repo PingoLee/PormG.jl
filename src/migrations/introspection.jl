@@ -611,10 +611,10 @@ What each slot is read FROM, and what it is no longer inferred from:
     never from the pragma, exactly as before; a relational column's `db_index` is what the catalog
     holds, not the `true` the old reader stamped on every foreign key;
   * `identity` — the catalog image of the DECLARED rule, stated once beside its other half in
-    `_column_identity(::PormGSQLite)`: an INTEGER column on the `IDField` arm (`_integer_key_arm`)
-    compiles to the SQLite identity, because `IDField` is the only integer key PormG can declare and
-    it always renders `AUTOINCREMENT`, so a rowid key without the token has no declaration that
-    could ever equal it; a TEXT key (`UUIDField(primary_key = true)`) compiles none;
+    `_column_identity(::PormGSQLite)`: a **rowid alias** (`_sqlite_rowid_alias`) on the `IDField`
+    arm (`_integer_key_arm`) compiles to the SQLite identity, since SQLite fills it whether or not
+    it carries `AUTOINCREMENT`; any other integer key — the `BIGINT` key `IDField(generated = false)`
+    renders — compiles none (#1393), and neither does a TEXT key (`UUIDField(primary_key = true)`);
   * `default` — `_default_or_drop`: the literal coerced per canonical type; an expression or
     an uncoercible literal dropped with the same warning as before (#472/#475).
 
@@ -639,6 +639,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   unique_cols = _sqlite_single_column_unique_columns(db, table_name)
   indexed_cols = _sqlite_single_column_indexed_columns(db, table_name)
   composite = _sqlite_composite_indexes(db, table_name)
+  rowid_alias = _sqlite_rowid_alias(db, table_name)
 
   # Single-column foreign keys by child column. A MULTI-COLUMN key is skipped rather than split
   # (#415): `PRAGMA foreign_key_list` returns one row per column grouped under a shared `id`, PormG
@@ -691,7 +692,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
     # identity, so such a table rebuilt on every run.)
     integer_key = _integer_key_arm(arm, ctype)
     spec_unique = (integer_key || (arm === :reference && is_pk)) ? true : col_name in unique_cols
-    identity = integer_key ? ColumnIdentity(false, false, true) : nothing
+    identity = (integer_key && rowid_alias) ? ColumnIdentity(false, false, true) : nothing
     probe = ColumnSpec(col_name, ctype, is_pk ? false : nullable, is_pk, spec_unique, NoDefault(),
                        reference, _reader_checks(get(checks, lowercase(col_name), CheckKind[]), ctype),
                        identity, raw_type)
@@ -701,6 +702,15 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in indexed_cols)
   return LiveTable(table_name, columns, indexes, composite, table_checks)
 end
+
+# #1393: whether the table's key is a ROWID ALIAS, the one key SQLite fills itself when an insert
+# leaves it out, with or without AUTOINCREMENT. Read from the catalog rather than the type text: SQLite
+# builds an `origin = 'pk'` index for every other key — a `BIGINT` or `INT` key, `INTEGER PRIMARY KEY
+# DESC`, a `WITHOUT ROWID` table, a composite key — and none for an alias, whether it is spelled
+# `INTEGER PRIMARY KEY`, `integer primary key` or `PRIMARY KEY (id)` at table level (each measured on
+# 3.53). `true` for a table with no key at all, so the caller asks it only of a key column.
+_sqlite_rowid_alias(db::PormGSQLite, table_name::String)::Bool =
+  nrow(fetch(db, "SELECT 1 FROM pragma_index_list(?) WHERE origin = 'pk'", [table_name]) |> DataFrame) == 0
 
 """
     convertSQLToModel(db::PormGSQLite, table_name) -> PormGModel

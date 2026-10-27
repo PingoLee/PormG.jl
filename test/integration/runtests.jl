@@ -81,6 +81,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "EXPLAIN / :pretty (#48)"       begin include("test_explain.jl")             end
     @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     @testset "Importer / Introspection"     begin include("test_importers_introspection.jl") end
+    @testset "IDField(generated = false) (#1393)" begin include("test_idfield_generated_key.jl") end
     @testset "Table Rename (#615)"          begin include("test_migration_rename_table.jl") end
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end

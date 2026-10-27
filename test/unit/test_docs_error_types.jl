@@ -45,7 +45,7 @@ using PormG.Models: BooleanField
 using PormG.Models: SearchVectorField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
 import Decimals
-using PormG.QueryBuilder: bulk_insert, bulk_update
+using PormG.QueryBuilder: bulk_insert, bulk_update, allocate_primary_keys
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
 using PormG.Functions: WindowOver, Rank
@@ -140,6 +140,12 @@ end
 
 const DOCERR_STINT_PG = let m = Model("docerr_stint_docerr_pg",
         id = IDField(), driver = CharField(), laps = IntegerField(default = 0))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
+# #1393 — a key the caller supplies, for the `IDField(generated = false)` write-path claims.
+const DOCERR_CIRCUIT_SOURCE_PG = let m = Model("docerr_circuit_source_docerr_pg",
+        circuitid = IDField(generated = false), name = CharField())
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
@@ -1031,6 +1037,22 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> bulk_insert(DOCERR_STINT_PG.objects,
                           DataFrames.DataFrame(driver = [["Senna", "Prost"]]),
+                          show_query = :dict),
+    ),
+    # #1393 — `fields.md` (IDField → Key Parameters), `write/bulk.md` and the `allocate_primary_keys`
+    # docstring: a key the caller supplies has nothing to allocate from, whatever the frame holds, and
+    # a blank cell in its column is a missing value rather than a column to leave out. Build-time:
+    # the allocation refusal runs before any SQL, the blank one in the per-row sweep.
+    (
+        "fields.md + write/bulk.md + allocate_primary_keys docstring — allocate_primary_keys on IDField(generated = false) raises QueryBuildError",
+        QueryBuildError,
+        () -> allocate_primary_keys(DOCERR_CIRCUIT_SOURCE_PG.objects, DataFrames.DataFrame(name = ["Monza"])),
+    ),
+    (
+        "fields.md + write/bulk.md — a blank IDField(generated = false) key cell in bulk_insert raises InvalidValueError",
+        InvalidValueError,
+        () -> bulk_insert(DOCERR_CIRCUIT_SOURCE_PG.objects,
+                          DataFrames.DataFrame(circuitid = [missing], name = ["Monza"]),
                           show_query = :dict),
     ),
     # A control, not a regression: create() already behaved this way, and #331 aligned the bulk

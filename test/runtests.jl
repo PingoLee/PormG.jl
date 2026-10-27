@@ -287,6 +287,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Unaccepted Field Keywords (#1333)" include("unit/test_field_unaccepted_kwargs.jl")
     @testset "IDField Identity Keyword (#1334)" include("unit/test_idfield_identity_keyword.jl")
+    @testset "IDField(generated = false) On Every Engine (#1393)" include("unit/test_idfield_generated_key.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")
     @testset "Django Custom Field Classes (#1041)" include("unit/test_import_django_field_subclass.jl")

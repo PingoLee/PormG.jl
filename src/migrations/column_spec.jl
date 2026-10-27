@@ -367,47 +367,42 @@ function _column_checks(field::PormGField)::Vector{CheckKind}
   return checks
 end
 
-# Identity is engine-specific in a way the field struct is not: `sIDField` carries `generated`,
-# `generated_always` AND `auto_increment` at all times, but PostgreSQL renders only the first two and
-# SQLite renders none of them (`PRIMARY KEY AUTOINCREMENT` for every `sIDField` key). Reading the
-# slots the engine cannot express would manufacture a difference out of a constructor default.
-# (`auto_increment` is always `true` since #1334, which refuses the keyword.)
+# Identity is one fact on every engine since #1393: `Models._database_generates` — "may the database
+# generate this key?", which is `generated`. Each engine's DDL reads it (`Dialect.field_to_column`), the
+# write path reads it, and these methods compile it, so the IR cannot disagree with the renderer. What
+# stays per engine is the SHAPE of the identity: PostgreSQL's carries `generated_always`, SQLite's and
+# MySQL's exist only on a key. `auto_increment` is no input: always `true` since #1334, which refuses
+# the keyword, and read by nothing since #1393.
+#
+# Before #1393 SQLite and MySQL followed their renderers' `sIDField && primary_key`, which ignored
+# `generated`: `IDField(generated = false)` was a database-generated key there, and moving a model to it
+# planned nothing. It is now an `:identity` delta on every engine — a rebuild on SQLite, a `MODIFY` on
+# MySQL — even where `parse_canonical_type` reads the old `INTEGER` and the new `BIGINT` as one type.
 function _column_identity(field::PormGField, ::PormGPostgres)::Union{Nothing, ColumnIdentity}
-  _slot(field, :generated, false)::Bool || return nothing
-  return ColumnIdentity(true, _slot(field, :generated_always, false)::Bool, false)
+  Models._database_generates(field) || return nothing
+  return ColumnIdentity(true, getfield(field, :generated_always)::Bool, false)
 end
 
 function _column_identity(field::PormGField, ::PormGSQLite)::Union{Nothing, ColumnIdentity}
-  # THE CONDITION IS THE RENDERER'S, verbatim. `field_to_column(::PormGSQLite)` emits
-  # `PRIMARY KEY AUTOINCREMENT` for `field isa sIDField && primary_key` and plain `PRIMARY KEY`
-  # otherwise — it does NOT consult the `auto_increment` slot at all. Reading that slot here instead
-  # made the IR disagree with the DDL in both directions: `IDField(auto_increment = false)` renders
-  # AUTOINCREMENT but compiled to no identity (so it compared EQUAL to a plain `PRIMARY KEY` column —
-  # two different columns, one spec), while `IDField()` vs `IDField(auto_increment = false)` render
-  # byte-identical DDL yet compiled to a permanent `:auto_increment` delta, which on SQLite is a full
-  # table rebuild forever.
-  #
-  # That is the "two answers to one fact" shape this whole file exists to remove, so it is spelled
-  # once, here, against the renderer. If `field_to_column` ever learns to honour the slot, this moves
-  # with it. (#1334 then refused the keyword, so the slot is always `true` and the history above
-  # cannot recur from a declaration; the condition stays the renderer's.)
-  (field isa Models.sIDField && _slot(field, :primary_key, false)::Bool) || return nothing
+  # `INTEGER PRIMARY KEY AUTOINCREMENT`, the rowid alias (`Dialect.field_to_column(::PormGSQLite)`).
+  (Models._database_generates(field) && _slot(field, :primary_key, false)::Bool) || return nothing
   return ColumnIdentity(false, false, true)
 end
 
-# MySQL (#1130 phase 4a): `field_to_column(::PormGMySQL)` writes `AUTO_INCREMENT` on an `IDField` key and
+# MySQL (#1130 phase 4a): `field_to_column(::PormGMySQL)` writes `AUTO_INCREMENT` on such a key and
 # nowhere else — SQLite's condition — and the reader reads the token back from `EXTRA`.
 function _column_identity(field::PormGField, ::PormGMySQL)::Union{Nothing, ColumnIdentity}
-  (field isa Models.sIDField && _slot(field, :primary_key, false)::Bool) || return nothing
+  (Models._database_generates(field) && _slot(field, :primary_key, false)::Bool) || return nothing
   return ColumnIdentity(false, false, true)
 end
 
 # THE LIVE SIDE'S HALF of the same rule (#522), stated here so the two cannot drift. The SQLite
-# reader (`_sqlite_live_table`) compiles `ColumnIdentity(false, false, true)` for a column on the
-# `IDField` arm whose type is an integer — `_integer_key_arm` — and for nothing else. It deliberately
-# does NOT read the catalog's `AUTOINCREMENT` token: `IDField` is the only integer key PormG can
-# declare and it always renders the token, so a rowid key without it has no declaration that could
-# ever equal it, and reading the token would make such a key churn forever. A TEXT key (what
+# reader (`_sqlite_live_table`) compiles `ColumnIdentity(false, false, true)` for a ROWID ALIAS — an
+# integer key on the `IDField` arm (`_integer_key_arm`) that SQLite fills itself, which the catalog
+# shows as a key with no `origin = 'pk'` index (`_sqlite_rowid_alias`) — and for nothing else (#1393).
+# A `BIGINT` key, what `IDField(generated = false)` renders, has that index and compiles none. The
+# reader deliberately does NOT read the `AUTOINCREMENT` token: a rowid key without it is still filled
+# by SQLite, so it is `IDField()`, the only declaration that could equal it. A TEXT key (what
 # `UUIDField(primary_key = true)` renders here) compiles no identity and takes the pragma's `unique`,
 # which is this function's and `column_spec`'s answer for that declaration.
 
@@ -1831,10 +1826,11 @@ end
 function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
                           table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
   if _integer_key_arm(arm, ctype)
-    # No `auto_increment`: the keyword is refused since #1334 (no DDL path read it). This reader
-    # wrote `auto_increment = false` for a key that is not an exact `INTEGER` (not a rowid alias),
-    # which put the keyword into generated models files and changed nothing.
-    return Models.IDField(null = false, primary_key = true)
+    # #1393: a rowid alias (the reader's identity) is a key SQLite fills, `IDField()`; any other integer
+    # key — a `BIGINT` or `INT` key, `WITHOUT ROWID` — is one the caller supplies, and SQLite refuses an
+    # insert without it, so it is `IDField(generated = false)`, which renders such a key. (#1334 removed
+    # the `auto_increment = false` this reader used to write here, which changed no column.)
+    return Models.IDField(generated = spec.identity !== nothing, null = false, primary_key = true)
   elseif ctype isa CText
     # A bare `TEXT PRIMARY KEY` is what `UUIDField(primary_key = true)` renders on SQLite (the
     # reverse map writes `TEXT` for `UUID`), and it is the ONE lengthless textual key PormG can
@@ -1850,26 +1846,27 @@ function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, 
     return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
                             db_index = indexed, default = default, db_default = db_default)
   else
-    @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
-          "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
-          "the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
-    return Models.IDField(null = false, primary_key = true)
+    # A `REAL` key, say. Not a rowid alias, so SQLite does not fill it: `generated = false` (#1393), and
+    # `allocate_primary_keys` refuses the model rather than allocating from a non-integer maximum.
+    @warn "inspectdb: no PormG field declares a primary key of this type; emitting " *
+          "IDField(generated = false). A declared IDField will NOT match this column, so " *
+          "makemigrations plans a retype unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+    return Models.IDField(generated = false, null = false, primary_key = true)
   end
 end
 
-# MySQL (#1130 phase 4c): an `IDField` is `BIGINT AUTO_INCREMENT` there (`_column_identity(::PormGMySQL)`
-# reads the renderer; the `auto_increment` slot is always `true` since #1334), so every fall-through
-# key is declared as one, and a key of another shape — an `INT`, one without `AUTO_INCREMENT`, a text
-# key — says so: the next plan changes the column to PormG's, which MySQL refuses on a key another
-# table's foreign key references (3780).
+# MySQL (#1130 phase 4c): an `IDField` is `BIGINT` there, `AUTO_INCREMENT` when the database generates
+# it (`_column_identity(::PormGMySQL)`), so a fall-through key keeps its catalog identity as `generated`,
+# as on PostgreSQL (#1393). A key of another type — an `INT`, a text key — says so: the next plan changes
+# the column to PormG's, which MySQL refuses on a key another table's foreign key references (3780).
 function _inspectdb_id_pk(conn::PormGMySQL, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
                           table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
-  if !(ctype isa CInt64 && spec.identity !== nothing)
-    @warn "inspectdb: an IDField is BIGINT AUTO_INCREMENT on MySQL, and this primary key is not; emitting " *
+  if !(ctype isa CInt64)
+    @warn "inspectdb: an IDField is BIGINT on MySQL, and this primary key is not; emitting " *
           "IDField. A declared IDField will NOT match this column, so makemigrations plans a change to it " *
           "(which MySQL refuses on a key a foreign key references) unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
   end
-  return Models.IDField(unique = true, null = false, db_index = true)
+  return Models.IDField(generated = spec.identity !== nothing, unique = true, null = false, db_index = true)
 end
 
 function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,

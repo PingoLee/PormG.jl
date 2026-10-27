@@ -1328,7 +1328,7 @@ end
 struct ColumnIdentity
   generated::Bool         # PostgreSQL: GENERATED … AS IDENTITY
   always::Bool            # PostgreSQL: … ALWAYS (as opposed to BY DEFAULT)
-  auto_increment::Bool    # SQLite: INTEGER PRIMARY KEY AUTOINCREMENT
+  auto_increment::Bool    # SQLite / MySQL: a key the database fills (a rowid alias, AUTO_INCREMENT)
 end
 
 # ── ForeignKeyRef ────────────────────────────────────────────────────────────────────────────────

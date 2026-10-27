@@ -736,8 +736,14 @@ checked at all: a JSON key times `2`, or compared for equality with a date, buil
 on SQLite and MySQL (#1323). SQLite stores a time as its `HH:MM:SS` text and computes on the leading
 digits, so on the 2009 Australian Grand Prix (`06:00:00`) `F("time") + 1` was `7`; MySQL reads a time
 as the number its digits spell. PostgreSQL has no `time + integer` either and fails at the server.
-PormG has no spelling for arithmetic on a time of day on SQLite or MySQL. Comparing a time with a time
-builds on every engine, since the `HH:MM:SS` text sorts in time order:
+PormG has no spelling for arithmetic on a time of day on SQLite or MySQL.
+
+On PostgreSQL, a time minus a time is a duration (#1406), typed as a `DurationField` value is: it
+reads back as a `Dates.CompoundPeriod`, compares with a duration (`Minute(1)`), and is refused where a
+duration is (a calendar part, a number function such as `Round`). Its seconds are
+`Extract(F("time") - F("time"), "epoch")`.
+
+Comparing a time with a time builds on every engine, since the `HH:MM:SS` text sorts in time order:
 
 ```julia
 query = M.Race.objects

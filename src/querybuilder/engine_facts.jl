@@ -43,6 +43,12 @@ _stores_interval_as_units(::PormGPostgres) = false
 _stores_interval_as_units(::PormGSQLite) = false
 _stores_interval_as_units(::PormGMySQL) = true
 
+# #1406 — a time of day minus a time of day is an interval: PostgreSQL's `time - time`. SQLite and
+# MySQL refuse arithmetic on a time of day (#1323), so the type walk has no answer to give there.
+_subtracts_times(::PormGPostgres) = true
+_subtracts_times(::PormGSQLite) = false
+_subtracts_times(::PormGMySQL) = false
+
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).
 _stores_date_as_text(::PormGPostgres) = false

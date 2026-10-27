@@ -1878,7 +1878,8 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
         v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
           _refuse_untyped_date_operand(v.operation, instruc)
         v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
-        return "($(left_side) $(v.operation) $(right_side))", nothing
+        # #1406: `time - time` is an interval on PostgreSQL; the one copy of the rule says so.
+        return "($(left_side) $(v.operation) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
       end
     end
 

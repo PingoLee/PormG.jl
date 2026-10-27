@@ -51,7 +51,7 @@ PormG.config["mod_mock"] = PormG.Configuration.Settings(
   connections = _MOD_SL, change_data = true, db_def_folder = "mod_mock",
 )
 
-# The F1 result, with a fastest-lap duration, a number, a float and the race's start and date.
+# The F1 result, with a fastest-lap duration, a number, a float and the race's start, date and time.
 module ModModels
 import PormG
 import PormG.Models
@@ -63,6 +63,7 @@ Mod_result = Models.Model("mod_result",
   fastestlaptime = Models.DurationField(null = true),
   start_at       = Models.DateTimeField(null = true),
   date           = Models.DateField(null = true),
+  time           = Models.TimeField(null = true),   # #1406
 )
 
 PormG.Models.set_models(@__MODULE__, "mod_mock")
@@ -133,6 +134,53 @@ end
   _mod_refused(Fn.Ceil(_MF("start_at") - _MF("start_at")), "Ceil")
   # Under arithmetic too: `Floor(<a duration>) / 2` is refused at the `Floor`, before the quotient.
   _mod_refused(Fn.Floor(_MF("fastestlaptime") * 2) / 2, "Floor")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1406: a time of day minus a time of day is a duration on PostgreSQL
+# PostgreSQL's `time - time` is an `interval`, but the type walk had no arm for a time on the left, so
+# the difference had no kind and every check that reads the walk let it through: `Round` built
+# `ROUND((…)::numeric)`, which fails at the server, and `Extract(…, "year")` built and read `0`. The
+# walk now names it a duration (an engine fact, `_subtracts_times`), so the number-function refusal
+# (#1324) and the calendar-part refusal (#1388) cover it with no change of their own, and the column
+# reads back as a duration. SQLite and MySQL keep refusing arithmetic on a time of day (#1323).
+# Expected SQL on PostgreSQL: `("Tb"."time" - "Tb"."time")`, read as an interval.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1406: time minus time is a duration on PostgreSQL" begin
+  diff = () -> _MF("time") - _MF("time")
+  # The projection builds, and records the kind its value is read back as.
+  q = MOD.Mod_result.objects
+  q.values("v" => diff())
+  sql = PormG.QueryBuilder.query(q; show_query = :sql, connection = _MOD_PG)
+  @test occursin("(\"Tb\".\"time\" - \"Tb\".\"time\")", sql)
+  @test get(q.object.projection_kinds, :v, nothing) isa PormG.CInterval
+  # A filter on the alias takes a duration, as over a `DurationField`.
+  q = MOD.Mod_result.objects
+  q.values("v" => diff())
+  q.filter("v__@gt" => Minute(1))
+  @test inspect_query(q; connection = _MOD_PG)[:parameters] == ["00:01:00"]
+  # Every check that reads the walk covers it now: a number function and a calendar part.
+  for (expr, name) in ((Fn.Round(diff()), "Round"), (Fn.Floor(diff()), "Floor"), (Fn.Sqrt(diff()), "Sqrt"))
+    err = _mod_refusal(expr; conn = _MOD_PG)
+    @test err isa QueryBuildError && occursin("`$(name)` of a duration is not supported", _mod_msg(err))
+  end
+  for part in ("year", "quarter", "dow")
+    err = _mod_refusal(Fn.Extract(diff(), part); conn = _MOD_PG)
+    @test err isa QueryBuildError &&
+          occursin("The $(part) part over a duration is not supported", _mod_msg(err))
+  end
+  # EPOCH reads a duration's seconds and builds.
+  @test _mod_refusal(Fn.Extract(diff(), "epoch"); conn = _MOD_PG) === nothing
+  # SQLite and MySQL refuse the arithmetic itself, as before (#1323).
+  for conn in (_MOD_SL, _MOD_MY)
+    err = _mod_refusal(diff(); conn = conn)
+    @test err isa QueryBuildError && occursin("on a time of day", _mod_msg(err))
+  end
+  # Only `-` of two times: a time plus a time has no meaning, and stays untyped.
+  q = MOD.Mod_result.objects
+  q.values("v" => _MF("time") + _MF("time"))
+  PormG.QueryBuilder.query(q; show_query = :sql, connection = _MOD_PG)
+  @test get(q.object.projection_kinds, :v, nothing) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

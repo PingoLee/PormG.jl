@@ -6486,17 +6486,21 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Extract minute F datetime - date | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"date\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F time - time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" - \"Tb\".\"time\") > \$1", params = [("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F time - time | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" - \"Tb\".\"time\") > \$1", params = [("\"00:01:00\"", "String")]),
   ("F time - time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" - \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F time - time | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" - \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Max F time - time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Max F time - time | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("\"00:01:00\"", "String")]),
   ("Max F time - time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Extract year F time - time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::integer > \$1", params = [("10", "Int64")]),
-  ("Extract year F time - time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM (\"R2\".\"time\" - \"R2\".\"time\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Max F time - time | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Extract hour F time - time | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(HOUR FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::integer > \$1", params = [("10", "Int64")]),
   ("Extract hour F time - time | subquery", :postgres, "w__@gt", "10") =>
@@ -6505,18 +6509,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Round F time - time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "ROUND(((\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
-  ("Round F time - time | alone", :postgres, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "ROUND(((\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
-  ("Round F time - time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(((\"R2\".\"time\" - \"R2\".\"time\"))::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Round F time - time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(((\"R2\".\"time\" - \"R2\".\"time\"))::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
-  ("Coalesce F time - time int | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"time\" - \"Tb\".\"time\"), \"Tb\".\"year\") > \$1", params = [("10", "Int64")]),
-  ("Coalesce F time - time int | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"time\" - \"R2\".\"time\"), \"R2\".\"year\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce bool int | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool int | alone", :postgres, "v__@gt", "10") =>

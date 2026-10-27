@@ -2620,7 +2620,8 @@ end
         @test occursin("fantasma = Models.CharField(max_length=10)", generated)
 
         # Only CharField has a choices slot. `_common_kwargs` would warn anonymously
-        # ("Unexpected parameter for TextField"); this names the field and class.
+        # ("Unexpected parameter for TextField", a schema-neutral keyword since #1333); this names
+        # the field and class.
         @test occursin("TextField has no choices slot in PormG", generated)
         @test occursin("corpo = Models.TextField()", generated)
 
@@ -4006,5 +4007,69 @@ class Pilot(models.Model):
                        "as a Primary Key", sprint(showerror, err))
     finally
         cleanup_import_test!(config_key2, existed2)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1333: a field constructor refuses a keyword it does not accept, so the importer drops the Django
+# options with no PormG counterpart itself, where it can name the class and field, instead of letting
+# one of them abort the whole import. Expected: the import completes; `points` comes through as a
+# plain IntegerField with the existing lost-key marker (#369), which advises IDField(generated =
+# false); `email`'s and `bio`'s `max_length`, the many-to-many's `symmetrical` and the array
+# element's `max_length` are dropped with a marker each; an index declared on a PasswordField, which
+# takes no `db_index`, is dropped with its marker instead of being written as `db_index=true` into a
+# file that would refuse to load; and the model after them is still in the file. Each of the four
+# drop arms (column, many-to-many, element, Meta index) aborted the import or wrote an unloadable
+# file without its fix.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django options a PormG field does not take are dropped and reported (#1333)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+class Circuit(models.Model):
+    circuitref = models.CharField(max_length=255, primary_key=True)
+
+class Season(models.Model):
+    points = models.IntegerField(primary_key=True)
+    email = models.EmailField(max_length=320)
+    bio = models.TextField(max_length=500, null=True)
+    circuits = models.ManyToManyField(Circuit, symmetrical=False)
+    tags = ArrayField(models.TextField(max_length=5))
+    secret = models.PasswordField(max_length=128)
+
+    class Meta:
+        indexes = [models.Index(fields=['secret'])]
+
+class Race(models.Model):
+    name = models.CharField(max_length=255)
+"""
+    generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_1333_unit.jl")
+    try
+        @test occursin("points = Models.IntegerField()", generated)
+        @test occursin("# PormG: 'Season' declares its primary key on 'points'", generated)
+        # `primary_key` gets no #1333 marker of its own: the lost-key marker above is the report.
+        @test !occursin("declares `primary_key`", generated)
+        @test occursin("email = Models.EmailField()", generated)
+        @test occursin("# PormG: field 'email' on 'Season' declares `max_length`, which PormG's " *
+                       "EmailField does not take — dropped.", generated)
+        @test occursin("bio = Models.TextField(null=true)", generated)
+        @test occursin("# PormG: field 'bio' on 'Season' declares `max_length`, which PormG's TextField", generated)
+        @test occursin("an integer key as IDField(generated = false)", generated)
+        @test occursin("# PormG: field 'circuits' on 'Season' declares `symmetrical`, which PormG's " *
+                       "ManyToManyField does not take — dropped. Check the join table", generated)
+        @test occursin("tags = Models.ArrayField(Models.TextField())", generated)
+        @test occursin("# PormG: field 'tags' on 'Season' declares, on its ArrayField element, " *
+                       "`max_length`, which PormG's TextField does not take", generated)
+        @test occursin("secret = Models.PasswordField()", generated)
+        @test !occursin("db_index=true", generated)
+        @test occursin("'Season'.secret was dropped — that field type has no db_index option", generated)
+        # The generated file loads: nothing in it is a keyword a constructor refuses.
+        mod = Module(:Gen1333)
+        Core.eval(mod, :(import PormG.Models))
+        @test Base.include_string(mod, replace(generated, r"^module\s+\w+\s*\n"m => "", r"\nend\s*$" => "\n")) !== nothing
+        @test occursin("\nRace = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
     end
 end

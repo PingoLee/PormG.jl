@@ -2603,7 +2603,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       #
       # BOTH readings are needed, and they disagree in opposite directions:
       #   - the built field alone misses `codigo = models.IntegerField(primary_key=True)`, because
-      #     most PormG field types refuse `primary_key` and construct with `false` — and injecting
+      #     most PormG field types do not take `primary_key`, so it is dropped before they are built
+      #     (#1333) and they construct with `false` — and injecting
       #     `id` there would name a column the Django table does not have;
       #   - the declaration alone misses `codigo = models.AutoField()`, which declares nothing but
       #     builds a field that IS the key, because the `IDField` it maps to (DJANGO_AUTO_KEY_TYPES,
@@ -2714,7 +2715,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                           "unusable by anything that needs a key: a ManyToManyField pointing at it " *
                           "makes the WHOLE generated file fail to load, and a ForeignKey pointing " *
                           "at it loads and is silently wrong.") *
-                       " Re-declare the key by hand as a CharField/UUIDField primary key.")
+                       " Re-declare the key by hand: an integer key as IDField(generated = false), " *
+                       "a text key as a CharField/UUIDField primary key.")
       end
 
       # Rewrite every relation target to the BINDING of the model it names, before the model is
@@ -3027,11 +3029,14 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           # legal `Meta.indexes = [Index(fields=['id'])]` used to abort the entire import with no
           # marker, no warning and no models file.
           @debug "import: single-column index on a primary key is redundant; the key is already indexed" class=class_label field=col
-        elseif ismutable(f) && hasproperty(f, :db_index)
+        elseif ismutable(f) && hasproperty(f, :db_index) &&
+               :db_index in Models._accepted_field_kwargs(chopprefix(string(nameof(typeof(f))), "s"))
           f.db_index = true
         else
-          # `PasswordField` excludes `db_index` entirely (src/models/fields.jl), and any future
-          # immutable field type lands here too rather than raising.
+          # `PasswordField` has a `db_index` slot but excludes the keyword (src/models/fields.jl), so
+          # setting the slot would write `PasswordField(db_index=true)` into a models file that
+          # then refuses to load (#1333). Any future immutable field type lands here too rather
+          # than raising.
           @warn "import: single-column index maps to db_index, which this field cannot carry; dropped" class=class_label field=col
           push!(markers, "# PormG: a single-column index on '$(class_label)'.$(col) was dropped — " *
                          "that field type has no db_index option.")
@@ -5720,7 +5725,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
 
     # Whether DJANGO called this field the primary key — recorded beside the built field because it
     # cannot be read back off it (#369). Most PormG field types do not accept `primary_key` at all:
-    # `_common_kwargs` warns "Unexpected parameter" and constructs with `primary_key = false`, so a
+    # `_drop_unaccepted_django_options!` drops it before the constructor refuses it (#1333), so a
     # legacy table keyed on `codigo = models.IntegerField(primary_key=True)` yields a field that
     # denies being the key. Deciding the implicit `id` from the built fields ALONE would then invent
     # an `id` column the Django table has not got. Mirrors `fields_dict`'s last-write-wins, so a
@@ -5858,7 +5863,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                             consts = consts, const_owner = stmt_owner,
                                             lineno = stmt.lineno)
       _drop_array_element_column_kwargs!(element_options, field_name, class_label, array_element.type, markers)
+      _drop_unaccepted_django_options!(element_options, element_type, field_name, class_label, markers;
+                                       element_of = field_type)
     end
+    _drop_unaccepted_django_options!(options, field_type, field_name, class_label, markers)
 
     # One constructor for the first attempt AND the #342 retry below, so a new field shape gets one
     # home rather than two arms kept in step by hand. `field_key` already carries the "_id" suffix
@@ -6125,6 +6133,36 @@ function _drop_array_element_column_kwargs!(element_options::Dict{Symbol, Any}, 
   return element_options
 end
 
+# #1333: a PormG field constructor refuses a keyword it does not accept, where it used to warn and
+# drop it — so the Django options with no counterpart on the PormG field are dropped HERE, where the
+# class and field are known, instead of aborting the whole import. Only the ones the constructor
+# would refuse: a schema-neutral one (`choices` on a TextField is reported by its own branch,
+# `editable` on a ManyToManyField) still reaches the constructor's own warning, as before.
+# `primary_key` is dropped without a marker of its own, since `declared_pk`/`lost_pk` already
+# report a key PormG cannot keep.
+function _drop_unaccepted_django_options!(options::Dict{Symbol, Any}, field_type::AbstractString,
+                                          field_name, class_label, markers::Vector{String};
+                                          element_of::Union{Nothing, AbstractString} = nothing)
+  # A type PormG has no constructor for never gets here (#410 skips it first); a guard, not a branch.
+  (haskey(Models._FIELD_KWARG_SPECS, Symbol(field_type)) || field_type == "ManyToManyField") || return options
+  accepted = Models._accepted_field_kwargs(field_type)
+  dropped = sort!([k for k in keys(options)
+                   if !(k in accepted) && !(k in Models._SCHEMA_NEUTRAL_FIELD_KWARGS)])
+  isempty(dropped) && return options
+  foreach(k -> delete!(options, k), dropped)
+  reported = filter(!=(:primary_key), dropped)
+  isempty(reported) && return options
+  names = join(("`$(k)`" for k in reported), ", ")
+  where = element_of === nothing ? "declares" : "declares, on its ArrayField element,"
+  @warn "import: a Django option the PormG field does not take; dropped" class=class_label field=field_name field_type=field_type options=reported
+  check = field_type == "ManyToManyField" ? "Check the join table against Django's" :
+                                             "Check the column against Django's"
+  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' $(where) $(names), which " *
+                 "PormG's $(field_type) does not take — dropped. $(check): the option may have " *
+                 "changed it there.")
+  return options
+end
+
 # `class_name` seeds `enum_scopes` — the key vector into `enums`, which is keyed by `(app_index,
 # BARE Python class name)` — so it must not be app-qualified; the app is already the `Int`.
 # `class_label` only NAMES the class in a report and must be. See the note on
@@ -6374,8 +6412,9 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
   end
 
   # `choices` only exists on CharField. Every other field type would take it to `_common_kwargs`,
-  # which warns anonymously ("Unexpected parameter for TextField") and drops it — true but useless
-  # for finding the field. Report it here, where the field, class and value are all known.
+  # which warns anonymously ("Unexpected parameter for TextField", a schema-neutral keyword, #1333)
+  # and drops it — true but useless for finding the field. Report it here, where the field, class
+  # and value are all known.
   if haskey(options, :choices) && field_type != "CharField"
     delete!(options, :choices)
     @warn "import: this field type has no choices slot; the option was dropped" class=class_label field=field_name field_type=field_type

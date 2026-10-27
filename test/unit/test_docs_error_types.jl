@@ -3335,6 +3335,16 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RACE1183_SL.objects.values("raceid", "v" => PormG.Functions.Value(2.5)).filter("v__@startswith" => "2").list(show_query = :dict),
     ),
+    (
+        "fields.md — a keyword a field does not accept raises FieldValidationError (#1333)",
+        FieldValidationError,
+        () -> PormG.Models.BigIntegerField(primary_key = true),
+    ),
+    (
+        "src/models/fields.jl — ForeignKey docstring: a keyword it does not accept raises FieldValidationError (#1333)",
+        FieldValidationError,
+        () -> ForeignKey("Circuit"; max_length = 10),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

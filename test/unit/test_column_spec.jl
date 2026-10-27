@@ -654,11 +654,12 @@ const SPEC_CORPUS = [
     @test occursin(r"byte-identical|forces no migration", msg)
     @test occursin("generate_models_from_db", msg)
 
-    # The refusal is scoped to the two constructors that accepted them. A non-relational field keeps
-    # the pre-existing "unexpected parameter" warning — #516 argued for removing three FK keywords,
-    # not for turning every stray kwarg on every field into an error.
-    @test_logs (:warn, r"Unexpected parameter") match_mode = :any Models.CharField(
-      max_length = 10, deferrable = true)
+    # The #516 reason is scoped to the two constructors that accepted them. A non-relational field
+    # refuses the keyword too since #1333, but as one it never took — no #516 history in the message.
+    e = try Models.CharField(max_length = 10, deferrable = true); nothing catch err; err end
+    @test e isa PormG.FieldValidationError
+    @test occursin("CharField does not accept `deferrable`", sprint(showerror, e))
+    @test !occursin("#516", sprint(showerror, e))
 
     # A plain foreign key still compiles to the constraint it always did: the removal took API
     # surface, not behavior. Asserted on the spec's CONTENT — comparing two identically-constructed

@@ -283,6 +283,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "PostgreSQL server versions below 11 (#1162)" include("unit/test_pg_server_versions.jl")
     @testset "UUIDField Pattern Lookups (#902)" include("unit/test_uuid_pattern_lookups.jl")
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
+    @testset "Unaccepted Field Keywords (#1333)" include("unit/test_field_unaccepted_kwargs.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")
     @testset "Django Custom Field Classes (#1041)" include("unit/test_import_django_field_subclass.jl")

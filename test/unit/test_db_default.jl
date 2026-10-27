@@ -320,11 +320,13 @@ end
     @test_throws PormG.FieldValidationError Models.TextField(db_default = 5)
     @test_throws PormG.FieldValidationError Models.TextField(db_default = (postgres = 5,))
 
-    # The two constructors that do NOT accept it warn and genuinely ignore, exactly as they already
-    # do for `default` — never throw, because that would break the `Model_to_str` round trip for a
-    # generated file that happens to carry the keyword.
-    @test (@test_logs (:warn,) Models.IDField(db_default = "CURRENT_DATE")) isa Models.sIDField
-    @test (@test_logs (:warn,) Models.PasswordField(db_default = "CURRENT_DATE")).db_default === nothing
+    # The two constructors that do NOT accept it refuse it (#1333). They used to warn and ignore it,
+    # for fear of breaking the `Model_to_str` round trip, but no generated file can carry it:
+    # `Model_to_str` writes the slots that differ from the bare struct, `sIDField` has no
+    # `db_default` slot, and `PasswordField`'s is always `nothing`. Ignoring it dropped a default
+    # the table then lacked.
+    @test_throws PormG.FieldValidationError Models.IDField(db_default = "CURRENT_DATE")
+    @test_throws PormG.FieldValidationError Models.PasswordField(db_default = "CURRENT_DATE")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -596,8 +598,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # check() reports only the columns the importer can actually describe
 # The finding's ADVICE is "declare it as `db_default=`", so reporting a column whose arm has no such
-# slot is advice that cannot be followed: `IDField` answers it with
-# "Unexpected parameter … will be ignored" and the user's edit is a no-op.
+# slot is advice that cannot be followed: `IDField` refuses the keyword (#1333; until then it
+# answered "Unexpected parameter … will be ignored" and the user's edit was a no-op).
 #
 # Found in review, and the gap was wider than the original skip. `_integer_key_arm` covered only an
 # INTEGER key, but EVERY key on the fall-through arm compiles to `IDField` — a `BLOB` key, a `REAL`

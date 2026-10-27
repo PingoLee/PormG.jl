@@ -204,8 +204,8 @@ IDField|db_index_false|verbose_name=nothing;primary_key=true;auto_increment=true
 IDField|db_column|verbose_name=nothing;primary_key=true;auto_increment=true;unique=true;blank=false;null=false;db_index=true;db_column="col_x";default=nothing;editable=false;type="BIGINT";formatter=format_number_sql;generated=true;generated_always=false;
 IDField|editable_true|verbose_name=nothing;primary_key=true;auto_increment=true;unique=true;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=true;type="BIGINT";formatter=format_number_sql;generated=true;generated_always=false;
 IDField|editable_false|verbose_name=nothing;primary_key=true;auto_increment=true;unique=true;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;type="BIGINT";formatter=format_number_sql;generated=true;generated_always=false;
-IDField|db_default_portable|verbose_name=nothing;primary_key=true;auto_increment=true;unique=true;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;type="BIGINT";formatter=format_number_sql;generated=true;generated_always=false;
-IDField|db_default_pinned|verbose_name=nothing;primary_key=true;auto_increment=true;unique=true;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;type="BIGINT";formatter=format_number_sql;generated=true;generated_always=false;
+IDField|db_default_portable|ERROR:FieldValidationError
+IDField|db_default_pinned|ERROR:FieldValidationError
 ImageField|bare|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="BLOB";formatter=format_text_sql;db_default=nothing;
 ImageField|verbose_name|verbose_name="VN";primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="BLOB";formatter=format_text_sql;db_default=nothing;
 ImageField|unique_true|verbose_name=nothing;primary_key=false;unique=true;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="BLOB";formatter=format_text_sql;db_default=nothing;
@@ -247,17 +247,17 @@ JSONField|db_default_portable|verbose_name=nothing;primary_key=false;unique=fals
 JSONField|db_default_pinned|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="JSONB";formatter=format_json_sql;db_default=(postgres = "now()",);
 ManyToManyField|bare|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
 ManyToManyField|verbose_name|verbose_name="VN";primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|unique_true|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|unique_false|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
+ManyToManyField|unique_true|ERROR:FieldValidationError
+ManyToManyField|unique_false|ERROR:FieldValidationError
 ManyToManyField|blank_true|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|null_true|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|db_index_true|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|db_index_false|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|db_column|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
+ManyToManyField|null_true|ERROR:FieldValidationError
+ManyToManyField|db_index_true|ERROR:FieldValidationError
+ManyToManyField|db_index_false|ERROR:FieldValidationError
+ManyToManyField|db_column|ERROR:FieldValidationError
 ManyToManyField|editable_true|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
 ManyToManyField|editable_false|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|db_default_portable|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
-ManyToManyField|db_default_pinned|verbose_name=nothing;primary_key=false;to="Driver";through=nothing;related_name=nothing;db_table=nothing;source_field=nothing;target_field=nothing;type="MANYTOMANY";formatter=identity;
+ManyToManyField|db_default_portable|ERROR:FieldValidationError
+ManyToManyField|db_default_pinned|ERROR:FieldValidationError
 OneToOneField|bare|unique=true;verbose_name=nothing;primary_key=false;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;to="Driver";pk_field=nothing;on_delete=nothing;how=nothing;related_name=nothing;type="BIGINT";formatter=format_number_sql;db_constraint=true;to_table=nothing;db_default=nothing;
 OneToOneField|verbose_name|unique=true;verbose_name="VN";primary_key=false;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;to="Driver";pk_field=nothing;on_delete=nothing;how=nothing;related_name=nothing;type="BIGINT";formatter=format_number_sql;db_constraint=true;to_table=nothing;db_default=nothing;
 OneToOneField|unique_true|unique=true;verbose_name=nothing;primary_key=false;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;to="Driver";pk_field=nothing;on_delete=nothing;how=nothing;related_name=nothing;type="BIGINT";formatter=format_number_sql;db_constraint=true;to_table=nothing;db_default=nothing;
@@ -273,17 +273,17 @@ OneToOneField|db_default_portable|unique=true;verbose_name=nothing;primary_key=f
 OneToOneField|db_default_pinned|unique=true;verbose_name=nothing;primary_key=false;blank=false;null=false;db_index=true;db_column=nothing;default=nothing;editable=false;to="Driver";pk_field=nothing;on_delete=nothing;how=nothing;related_name=nothing;type="BIGINT";formatter=format_number_sql;db_constraint=true;to_table=nothing;db_default=(postgres = "now()",);
 PasswordField|bare|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
 PasswordField|verbose_name|verbose_name="VN";primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|unique_true|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|unique_false|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
+PasswordField|unique_true|ERROR:FieldValidationError
+PasswordField|unique_false|ERROR:FieldValidationError
 PasswordField|blank_true|verbose_name=nothing;primary_key=false;unique=false;blank=true;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
 PasswordField|null_true|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=true;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|db_index_true|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|db_index_false|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
+PasswordField|db_index_true|ERROR:FieldValidationError
+PasswordField|db_index_false|ERROR:FieldValidationError
 PasswordField|db_column|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column="col_x";default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
 PasswordField|editable_true|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
 PasswordField|editable_false|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|db_default_portable|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
-PasswordField|db_default_pinned|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=true;type="VARCHAR";formatter=format_text_sql;max_length=128;auto_hash=true;db_default=nothing;
+PasswordField|db_default_portable|ERROR:FieldValidationError
+PasswordField|db_default_pinned|ERROR:FieldValidationError
 PositiveIntegerField|bare|verbose_name=nothing;primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="INTEGER UNSIGNED";formatter=format_number_sql;db_default=nothing;
 PositiveIntegerField|verbose_name|verbose_name="VN";primary_key=false;unique=false;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="INTEGER UNSIGNED";formatter=format_number_sql;db_default=nothing;
 PositiveIntegerField|unique_true|verbose_name=nothing;primary_key=false;unique=true;blank=false;null=false;db_index=false;db_column=nothing;default=nothing;editable=false;type="INTEGER UNSIGNED";formatter=format_number_sql;db_default=nothing;

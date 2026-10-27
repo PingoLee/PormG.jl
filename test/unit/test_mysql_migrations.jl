@@ -186,8 +186,9 @@ end
 # Synthetic catalog rows for the tables above, as MySQL 8.4 reports them after `migrate`.
 _mm_col(tbl, col, ctype, nullable, dflt, extra, key; comment = "") =
   (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key, comment = comment)
-_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing) =
-  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr)
+_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing, index_type = "BTREE") =
+  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr,
+   index_type = index_type)
 
 # What: `_mysql_live_table` over the rows MySQL reports for the DDL above, against `column_spec`.
 # SQL: none.
@@ -195,6 +196,7 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
 # created must compile to the specs its declaration compiles to, or the next `makemigrations` re-plans
 # it. Two MySQL-only facts ride on it: InnoDB's index for a foreign key is named after the constraint
 # and declares nothing, and an inline `UNIQUE` is an index named after its column.
+# A prefix index and a hand-made FULLTEXT or SPATIAL one (#1369) are not read at all, so no plan drops them.
 @testset "#1268: a table PormG created reads back as its declaration" begin
   cols = [_mm_col("result", "resultid", "bigint", "NO", missing, "auto_increment", "PRI"),
           _mm_col("result", "driverid", "bigint", "NO", missing, "", "MUL"),
@@ -238,6 +240,15 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
   @test isempty(dlive.indexes)
   @test sort!([(c.name, c.columns, c.unique, c.descending) for c in dlive.composites]) ==
         [("driver_code_uniq", ["code"], true, [false]), ("driver_f_d_idx", ["forename", "dob"], false, [false, true])]
+  # #1369: a FULLTEXT or SPATIAL index made by hand is not read — not a composite (the next plan would drop
+  # it), and at one column not `db_index` either. MySQL reports no COLLATION on one.
+  ftstats = vcat(dstats, [_mm_stat("driver", "driver_ft", 1, "forename", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_ft", 1, "code", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_ft1", 1, "forename", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_sp", 1, "dob", missing; index_type = "SPATIAL")])
+  ftlive = _MM._mysql_live_table(_mm_my, "driver", dcols, ftstats, Any[], Any[])
+  @test isempty(ftlive.indexes)
+  @test sort!([c.name for c in ftlive.composites]) == ["driver_code_uniq", "driver_f_d_idx"]
   # A CHECK that is not one of PormG's two column shapes is the table's.
   other = _MM._mysql_live_table(_mm_my, "driver", dcols, Any[], Any[],
                                 [(tbl = "driver", name = "driver_chk_1", clause = "(`dob` > _utf8mb4'1950-01-01')")])

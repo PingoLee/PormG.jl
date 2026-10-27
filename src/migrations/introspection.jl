@@ -2091,7 +2091,7 @@ function get_constraints_index(conn::PormGMySQL, table_name::Symbol, field_name:
   rows = fetch(conn, """
     SELECT s.INDEX_NAME AS name FROM information_schema.STATISTICS s
      WHERE s.TABLE_SCHEMA = DATABASE() AND s.TABLE_NAME = ? AND s.COLUMN_NAME = ? AND s.NON_UNIQUE = 1
-       AND s.SUB_PART IS NULL
+       AND s.SUB_PART IS NULL AND s.INDEX_TYPE = 'BTREE'
        AND (SELECT COUNT(*) FROM information_schema.STATISTICS o WHERE o.TABLE_SCHEMA = s.TABLE_SCHEMA
               AND o.TABLE_NAME = s.TABLE_NAME AND o.INDEX_NAME = s.INDEX_NAME) = 1
        AND NOT EXISTS (SELECT 1 FROM information_schema.REFERENTIAL_CONSTRAINTS r
@@ -2142,14 +2142,14 @@ end
 
 # Whether `column` leads an index of `table` other than those named in `except` (MySQL): the index a foreign
 # key on it keeps once they are dropped. MySQL keeps every foreign key indexed (a primary key counts; a
-# prefix index cannot serve a key), and the index InnoDB made for the key may be gone, dropped when another
-# index could serve it. Bound by value.
+# prefix index or a FULLTEXT one cannot serve a key), and the index InnoDB made for the key may be gone,
+# dropped when another index could serve it. Bound by value.
 function _leads_another_index(conn::PormGMySQL, table::AbstractString, column::AbstractString,
                               except::Vector{String})::Bool
   rows = fetch(conn, """
     SELECT INDEX_NAME AS name FROM information_schema.STATISTICS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND SEQ_IN_INDEX = 1
-       AND SUB_PART IS NULL""",
+       AND SUB_PART IS NULL AND INDEX_TYPE = 'BTREE'""",
     [String(table), String(column)]) |> DataFrame
   skip = Set{String}(lowercase(n) for n in except)
   return any(r -> !(lowercase(_mysql_str(r.name)) in skip), eachrow(rows))
@@ -5254,7 +5254,9 @@ end
 # declares no generated column MySQL renders, and a plain declaration leaves it alone), and a CHECK or a
 # functional index whose text MySQL prints in no declarable form (`_mysql_declarable_sql`) is left out of
 # the model — the next `makemigrations` drops it when it is PormG's own (marked), so it must be declared by
-# hand. A default left out says so where it is compiled (`field_from_spec`).
+# hand. So is an index the reader leaves out (#1369): a FULLTEXT or SPATIAL one, one over a column prefix,
+# one mixing columns and expressions, which no declaration states and `makemigrations` leaves alone. A
+# default left out says so where it is compiled (`field_from_spec`).
 function convert_schema_to_models(db::PormGMySQL; kwargs...)::Vector{PormGModel}
   tables = read_live_schema(db; kwargs...)
   _warn_mysql_undeclarable(db, tables)
@@ -5267,6 +5269,14 @@ function _warn_mysql_undeclarable(db::PormGMySQL, tables::Vector{LiveTable})::No
     _mysql_str(r.tbl) in names || continue
     @warn "inspectdb: a generated column made by hand is declared as a plain field; PormG declares no " *
           "generated column on MySQL, and leaves this one's expression as it is." table = _mysql_str(r.tbl) column = _mysql_str(r.col) expression = _mysql_catalog_sql(something(_mysql_str(r.gen), ""))
+  end
+  for r in eachrow(fetch(db, _MYSQL_UNREAD_INDEXES_SQL) |> DataFrame)
+    _mysql_str(r.tbl) in names || continue
+    type = something(_mysql_str(r.index_type), "BTREE")
+    kind = type != "BTREE" ? "a $(type) index" : r.prefix == 1 ? "an index over a column prefix" :
+           "an index mixing columns and expressions"
+    @warn "inspectdb: $(kind) is left out of the model: no declaration states one. makemigrations leaves it " *
+          "alone." table = _mysql_str(r.tbl) index = _mysql_str(r.idx)
   end
   owned(marker) = marker === nothing ? "" : " It is PormG's (it carries the marker), so the next makemigrations drops it unless it is declared by hand."
   for t in tables
@@ -5327,9 +5337,21 @@ const _MYSQL_COLUMNS_SQL = """
    ORDER BY TABLE_NAME, ORDINAL_POSITION"""
 const _MYSQL_STATISTICS_SQL = """
   SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, NON_UNIQUE AS non_unique, COLUMN_NAME AS col,
-         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment, EXPRESSION AS expr
+         COLLATION AS coll, SUB_PART AS sub_part, INDEX_COMMENT AS comment, EXPRESSION AS expr,
+         INDEX_TYPE AS index_type
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
+# The indexes the reader leaves out of the model (`_mysql_live_table`), one row each, for `inspectdb`'s
+# warning: a FULLTEXT or SPATIAL one (#1369), one over a column prefix, one mixing columns and expressions.
+# The primary key is the columns' fact (`COLUMN_KEY`), whatever its index holds, so it is never one.
+const _MYSQL_UNREAD_INDEXES_SQL = """
+  SELECT TABLE_NAME AS tbl, INDEX_NAME AS idx, MAX(INDEX_TYPE) AS index_type,
+         MAX(SUB_PART IS NOT NULL) AS prefix
+    FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME <> 'PRIMARY'
+   GROUP BY TABLE_NAME, INDEX_NAME
+  HAVING MAX(INDEX_TYPE) <> 'BTREE' OR MAX(SUB_PART IS NOT NULL) = 1 OR
+         (MAX(COLUMN_NAME IS NULL) = 1 AND MIN(COLUMN_NAME IS NULL) = 0)
+   ORDER BY TABLE_NAME, INDEX_NAME"""
 const _MYSQL_FOREIGN_KEYS_SQL = """
   SELECT k.TABLE_NAME AS tbl, k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col,
          k.REFERENCED_TABLE_NAME AS parent, k.REFERENCED_COLUMN_NAME AS parent_col, r.DELETE_RULE AS on_delete
@@ -5425,8 +5447,12 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
   composites = LiveComposite[]
   for (idx, members) in groups
     idx == "PRIMARY" && continue
-    # A prefix length, or a column beside an expression, is a member PormG cannot re-emit, so the index is
-    # not read, as the other readers drop one whole. An index of expressions only is a functional index.
+    # A FULLTEXT or SPATIAL index (#1369) is one no declaration states, and a prefix length, or a column
+    # beside an expression, is a member PormG cannot re-emit: the index is not read, so it is neither
+    # declared nor planned away, as the other readers drop one whole (`inspectdb` says so,
+    # `_warn_mysql_undeclarable`). An index of expressions only is a functional index. A row without the
+    # type (a hand-built one) is a B-tree's.
+    any(r -> hasproperty(r, :index_type) && something(_mysql_str(r.index_type), "BTREE") != "BTREE", members) && continue
     any(r -> _mysql_str(r.sub_part) !== nothing, members) && continue
     functional = all(r -> _mysql_str(r.col) === nothing, members)
     functional || all(r -> _mysql_str(r.col) !== nothing, members) || continue

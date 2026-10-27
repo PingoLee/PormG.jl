@@ -1625,3 +1625,34 @@ end
   @test occursin("position", err.value.msg)
   @test Models._try_resolve_model_reference(lone, "position") === nothing
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1355: many-to-many writes split under the connection's bind-parameter limit
+# What: the groups `remove`/`set` and SQLite's `add` bind their target ids in, on a SQLite older than
+# 3.32 (999 parameters) and a MySQL driver at 4096; and that one statement runs without a transaction.
+# SQL: `DELETE … WHERE owner = ? AND related IN (?, …)` per group (one parameter per id plus the
+# owner's), `INSERT OR IGNORE … VALUES (?, ?), …` per group (two per id) — asserted live in
+# test/integration/test_many_to_many.jl past each engine's real limit.
+# Why: each was one statement whatever the target count, so a large remove raised on MySQL before it
+# was sent and a large SQLite add failed at the driver, as the bulk writers no longer do (#84).
+# ─────────────────────────────────────────────────────────────────────────────
+struct M2MLimitSQLite1355 <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::M2MLimitSQLite1355) = 3029000
+struct M2MLimitMySQL1355 <: PormG.PormGMySQL end
+PormG.backend_mysql_parameter_limit(::M2MLimitMySQL1355) = 4096
+
+@testset "#1355: many-to-many writes split under the bind-parameter limit" begin
+  QB = PormG.QueryBuilder
+  ids(n) = Any[i for i in 1:n]
+  sizes(conn, n, per, fixed) = length.(QB._m2m_id_chunks(conn, ids(n), per, fixed, :many_to_many_remove))
+  # remove: 998 ids and the owner fill a 999-parameter statement; one more id is a second statement.
+  @test sizes(M2MLimitSQLite1355(), 998, 1, 1) == [998]
+  @test sizes(M2MLimitSQLite1355(), 999, 1, 1) == [998, 1]
+  @test sizes(M2MLimitMySQL1355(), 4096, 1, 1) == [4095, 1]
+  # SQLite's add binds two per target: 499 targets per statement.
+  @test sizes(M2MLimitSQLite1355(), 1000, 2, 0) == [499, 499, 2]
+  # Every id lands in exactly one group, in order.
+  @test reduce(vcat, collect.(QB._m2m_id_chunks(M2MLimitSQLite1355(), ids(2500), 1, 1, :many_to_many_remove))) == ids(2500)
+  # One statement runs as it did, with no transaction of its own.
+  @test QB._m2m_in_one_transaction(() -> :ran, PormG.config["m2m_mock"], 1) === :ran
+end

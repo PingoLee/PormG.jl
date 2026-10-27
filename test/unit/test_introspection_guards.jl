@@ -2469,7 +2469,7 @@ end
   # against it. This is what makes the assertion above evidence of a behaviour CHANGE rather than
   # of a difference that was always there.
   pre_fix_live = PormG.Models.Model("lap_note",
-      id   = PormG.Models.IDField(auto_increment = true),
+      id   = PormG.Models.IDField(),   # `auto_increment = true` was the default; refused since #1334
       note = PormG.Models.TextField(null = true, default = "now()"),
       ok   = PormG.Models.IntegerField(default = 5, null = true))
   pre_fix_plan = PormG.Migrations.get_migration_plan(

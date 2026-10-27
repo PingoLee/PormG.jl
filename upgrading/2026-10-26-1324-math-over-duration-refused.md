@@ -29,10 +29,12 @@ The refusal says why on every engine, and names the spelling that has a meaning 
 
 `Sum` and `Avg` mean a duration's total and mean, and keep building on every engine.
 
-On MySQL (unreleased), a date part of a duration expression, such as
+On MySQL (unreleased), a time-of-day part of a duration expression, such as
 `Extract(F("start_at") - F("date"), "hour")` or `Extract(Sum("fastestlaptime"), "second")`, is
 refused too. MySQL holds the duration as its count of microseconds, and the part would read that count
-as a date or a time. `Extract(…, "epoch")` builds there. PostgreSQL and SQLite do not change for these.
+as a time. `Extract(…, "epoch")` builds there. PostgreSQL and SQLite do not change for these. A
+calendar part of a duration expression (`Extract(…, "year")`) is refused on every engine, with its own
+message (#1388).
 
 ### Who this affects
 

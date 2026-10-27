@@ -231,8 +231,21 @@ M.Race.objects.values("h" => Extract("date", "hour"))  # the same QueryBuildErro
 ```
 
 The check covers columns PormG can name a field for: a model field, or one reached through a
-join (`"raceid__date__@week"`). A column of unknown type, such as an expression or a subquery, is
-passed through as written. A foreign key's value is the related row's key, so a part over it is
+join (`"raceid__date__@week"`). An expression or a subquery has no field. For one of them, only the
+calendar parts (the last row of the table) are checked, against the expression's type. A duration
+expression has no calendar date, as a `DurationField` has none: a timestamp difference, interval
+arithmetic, or a `Sum` or `Avg` of a duration raises `QueryBuildError` on every engine. Any other
+expression is passed through as written, and so is a time-of-day part over a duration expression
+(except on MySQL, which refuses it: see
+[Subtracting two dates](field_expressions.md#Subtracting-two-dates)).
+
+```julia
+M.Result.objects.values("y" => Extract(F("fastestlaptime") * 2, "year"))   # QueryBuildError: a duration has no calendar date
+M.Race.objects.values("q" => Extract(F("start_at") - F("date"), "quarter"))  # the same QueryBuildError
+M.Result.objects.values("y" => Extract(F("raceid__date") + F("fastestlaptime"), "year"))  # a timestamp: builds
+```
+
+A foreign key's value is the related row's key, so a part over it is
 checked against that key's field: on `M.Result`, `"raceid__@year"` raises `QueryBuildError`,
 because `raceid` holds the race's integer id. Read the race's date through the relation instead,
 with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because

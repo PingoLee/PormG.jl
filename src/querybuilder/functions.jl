@@ -1093,8 +1093,11 @@ the query is built, on both engines (#1070). It raises `QueryBuildError` otherwi
 - `EPOCH` reads any of those, a `DateField` or a `DurationField`;
 - every other part reads a `DateField` or a `DateTimeField`.
 
-The `"col__@hour"` transforms are this function, so they follow the same rule. A column PormG
-cannot name a field for — an expression, a subquery, an untyped CTE column — is not checked.
+The `"col__@hour"` transforms are this function, so they follow the same rule. An operand PormG
+cannot name a field for — an expression, a subquery, an untyped CTE column — is checked by its type
+for the calendar parts only (every part but the time-of-day, `TIMEZONE` and `EPOCH` ones): a duration
+expression (a timestamp difference, interval arithmetic, a `Sum` or `Avg` of a duration) has no
+calendar date, and raises `QueryBuildError` on every engine (#1388). Anything else passes unchecked.
 
 A filter on the result is held to the part's range: `HOUR` 0–23, `MINUTE` and `SECOND` 0–59,
 `MONTH` 1–12, `DAY` 1–31, `QUARTER` 1–4, `WEEK` 1–53, `ISODOW` 1–7, `DOW` 0–6, `DOY` 1–366. A

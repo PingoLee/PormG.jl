@@ -2558,6 +2558,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1388: a calendar part over a duration EXPRESSION is refused when the query is built, on every
+# engine, as #1070 refuses it over a `DurationField` column. Before, SQLite read `Extract(F("fastestlaptime")
+# * 2, "year")` as 2000 and PostgreSQL as 0, and `ToChar(…, "YYYY-MM")` as "2000-01" and "0000-00".
+# A clock part of the same expression still builds: its meaning is measured on #1388, not decided
+# here, so its values are not pinned. The remedy the upgrade entry names — the date plus the
+# duration, a timestamp — reads the race's year back, since no fastest lap is a day long.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1388: a calendar part over a duration expression is refused; a timestamp's builds" begin
+    for (q, expr) in ((M.Result.objects, Extract(F("fastestlaptime") * 2, "year")),
+                      (M.Result.objects, Extract(Sum("fastestlaptime"), "month")),
+                      (M.Result.objects, ToChar(F("fastestlaptime") * 2, "YYYY-MM")),
+                      (M.Race.objects, Extract(F("start_at") - F("date"), "quarter")))
+        e = try; q.values("v" => expr).list(); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("(#1388)", sprint(showerror, e))
+    end
+    # The clock part: built on PostgreSQL and SQLite, refused on MySQL, which holds the duration as its
+    # microseconds (#1324). Closures, since `by_engine` evaluates every row it is given.
+    clock() = M.Result.objects.filter("fastestlaptime__@isnull" => false, "resultid__@lte" => 200).
+        values("resultid", "m" => Extract(F("fastestlaptime") * 2, "minute")).list()
+    builds = () -> @test !isempty(clock())
+    refused = () -> begin
+        e = try; clock(); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("Extract(d, \"epoch\")", sprint(showerror, e))
+    end
+    by_engine(postgres = builds, sqlite = builds, mysql = refused)()
+    rows = M.Result.objects.filter("fastestlaptime__@isnull" => false, "resultid__@lte" => 200).
+        values("raceid__date", "y" => Extract(F("raceid__date") + F("fastestlaptime"), "year")).list()
+    @test !isempty(rows)
+    @test all(r -> r[:y] == year(r[:raceid__date]), rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1068: a date part over a foreign key reads the key the column holds, on both engines.
 # `M.Result.raceid` holds the race's integer id, so `raceid__@year` is refused when the query is built
 # — before #1068 it reached PostgreSQL as `EXTRACT(YEAR FROM <integer>)` and SQLite read the integer

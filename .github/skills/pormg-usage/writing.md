@@ -45,7 +45,7 @@ n = M.Result.objects.
     update("points" => F("points") + 1)          # returns the matched-row count (Int)
 
 M.Result.objects.filter("raceid__year__@lt" => 1960).delete()
-M.Result.objects.filter("raceid" => 999).delete(show_query = :sql)   # inspect, never runs
+M.Result.objects.filter("raceid" => 999).delete(show_query = :sql)   # inspect, never runs; a Vector when a dependent cascades
 ```
 
 Safety guards (each raises; see [`errors.md`](errors.md)):

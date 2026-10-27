@@ -83,7 +83,7 @@ result = await_result(task)          # a FetchTask; releases its pooled connecti
 - **Always await every `FetchTask`.** `fetch_async` checks a connection out immediately, and only
   `await_result` returns it. `await_result` is idempotent.
 - **Bind values through the params array, never string interpolation.** Placeholders are
-  backend-native and not translated: `$1, $2` on PostgreSQL, `?` on SQLite. The same string is
+  backend-native and not translated: `$1, $2` on PostgreSQL, `?` on SQLite and MySQL. The same string is
   therefore not portable across backends.
 - The array bypasses the ORM's field formatting (datetime canonicalization and the like), so
   pre-format such values yourself.

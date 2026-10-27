@@ -12,9 +12,9 @@ Every terminal accepts `show_query`:
 | `show_query =` | Returns |
 | :--- | :--- |
 | `:execute` | the result (default) |
-| `:sql` | the SQL `String` |
+| `:sql` | the SQL `String`, or a `Vector` of them, one per statement (see below) |
 | `:pretty` | the same SQL reflowed one clause per line — for a log line; only whitespace changes |
-| `:dict` | a `Dict` with `:sql_text`, `:parameters`, `:parameter_count`, `:parameter_buckets`, `:dialect`, `:bucketing`, `:model`, `:operation` — the same keys for every operation |
+| `:dict` | a `Dict` with `:sql_text`, `:parameters`, `:parameter_count`, `:parameter_buckets`, `:dialect`, `:bucketing`, `:model`, `:operation` — the same keys for every operation; a `Vector` of them for a call that runs several statements |
 | `:params` | the bound parameters only |
 | `:none` | `nothing` — builds the query and skips the round-trip, for benchmarking |
 
@@ -33,7 +33,7 @@ info = inspect_query(q)            # or q.inspect(), or q |> inspect_query()
 info[:sql_text]; info[:parameters]; info[:dialect]
 ```
 
-Placeholders differ by backend: `$1, $2, …` on PostgreSQL, `?` on SQLite. Values are always
+Placeholders differ by backend: `$1, $2, …` on PostgreSQL, `?` on SQLite and MySQL. Values are always
 parameters. If a value appears inline in the SQL text, that is a bug worth reporting.
 
 ### Testing SQL without a database

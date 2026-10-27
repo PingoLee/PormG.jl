@@ -116,8 +116,9 @@ const ARR28_BASES = [
     @test_throws PormG.FieldValidationError AF.ArrayField("integer")
     # `null` on the element field is the element-NULL rule, and is accepted.
     @test AF.ArrayField(AF.IntegerField(null = true)).base_field.null
-    # No primary key: an array is no row's identity.
-    @test (@test_logs (:warn, r"Unexpected parameter") AF.ArrayField(AF.IntegerField(); primary_key = true)).primary_key == false
+    # No primary key: an array is no row's identity. Refused since #1333, where it was warned about
+    # and dropped, leaving a table with no key.
+    @test_throws PormG.FieldValidationError AF.ArrayField(AF.IntegerField(); primary_key = true)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

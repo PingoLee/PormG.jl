@@ -3728,8 +3728,8 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
     # the importers can rewrite `.to` to the target's final binding in a pass 1 BEFORE rendering. By
     # the time we get here that rewrite has happened and `to` below is already correct, so the slot
     # has nothing left to say. It is skipped rather than emitted because `ForeignKey`/`OneToOneField`
-    # accept no such kwarg — `_common_kwargs` would `@warn "Unexpected parameter"` and drop it on
-    # every reload of the generated file, which is noise describing a value nothing consumes.
+    # accept no such kwarg — `_common_kwargs` refuses it (#1333; it used to warn and drop it), so
+    # emitting it would make the generated file fail to load. The skip is load-bearing.
     sfield === :to_table && continue
     # #62: `.to` may now be a resolved PormGModel (set_models / migration prelude write
     # back the model). Emit its generated variable name via `_model_binding_name` — the SAME

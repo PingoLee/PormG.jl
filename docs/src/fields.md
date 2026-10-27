@@ -85,6 +85,40 @@ driver = Models.Model("driver",
 ```
 
 
+### Keywords a field does not accept
+
+A keyword a field constructor does not take raises `FieldValidationError` when the field is
+defined, typos included. The message names every such keyword and lists the ones the field accepts.
+Until #1333 the keyword was warned about and ignored, and an ignored keyword can be a schema the table
+then lacks. `primary_key = true` on a `BigIntegerField` created a table with **no primary key**:
+
+```julia
+# ✗ raises FieldValidationError: BigIntegerField does not accept `primary_key`
+Circuit_source = Models.Model("circuit_source",
+  circuitid = Models.BigIntegerField(primary_key = true),
+  name = Models.CharField(max_length = 255)
+)
+
+# ✓ an integer key the caller supplies (a source system's id)
+Circuit_source = Models.Model("circuit_source",
+  circuitid = Models.IDField(generated = false),
+  name = Models.CharField(max_length = 255)
+)
+```
+
+The fields that take `primary_key` are `IDField`, `CharField`, `UUIDField`, `ForeignKey` and
+`OneToOneField`. `DecimalField` and `FloatField` take the keyword only to refuse `true`.
+
+A few keywords cannot change any column, and those are still only warned about and ignored on a field
+that does not take them:
+
+- `help_text`: Django's form text.
+- `verbose_name`, `blank`, `editable`, `choices`, `related_name`, `how`: model-layer only.
+- `auto_now`, `auto_now_add`, `auto_add`, `auto_hash`: PormG fills the value when it writes the row.
+- `upload_to`: `FileField`'s storage path.
+- `unpack_ipv4`, `protocol`: `GenericIPAddressField`'s write-time validation.
+- `size`: `ArrayField`'s bound, which PostgreSQL does not keep.
+
 ---
 
 ## Primary Key Fields

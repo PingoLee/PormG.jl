@@ -128,6 +128,8 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_double_quote_is_identifier,
                                # #1356: an integer cast's range, applied by a guard PormG renders.
                                :_guards_integer_cast,
+                               # #1330: MySQL's strict column refuses a decimal too wide for it.
+                               :_unchecked_decimal_assignment_width,
                                # ... and JSON path lookups, read as text.
                                :_json_extract_expr, :_json_path_extracts_text, :_json_numeric_operand,
                                # ... and explain(): EXPLAIN FORMAT=JSON, read as its facts.

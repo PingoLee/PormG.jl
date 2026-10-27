@@ -33,10 +33,9 @@ still refused when the query is built (#1040). So this changes a value read back
 operand is one PormG cannot type (a JSON key lookup), or where a `DecimalField` column holds a value
 that does not fit it: such a value is rounded to the column's scale, and one too wide for its
 precision raises on every read, where both used to come back as the raw `Float64` or `Int64` SQLite
-stored. A column holds such a value when a tool other than PormG wrote it, or when an `update` stored
-an expression too wide for it: SQLite builds `update("narrow" => F("grid") * 100)` into a
-`DecimalField(max_digits = 4, decimal_places = 2)` and stores `2000` for a grid of `20`, where
-PostgreSQL refuses the `UPDATE` with the same SQLSTATE. A value composed over a declaration (`Max`,
+stored. A column holds such a value when a tool other than PormG wrote it. An expression `update` too
+wide for its `DecimalField` no longer stores one: it raises the same SQLSTATE as it writes, on every
+engine (#1330, its own entry). A value composed over a declaration (`Max`,
 `Coalesce`, arithmetic) is the computed number it means and keeps the 15-significant-digit read, as
 before. A `Lag`/`Lead` with a non-NULL default over a `DecimalField` reads width-less on SQLite: its
 default is a value no column holds (PostgreSQL's `lag(numeric(4,2), 1, 999)` returns `999`), so the
@@ -53,9 +52,8 @@ the type holds, with only a warning, so a read cannot tell it from a value that 
 
 On SQLite, code that projects a `Cast` to `numeric(p, s)`, `decimal(p, s)` or `DecimalField(…)`, or
 a `Coalesce`/`Greatest`/`Least`/`Case` with such an `output_field`, over values that can exceed
-`p - s` whole digits; code that reads a `DecimalField` column a tool other than PormG wrote to; and
-code that `update`s a `DecimalField` with an expression whose value can be too wide for it, whose
-rows now raise when they are read.
+`p - s` whole digits; and code that reads a `DecimalField` column a tool other than PormG wrote to,
+or one an expression `update` wrote before #1330.
 
 ### How to find the calls to migrate
 

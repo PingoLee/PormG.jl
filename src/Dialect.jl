@@ -1088,6 +1088,32 @@ function integer_cast_guard_sql(::PormGSQLite, x::AbstractString, bits::Int)::Tu
   return ("CASE WHEN $(s) BETWEEN $(lo) AND $(hi) THEN $(s) ELSE abs($(s) * 0 - 9223372036854775807 - 1) END", 3)
 end
 
+"""
+    decimal_assignment_guard_sql(conn, x, precision, scale) -> Tuple{String, Int}
+
+`x` as the value assigned to a `numeric(precision, scale)` column, raising per row on a value that needs
+more than `precision - scale` digits before the point, on an engine whose column does not refuse it
+(`_unchecked_decimal_assignment_width`, #1330), and how many times the text names `x`. Measured on SQLite
+3.54:
+
+- The value is refused when the #1110 read would refuse it, so a row the `UPDATE` writes always reads
+  back: the read takes a double's 15 significant digits (`printf('%.14e', x)`), then rounds to `scale`, and
+  a magnitude from `10^(p-s) - 0.5·10^-s` up rounds to `10^(p-s)`. That edge is compared as decimal text.
+  The comparison agreed with `_parse_sqlite_decimal` on every value sampled around the edge of twelve
+  declarations, integers and ±0 among them; `round(x, s)` and a plain `abs(x)` did not (SQLite's `round`
+  keeps more than 15 digits). An infinite double prints as `Inf`, which reads back as `0.0`, so the text
+  is read as `9e999` instead, an infinity again: no `numeric(p, s)` holds it, and PostgreSQL's and MySQL's
+  double arithmetic raise 22003 where SQLite's overflows to it.
+- Out of range, `abs()` of the smallest 64-bit integer raises "integer overflow", reported as 22003, as in
+  `integer_cast_guard_sql`; the `CAST(x AS INTEGER) * 0` keeps it a per-row value. NULL passes as NULL.
+"""
+function decimal_assignment_guard_sql(::PormGSQLite, x::AbstractString, precision::Int, scale::Int)::Tuple{String,Int}
+  whole = BigInt(10)^(precision - scale)
+  edge = "$(whole - 1)." * "9"^scale * "5"
+  return ("CASE WHEN abs(CAST(replace(printf('%.14e', $(x)), 'Inf', '9e999') AS REAL)) < $(edge) THEN $(x) " *
+          "ELSE abs(CAST($(x) AS INTEGER) * 0 - 9223372036854775807 - 1) END", 3)
+end
+
 # #822 — SQLite has no temporal types, only type AFFINITY, and every temporal type name gets NUMERIC
 # affinity (it contains none of INT/CHAR/CLOB/TEXT/BLOB/REAL/FLOA/DOUB). A NUMERIC cast reads the
 # longest numeric prefix of the text, so it does not fail — it returns a wrong number:

@@ -1157,6 +1157,8 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #   error, and SQLite reads its stored text's hours;
 # - `:number` over a boolean (#1319): a boolean is a number only as the integer `1` / `0`, so its cast
 #   to a float or a `numeric` is an error, which SQLite and MySQL compute from the integer they store;
+# - `:date` (#1325): a duration or a time of day has no date, so its cast to one is an error, and
+#   SQLite reads the stored `HH:MM:SS` text as a time on 2000-01-01;
 # - `:scale` (#1040): a `numeric(p, s)` cast over an operand with more than `s` fractional digits
 #   (`_scale_divergent_operand`) means the value rounded to `s`; SQLite keeps every digit;
 # - `:precision` (#1087): a literal `Cast` operand too large for `p` (`_precision_overflow_operand`)
@@ -1193,6 +1195,15 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   end
   size = _numeric_cast_size(declared)
   target = _sql_type_field(declared)
+  # #1325: a duration and a time of day have no calendar date, so their cast to one is no value. The
+  # operand is read as the number rules below read it; a date or a timestamp has no row, and builds.
+  if target isa Models.sDateField
+    for operand in operands
+      side = _temporal_number_operand(operand, instruc)
+      side === nothing || (d = departs(side[1], side[2], :date, _concat_flag(operand)); d === nothing || return d)
+    end
+    return nothing
+  end
   # #1259: an interval is no number, whatever number the target is: an integer, a float, a `numeric`,
   # scaled or not; nor is a date, a time or a timestamp (#1260). Checked ahead of the number rules,
   # which read a fraction, not a duration or a date.

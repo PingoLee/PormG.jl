@@ -6549,62 +6549,26 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast interval to date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\")::date > \$1", params = [("\"2009-03-29\"", "String")]),
-  ("Cast interval to date | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast interval to date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "date(\"Tb\".\"fastestlaptime\") > ?", params = [("\"2009-03-29\"", "String")]),
   ("Cast interval to date | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
   ("Cast interval to date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
-  ("Cast interval to date | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
-  ("Cast interval to date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("Cast interval to date | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast interval to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\")::date as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
-  ("Cast interval to date | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast interval to date | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    date(\"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
-  ("Cast time to date | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast time to date | alone", :mysql, "v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`time` AS DATE) > ?", params = [("\"2009-03-29\"", "String")]),
   ("Cast time to date | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast time to date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\")::date > \$1", params = [("\"2009-03-29\"", "String")]),
-  ("Cast time to date | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast time to date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "date(\"Tb\".\"time\") > ?", params = [("\"2009-03-29\"", "String")]),
-  ("Cast time to date | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
-  ("Cast time to date | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
   ("Cast time to date | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
   ("Cast time to date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
-  ("Cast time to date | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
-  ("Cast time to date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
-  ("Cast time to date | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast time to date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`time` AS DATE) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Cast time to date | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast time to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\")::date as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
-  ("Cast time to date | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
-  ("Cast time to date | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    date(\"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("ToChar time YYYY-MM-DD | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "to_char(\"Tb\".\"time\", 'YYYY-MM-DD') > \$1", params = [("\"10\"", "String")]),
   ("ToChar time YYYY-MM-DD | alone", :postgres, "v__@gt", "text pole") =>

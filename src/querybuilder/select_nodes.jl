@@ -1095,7 +1095,9 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
     if any(t -> Base.startswith(target, t), ("DATE", "TIME", "BOOLEAN"))
       # A date, a time, a timestamp or a boolean cast of the count reads its digits as one (`80500000` is
       # `8050:00:00`), where PostgreSQL refuses `interval::date` and `interval::boolean`, and reads
-      # `interval::time` as a time of day. Refused on MySQL, the engine that departs, before any SQL.
+      # `interval::time` as a time of day. Refused on MySQL, the engine that departs, before any SQL. A
+      # date target is the #1325 departure row's, which the cast check meets first; this arm is its
+      # backstop for an interval only the walk names.
       as_what = target == "BOOLEAN" ? "boolean" : Base.startswith(target, "DATETIME") ? "timestamp" :
                 Base.startswith(target, "DATE") ? "date" : "time"
       throw(QueryBuildError("$(_declared_cast_label(v)) of an interval is not supported on $(engine): it " *

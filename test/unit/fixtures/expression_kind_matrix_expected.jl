@@ -6197,39 +6197,39 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast interval to date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast interval to date | alone", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
   ("Cast interval to date | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of an interval is not supported on MySQL: it stores an interval as its count of microseconds, whose digi"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
   ("Cast interval to date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast interval to date | cte", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
   ("Cast interval to date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of an interval is not supported on MySQL: it stores an interval as its count of microseconds, whose digi"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
   ("Cast interval to date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast interval to date | subquery", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
   ("Cast interval to date | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of an interval is not supported on MySQL: it stores an interval as its count of microseconds, whose digi"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
   ("Cast time to date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast time to date | alone", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
   ("Cast time to date | alone", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
   ("Cast time to date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast time to date | cte", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
   ("Cast time to date | cte", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
   ("Cast time to date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast time to date | subquery", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
   ("Cast time to date | subquery", :mysql) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
   ("ToChar time YYYY-MM-DD | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar time YYYY-MM-DD | alone", :sqlite) =>

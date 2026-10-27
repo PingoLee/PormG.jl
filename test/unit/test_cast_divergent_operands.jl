@@ -994,6 +994,54 @@ const _CCD_MY = CcdMockMySQL()
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1325: a duration or a time cast to a date is refused on SQLite and MySQL
+# MEANING: neither has a calendar date, so the cast is an error: PostgreSQL has no `interval::date`
+# and no `time::date`, and rejects the query when it runs. SQLite's `date()` reads the stored
+# `HH:MM:SS` text as a time on 2000-01-01 (`date('01:23:45')` is `2000-01-01`; past 24 hours, NULL);
+# MySQL reads a duration's count of microseconds as a date and gives a time today's date. A column,
+# an aggregate, interval arithmetic, a literal and the `output_field` sites. A date and a timestamp
+# cast to a date, and a duration or a time cast to text, build on every engine.
+# Expected SQL, PostgreSQL: ("Tb"."laptime")::date
+# Why: before #1325 SQLite answered January 1st, 2000 for a lap time, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1325: a duration or a time cast to a date is refused on SQLite and MySQL" begin
+  case(then) = Fn.Case(Fn.When("number" => 1, then = then), output_field = "date")
+  for (expr, meaning) in (
+      (Fn.Cast("laptime", "date"), "a duration has no calendar date"),
+      (Fn.Cast("laptime", Models.DateField()), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Sum("laptime"), "date"), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Avg("laptime"), "date"), "a duration has no calendar date"),
+      (Fn.Greatest("laptime", "laptime"; output_field = "date"), "a duration has no calendar date"),
+      (Fn.Least("clock", "clock"; output_field = "date"), "a time of day has no date"),
+      (Fn.Cast(_CF("start_at") - _CF("start_at"), "date"), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Value(Minute(1)), "date"), "a duration has no calendar date"),
+      (Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "date"), "a duration has no calendar date"),
+      (case(_CF("laptime")), "a duration has no calendar date"),
+      (Fn.Cast("clock", "date"), "a time of day has no date"),
+      (Fn.Cast(Fn.Max("clock"), "date"), "a time of day has no date"),
+      (Fn.Cast(Fn.Value(Time(6)), "date"), "a time of day has no date"),
+      (case(_CF("clock")), "a time of day has no date"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1325", named = meaning)
+    my = _ccd_refusal(expr; conn = _CCD_MY)
+    msg = my === nothing ? "" : _ccd_msg(my)
+    @test my isa QueryBuildError
+    @test occursin("so PormG refuses it on MySQL (#1325)", msg) && occursin(meaning, msg)
+    @test !occursin("SQLite", msg) && !occursin("PostgreSQL", msg)
+  end
+  @test occursin("(\"Tb\".\"laptime\")::date as \"x\"", _ccd_render(Fn.Cast("laptime", "date"); conn = _CCD_PG))
+  # What each engine computes instead, named for the engine at hand.
+  @test occursin("SQLite computes a day in January 2000", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
+  @test occursin("MySQL computes today's date", _ccd_msg(_ccd_refusal(Fn.Cast("clock", "date"); conn = _CCD_MY)))
+  @test occursin("F(\"date\") + F(\"laptime\")", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
+  # A date and a timestamp have a date; a duration and a time have a text. All build on every engine.
+  for expr in (Fn.Cast("start_at", "date"), Fn.Cast("born", "date"), Fn.Cast(Fn.Value(Date(2009, 3, 29)), "date"),
+               Fn.Cast("laptime", "text"), Fn.Cast("clock", "text"))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1221: a DecimalField declaration is its numeric(max_digits, decimal_places), as the string is
 # `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` and the same `output_field` used to keep
 # only the field's `"DECIMAL"` and render an unscaled `decimal`, so neither engine applied the scale the

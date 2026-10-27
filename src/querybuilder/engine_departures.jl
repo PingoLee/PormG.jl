@@ -26,7 +26,7 @@
 # decision nobody made; `test/unit/test_meaning_departures.jl` fails on it, so a new backend (#1130)
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
-# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
+# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
@@ -83,6 +83,21 @@ const _MEANING_DEPARTURES = (
    computes = (PormGSQLite => _ -> "the integer it stores, `1` or `0` (`1.0` as a float)",
                PormGMySQL => _ -> "`1` or `0`, the integer it stores"),
    fix = (flag, declared) -> "Cast it to the integer first, which every engine computes alike: \e[32mCast(Cast(\"$(flag)\", IntegerField()), \"$(something(declared, "float8"))\")\e[0m, or say the values: \e[32mCase([When(\"$(flag)\" => true, then = Value(1.0)), When(\"$(flag)\" => false, then = Value(0.0))])\e[0m."),
+  # #1325: a duration and a time of day have no calendar date, so their cast to a date is an error:
+  # PostgreSQL has no `interval::date` and no `time::date`. SQLite's `date()` reads the stored
+  # `HH:MM:SS` text as a time on 2000-01-01 (measured on 3.45.1: `date('01:23:45')` is `2000-01-01`,
+  # `date('24:00:00')` `2000-01-02`, `date('25:00:00')` NULL). MySQL holds a duration as its count of
+  # microseconds, whose digits its cast reads as a date, and gives a time today's date.
+  (targets = (:date,), kinds = (:interval,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1325",
+   meaning = _ -> "an error, since a duration has no calendar date",
+   computes = (PormGSQLite => _ -> "a day in January 2000, its `HH:MM:SS` text read as a time on `2000-01-01`, or NULL past 24 hours",
+               PormGMySQL => _ -> "the digits of its count of microseconds, which is how MySQL stores it, read as a date"),
+   fix = (flag, _) -> "A duration places a date only from another one: add it to a date, \e[32mF(\"date\") + F(\"$(flag)\")\e[0m."),
+  (targets = (:date,), kinds = (:time,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1325",
+   meaning = _ -> "an error, since a time of day has no date",
+   computes = (PormGSQLite => _ -> "`2000-01-01`, the date it gives a time of day",
+               PormGMySQL => _ -> "today's date, which changes every day"),
+   fix = (_, _) -> "Take the date from a date or a timestamp column, or project the time itself."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite. MySQL's
   # `DECIMAL(p, s)` rounds a decimal, a double and text alike (measured: `1.235` → `1.24`).

@@ -413,6 +413,15 @@ M.Constructor.objects.values("name", "metadata__principal")
 Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
+A projection alias over a path lookup holds the key's value, and a filter on it compares as the path
+lookup itself does, with the same comparisons:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "principal" => F("metadata__principal"))
+q.filter("principal" => "Toto Wolff")      # as filter("metadata__principal" => "Toto Wolff")
+```
+
 A path lookup compares the extracted value against a **value**. A column expression on the right
 (`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison

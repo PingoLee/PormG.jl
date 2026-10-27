@@ -1495,9 +1495,24 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   set_context!(parameters, :update)
   set_clause_parts = String[]
   set_fields = String[]   # #1130: the field each SET item writes, item for item
-  for field in keys(objct.insert)    
+  for field in keys(objct.insert)
+    # #1320: `Value(x)` wraps a literal (`Value`'s own refusal of a column says so, #444), so `update`
+    # writes `x`: the same checks, formatter and bind as `update(field => x)`. Rendered as SQL instead,
+    # a text, float or boolean literal would reach a number column past every check. A `Value` around
+    # an expression is refused rather than unwrapped: `update` would write it as SQL, which no other
+    # `Value` position does, and `_update!`'s path walk does not reach inside one.
+    # The field's own checks (an unknown name, a primary key) come first, as for any other value.
+    value = objct.insert[field]
+    if value isa SQLText
+      _validate_field_name(model, field, "update"; allow_primary_key = false)
+      value.field isa Union{SQLType,SQLObject} && _validation_error("update", model, field,
+        "Value(…) wraps a literal, and this one wraps an expression ($(nameof(typeof(value.field))))";
+        suggestion = "drop the Value(…): update(\"$(field)\" => expression), or Subquery(query) for a query",
+        kind = :type)
+      value = value.field
+    end
     # Validation checks
-    validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
+    validate_field_data(model, field, value, "update"; allow_primary_key = false)
     Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
     
     quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
@@ -1512,8 +1527,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
     # not a value" refusal every other value position keeps. Into any other column it is refused, as
     # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
-    if _is_fts_operand(objct.insert[field])
-      value = objct.insert[field]
+    if _is_fts_operand(value)
       (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
         throw(QueryBuildError(
           "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
@@ -1524,14 +1538,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
     # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
     # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
-    elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
-       isa(objct.insert[field], SQLTypeCTE) || isa(objct.insert[field], SQLTypeJoined)
-      f_value = _set_update_query(objct.insert[field], instruction)
-      _refuse_update_non_number(model.fields[field], field, objct.insert[field], instruction)
-      _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
+    # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
+    elseif value isa _SetExpression
+      f_value = _set_update_query(value, instruction)
+      _refuse_update_non_number(model.fields[field], field, value, instruction)
+      _refuse_update_scale_departure(model.fields[field], field, value, instruction)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update"; conn = connection)
+      formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

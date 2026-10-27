@@ -631,6 +631,9 @@ A `Sockets.IPv4` / `Sockets.IPv6` binds on PostgreSQL as an `inet`, in the text 
 for it: `Value(ip"::FFFF:10.0.0.1")` is `::ffff:10.0.0.1`. SQLite and MySQL have no network type, so
 there it raises `BackendCapabilityError` while the query is built.
 
+`update` writes `Value(x)` as `x`: `update("grid" => Value(3))` is `update("grid" => 3)`, with the same
+checks, formatting and bind (#1320).
+
 ```julia
 using PormG.Functions: Value
 

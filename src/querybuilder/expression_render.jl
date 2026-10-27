@@ -1544,6 +1544,10 @@ _set_update_query(v::CTEReference, instruc::SQLInstruction) = _get_select_query(
 # non-String `field_name` here.
 _set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_query(v, instruc)
 
+# #1320: a bare `Subquery(…)` as an UPDATE SET value. It renders as it does in a projection, its
+# values lifted into the ambient bucket, which is `:update` while SET renders.
+_set_update_query(v::SubqueryObject, instruc::SQLInstruction) = _get_select_query(v, instruc)
+
 # #564 — the temporal path renders AND types, in one pass.
 #
 # `_set_update_query` keeps its `String` contract for every caller (`_get_select_query(::SQLTypeF)`

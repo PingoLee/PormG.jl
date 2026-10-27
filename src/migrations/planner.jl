@@ -1108,14 +1108,15 @@ function _diff_checks(model::PormGModel, live_checks::Vector{LiveCheck})::_Check
   isempty(declared) && all(lc -> lc.marker === nothing, live_checks) && return plan
   declared_names = Set{String}(c.name for c in declared)
   live_by_name = Dict{String, LiveCheck}(lc.name => lc for lc in live_checks)
+  # #1368: the text compared in `_comparable_sql_text`'s form — `"laps"` and `laps` are one column here.
   unchanged(c, lc) = (lc.marker !== nothing && lc.marker == check_marker(c.condition)) ||
-                     canonical_check_condition(lc.sql) == canonical_check_condition(c.condition)
+                     _comparable_sql_text(lc.sql) == _comparable_sql_text(c.condition)
   orphans = LiveCheck[lc for lc in live_checks if lc.marker !== nothing && !(lc.name in declared_names)]
   for c in declared
     lc = get(live_by_name, c.name, nothing)
     if lc === nothing
       k = findfirst(o -> o.marker == check_marker(c.condition) ||
-                         canonical_check_condition(o.sql) == canonical_check_condition(c.condition), orphans)
+                         _comparable_sql_text(o.sql) == _comparable_sql_text(c.condition), orphans)
       if k === nothing
         push!(plan.adds, c)
       else
@@ -1267,6 +1268,53 @@ function _refuse_shared_check_names(::PormGMySQL, current_schema)::Nothing
         "CheckConstraint name '$(c.name)' is declared on models '$(other)' and '$(model_name)'. CHECK names " *
         "are unique per database on MySQL; give one of them another name."))
     end
+  end
+  return nothing
+end
+
+"""
+    _refuse_double_quoted_names(current_schema, conn) -> Nothing
+    _refuse_double_quoted_names(model, table, conn) -> Nothing
+
+#1368: a double-quoted name in a `CheckConstraint` condition or an `Index` / `UniqueConstraint`
+expression, on an engine where it is a string literal rather than the column (`_double_quote_is_identifier`
+— MySQL, whose session `sql_mode` has no `ANSI_QUOTES`). Sent as written, `"laps" >= 0` would be a CHECK
+comparing the text `'laps'` and `LOWER("name")` an index on a constant, and both converge with their own
+declaration, so nothing would ever report them. Refused for every managed model before the diff, like
+`_refuse_unsupported_indexes`, so a declaration the plan would leave untouched is refused too; and by
+`ensure_table!`, which renders a table outside the plan. Not a capability row: the engine has CHECKs and
+expression indexes; the text means something else there. A partial index's `condition` is not scanned:
+MySQL has no partial index, and `Dialect.create_index` refuses one when it renders (`:partial_indexes`).
+"""
+function _refuse_double_quoted_names(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                     conn)::Nothing
+  (conn isa PormGBackend && !_double_quote_is_identifier(conn)) || return nothing
+  for table in sort!(collect(keys(current_schema)))
+    _refuse_double_quoted_names(current_schema[table][:model], table, conn)
+  end
+  return nothing
+end
+function _refuse_double_quoted_names(model::PormGModel, table, conn)::Nothing
+  (conn isa PormGBackend && !_double_quote_is_identifier(conn)) || return nothing
+  texts = Tuple{String, String}[("CheckConstraint '$(c.name)'", c.condition)
+                                for c in Models.declared_check_constraints(model)]
+  for d in declared_composites(model), e in d.expressions
+    push!(texts, ("$(d.unique ? "UniqueConstraint" : "Index") '$(d.name)'", e))
+  end
+  for (what, sql) in texts
+    quoted = _double_quoted_identifiers(sql)
+    isempty(quoted) && continue
+    ident = first(quoted)
+    fix = _portable_bare_name(ident) ?
+      "Write the name bare, `$(ident)`: a bare name is the column on every engine (a string is written in " *
+      "single quotes)." :
+      "`$(ident)` has no spelling that names the column on every engine (it is a reserved word or not a " *
+      "plain lower-case name, and a backtick means nothing on PostgreSQL and SQLite); give the column " *
+      "a plain lower-case name, with `db_column` if the field keeps its own."
+    throw(InvalidMigrationError(
+      "$(what) on table '$(table)' writes the name `$(ident)` in double quotes. On $(_backend_name(conn)) a " *
+      "double-quoted name is a string literal, not the column, so the constraint or index would be " *
+      "over a constant. $(fix)"))
   end
   return nothing
 end
@@ -3252,6 +3300,7 @@ _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 _refuse_unsupported_fields(current_schema, conn)
 _refuse_unsupported_indexes(current_schema, conn)
 _refuse_unbounded_indexes(current_schema, conn)
+_refuse_double_quoted_names(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables

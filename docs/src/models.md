@@ -383,7 +383,7 @@ silently change the statement it lands in: a `--` or `/*` comment, an unterminat
 `;` — or a top-level `,`, so each entry of `expressions` is exactly one member — and an `E'…'` string,
 a backslash right before a quote, a dollar quote or a backtick, whose end only one engine can find.
 PostgreSQL and SQLite have
-expression and partial indexes, and MySQL expression indexes only (`partial_indexes`). Write SQL that every engine the model runs on understands. On MySQL, write column names bare: without `ANSI_QUOTES`, a double-quoted name is a string literal there ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)).
+expression and partial indexes, and MySQL expression indexes only (`partial_indexes`). Write SQL that every engine the model runs on understands. Write column names bare (`LOWER(surname)`): a bare name is the column on every engine, while a double-quoted one is a string literal on MySQL, whose `makemigrations` refuses it ([MySQL Guide](mysql.md#Migrations)).
 
 ```sql
 CREATE INDEX "driver_surname_lower_idx" ON "driver" (lower(surname));
@@ -551,7 +551,7 @@ Result = Models.Model(
 - **`condition` is SQL**, sent to every engine as written (MySQL's with PormG's marker as an extra term, [below](#How-a-CHECK-migrates)). It names the table's *physical* columns
   (`db_column`, where a field sets one), unqualified: `grid >= 0`, never `result.grid >= 0`, which
   does not survive a SQLite table rebuild. It is not a `Q(...)` — a CHECK is DDL, which takes no bind
-  parameters. Write SQL that every engine you run on accepts, as you would for `db_default`. On MySQL, write column names bare: a double-quoted name is a string literal there ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)). PormG checks it only for
+  parameters. Write SQL that every engine you run on accepts, as you would for `db_default`. Write column names bare (`laps >= 0`): a bare name is the column on every engine, while a double-quoted one is a string literal on MySQL, whose `makemigrations` refuses it with `InvalidMigrationError` ([MySQL Guide](mysql.md#Migrations)). PormG checks it only for
   the typos that would silently change the statement it lands in: a `--` or `/*` comment, an
   unterminated quote, a `;` or a `,` outside parentheses — and for quoting whose end only one engine
   can find: an `E'…'` string, a backslash right before a quote, a dollar quote or a backtick. The

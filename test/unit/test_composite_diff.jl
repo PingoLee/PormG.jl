@@ -1030,17 +1030,22 @@ end
 # Django's `Exact.as_sql` renders a boolean field against True as the bare column, so a Django-built
 # SQLite database stores `WHERE "ativo"`. The importer's translator wrote `"ativo" = TRUE`, which no
 # canonical comparison equates with it, so `makemigrations` refused the index's name as hand-made.
-# Now the translator writes Django's spelling and the imported declaration simply matches — no
-# statement, no refusal. PostgreSQL stores its own deparse (`ativo`, unquoted), which still differs;
-# that half stays the documented adoption hint.
-# Mutation gate: restore `"col = TRUE"` in `_q_leaf_sql` and the plan is an InvalidMigrationError.
+# Now the translator writes Django's shape and the imported declaration simply matches — no
+# statement, no refusal. Since #1368 it writes the name bare (`ativo`), as a double-quoted name is a
+# string on MySQL, and the planner compares `"ativo"` and `ativo` as one column
+# (`_comparable_sql_text`), so the index Django built with the quotes still matches. PostgreSQL stores
+# its own deparse of anything else (`lower(apelido::text)`); that half stays the documented adoption hint.
+# Mutation gate: restore `"col = TRUE"` in `_q_leaf_sql`, or compare with `canonical_check_condition`
+# in `_composite_text_matches`, and the plan is an InvalidMigrationError.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite: an imported Q(bool=True) partial index matches the one Django built (#934)" begin
   fields = Dict{Symbol, Any}(:raceid => Models.IntegerField(), :ativo => Models.BooleanField())
   cond_true = PormG.Migrations._q_expression("Q(ativo=True)", fields).sql
   cond_false = PormG.Migrations._q_expression("Q(ativo=False)", fields).sql
-  @test cond_true == "\"ativo\""
-  @test cond_false == "NOT \"ativo\""
+  @test cond_true == "ativo"
+  @test cond_false == "NOT ativo"
+  # What Django's schema editor sends for each: the column double-quoted.
+  django = Dict("True" => "\"ativo\"", "False" => "NOT \"ativo\"")
   for (label, cond) in (("True", cond_true), ("False", cond_false))
     @testset "Q(ativo=$label)" begin
       mktempdir() do dir
@@ -1052,9 +1057,9 @@ end
           # SQLite schema editor writes it, so it carries no PormG marker.
           plan = _cd_plan(pool, LiveTable[], _cd_result(ativo = Models.BooleanField(default = true)))
           _cd_apply!(pool, plan)
-          fetch(pool, "CREATE INDEX \"idx_ativos\" ON \"result\" (\"raceid\", \"grid\") WHERE $(cond);")
+          fetch(pool, "CREATE INDEX \"idx_ativos\" ON \"result\" (\"raceid\", \"grid\") WHERE $(django[label]);")
           live = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "idx_ativos")
-          @test live.marker === nothing && live.condition == cond
+          @test live.marker === nothing && live.condition == django[label]
           @test _cd_converged(pool, ("result",), declared)
         finally
           close_pool!(pool)

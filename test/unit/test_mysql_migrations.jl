@@ -451,6 +451,45 @@ end
   @test haskey(_mm_plan(_mm_my, "", "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(), raw = Models.BinaryField(null = true))"), :lap)
 end
 
+# What: a double-quoted name in a CheckConstraint condition, an Index expression or a UniqueConstraint
+# expression, refused on MySQL for the whole models file before the diff, naming the bare spelling.
+# SQL: none.
+# Why: MySQL's session `sql_mode` has no `ANSI_QUOTES`, so `"code" <> ''` is a CHECK comparing the text
+# `'code'` and `LOWER("forename")` an index on a constant; both converge with their own declaration, so
+# nothing would ever report them (#1368). On PostgreSQL and SQLite the same text names the column.
+# `ensure_table!` renders a table outside the plan, so it refuses the same text.
+@testset "#1368: a double-quoted name in SQL text is refused on MySQL, before the plan" begin
+  drv(tail) = "Driver = Models.Model(\"driver\", driverid = Models.IDField(), " *
+              "forename = Models.CharField(max_length = 100), code = Models.CharField(max_length = 8), " *
+              "user = Models.IntegerField(null = true); $(tail))"
+  check = drv(raw"""constraints = [Models.CheckConstraint(condition = "\\"code\\" <> ''", name = "code_set")]""")
+  index = drv(raw"""indexes = [Models.Index(expressions = ("LOWER(\\"forename\\")",), name = "drv_lf_idx")]""")
+  uniq = drv(raw"""constraints = [Models.UniqueConstraint(expressions = ("LOWER(\\"code\\")",), name = "drv_lc_uniq")]""")
+  for (label, src, what) in (("a CHECK", check, "CheckConstraint 'code_set'"),
+                             ("an Index expression", index, "Index 'drv_lf_idx'"),
+                             ("a UniqueConstraint expression", uniq, "UniqueConstraint 'drv_lc_uniq'"))
+    for (when, live) in (("a new table", ""), ("a table already declared so", src))
+      e = _mm_err(() -> _mm_plan(_mm_my, live, src))
+      msg = e isa PormG.InvalidMigrationError ? sprint(showerror, e) : ""
+      @test (label, when, occursin(what, msg) && occursin("On MySQL a double-quoted name is a string literal", msg) &&
+                          occursin("Write the name bare", msg)) == (label, when, true)
+    end
+    # The same declaration names the column on PostgreSQL, and plans.
+    @test (label, _mm_plan(MmMockPostgres(), "", src) isa AbstractDict) == (label, true)
+    # `ensure_table!` renders a table outside the plan, and refuses it too.
+    model = only(values(_mm_schema(src)))[:model]
+    @test (label, _mm_err(() -> _MM._ensure_table_statements(_mm_my, model)) isa PormG.InvalidMigrationError) == (label, true)
+  end
+  # A reserved word has no bare spelling: the refusal says so rather than suggest one.
+  e = _mm_err(() -> _mm_plan(_mm_my, "", drv(raw"""constraints = [Models.CheckConstraint(condition = "\\"user\\" > 0", name = "user_pos")]""")))
+  @test e isa PormG.InvalidMigrationError && occursin("`user` has no spelling that names the column on every engine", sprint(showerror, e))
+  # A double quote inside a string literal is data, and bare names build.
+  @test _MM._refuse_double_quoted_names(
+          _mm_schema(drv(raw"""constraints = [Models.CheckConstraint(condition = "code <> '\\"x\\"'", name = "code_set")]""")), _mm_my) === nothing
+  @test haskey(_mm_plan(_mm_my, "", drv(raw"""indexes = [Models.Index(expressions = ("LOWER(forename)",), name = "drv_lf_idx")]""")), :driver)
+  @test (_MM._double_quote_is_identifier(_mm_my), _MM._double_quote_is_identifier(MmMockPostgres())) == (false, true)
+end
+
 # What: the rows a key added to a table that exists would reject, counted in MySQL's own SQL.
 # SQL: `SELECT CAST((SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) … GROUP BY … HAVING COUNT(*) > 1)
 #      AS pormg_duplicates) AS SIGNED) AS n`, backtick names; a primary key also counts its NULLs.

@@ -478,6 +478,12 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             plan = apply!(tr("m4b_tr2", ""); renames = ["m4b_tr" => "m4b_tr2"])
             @test occursin("RENAME TABLE `m4b_tr` TO `m4b_tr2`", plan) && occursin("DROP CHECK `m4b_tr2_chk_1`", plan)
             @test isempty(live("m4b_tr2").checks) && converged()
+            # #1368: a double-quoted name is a string literal on MySQL, so `"lap" < 100` would be a CHECK on the
+            # text 'lap'. makemigrations refuses it, naming the bare spelling, and nothing reaches the server.
+            write_models(tr("m4b_tr2", "; constraints = [$(ck("m4b_tr2_q", "\\\"lap\\\" < 100"))]"))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("Write the name bare, `lap`", sprint(showerror, e))
+            @test isempty(live("m4b_tr2").checks)
         end
 
         # What: a functional index and a functional UniqueConstraint (#1130 phase 4c): created, converged,
@@ -515,6 +521,11 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
             @test e isa PormG.InvalidMigrationError && occursin("m4b_fn_idx", sprint(showerror, e))
             exec("DROP INDEX `m4b_fn_idx` ON `m4b_fn`")
+            # #1368: `lower("name")` would be an index on the constant 'name' there; refused, nothing created.
+            write_models(fn(index("lower(\\\"name\\\")")))
+            e = try; Mig.makemigrations(folder; interactive = false); nothing; catch err; err; end
+            @test e isa PormG.InvalidMigrationError && occursin("Write the name bare, `name`", sprint(showerror, e))
+            @test isempty(live("m4b_fn").composites)
         end
 
         # What: a per-engine db_default on MySQL (#1130 phase 4c): created with its stamp, converged, changed

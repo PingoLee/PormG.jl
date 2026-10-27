@@ -982,12 +982,12 @@ end
     generated = read(joinpath(config_key, "ix_reject_unit.jl"), String)
 
     # The three PormG can express survive, and they are the ONLY Indexes emitted: the functional
-    # one in Django's own spelling, the partial one's Q() through the CheckConstraint translator.
+    # one in Django's own spelling (the column bare, #1368), the partial one's Q() through the CheckConstraint translator.
     @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"ok_idx\")", generated)
-    @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"lower_idx\")", generated)
-    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\"\")", generated)
+    @test occursin("Models.Index(expressions = (\"LOWER(apelido)\",), name = \"lower_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"ativo\")", generated)
     # A bare positional string is Django's shorthand for F().
-    @test occursin("Models.Index(expressions = (\"\\\"cpf\\\"\", \"LOWER(\\\"apelido\\\") DESC\",), name = \"str_idx\")", generated)
+    @test occursin("Models.Index(expressions = (\"cpf\", \"LOWER(apelido) DESC\",), name = \"str_idx\")", generated)
     # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.
     @test occursin("Models.Index(fields = (\"cpf\", \"-ativo\",), name = \"f_idx\")", generated)
     # #934: a covering index carries its payload — one field is fine, since `include` makes it advanced.
@@ -1394,7 +1394,7 @@ end
     import_models_from_django(django; db = config_key, file = "uc_members_unit.jl", force_replace = true)
     generated = read(joinpath(config_key, "uc_members_unit.jl"), String)
     @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"lap\",), name = \"lap_race_lap_uq\")", generated)
-    @test occursin("Models.UniqueConstraint(expressions = (\"\\\"raceid\\\" DESC\", \"\\\"lap\\\"\",), " *
+    @test occursin("Models.UniqueConstraint(expressions = (\"raceid DESC\", \"lap\",), " *
                    "name = \"lap_race_desc_uq\")", generated)
     @test !occursin("was dropped", generated)
   finally

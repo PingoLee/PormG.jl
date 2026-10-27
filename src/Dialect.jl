@@ -1459,6 +1459,7 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   up = extract_part(part)
   kind = get(format, "temporal_kind", nothing)
   kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
+  kind === :interval && up in _MYSQL_CALENDAR_PARTS && throw(_duration_calendar_refusal("Extract(…, \"$(part)\")"))
   kind === :interval && up != "EPOCH" && throw(_mysql_part_of_interval_refusal("Extract(…, \"$(part)\")"))
   template = get(_MYSQL_EXTRACT_NATIVE, up, nothing)
   template === nothing || return replace(template, "%s" => column)
@@ -1475,19 +1476,26 @@ _mysql_date_of_time_refusal(label::String) = QueryBuildError(
   "$(label) over a time is not supported on MySQL, which reads a time's date as today's: a time has no date.")
 _refuse_date_of_time(format::Dict{String,Any}, label::String) =
   get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
-# #1324 — a part of a duration EXPRESSION (a timestamp difference, interval arithmetic, a `Sum` of a
-# duration), which MySQL holds as its count of microseconds: `EXTRACT(HOUR FROM <a BIGINT>)` reads the
-# count as a date or a time, a NULL or a value with no meaning, where PostgreSQL reads the interval's
-# hours component. MySQL departs, so it refuses on itself; only `EPOCH` reads the count (its seconds).
-# A `DurationField` column is refused earlier, on every engine, by its field (#1070); this is an
+# #1324 — a clock part of a duration EXPRESSION (a timestamp difference, interval arithmetic, a `Sum`
+# of a duration), which MySQL holds as its count of microseconds: `EXTRACT(HOUR FROM <a BIGINT>)` reads
+# the count as a time, a NULL or a value with no meaning, where PostgreSQL reads the interval's hours
+# component. MySQL departs, so it refuses on itself; only `EPOCH` reads the count (its seconds). A
+# `DurationField` column is refused earlier, on every engine, by its field (#1070); this is an
 # expression.
 _mysql_part_of_interval_refusal(label::String) = QueryBuildError(
   "$(label) over a duration expression is not supported on MySQL, which holds a duration as its count " *
   "of microseconds there: the part would read that count as a date or a time. For a duration's seconds, " *
   "write Extract(d, \"epoch\").")
+# #1388 — a calendar part (a year, a quarter, a day of the week, `@date`) of a duration, which has no
+# calendar date on any engine. The build refuses it on every engine (`_check_temporal_operand`) before
+# a MySQL arm runs; the arms refuse it with the same words.
+_duration_calendar_refusal(label::String) = QueryBuildError(
+  "$(label) over a duration is not supported: a duration has no calendar date on any engine, so the " *
+  "part has no meaning over one (#1388).")
+# The four nodes MySQL renders from a date part, all calendar parts.
 function _refuse_mysql_date_part(format::Dict{String,Any}, label::String)
   _refuse_date_of_time(format, label)
-  get(format, "temporal_kind", nothing) === :interval && throw(_mysql_part_of_interval_refusal(label))
+  get(format, "temporal_kind", nothing) === :interval && throw(_duration_calendar_refusal(label))
   return nothing
 end
 

@@ -16,9 +16,13 @@ operand of one that means numbers only is refused on every engine, naming the sp
 seconds where the engine has one (`Extract(d, "epoch")` on PostgreSQL and MySQL; SQLite has no `EPOCH`
 part). `Sum` and `Avg` mean a duration's total and mean, and keep building.
 
-MySQL also holds a duration EXPRESSION as its count of microseconds, so a date part of one
-(`Extract(F("start_at") - F("date"), "hour")`) read that count as a date or a time; it is refused on
-MySQL, which departs, and only `EPOCH` builds there. PostgreSQL and SQLite do not move for that part.
+MySQL also holds a duration EXPRESSION as its count of microseconds, so a clock part of one
+(`Extract(F("start_at") - F("date"), "hour")`) read that count as a time; it is refused on MySQL,
+which departs, and only `EPOCH` builds there. PostgreSQL and SQLite do not move for a clock part.
+
+#1388: a CALENDAR part of a duration expression (`Extract(F("fastestlaptime") * 2, "year")`, `@date`,
+`@quarter`, `@week_day`) is refused on every engine, as #1070 refuses it over a `DurationField` column:
+a duration has no calendar date.
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -166,13 +170,14 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1324: a date part of a duration expression is refused on MySQL, which departs
+# #1324: a clock part of a duration expression is refused on MySQL, which departs
 # MySQL holds a duration as its count of microseconds, so `EXTRACT(HOUR FROM <that count>)` read the
-# count as a date or a time where PostgreSQL reads the interval's hours component. Refused on MySQL,
-# naming `Extract(d, "epoch")`, which builds there; PostgreSQL and SQLite do not move here. Expected
-# SQL on PostgreSQL: the part of the interval, `EXTRACT(HOUR FROM (…))`.
+# count as a time where PostgreSQL reads the interval's hours component. Refused on MySQL, naming
+# `Extract(d, "epoch")`, which builds there; PostgreSQL and SQLite do not move for a clock part (the
+# calendar parts are #1388's, below). Expected SQL on PostgreSQL: the part of the interval,
+# `EXTRACT(HOUR FROM (…))`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1324: Extract over a duration expression on MySQL" begin
+@testset "#1324: a clock part over a duration expression on MySQL" begin
   for (expr, part) in ((Fn.Extract(_MF("start_at") - _MF("start_at"), "hour"), "hour"),
                        (Fn.Extract(_MF("fastestlaptime") * 2, "minute"), "minute"),
                        (Fn.Extract(Fn.Sum("fastestlaptime"), "second"), "second"))
@@ -185,13 +190,118 @@ end
     @test _mod_refusal(expr; conn = _MOD_PG) === nothing
   end
   @test _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, "epoch"); conn = _MOD_MY) === nothing
-  # The four transforms MySQL renders from a date part refuse a duration operand at their Dialect arm,
-  # as `Extract` does; a date operand renders as before.
+end
+
+# The #1388 refusal, without colour: the part, the reason that holds on every engine, no remedy.
+_mod_calendar_refused(msg, label) =
+  occursin("$(label) over a duration is not supported: a duration has no calendar date on any engine", msg) &&
+  occursin("(#1388)", msg) && !occursin("epoch", msg)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1388: a calendar part of a duration expression is refused on every engine
+# #1070 refused every part but EPOCH over a `DurationField` column, by its field, and let an
+# expression through. A timestamp difference, interval arithmetic or a `Sum` of a duration has no
+# calendar date either. PostgreSQL built `EXTRACT(QUARTER FROM (…))` over the interval, SQLite read the
+# duration's text or milliseconds as a date, and MySQL refused with #1324's epoch remedy. Now the type
+# walk names the operand a duration and the build refuses it on every engine with one reason; the
+# `century` part, which SQLite refused as a missing feature, gets the same reason there. Expected SQL:
+# none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1388: a calendar part over a duration expression is refused on every engine" begin
+  QB = PormG.QueryBuilder
+  shapes = (
+    (Fn.Extract(_MF("start_at") - _MF("date"), "quarter"), "quarter"),
+    (Fn.Extract(_MF("fastestlaptime") * 2, "year"), "year"),
+    (Fn.Extract(_MF("fastestlaptime") * 2, "century"), "century"),
+    (Fn.Extract(Fn.Sum("fastestlaptime"), "month"), "month"),
+    (Fn.Extract(_MF("start_at") - _MF("start_at"), "dow"), "dow"),
+    (Fn.Extract(_MF("fastestlaptime") + _MF("fastestlaptime"), "week"), "week"),
+    (Fn.Extract(Fn.Avg("fastestlaptime"), "isodow"), "isodow"),
+    (Fn.Extract(_MF("fastestlaptime") * 2, "doy"), "doy"),
+    (QB.DATE(_MF("fastestlaptime") * 2), "date"),
+    (QB.QUARTER(_MF("start_at") - _MF("date")), "quarter"),
+    (QB.QUADRIMESTER(Fn.Sum("fastestlaptime")), "quadrimester"),
+    (QB.WEEK_DAY(_MF("fastestlaptime") * 2), "week_day"),
+    (Fn.ToChar(_MF("fastestlaptime") * 2, "YYYY-MM"), "yyyy_mm"),
+  )
+  for (expr, part) in shapes, (conn, engine) in _MOD_ENGINES
+    err = _mod_refusal(expr; conn = conn)
+    @test err isa QueryBuildError
+    err isa QueryBuildError || continue
+    @test _mod_calendar_refused(_mod_msg(err), "The $(part) part")
+  end
+  # The same node filtered and ordered by its alias, the spelling `filter`/`order_by` take for one.
+  for (conn, _) in _MOD_ENGINES
+    part = Fn.Extract(_MF("fastestlaptime") * 2, "year")
+    for build in (q -> (q.values("y" => part); q.filter("y" => 2009)),
+                  q -> (q.values("resultid", "y" => part); q.order_by("y")))
+      err = try
+        inspect_query((q = MOD.Mod_result.objects; build(q); q); connection = conn); nothing
+      catch e
+        e
+      end
+      @test err isa QueryBuildError && _mod_calendar_refused(_mod_msg(err), "The year part")
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1388: what the calendar refusal leaves alone
+# A clock part over a duration expression keeps building on PostgreSQL and SQLite (its meaning is
+# measured on #1388, not decided here), and MySQL keeps #1324's refusal, which names EPOCH. EPOCH
+# builds where the engine has it. A date plus a duration is a timestamp, so its calendar parts build.
+# A `DurationField` column keeps #1070's message. Expected SQL on PostgreSQL for the clock part:
+# `EXTRACT(HOUR FROM (…))::integer`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1388: clock parts, EPOCH, timestamps and columns are unchanged" begin
+  for (conn, engine) in _MOD_ENGINES
+    for part in ("hour", "minute", "second")
+      err = _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, part); conn = conn)
+      if conn === _MOD_MY
+        @test err isa QueryBuildError && occursin("Extract(d, \"epoch\")", _mod_msg(err))
+      else
+        @test err === nothing
+      end
+    end
+    @test _mod_refusal(Fn.Extract(_MF("date") + _MF("fastestlaptime"), "year"); conn = conn) === nothing
+    err = _mod_refusal(Fn.Extract("fastestlaptime", "year"); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1070)", _mod_msg(err)) && !occursin("#1388", _mod_msg(err))
+  end
+  @test occursin("EXTRACT(HOUR FROM", _mod_render(Fn.Extract(_MF("fastestlaptime") * 2, "hour"); conn = _MOD_PG))
+  for conn in (_MOD_PG, _MOD_MY)
+    @test _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, "epoch"); conn = conn) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1388: MySQL's date arms say the same
+# The build refuses a calendar part before a MySQL arm renders, but the arms that read the operand's
+# temporal kind refuse it too, with the #1388 reason instead of #1324's epoch remedy: `@date`,
+# `@quarter`, `@quadrimester`, `@week_day`, and `Extract`'s calendar parts. `Extract`'s clock parts
+# keep the epoch remedy, and a date operand renders as before. Expected SQL for a date: `QUARTER(x)`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1388: MySQL's date arms refuse a calendar part of a duration" begin
   for (fn, label) in ((:DATE, "@date"), (:QUARTER, "@quarter"), (:QUADRIMESTER, "@quadrimester"),
                       (:WEEK_DAY, "@week_day"))
     arm = getfield(PormG.Dialect, fn)
     err = try arm("x", Dict{String,Any}("temporal_kind" => :interval), _MOD_MY); nothing catch e; e end
-    @test err isa QueryBuildError && occursin("$(label) over a duration expression is not supported on MySQL", _mod_msg(err))
+    @test err isa QueryBuildError && _mod_calendar_refused(_mod_msg(err), label)
     @test arm("x", Dict{String,Any}("temporal_kind" => :date), _MOD_MY) isa String
   end
+  @test PormG.Dialect.QUARTER("x", Dict{String,Any}("temporal_kind" => :date), _MOD_MY) == "QUARTER(x)"
+  extract(part) = try
+    PormG.Dialect.EXTRACT("x", Dict{String,Any}("part" => part, "temporal_kind" => :interval), _MOD_MY)
+  catch e
+    e
+  end
+  for part in ("year", "quarter", "dow", "isoyear")
+    err = extract(part)
+    @test err isa QueryBuildError && _mod_calendar_refused(_mod_msg(err), "Extract(…, \"$(part)\")")
+  end
+  for part in ("hour", "microseconds")
+    err = extract(part)
+    @test err isa QueryBuildError && occursin("over a duration expression is not supported on MySQL", _mod_msg(err)) &&
+          occursin("Extract(d, \"epoch\")", _mod_msg(err))
+  end
+  @test extract("epoch") == "(x / 1000000)"
 end

@@ -5493,131 +5493,131 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Extract quarter F datetime - date | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | alone", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | cte", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | subquery", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"quarter\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract year F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract year F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"year\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract month F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_month_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract month F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"month\") over a duration expression is not supported on MySQL, which holds a duration as its count of microse"),
+    (stage = :build, error = "QueryBuildError", message = "The month part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meani"),
   ("Extract century F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | alone", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | subquery", :sqlite) =>
-    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: century"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract century F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"century\") over a duration expression is not supported on MySQL, which holds a duration as its count of micro"),
+    (stage = :build, error = "QueryBuildError", message = "The century part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract dow Sum interval | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_dow_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract dow Sum interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"dow\") over a duration expression is not supported on MySQL, which holds a duration as its count of microseco"),
+    (stage = :build, error = "QueryBuildError", message = "The dow part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meaning"),
   ("Extract week F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("Extract week F datetime - datetime | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"week\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The week part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@date over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there: t"),
+    (stage = :build, error = "QueryBuildError", message = "The date part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
   ("DATE CTE interval col | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
   ("DATE CTE interval col | alone", :sqlite) =>
@@ -5637,77 +5637,77 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("DATE CTE interval col | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("WEEK_DAY Sum interval | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function WEEK_DAY is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function WEEK_DAY is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_week_day_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@week_day over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds ther"),
+    (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("QUARTER F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUARTER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUARTER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUARTER F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quarter over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds there"),
+    (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("QUADRIMESTER F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUADRIMESTER is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function QUADRIMESTER is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_quadrimester_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("QUADRIMESTER F datetime - datetime | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "@quadrimester over a duration expression is not supported on MySQL, which holds a duration as its count of microseconds "),
+    (stage = :build, error = "QueryBuildError", message = "The quadrimester part over a duration is not supported: a duration has no calendar date on any engine, so the part has n"),
   ("ToChar YYYY-MM F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("ToChar YYYY-MM F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: use Cast(x, \"text\") for "),
+    (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract hour F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract hour F interval * 2 | alone", :sqlite) =>

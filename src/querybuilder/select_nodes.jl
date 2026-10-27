@@ -590,16 +590,17 @@ _temporal_hint(::Any) = nothing
 
 # Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
 # row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,
-# unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
-# untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
-# valid SQL. A relation is checked against the key it holds (#1068); a many-to-many has no column.
+# unlike `@len`: a column is checked by the field PormG names for it, and an operand with no field (an
+# expression, a subquery, an untyped CTE column) only by `_check_temporal_expression`; what neither
+# can type passes, because refusing it would refuse valid SQL. A relation is checked against the key
+# it holds (#1068); a many-to-many has no column.
 function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   found = _temporal_row_of(v)
   found === nothing && return nothing
   row, part = found
   column = _temporal_operand(v.column)
   declared = _alias_column_field(column, instruc)
-  declared isa PormGField || return nothing
+  declared isa PormGField || return _check_temporal_expression(v, row, part, instruc)
   declared isa Models.sManyToManyField && return nothing
   field = _relation_key_field(declared, instruc)
   field isa PormGField || return nothing
@@ -614,6 +615,17 @@ function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   throw(QueryBuildError(
     "The \e[31m$(part)\e[0m part reads $(row.what), so its column must be $(must); " *
     "\e[31m$(label)\e[0m $(declared_as) (#1070)."))
+end
+
+# #1388: an operand with no field is checked by its kind from the type walk, for a calendar part only.
+# A duration EXPRESSION — a timestamp difference, interval arithmetic, a `Sum` of a duration — has no
+# calendar date on any engine, as a `DurationField` column has none (#1070). A clock part over one is
+# not refused here: PostgreSQL reads the interval's components, and whether SQLite agrees is measured on
+# #1388. MySQL refuses the clock parts on itself (`Dialect._mysql_part_of_interval_refusal`, #1324).
+function _check_temporal_expression(v::FObject, row::_TemporalRow, part::String, instruc::SQLInstruction)
+  row.reads == _CALENDAR_READS.reads || return nothing
+  _expression_kind(v.column, instruc) isa CInterval || return nothing
+  throw(Dialect._duration_calendar_refusal("The \e[31m$(part)\e[0m part"))
 end
 
 # #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a

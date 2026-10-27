@@ -1654,6 +1654,25 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.values("y" => "statusid__@year").list(show_query = :dict),
     ),
+    # #1388: a calendar part over a duration EXPRESSION is refused as over the column, on every engine.
+    (
+        "read/functions_and_dates.md + Extract docstring — a calendar part over a duration expression raises",
+        QueryBuildError,
+        () -> DOCERR_RACE1183_PG.objects.values("y" => Extract(PormG.QueryBuilder.F("duration") * 2, "year")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md + read/field_expressions.md — a calendar part over a timestamp difference raises on SQLite too",
+        QueryBuildError,
+        () -> DOCERR_RACE1183_SL.objects.values("q" => Extract(PormG.QueryBuilder.F("start_at") -
+            PormG.QueryBuilder.F("start_at"), "quarter")).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md — `ToChar(…, \"YYYY-MM\")` over a `Sum` of a duration raises",
+        QueryBuildError,
+        () -> DOCERR_RACE1183_SL.objects.values("w" => ToChar(Sum("duration"), "YYYY-MM")).
+            list(show_query = :dict),
+    ),
     # #1070 (review): `ToChar(x, "YYYY-MM")` is `@yyyy_mm`, so a filter on it takes a whole
     # `"YYYY-MM"` value, as the transform always did. A pattern lookup takes a fragment (#1086).
     (

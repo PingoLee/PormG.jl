@@ -1251,7 +1251,7 @@ end
   end
   @test occursin("((FLOOR(((\"Tb\".\"number\" + \$1::bigint))::numeric)::bigint / \$2::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Floor(_CF("number") + 1) / 2, Models.IntegerField()); conn = _CCD_PG))
-  @test occursin("CAST((FLOOR((\"Tb\".\"number\" + ?)) / ?) AS INTEGER) as \"x\"",
+  @test occursin("WHEN CAST((FLOOR((\"Tb\".\"number\" + ?)) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
                  _ccd_render(Fn.Cast(Fn.Floor(_CF("number") + 1) / 2, Models.IntegerField()); conn = _CCD_SL))
   @test occursin("((SUM(\"Tb\".\"laps_total\")::bigint / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Sum("laps_total") / 2, Models.IntegerField()); conn = _CCD_PG))
@@ -1342,7 +1342,7 @@ end
   end
   @test occursin("((FLOOR((\"Tb\".\"number\")::numeric)::integer / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Floor("number") / 2, Models.IntegerField()); conn = _CCD_PG))
-  @test occursin("CAST((FLOOR(\"Tb\".\"number\") / ?) AS INTEGER) as \"x\"",
+  @test occursin("WHEN CAST((FLOOR(\"Tb\".\"number\") / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
                  _ccd_render(Fn.Cast(Fn.Floor("number") / 2, Models.IntegerField()); conn = _CCD_SL))
   @test occursin("(SUM(FLOOR((\"Tb\".\"number\")::numeric)::integer) / \$1::bigint)",
                  _ccd_render(Fn.Cast(Fn.Sum(Fn.Floor("number")) / 2, Models.IntegerField()); conn = _CCD_PG))
@@ -1369,7 +1369,7 @@ end
   end
   @test occursin("((FLOOR((LENGTH(\"Tb\".\"surname\"))::numeric)::integer / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Floor(Fn.Length("surname")) / 2, Models.IntegerField()); conn = _CCD_PG))
-  @test occursin("CAST((FLOOR(LENGTH(\"Tb\".\"surname\")) / ?) AS INTEGER) as \"x\"",
+  @test occursin("WHEN CAST((FLOOR(LENGTH(\"Tb\".\"surname\")) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
                  _ccd_render(Fn.Cast(Fn.Floor(Fn.Length("surname")) / 2, Models.IntegerField()); conn = _CCD_SL))
   # The sum of a `bigint` and a decimal is a decimal: no integer quotient on PostgreSQL.
   _ccd_expect(Fn.Cast(Fn.Sum(_CF("id") + _CF("grid")) / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
@@ -1399,7 +1399,7 @@ end
     _ccd_expect(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, target); departs = _PG_ONLY,
                 issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
   end
-  @test occursin("CAST((SUM((\"Tb\".\"number\" + json_extract(\"Tb\".\"payload\", '\$.n'))) / ?) AS INTEGER) as \"x\"",
+  @test occursin("WHEN CAST((SUM((\"Tb\".\"number\" + json_extract(\"Tb\".\"payload\", '\$.n'))) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
                  _ccd_render(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_SL))
   # The message says the sum is untyped and what each spelling divides as.
   msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_PG))
@@ -1702,12 +1702,12 @@ end
   divided = Fn.Cast(Fn.Sum("laps_total") / 2, Models.IntegerField())
   @test _ccd_builds(divided)
   @test occursin("((SUM(\"Tb\".\"laps_total\")::bigint / \$1::bigint))::integer as \"x\"", pg(divided))
-  @test occursin("CAST((SUM(\"Tb\".\"laps_total\") / ?) AS INTEGER) as \"x\"", sl(divided))
+  @test occursin("WHEN CAST((SUM(\"Tb\".\"laps_total\") / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN", sl(divided))
   # #1153: a shift has its left operand's type, so a shifted `bigint` sums to one and is cast back too.
   shifted = Fn.Cast(Fn.Sum(_CF("laps_total") << 1) / 2, Models.IntegerField())
   @test _ccd_builds(shifted)
   @test occursin("((SUM((\"Tb\".\"laps_total\" << \$1::integer))::bigint / \$2::bigint))::integer as \"x\"", pg(shifted))
-  @test occursin("CAST((SUM((\"Tb\".\"laps_total\" << ?)) / ?) AS INTEGER) as \"x\"", sl(shifted))
+  @test occursin("WHEN CAST((SUM((\"Tb\".\"laps_total\" << ?)) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN", sl(shifted))
   # A `Floor` over a `Mod` is a fraction to the classifier: cast to an integer, SQLite departs (#1028).
   floor_mod = Fn.Cast(Fn.Floor(Fn.Mod("number", 3)) / 2, Models.IntegerField())
   _ccd_expect(floor_mod; departs = _SL_ONLY, issue = "#1028", named = "arithmetic over `FLOOR(…)` over `MOD(…)`")
@@ -1750,7 +1750,7 @@ end
   end
   @test occursin("((FLOOR((EXTRACT(YEAR FROM \"Tb\".\"born\")::integer)::numeric)::integer / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Floor("born__@year") / 2, Models.IntegerField()); conn = _CCD_PG))
-  @test occursin("CAST((FLOOR(CAST(strftime('%Y', \"Tb\".\"born\") AS INTEGER)) / ?) AS INTEGER) as \"x\"",
+  @test occursin("WHEN CAST((FLOOR(CAST(strftime('%Y', \"Tb\".\"born\") AS INTEGER)) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
                  _ccd_render(Fn.Cast(Fn.Floor("born__@year") / 2, Models.IntegerField()); conn = _CCD_SL))
   # `ABS` over an integer date part renders PostgreSQL's own integer `abs`, with no cast.
   @test occursin("ABS((EXTRACT(DOW FROM \"Tb\".\"born\")::integer + 1))",

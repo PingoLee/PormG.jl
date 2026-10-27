@@ -1474,7 +1474,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast datetime to date | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    date(\"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Cast float to integer | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS SIGNED) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(`Tb`.`points` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`Tb`.`points` AS SIGNED), ~0 + ABS(CAST(`Tb`.`points` AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast float to integer | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::integer > \$1", params = [("10", "Int64")]),
   ("Cast float to integer | cte", :mysql, "g__v__@gt", "10") =>
@@ -1482,7 +1482,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast float to integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast float to integer | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(`R2`.`points` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`R2`.`points` AS SIGNED), ~0 + ABS(CAST(`R2`.`points` AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast float to integer | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast int to text | alone", :mysql, "v__@gt", "10") =>
@@ -3616,7 +3616,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast decimal to text | subquery", :sqlite, "w__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"points\" AS TEXT) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Cast decimal to integer | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS SIGNED) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(`Tb`.`points` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`Tb`.`points` AS SIGNED), ~0 + ABS(CAST(`Tb`.`points` AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast decimal to integer | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\")::integer > \$1", params = [("10", "Int64")]),
   ("Cast decimal to integer | cte", :mysql, "g__v__@gt", "10") =>
@@ -3624,7 +3624,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast decimal to integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast decimal to integer | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`points` AS SIGNED) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(`R2`.`points` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`R2`.`points` AS SIGNED), ~0 + ABS(CAST(`R2`.`points` AS SIGNED))) AS SIGNED) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast decimal to integer | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\")::integer as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast float to scale 1 | alone", :mysql, "v__@gt", "10") =>
@@ -3688,23 +3688,23 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Sum bigint / 2 | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM(\"R2\".\"resultid\") / ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST(((SUM(`Tb`.`resultid`) DIV 1) DIV ?) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST(((SUM(`Tb`.`resultid`) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM(`Tb`.`resultid`) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM(`Tb`.`resultid`) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "((SUM(\"Tb\".\"resultid\")::bigint / \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST((SUM(\"Tb\".\"resultid\") / ?) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CASE WHEN CAST((SUM(\"Tb\".\"resultid\") / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM(\"Tb\".\"resultid\") / ?) AS INTEGER) ELSE abs(CAST((SUM(\"Tb\".\"resultid\") / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(((SUM(`R2`.`resultid`) DIV 1) DIV ?) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(((SUM(`R2`.`resultid`) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM(`R2`.`resultid`) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM(`R2`.`resultid`) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM(\"R2\".\"resultid\")::bigint / \$3::bigint))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM(\"R2\".\"resultid\") / ?) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST((SUM(\"R2\".\"resultid\") / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM(\"R2\".\"resultid\") / ?) AS INTEGER) ELSE abs(CAST((SUM(\"R2\".\"resultid\") / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sum Case int | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "(SUM(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n) DIV 1) > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
   ("Sum Case int | alone", :postgres, "v__@gt", "10") =>
@@ -3850,15 +3850,15 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Sum F int + epoch / 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))) / \$2::double precision))::integer > \$3", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.0", "Float64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::double precision))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v__@gt", "10") =>
@@ -4006,41 +4006,41 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite, "w__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((SUM(CAST(round((\"R2\".\"grid\") * (((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER))) * 1.0 / (?)) AS INTEGER) AS _pormg_ms)) AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST(((SUM((DATEDIFF(`Tb`.`date`, `Tb`.`date`) + `Tb`.`raceid`)) DIV 1) DIV ?) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST(((SUM((DATEDIFF(`Tb`.`date`, `Tb`.`date`) + `Tb`.`raceid`)) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM((DATEDIFF(`Tb`.`date`, `Tb`.`date`) + `Tb`.`raceid`)) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM((DATEDIFF(`Tb`.`date`, `Tb`.`date`) + `Tb`.`raceid`)) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "((SUM(((\"Tb\".\"date\" - \"Tb\".\"date\") + \"Tb\".\"raceid\"))::bigint / \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST((SUM((CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) + \"Tb\".\"raceid\")) / ?) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CASE WHEN CAST((SUM((CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) + \"Tb\".\"raceid\")) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM((CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) + \"Tb\".\"raceid\")) / ?) AS INTEGER) ELSE abs(CAST((SUM((CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) + \"Tb\".\"raceid\")) / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(((SUM((DATEDIFF(`R2`.`date`, `R2`.`date`) + `R2`.`raceid`)) DIV 1) DIV ?) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(((SUM((DATEDIFF(`R2`.`date`, `R2`.`date`) + `R2`.`raceid`)) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM((DATEDIFF(`R2`.`date`, `R2`.`date`) + `R2`.`raceid`)) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM((DATEDIFF(`R2`.`date`, `R2`.`date`) + `R2`.`raceid`)) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM(((\"R2\".\"date\" - \"R2\".\"date\") + \"R2\".\"raceid\"))::bigint / \$3::bigint))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM((CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) + \"R2\".\"raceid\")) / ?) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST((SUM((CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) + \"R2\".\"raceid\")) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM((CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) + \"R2\".\"raceid\")) / ?) AS INTEGER) ELSE abs(CAST((SUM((CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) + \"R2\".\"raceid\")) / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST(((SUM(DATEDIFF(`Tb`.`date`, `Tb`.`date`)) DIV 1) DIV ?) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST(((SUM(DATEDIFF(`Tb`.`date`, `Tb`.`date`)) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM(DATEDIFF(`Tb`.`date`, `Tb`.`date`)) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM(DATEDIFF(`Tb`.`date`, `Tb`.`date`)) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"date\" - \"Tb\".\"date\")) / \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "CAST((SUM(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) / ?) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "CASE WHEN CAST((SUM(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) / ?) AS INTEGER) ELSE abs(CAST((SUM(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(((SUM(DATEDIFF(`R2`.`date`, `R2`.`date`)) DIV 1) DIV ?) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(((SUM(DATEDIFF(`R2`.`date`, `R2`.`date`)) DIV 1) DIV ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(((SUM(DATEDIFF(`R2`.`date`, `R2`.`date`)) DIV 1) DIV ?) AS SIGNED), ~0 + ABS(CAST(((SUM(DATEDIFF(`R2`.`date`, `R2`.`date`)) DIV 1) DIV ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"date\" - \"R2\".\"date\")) / \$3::bigint))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST((SUM(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER)) / ?) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST((SUM(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER)) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST((SUM(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER)) / ?) AS INTEGER) ELSE abs(CAST((SUM(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER)) / ?) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(((SELECT\n    `R2`.`grid` as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) + 0)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :postgres, "v__@gt", "10") =>
@@ -4270,15 +4270,15 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Lag int default float / 2 | subquery", :sqlite, "w__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(LAG(\"R2\".\"grid\", ?, ?) OVER (ORDER BY \"R2\".\"resultid\" ASC) AS REAL) / ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("2", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
   ("Cast Case int float to integer | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED), ~0 + ABS(CAST(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED))) AS SIGNED) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case int float to integer | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::bigint\nEND\n)::integer > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case int float to integer | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case int float to integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case int float to integer | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED), ~0 + ABS(CAST(CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Case int float to integer | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n)::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Case float col to scale 0 | alone", :mysql, "v__@gt", "10") =>
@@ -4342,15 +4342,15 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast Case float literal to scale 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Cast Case decimal to integer | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN `Tb`.`status` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS SIGNED) > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CASE\nWHEN `Tb`.`status` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CASE\nWHEN `Tb`.`status` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS SIGNED), ~0 + ABS(CAST(CASE\nWHEN `Tb`.`status` = ? THEN `Tb`.`points`\nELSE ?\nEND\n AS SIGNED))) AS SIGNED) > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case decimal to integer | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"status\" = \$3 THEN \"Tb\".\"points\"\nELSE \$4::bigint\nEND\n)::integer > \$5", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case decimal to integer | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case decimal to integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("\"x\"", "String"), ("0", "Int64"), ("10", "Int64")]),
   ("Cast Case decimal to integer | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN `R2`.`status` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS SIGNED) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(CASE\nWHEN `R2`.`status` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CASE\nWHEN `R2`.`status` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS SIGNED), ~0 + ABS(CAST(CASE\nWHEN `R2`.`status` = ? THEN `R2`.`points`\nELSE ?\nEND\n AS SIGNED))) AS SIGNED) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Case decimal to integer | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"status\" = \$4 THEN \"R2\".\"points\"\nELSE \$5::bigint\nEND\n)::integer as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$6 \n) > \$7", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce date Date(zoned) | alone", :mysql, "v__@gt", "10") =>
@@ -6150,11 +6150,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast F date + Day(1) int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (((\"R2\".\"date\" + make_interval(days => \$3::integer)))::date)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast F date - date int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(DATEDIFF(`Tb`.`date`, `Tb`.`date`) AS SIGNED) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(DATEDIFF(`Tb`.`date`, `Tb`.`date`) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(DATEDIFF(`Tb`.`date`, `Tb`.`date`) AS SIGNED), ~0 + ABS(CAST(DATEDIFF(`Tb`.`date`, `Tb`.`date`) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast F date - date int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "((\"Tb\".\"date\" - \"Tb\".\"date\"))::integer > \$1", params = [("10", "Int64")]),
   ("Cast F date - date int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) AS INTEGER) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) AS INTEGER) ELSE abs(CAST(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
   ("Cast F date - date int | cte", :mysql, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Cast F date - date int | cte", :postgres, "g__v__@gt", "10") =>
@@ -6162,17 +6162,17 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast F date - date int | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Cast F date - date int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(DATEDIFF(`R2`.`date`, `R2`.`date`) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(DATEDIFF(`R2`.`date`, `R2`.`date`) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(DATEDIFF(`R2`.`date`, `R2`.`date`) AS SIGNED), ~0 + ABS(CAST(DATEDIFF(`R2`.`date`, `R2`.`date`) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast F date - date int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"date\" - \"R2\".\"date\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast F date - date int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) AS INTEGER) ELSE abs(CAST(CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast transform @year int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(EXTRACT(YEAR FROM `Tb`.`start_at`) AS SIGNED) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(EXTRACT(YEAR FROM `Tb`.`start_at`) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(EXTRACT(YEAR FROM `Tb`.`start_at`) AS SIGNED), ~0 + ABS(CAST(EXTRACT(YEAR FROM `Tb`.`start_at`) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM \"Tb\".\"start_at\")::integer)::integer > \$1", params = [("10", "Int64")]),
   ("Cast transform @year int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) AS INTEGER) > ?", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) AS INTEGER) ELSE abs(CAST(CAST(strftime('%Y', \"Tb\".\"start_at\") AS INTEGER) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | cte", :mysql, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | cte", :postgres, "g__v__@gt", "10") =>
@@ -6180,11 +6180,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast transform @year int | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Cast transform @year int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(YEAR FROM `R2`.`start_at`) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(EXTRACT(YEAR FROM `R2`.`start_at`) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(EXTRACT(YEAR FROM `R2`.`start_at`) AS SIGNED), ~0 + ABS(CAST(EXTRACT(YEAR FROM `R2`.`start_at`) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast transform @year int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(YEAR FROM \"R2\".\"start_at\")::integer)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast transform @year int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(strftime('%Y', \"R2\".\"start_at\") AS INTEGER) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(CAST(strftime('%Y', \"R2\".\"start_at\") AS INTEGER) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(strftime('%Y', \"R2\".\"start_at\") AS INTEGER) AS INTEGER) ELSE abs(CAST(CAST(strftime('%Y', \"R2\".\"start_at\") AS INTEGER) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Subquery Max hop date | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Subquery Max hop date | alone", :mysql, "v__@gt", "date 2009-03-29") =>

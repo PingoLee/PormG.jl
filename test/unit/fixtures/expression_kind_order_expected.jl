@@ -2492,29 +2492,29 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Sum bigint / 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum bigint / 2 int | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum bigint / 2 int | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Sum Case int | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Sum Case int | alone", :postgres, "v") =>
@@ -2700,19 +2700,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Sum F int + epoch / 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2.0", "Float64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2.0", "Float64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2.0", "Float64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2.0", "Float64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("1", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2.0", "Float64"), ("1", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v") =>
@@ -2812,53 +2812,53 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Floor Subquery int | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("Floor Subquery int | alone", :postgres, "v") =>
@@ -3016,19 +3016,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Lag int default float / 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Case int float to integer | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Cast Case int float to integer | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Case int float to integer | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Case float col to scale 0 | alone", :mysql, "v") =>
@@ -3072,19 +3072,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Cast Case float literal to scale 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Case decimal to integer | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"x\"", "String"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"x\"", "String"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"x\"", "String"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64")]),
   ("Cast Case decimal to integer | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Case decimal to integer | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64")]),
   ("Coalesce date Date(zoned) | alone", :mysql, "v") =>

@@ -7352,8 +7352,12 @@ end
 #   Dates, times, decimals and durations are not a family here: SQLite stores them in more than one
 #   representation, so two such columns do not compare there as they do on PostgreSQL.
 #
-# Columns are always double-quoted, as Django renders them — a bare `user` on PostgreSQL is
-# `CURRENT_USER`, not a column.
+# A column is written bare when it is a plain lower-case name no engine reserves (`_portable_bare_name`),
+# and double-quoted, as Django renders it, otherwise (#1368). Bare, because a double-quoted name is a
+# string literal on MySQL; quoted otherwise, because a bare `user` on PostgreSQL is `CURRENT_USER`, not a
+# column, and no other spelling names it on every engine — `makemigrations` on MySQL refuses such a
+# declaration. A database Django built still matches: the planner compares `"laps"` and `laps` as one
+# (`_comparable_sql_text`).
 
 # The lookups the translator admits; `exact` is also what a bare `field=value` means.
 const _Q_LOOKUPS = ("exact", "gt", "gte", "lt", "lte", "in", "isnull", "range")
@@ -7376,7 +7380,8 @@ function _q_family(field)::Symbol
   return :other
 end
 
-_q_ident(col::AbstractString)::String = "\"" * replace(col, "\"" => "\"\"") * "\""
+_q_ident(col::AbstractString)::String =
+  _portable_bare_name(col) ? String(col) : "\"" * replace(col, "\"" => "\"\"") * "\""
 
 _q_numeric(fam::Symbol)::Bool = fam in (:int, :float)
 
@@ -7521,9 +7526,10 @@ function _q_leaf_sql(k::AbstractString, v::AbstractString, fields::Dict{Symbol, 
     _q_admits(fam, val) ||
       _q_fail("`$(k)=` compares a field to a value it cannot be compared to exactly on both engines")
     # #934: Django's `Exact.as_sql` renders a boolean field against a literal True/False as the bare
-    # column (`WHERE "ativo"`) or its negation (`NOT "ativo"`), never `= TRUE`. Writing its spelling
-    # is what lets an imported CHECK or partial index match the text a Django-built SQLite database
-    # stores, instead of being replaced (a table rebuild, for a CHECK) or refused by name.
+    # column (`WHERE "ativo"`) or its negation (`NOT "ativo"`), never `= TRUE`. Writing its shape
+    # (the name bare since #1368, which the planner compares as the quoted one) is what lets an imported
+    # CHECK or partial index match the text a Django-built SQLite database stores, instead of being
+    # replaced (a table rebuild, for a CHECK) or refused by name.
     fam == :bool && val.kind == :bool && return val.sql == "TRUE" ? col.sql : "NOT " * col.sql
     return col.sql * " = " * val.sql
   end
@@ -7743,7 +7749,8 @@ One positional expression of a Django index as the SQL index member Django itsel
 or why it is not translated. A whitelist, as the `Q(...)` translator is: `F("field")`,
 `Lower(…)` / `Upper(…)` over a field or an `F()`, and a bare string (Django's own shorthand for
 `F()`), each optionally `.asc()` / `.desc()`. The column is
-double-quoted and the function upper-cased — Django's own spelling, so a Django-built SQLite schema
+written as `_q_ident` writes it (bare where portable, #1368) and the function upper-cased — Django's own
+spelling, which the planner compares with Django's double-quoted text as one, so a Django-built SQLite schema
 compares equal and is adopted rather than re-created. Anything else (`Collate`, `OpClass`, another
 function, arithmetic) is reported; the caller drops the index.
 """

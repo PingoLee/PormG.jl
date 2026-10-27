@@ -877,9 +877,10 @@ _composite_text_matches(live::LiveComposite, d::DeclaredComposite)::Bool =
   (_canonical_texts(live.expressions) == _canonical_texts(d.expressions) &&
    _canonical_text(live.condition) == _canonical_text(d.condition))
 
+# #1368: in `_comparable_sql_text`'s form, so a double-quoted portable name matches the bare one.
 _canonical_text(::Nothing) = nothing
-_canonical_text(s::AbstractString)::String = canonical_check_condition(s)
-_canonical_texts(v::AbstractVector{<:AbstractString})::Vector{String} = String[canonical_check_condition(s) for s in v]
+_canonical_text(s::AbstractString)::String = _comparable_sql_text(s)
+_canonical_texts(v::AbstractVector{<:AbstractString})::Vector{String} = String[_comparable_sql_text(s) for s in v]
 
 """
     composite_index_name(table, columns, unique) -> String

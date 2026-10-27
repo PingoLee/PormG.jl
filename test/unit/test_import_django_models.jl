@@ -1706,8 +1706,8 @@ end
         # #934: the partial and the functional one are imported with their text — the partial's
         # `Q(ativo=True)` in Django's own spelling (#934 commit 4), the functional one as `LOWER`.
         @test occursin("Models.UniqueConstraint(fields = (\"apelido\",), name = \"uniq_apelido_ativo\", " *
-                       "condition = \"\\\"ativo\\\"\")", generated)
-        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(\\\"apelido\\\")\",), " *
+                       "condition = \"ativo\")", generated)
+        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(apelido)\",), " *
                        "name = \"uniq_apelido_lower\")", generated)
 
         # The rejected forms never become constraints. `cpf` is the column both of them cover, so a
@@ -1761,46 +1761,47 @@ end
     )
     ck(body) = "models.CheckConstraint($(body), name=\"ck\")"
 
-    # Admitted: element → the exact condition. Every column is double-quoted, as Django renders it.
+    # Admitted: element → the exact condition. A column is written bare where it is a plain lower-case name
+    # no engine reserves (#1368: a double-quoted name is a string on MySQL), double-quoted otherwise.
     translated = [
-        ck("check=Q(dias__gte=0)")                       => "\"dias\" >= 0",
-        ck("check=Q(dias__gt=0, dias__lt=10)")           => "\"dias\" > 0 AND \"dias\" < 10",
+        ck("check=Q(dias__gte=0)")                       => "dias >= 0",
+        ck("check=Q(dias__gt=0, dias__lt=10)")           => "dias > 0 AND dias < 10",
         # `db_column` is what the CHECK names, not the Django field.
-        ck("check=Q(dias__lte=F(\"limite\"))")           => "\"dias\" <= \"limite_dias\"",
-        ck("condition=models.Q(dias__gte=models.F('limite'))") => "\"dias\" >= \"limite_dias\"",
-        ck("check=Q(tipo=\"ferias\")")                   => "\"tipo\" = 'ferias'",
+        ck("check=Q(dias__lte=F(\"limite\"))")           => "dias <= limite_dias",
+        ck("condition=models.Q(dias__gte=models.F('limite'))") => "dias >= limite_dias",
+        ck("check=Q(tipo=\"ferias\")")                   => "tipo = 'ferias'",
         # Quotes are doubled, so a value cannot close the literal and add SQL of its own.
-        ck("check=Q(tipo__exact=\"d'arc\")")             => "\"tipo\" = 'd''arc'",
-        ck("check=Q(tipo=\"x') OR (1=1\")")              => "\"tipo\" = 'x'') OR (1=1'",
-        ck("check=Q(tipo=\"a--b\")")                     => "\"tipo\" = 'a--b'",
-        ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "\"tipo\" IN ('a', 'b')",
-        ck("check=Q(dias__in=[1, 2, 3])")                => "\"dias\" IN (1, 2, 3)",
-        ck("check=Q(homologado=True)")                   => "\"homologado\"",
+        ck("check=Q(tipo__exact=\"d'arc\")")             => "tipo = 'd''arc'",
+        ck("check=Q(tipo=\"x') OR (1=1\")")              => "tipo = 'x'') OR (1=1'",
+        ck("check=Q(tipo=\"a--b\")")                     => "tipo = 'a--b'",
+        ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "tipo IN ('a', 'b')",
+        ck("check=Q(dias__in=[1, 2, 3])")                => "dias IN (1, 2, 3)",
+        ck("check=Q(homologado=True)")                   => "homologado",
         # The FK's Django name and its `_id` name both resolve to the `_id` column.
-        ck("check=Q(servidor__isnull=False)")            => "\"servidor_id\" IS NOT NULL",
-        ck("check=Q(servidor_id=None)")                  => "\"servidor_id\" IS NULL",
-        ck("check=Q(dias__range=(1, 365))")              => "\"dias\" BETWEEN 1 AND 365",
-        ck("check=Q(nota__gte=-1.5)")                    => "\"nota\" >= -1.5",
-        # A reserved word stays a column: bare `user` is CURRENT_USER on PostgreSQL.
+        ck("check=Q(servidor__isnull=False)")            => "servidor_id IS NOT NULL",
+        ck("check=Q(servidor_id=None)")                  => "servidor_id IS NULL",
+        ck("check=Q(dias__range=(1, 365))")              => "dias BETWEEN 1 AND 365",
+        ck("check=Q(nota__gte=-1.5)")                    => "nota >= -1.5",
+        # A reserved word keeps its quotes: bare `user` is CURRENT_USER on PostgreSQL.
         ck("check=Q(user__gt=0)")                        => "\"user\" > 0",
         # Python precedence: `~` binds tighter than `&`, `&` tighter than `|`.
         ck("check=Q(dias=1) | Q(dias=2) & ~Q(homologado=True)") =>
-            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\"))",
+            "dias = 1 OR (dias = 2 AND NOT (homologado))",
         ck("check=(Q(dias=1) | Q(dias=2)) & Q(homologado=True)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\"",
+            "(dias = 1 OR dias = 2) AND homologado",
         ck("check=Q(Q(dias=1) | Q(dias=2), homologado=False)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND NOT \"homologado\"",
+            "(dias = 1 OR dias = 2) AND NOT homologado",
         # A BETWEEN beside another AND is parenthesised, so its own AND cannot be misread.
         ck("check=Q(dias__range=(0, 10), homologado=True)") =>
-            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\"",
+            "(dias BETWEEN 0 AND 10) AND homologado",
         # An integral float is the integer Django's `int()` makes of it; an integer column may meet a
         # float column through F().
-        ck("check=Q(dias=1.0)")                          => "\"dias\" = 1.0",
-        ck("check=Q(dias__lte=F(\"nota\"))")             => "\"dias\" <= \"nota\"",
+        ck("check=Q(dias=1.0)")                          => "dias = 1.0",
+        ck("check=Q(dias__lte=F(\"nota\"))")             => "dias <= nota",
         # The trailing comma is what makes a one-element tuple.
-        ck("check=Q(tipo__in=(\"ferias\",))")            => "\"tipo\" IN ('ferias')",
+        ck("check=Q(tipo__in=(\"ferias\",))")            => "tipo IN ('ferias')",
         # The escapes PormG decodes as Python does.
-        ck("check=Q(tipo='d\\'arc')")                    => "\"tipo\" = 'd''arc'",
+        ck("check=Q(tipo='d\\'arc')")                    => "tipo = 'd''arc'",
     ]
     for (element, condition) in translated
         c = translate(element, fields)
@@ -1891,7 +1892,7 @@ class Volta(models.Model):
 """
     generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_768_violation_unit.jl")
     try
-        @test occursin("Models.CheckConstraint(condition = \"\\\"tempo\\\" > 0\", name = \"volta_tempo\")", generated)
+        @test occursin("Models.CheckConstraint(condition = \"tempo > 0\", name = \"volta_tempo\")", generated)
         @test occursin("# PormG: CheckConstraint 'volta_tempo' on 'Volta' was imported without its " *
                        "violation_error_message", generated)
         # The second CHECK reuses the UniqueConstraint's name: dropped, and never called imported.
@@ -1920,10 +1921,10 @@ end
         # The four translated CHECKs, in declaration order, as ONE list on the model.
         @test occursin(
             "constraints = [" *
-            "Models.CheckConstraint(condition = \"\\\"dias\\\" >= 0 AND \\\"dias\\\" <= \\\"limite_dias\\\"\", name = \"ck_afast_dias\"), " *
-            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT \\\"homologado\\\"\", name = \"ck_afast_tipo\"), " *
-            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR NOT \\\"homologado\\\"\", name = \"ck_afast_servidor\"), " *
-            "Models.CheckConstraint(condition = \"\\\"limite_dias\\\" BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
+            "Models.CheckConstraint(condition = \"dias >= 0 AND dias <= limite_dias\", name = \"ck_afast_dias\"), " *
+            "Models.CheckConstraint(condition = \"tipo IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT homologado\", name = \"ck_afast_tipo\"), " *
+            "Models.CheckConstraint(condition = \"NOT (servidor_id IS NULL) OR NOT homologado\", name = \"ck_afast_servidor\"), " *
+            "Models.CheckConstraint(condition = \"limite_dias BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
             generated,
         )
 
@@ -2347,8 +2348,8 @@ end
         # part 2 the functional and the partial one do too — so the fixture's indexes drop none.
         @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
         @test count("an index on 'Servidor' was dropped", generated) == 0
-        @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"idx_apelido_lower\")", generated)
-        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\"\")", generated)
+        @test occursin("Models.Index(expressions = (\"LOWER(apelido)\",), name = \"idx_apelido_lower\")", generated)
+        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"ativo\")", generated)
         @test occursin("Models.Index(fields = (\"-cpf\", \"apelido\",), name = \"idx_servidor_cpf_desc\")", generated)
         @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"gin_servidor\", method = \"gin\")", generated)
         # And what it CAN express reached the model: the composite index, plus the single-column
@@ -2398,8 +2399,8 @@ end
         @test length(rc) == 3                                   # #934: the partial and functional ones too
         @test rc[1].fields == ["cpf", "lotacao_id"]
         @test rc[1].name == "uniq_servidor_cpf_lotacao"
-        @test (rc[2].fields, rc[2].condition) == (["apelido"], "\"ativo\"")
-        @test rc[3].expressions == ["LOWER(\"apelido\")"]
+        @test (rc[2].fields, rc[2].condition) == (["apelido"], "ativo")
+        @test rc[3].expressions == ["LOWER(apelido)"]
 
         # A model declaring no db_table must not have acquired one on the way through.
         # (#345 note: this fixture imports with NO prefix — `temp_import_config!` defaults to

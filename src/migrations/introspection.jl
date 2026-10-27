@@ -5006,6 +5006,108 @@ const _MYSQL_CHARSETS = Set{String}(split("""
   gb2312 gbk geostd8 greek hebrew hp8 keybcs2 koi8r koi8u latin1 latin2 latin5 latin7 macce macroman sjis swe7
   tis620 ucs2 ujis utf16 utf16le utf32 utf8 utf8mb3 utf8mb4"""))
 
+# Whether a column name can be written BARE in declared SQL text and name that column on every engine
+# (#1368): lower case (PostgreSQL folds a bare name to lower case), a plain name, no engine's reserved
+# word (a bare `user` is `current_user` on PostgreSQL), and not `_` and a charset's name (an introducer on
+# MySQL). Any other name has no portable spelling: a double quote is a string on MySQL and a backtick
+# means nothing on PostgreSQL.
+_portable_bare_name(ident::AbstractString)::Bool =
+  occursin(r"^[a-z_][a-z0-9_]*$", ident) && !(uppercase(ident) in _UNDECLARABLE_WORDS) &&
+  !(Base.startswith(ident, "_") && ident[2:end] in _MYSQL_CHARSETS)
+
+"""
+    _double_quoted_identifiers(sql) -> Vector{String}
+
+Every `"…"` token in declared SQL text (text `is_valid_db_default_sql` accepted), outside a `'…'` literal, with its
+`""` escapes undone, in order of appearance. On PostgreSQL and SQLite each is a quoted identifier; on
+MySQL, whose session `sql_mode` has no `ANSI_QUOTES`, each is a string literal (#1368), so the planner
+refuses declared text that holds one there (`_refuse_double_quoted_names`). The walk is the validator's
+(`_sql_text_scan`), minus the refusals it already made.
+"""
+function _double_quoted_identifiers(s::AbstractString)::Vector{String}
+  out = String[]
+  in_single = false
+  token = nothing            # the `"…"` being read, or `nothing` outside one
+  last_i = lastindex(s)
+  i = firstindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_single
+      if ch == '\''
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '\''
+          i = nextind(s, j); continue
+        end
+        in_single = false
+      end
+    elseif token !== nothing
+      if ch == '"'
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '"'
+          print(token, '"'); i = nextind(s, j); continue
+        end
+        push!(out, String(take!(token))); token = nothing
+      else
+        print(token, ch)
+      end
+    elseif ch == '\''
+      in_single = true
+    elseif ch == '"'
+      token = IOBuffer()
+    end
+    i = nextind(s, i)
+  end
+  return out
+end
+
+"""
+    _comparable_sql_text(sql) -> String
+
+The form in which the planner compares a declared CHECK condition or index text with a live one that
+carries no marker (#1368): [`canonical_check_condition`](@ref), and then each double-quoted name that
+[`_portable_bare_name`](@ref) admits written bare, outside a `'…'` literal. On PostgreSQL and SQLite
+`"laps"` and `laps` are the same column, so the two spellings must compare equal: SQLite keeps a CHECK
+or an index exactly as it was sent, and Django sends `"laps" >= 0`, while the importer now writes
+`laps >= 0` so that the declaration means the column on MySQL too. Only a comparison form — never
+stored, never hashed: the ownership markers stay the hash of the declared text as written.
+"""
+function _comparable_sql_text(sql::AbstractString)::String
+  s = canonical_check_condition(sql)
+  occursin('"', s) || return s
+  out = IOBuffer()
+  in_single = false
+  i, last_i = firstindex(s), lastindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_single
+      ch == '\'' && (in_single = false)   # a `''` escape closes and reopens: the same text either way
+    elseif ch == '\''
+      in_single = true
+    elseif ch == '"'
+      # The quoted name, escapes undone; kept as written unless it is a plain portable name.
+      j, name = nextind(s, i), IOBuffer()
+      closed = false
+      while j <= last_i
+        if s[j] == '"'
+          k = nextind(s, j)
+          k <= last_i && s[k] == '"' || (closed = true; break)
+          print(name, '"'); j = nextind(s, k)
+        else
+          print(name, s[j]); j = nextind(s, j)
+        end
+      end
+      closed || (print(out, s[i:last_i]); break)   # unterminated: kept as written
+      ident = String(take!(name))
+      print(out, _portable_bare_name(ident) ? ident : s[i:j])
+      i = nextind(s, j)
+      continue
+    end
+    print(out, ch)
+    i = nextind(s, i)
+  end
+  return String(take!(out))
+end
+
 """
     _mysql_declarable_sql(sql; reserved = _UNDECLARABLE_WORDS) -> Union{String, Nothing}
 

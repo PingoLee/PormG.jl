@@ -44,6 +44,14 @@ _composite_name_key(conn::PormGSQLite, name::String)::String = lowercase(_catalo
 # case-insensitively.
 _composite_name_key(conn::PormGMySQL, name::String)::String = lowercase(_catalog_index_name(conn, name))
 
+# A double-quoted name in declared SQL text (a `CheckConstraint` condition, an `Index` or
+# `UniqueConstraint` expression) is an identifier — the column — rather than a string literal. MySQL's
+# session `sql_mode` has no `ANSI_QUOTES`, so `"laps" >= 0` there compares the text `'laps'`, and the
+# planner refuses it (#1368, `_refuse_double_quoted_names`).
+_double_quote_is_identifier(::PormGPostgres) = true
+_double_quote_is_identifier(::PormGSQLite) = true
+_double_quote_is_identifier(::PormGMySQL) = false
+
 # The built-in ignore list a connection reads the schema with (`_backend_ignore_tables` adds the
 # `unignore_defaults:` entries on top).
 _builtin_ignore_tables(::PormGPostgres)::Vector{String} = postgres_ignore_table

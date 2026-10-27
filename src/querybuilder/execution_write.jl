@@ -1375,6 +1375,27 @@ function _refuse_update_scale_departure(f_meta, field::AbstractString, value, in
     declared = "DecimalField(max_digits = $(f_meta.max_digits), decimal_places = $(places))"))
 end
 
+# #1330 — the width half of the same assignment. A value with more than `p - s` digits before the point
+# does not fit `numeric(p, s)`: PostgreSQL and MySQL refuse the `UPDATE` (SQLSTATE 22003) and write
+# nothing. SQLite stores it, and every later read of the row raises 22003 (#1110). Whether a row overflows
+# depends on its value, so it cannot be refused at build: on an engine that leaves the width unchecked
+# (`_unchecked_decimal_assignment_width`), the SET value renders a guard that raises 22003 on that row,
+# and the statement writes nothing. `f_value` is the rendered value, `marks` the parameter marks taken
+# before it rendered.
+function _decimal_assignment_guard(f_meta, field::AbstractString, f_value::AbstractString,
+                                   marks::Tuple{ParameterMark,NestedMark}, instruction::SQLInstruction)::String
+  f_meta isa Models.sDecimalField || return f_value
+  conn = instruction.connection
+  f_meta.max_digits <= _unchecked_decimal_assignment_width(conn) || return f_value
+  sql, occurrences = Dialect.decimal_assignment_guard_sql(conn, f_value, f_meta.max_digits, f_meta.decimal_places)
+  _bind_operand_again!(f_value, marks, occurrences, instruction) || throw(QueryBuildError(
+    "update(\"$(field)\" => …) cannot be rendered on $(_backend_name(conn)): checking that the value fits " *
+    "DecimalField(max_digits = $(f_meta.max_digits), decimal_places = $(f_meta.decimal_places)) names " *
+    "the expression more than once, and the values it binds cannot be bound again in step (#1330). " *
+    "Write a simpler expression, or compute the value before the update."))
+  return sql
+end
+
 # #1297 — an expression of a type that is no number, written into a numeric field. SQLite stores the
 # value's text (or a blob's bytes) in the INTEGER, REAL or NUMERIC column, and PostgreSQL has no
 # assignment cast from one to a number, so it fails only when the statement runs. No engine gives the
@@ -1540,9 +1561,12 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
     # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
     elseif value isa _SetExpression
+      marks = (parameter_mark(instruction), nested_parameter_mark(instruction))
       f_value = _set_update_query(value, instruction)
       _refuse_update_non_number(model.fields[field], field, value, instruction)
       _refuse_update_scale_departure(model.fields[field], field, value, instruction)
+      # #1330: on an engine that does not check a decimal's width on assignment, the value checks itself.
+      f_value = _decimal_assignment_guard(model.fields[field], field, f_value, marks, instruction)
       push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
       formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)

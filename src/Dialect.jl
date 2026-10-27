@@ -1041,6 +1041,53 @@ function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::Abstract
   return target
 end
 
+# #1356 — an integer cast means the declared type's range: a value outside it is an overflow (PostgreSQL's
+# 22003). The width each integer name declares, unsized; any other name is no integer cast.
+const _INTEGER_CAST_BITS = Dict{String,Int}(
+  "smallint" => 16, "int2" => 16, "integer" => 32, "int" => 32, "int4" => 32, "integer unsigned" => 32,
+  "bigint" => 64, "int8" => 64)
+
+"""
+    integer_cast_bits(type) -> Union{Int, Nothing}
+
+The width, in bits, of the integer type a cast to `type` declares (`smallint` 16, `integer` 32, `bigint`
+64), or `nothing` when `type` names no integer.
+"""
+function integer_cast_bits(type::AbstractString)::Union{Int,Nothing}
+  name, suffix = _parse_cast_type(type, "Cast")
+  isempty(suffix) || return nothing
+  return get(_INTEGER_CAST_BITS, lowercase(name), nothing)
+end
+
+"""
+    integer_cast_guard_sql(conn, x, bits) -> Tuple{String, Int}
+
+`x` cast to an integer of `bits` bits, raising per row on a value outside that range, on an engine whose
+own cast does not (`_guards_integer_cast`), and how many times the text names `x` — the caller binds the
+operand's values once per occurrence. Measured on MySQL 8.4 and SQLite 3.54 (#1356):
+
+- MySQL: `CAST(… AS SIGNED)` rounds as PostgreSQL does (a double's tie to even, a decimal's away from
+  zero) but is 64-bit, and past 64 bits wraps or clamps. The guard checks the rounded 64-bit value against
+  a 16- or 32-bit range, and a `bigint` operand as `DECIMAL(65,0)` before the cast (compared as a double,
+  2^63 equals 2^63 − 1); out of range, a `BIGINT UNSIGNED` overflow raises 1690, SQLSTATE 22003. Wrapped in
+  `CAST(… AS SIGNED)`, the result stays an integer.
+- SQLite: `CAST(… AS INTEGER)` applies no range below 64 bits; out of a 16- or 32-bit range, `abs()` of
+  the smallest 64-bit integer raises "integer overflow", which the extension reports as 22003. Past 64
+  bits SQLite saturates, which no guard can tell from a real value, so a `bigint` cast is not guarded.
+"""
+function integer_cast_guard_sql(::PormGMySQL, x::AbstractString, bits::Int)::Tuple{String,Int}
+  s = "CAST($(x) AS SIGNED)"
+  bits == 64 && return ("CAST(IF(CAST($(x) AS DECIMAL(65,0)) BETWEEN -9223372036854775808 AND 9223372036854775807, " *
+                        "$(s), ~0 + ABS($(s)) + 1) AS SIGNED)", 3)
+  lo, hi = -(Int64(2)^(bits - 1)), Int64(2)^(bits - 1) - 1
+  return ("CAST(IF($(s) BETWEEN $(lo) AND $(hi), $(s), ~0 + ABS($(s))) AS SIGNED)", 3)
+end
+function integer_cast_guard_sql(::PormGSQLite, x::AbstractString, bits::Int)::Tuple{String,Int}
+  s = "CAST($(x) AS INTEGER)"
+  lo, hi = -(Int64(2)^(bits - 1)), Int64(2)^(bits - 1) - 1
+  return ("CASE WHEN $(s) BETWEEN $(lo) AND $(hi) THEN $(s) ELSE abs($(s) * 0 - 9223372036854775807 - 1) END", 3)
+end
+
 # #822 — SQLite has no temporal types, only type AFFINITY, and every temporal type name gets NUMERIC
 # affinity (it contains none of INT/CHAR/CLOB/TEXT/BLOB/REAL/FLOA/DOUB). A NUMERIC cast reads the
 # longest numeric prefix of the text, so it does not fail — it returns a wrong number:

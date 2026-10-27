@@ -517,7 +517,9 @@ end
     # #1196: over an integer `Round` is that integer: SQLite renders the subquery itself, and neither
     # engine binds the places.
     ("Round int", s -> Round(s, 2),         nsub, Any[3, "A"],    ("((SELECT",                 "ROUND(((SELECT")),
-    ("Cast",     s -> Cast(s, "integer"),   nsub, Any[3, "A"],    ("CAST((SELECT",             "((SELECT")),
+    # #1356: SQLite's integer cast is a range guard naming its operand three times, so the subquery's
+    # value is bound for each occurrence there; PostgreSQL's `::integer` names it once.
+    ("Cast",     s -> Cast(s, "integer"),   nsub, (Any[3, 3, 3, "A"], Any[3, "A"]), ("CAST((SELECT", "((SELECT")),
     ("Extract",  s -> Extract(s, "year"),   dsub, Any[3, "A"],    ("strftime('%Y', (SELECT",   "EXTRACT(YEAR FROM (SELECT")),
     ("ToChar",   s -> ToChar(s, "YYYY-MM"), dsub, Any[3, "A"],    ("strftime('%Y-%m', (SELECT", "to_char((SELECT")),
     ("DATE",     QBA.DATE,                  dsub, Any[3, "A"],    ("strftime('%Y-%m-%d', (SELECT", "((SELECT")),
@@ -528,7 +530,7 @@ end
       for (label, f, sub, params, needle) in cases
         r = inspect_query(build(f, sub); connection = conn)
         @test occursin(needle[i], r[:sql_text])
-        @test r[:parameters] == params
+        @test r[:parameters] == (params isa Tuple ? params[i] : params)
       end
     end
   end
@@ -572,7 +574,7 @@ end
     q.values("id", CTE("ev", "m"))
     r = inspect_query(q; connection = conn)
     @test occursin("WITH", r[:sql_text]) && occursin("(SELECT", r[:sql_text])
-    @test r[:parameters] == Any[3, 7]
+    @test r[:parameters] == (conn === _ADM ? Any[3, 3, 3, 7] : Any[3, 7])   # #1356: SQLite's guard binds it per occurrence
   end
 
   # The transform keeps its read formatter with a subquery inside, which is what reads the value back
@@ -690,7 +692,7 @@ end
     q.values("id", CTE("ev", "p"))
     r = inspect_query(q; connection = conn)
     @test occursin("LAG(", r[:sql_text]) && occursin("(SELECT", r[:sql_text])
-    @test r[:parameters] == Any[3, 1, 7]
+    @test r[:parameters] == (conn === _ADM ? Any[3, 3, 3, 1, 7] : Any[3, 1, 7])   # #1356: as above
   end
 
   # #508: one window node reused across two builds renders the same SQL and binds the same values,

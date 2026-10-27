@@ -2144,6 +2144,68 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# An integer cast that a row overflows raises 22003 on every engine, on those rows only (#1356)
+# `Cast(driverid * 100000000, "integer")` holds drivers 1–21 (2.1e9) and overflows from 22; `smallint`
+# over `driverid * 1000` holds 1–32 and overflows from 33. PostgreSQL raises 22003 itself. MySQL's
+# `SIGNED` is 64-bit and returned the value, and SQLite applies no range below 64 bits: each now renders
+# the range guard (`Dialect.integer_cast_guard_sql`) and raises 22003 on the row, in a projection, under a
+# CTE, in a `Subquery` and in a filter. A `bigint` past 64 bits raises on PostgreSQL and MySQL; SQLite
+# saturates it to the largest integer, which no guard can tell from a real one (documented in backends.md).
+# Expected SQL, PostgreSQL: (("Tb"."driverid" * $1::bigint))::integer; MySQL:
+# CAST(IF(CAST((`Tb`.`driverid` * ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, …) AS SIGNED);
+# SQLite: CASE WHEN CAST(("Tb"."driverid" * ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN … END.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1356: an integer cast that a row overflows raises 22003 on every engine" begin
+    overflow(f) = (e = try f(); nothing catch err; err end; e isa PormG.StatementError && e.sqlstate == "22003")
+    alone(cast, lookup) = () -> (q = M.Driver.objects; q.filter(lookup); q.values("driverid", "x" => cast()); q)
+    function cte(cast, lookup)
+        return () -> begin
+            q = M.Driver.objects
+            q.with("g" => M.Driver.objects.values("driverid", "v" => cast()),
+                   join_field = "driverid" => "driverid", join_type = "INNER")
+            q.filter(lookup)
+            q.values("driverid", "x" => "g__v")
+            q
+        end
+    end
+    function sub(cast, lookup)
+        return () -> begin
+            inner = M.Driver.objects
+            inner.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"))
+            inner.values("t" => cast())
+            q = M.Driver.objects
+            q.filter(lookup)
+            q.values("driverid", "x" => PormG.QueryBuilder.Subquery(inner))
+            q
+        end
+    end
+    for (type, factor, last_fit) in (("integer", 100000000, 21), ("smallint", 1000, 32))
+        cast() = Cast(F("driverid") * factor, type)
+        for (ctx, build) in (("alone", alone), ("cte", cte), ("subquery", sub))
+            @testset "$(type), $(ctx)" begin
+                @test overflow(() -> build(cast, "driverid__@gt" => last_fit)().list())
+                df = build(cast, "driverid__@lte" => last_fit)() |> DataFrame
+                @test nrow(df) == last_fit && all(r -> r.x == r.driverid * factor, eachrow(df))
+            end
+        end
+        # In a filter, never read back: raises on the row all the same.
+        @test overflow(() -> (q = M.Driver.objects; q.filter(cast() > 0); q.values("driverid"); q.list()))
+    end
+    # bigint. In range, the largest integer reads back as itself on every engine.
+    big(lookup, expr) = (q = M.Driver.objects; q.filter(lookup); q.values("x" => Cast(expr, "bigint")); q.list())
+    @test only(big("driverid" => 1, F("driverid") * typemax(Int64)))[:x] == typemax(Int64)
+    # Past 64 bits: a double MySQL's SIGNED would clamp to the largest integer, and PostgreSQL's ::bigint
+    # refuses, raises on both (the guard on MySQL, the cast on PostgreSQL). SQLite refuses a fractional
+    # operand cast to an integer (#1028), and saturates an integer product past 64 bits (it turns into a
+    # REAL), which no guard can tell from a value: its measured departure.
+    if by_engine(postgres = true, mysql = true, sqlite = false)
+        @test overflow(() -> big("driverid" => 1, F("driverid") * 9.3e18))
+    else
+        @test only(big("driverid" => 2, F("driverid") * typemax(Int64)))[:x] == typemax(Int64)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cast to a single-precision float: refused on SQLite, a Float32 on PostgreSQL (#1215)
 # `real` means the value rounded to a 4-byte float. PostgreSQL computes it and its driver reads it back
 # as a `Float32`; SQLite has no 4-byte float and kept the double (`Float64`), a different type and, for

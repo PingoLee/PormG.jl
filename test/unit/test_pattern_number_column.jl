@@ -186,8 +186,11 @@ end
       # reads as its digits, a float is refused.
       sql = _pnc_sql(q -> (q.values("resultid", "g" => Cast("milliseconds", "integer"));
                            q.filter("g__@startswith" => "1")), conn)
+      # SQLite's integer cast is the #1356 range guard, its operand cast kept in each arm.
+      sl_cast = "CAST(\"Tb\".\"milliseconds\" AS INTEGER)"
       cast = conn isa PormG.PormGPostgres ? "(\"Tb\".\"milliseconds\")::integer" :
-                                             "CAST(\"Tb\".\"milliseconds\" AS INTEGER)"
+             "CASE WHEN $(sl_cast) BETWEEN -2147483648 AND 2147483647 THEN $(sl_cast) " *
+             "ELSE abs($(sl_cast) * 0 - 9223372036854775807 - 1) END"
       @test occursin("WHERE " * _pnc_read(cast, conn) * " LIKE ", sql)
       e = _pnc_refusal(q -> (q.values("resultid", "s" => Cast("grid", "float8"));
                              q.filter("s__@startswith" => "1")), conn)

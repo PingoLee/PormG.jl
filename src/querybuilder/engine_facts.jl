@@ -259,6 +259,15 @@ _sums_integers_as_decimal(::PormGMySQL) = true
 # overflow to the largest value the type holds, so the read could not tell it from a value that fits
 # (measured: `Cast("driverid", "numeric(2,0)")` read `99` for driver 100). So MySQL computes every width
 # it has at `DECIMAL(65, s)` (`Dialect.cast_type_sql`), and its read applies `p` as SQLite's does.
+# #1356: whether PormG applies an integer cast's declared range itself (`Dialect.integer_cast_guard_sql`),
+# by width in bits. PostgreSQL's `smallint`/`integer`/`bigint` raise 22003 on a value outside them. MySQL
+# casts every integer to its 64-bit `SIGNED`, which wraps or clamps past 64 bits, so every width is
+# guarded. SQLite applies no range below 64 bits and saturates past them, which nothing can detect, so
+# only the 16- and 32-bit casts are.
+_guards_integer_cast(::PormGPostgres, ::Int) = false
+_guards_integer_cast(::PormGSQLite, bits::Int) = bits < 64
+_guards_integer_cast(::PormGMySQL, ::Int) = true
+
 _unapplied_decimal_width(::PormGPostgres) = 0
 _unapplied_decimal_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
 _unapplied_decimal_width(::PormGMySQL) = 65

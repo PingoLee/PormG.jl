@@ -739,6 +739,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
   # only its kind is kept.
   interval_ms = interval = false
+  # #1356: an integer cast an engine guards names its operand more than once (`_integer_cast_guard`), so
+  # the values the operand binds are read back from here and bound again for each further occurrence.
+  cast_marks = v.function_name == "CAST" ? (parameter_mark(instruc), nested_parameter_mark(instruc)) : nothing
   fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
   if v isa FObject && v.function_name == "ABS" && _interval_as_ms(instruc.connection) && !(v.column isa AbstractVector)
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
@@ -978,7 +981,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # to no type). Decided by `_mysql_declared_output`, before any SQL: `nothing` everywhere else, and for
   # an undeclared function that passes its check, which renders as it always has.
   declared_sql = _mysql_declared_output(v, instruc)
-  if declared_sql === nothing
+  cast_type = get(resolved_kwargs, "type", nothing)
+  guarded = declared_sql === nothing && cast_marks !== nothing && cast_type isa AbstractString &&
+            resolved_column isa AbstractString ?
+    _integer_cast_guard(resolved_column, cast_type, cast_marks, instruc) : nothing
+  if guarded !== nothing
+    sql = guarded
+  elseif declared_sql === nothing
     sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   else
     # The function with no declaration (`Cast`'s is the operand itself), handed to the decided form.
@@ -992,6 +1001,32 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
+# #1356 — `Cast(x, <integer>)` on an engine whose cast does not apply the integer's range: the guard
+# `Dialect.integer_cast_guard_sql` spells, which raises 22003 per row on a value outside it, or `nothing`
+# where the engine's own cast is the meaning (`_guards_integer_cast`). The guard names `x` several times,
+# and a positional backend binds a value once per marker, so the values `x` bound (`marks`, taken before it
+# rendered) are bound again for each further occurrence, in text order — nothing binds between them. Fails
+# closed when that cannot be done exactly: values bound in another clause's bucket, or a marker count that
+# is not the number of values.
+function _integer_cast_guard(x::AbstractString, type::AbstractString, marks::Tuple{ParameterMark,NestedMark},
+                             instruc::SQLInstruction)::Union{String,Nothing}
+  conn = instruc.connection
+  bits = Dialect.integer_cast_bits(type)
+  (bits === nothing || !_guards_integer_cast(conn, bits)) && return nothing
+  sql, occurrences = Dialect.integer_cast_guard_sql(conn, x, bits)
+  operand = bound_since(first(marks))
+  before, now = last(marks), nested_parameter_mark(instruc)
+  bound = (before === nothing || now === nothing) ? 0 : sum(now) - sum(before)
+  (bound == length(operand) && count(==('?'), x) == length(operand)) || throw(QueryBuildError(
+    "Cast to $(type) cannot be rendered on $(_backend_name(conn)) over this operand: the cast names it " *
+    "more than once to apply the integer's range, and the values it binds cannot be bound again in step. " *
+    "Cast a simpler expression, or compute the value before the cast."))
+  for _ in 2:occurrences
+    reattach_parameters!(instruc, copy(operand))
+  end
+  return sql
+end
+
 # #1130 — a value of several (`Coalesce`, `Greatest`/`Least`, `NullIf`, a `Case`'s branches) or a declared
 # type (`Cast(x, T)`, `output_field = T`) over values whose MySQL form a plain render would misread.
 # Decided on the engine that departs (#1147), as a function of the undeclared SQL, or `nothing` for

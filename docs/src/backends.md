@@ -73,8 +73,16 @@ cannot keep a promise, PormG refuses or documents the difference rather than emu
 | Case-sensitive text: `@contains`, `@startswith`, `@endswith` and a plain equality respect case ([Filters](read/filters_and_aggregates.md)) | a deterministic collation (the default) | `BINARY` comparison, and `PRAGMA case_sensitive_like = ON`, which PormG sets | the `utf8mb4_0900_bin` collation of the columns PormG creates and of each connection ([#1265](https://github.com/PingoLee/PormG.jl/issues/1265)) |
 | A query waits without blocking other tasks ([Async](async.md)) | non-blocking driver I/O, in parallel across connections | one worker task, shared by every SQLite database in the process, runs statements one at a time; the calling task yields while it waits | each statement runs on a task of its own, in parallel across connections; the calling task yields while it waits |
 
-Two promises are PormG's own meaning rather than an engine's, and hold on every backend by
-construction: `F("grid") / 2` divides integers as integers, and a NULL `Concat` operand is skipped.
+Three promises are PormG's own meaning rather than an engine's, and hold on every backend by
+construction: `F("grid") / 2` divides integers as integers, a NULL `Concat` operand is skipped, and
+`Cast(x, "smallint" | "integer" | "bigint")` raises `StatementError` with `sqlstate == "22003"` on a value
+outside the type, on the row, in every clause. PostgreSQL's cast does that itself; MySQL's `SIGNED` is
+64-bit and SQLite's `INTEGER` applies no range below 64 bits, so there PormG renders a guard that raises
+it ([#1356](https://github.com/PingoLee/PormG.jl/issues/1356)). Two limits: SQLite saturates a value past
+64 bits to the largest integer, which nothing can tell from a real one, so a `bigint` cast there is not
+guarded; and a declared `output_field` (`Coalesce(…; output_field = "integer")`) is a plain cast on MySQL
+and SQLite, not guarded. The guard names its operand three times, so a `Subquery` operand runs three
+times per row.
 A backend whose operator computes something else gets a different rendering, not a different answer
 ([Functions and Dates](read/functions_and_dates.md)).
 

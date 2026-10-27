@@ -791,16 +791,16 @@ function _non_number_math_refusal(function_name::AbstractString, kind::Canonical
   head = "`$(name)` of $(noun) is not supported: $(noun) is not a number, so `$(name)` has no meaning " *
          "over one on any engine (#1387)."
   kind isa CUUID && return QueryBuildError("$(head) A UUID holds no number to compute `$(name)` over.")
-  v = kind isa CTime ? "t" : "d"
+  letter = kind isa CTime ? "t" : "d"
   # A column path only: a handle (`CTE(…)`) or a path that already ends in a transform has none.
   transform = label === nothing || occursin('(', label) || occursin("__@", label) ? "" : ", or \"$(label)__@year\""
   spellings = String[]
   kind isa CTime || push!(spellings, "a calendar part (Extract(d, \"year\")$(transform))")
-  kind isa CDate || push!(spellings, "a clock part (Extract($(v), \"hour\"))")
-  kind isa CDate && push!(spellings, "a day count, the difference of two dates (F(a) - F(b), over two DateFields)")
+  kind isa CDate || push!(spellings, "a clock part (Extract($(letter), \"hour\"))")
+  kind isa CDate && push!(spellings, "a day count (the difference of two DateFields, F(a) - F(b))")
   _extracts_epoch_of(conn, kind) &&
-    push!(spellings, "its seconds since $(kind isa CTime ? "midnight" : "1970") (Extract($(v), \"epoch\"))")
-  return QueryBuildError("$(head) For a number from $(noun) $(v), write $(join(spellings, ", ", ", or ")), " *
+    push!(spellings, "its seconds since $(kind isa CTime ? "midnight" : "1970") (Extract($(letter), \"epoch\"))")
+  return QueryBuildError("$(head) For a number from $(noun) $(letter), write $(join(spellings, ", ", ", or ")), " *
                          "and apply `$(name)` to that.")
 end
 _non_number_noun(::CDate) = "a date"

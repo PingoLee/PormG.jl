@@ -68,6 +68,11 @@ Result = Models.Model(
 Field_validation_scratch = Models.Model("field_validation_scratch",
   id         = Models.IDField(),
   uuid_token = Models.UUIDField(unique = true),
+  payload    = Models.JSONField(null = true),
+)
+New_join_position = Models.Model(
+  id            = Models.IDField(),
+  boolean_field = Models.BooleanField(null = true),
 )
 
 PormG.Models.set_models(@__MODULE__, "mdt_mock")
@@ -117,7 +122,7 @@ function _mdt_refused(model, expr, name, kind; label = nothing)
     else
       @test occursin("a calendar part (Extract(d, \"year\")", msg)
       label === nothing || @test occursin("\"$(label)__@year\"", msg)
-      kind === :date && @test occursin("a day count, the difference of two dates (F(", msg)
+      kind === :date && @test occursin("a day count (the difference of two DateFields, F(a) - F(b))", msg)
       kind === :datetime && @test occursin("a clock part (Extract(d, \"hour\"))", msg)
     end
   end
@@ -185,14 +190,16 @@ end
   _mdt_refused(MDT.Race, Fn.Floor(Fn.Max("date")), "Floor", :date)
   _mdt_refused(MDT.Race, Fn.Round(_DF("date")), "Round", :date; label = "date")
   for (conn, _) in _MDT_ENGINES
-    msg = _mdt_msg(_mdt_refusal(MDT.Race, Fn.Round(_DF("date") + Day(1)); conn = conn))
-    @test !occursin("__@year", msg)
+    err = _mdt_refusal(MDT.Race, Fn.Round(_DF("date") + Day(1)); conn = conn)
+    @test err isa QueryBuildError && !occursin("__@year", _mdt_msg(err))
   end
   # A transform path is a date too (`start_at__@date`); it already ends in a transform, so no
   # `__@year` is appended to it.
   _mdt_refused(MDT.Race, Fn.Power("start_at__@date", 2), "Power", :date)
+  _mdt_refused(MDT.Race, Fn.Round(_DF("start_at__@date")), "Round", :date)
   for (conn, _) in _MDT_ENGINES
-    @test !occursin("__@date__@year", _mdt_msg(_mdt_refusal(MDT.Race, Fn.Round(_DF("start_at__@date")); conn = conn)))
+    err = _mdt_refusal(MDT.Race, Fn.Round(_DF("start_at__@date")); conn = conn)
+    @test err isa QueryBuildError && !occursin("__@date__@year", _mdt_msg(err))
   end
   # Under arithmetic too: `Round(<a date>) / 2` is refused at the `Round`, before the quotient.
   _mdt_refused(MDT.Race, Fn.Round(_DF("date") + Day(1)) / 2, "Round", :date)
@@ -226,16 +233,25 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1387: what stays out of the check
-# Text reads as a number by its own rules (#1061, #1279) and a boolean has its own (#1386): neither is
-# refused here, so `Round` over a text column keeps the outcome it had. An operand the walk cannot
-# type is let through. Expected: no #1387 message.
+# Text reads as a number by its own rules (#1061, #1279) and a boolean has its own (#1386, #953):
+# neither is refused here, so each keeps the outcome it had. A JSON key lookup is a value the walk
+# cannot type, which is let through: `Round("payload__lap")` builds, as before. Expected: no #1387
+# message; the JSON key and `Round`/`Abs` over a boolean build, and `Sum` of a boolean keeps #953.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1387: text and untyped operands are not this check's" begin
+@testset "#1387: text, booleans and untyped operands are not this check's" begin
   for (conn, _) in _MDT_ENGINES
     for expr in (Fn.Round("positiontext"), Fn.Abs("positiontext"), Fn.Sum("positiontext"))
       err = _mdt_refusal(MDT.Result, expr; conn = conn)
       @test err === nothing || !occursin("#1387", _mdt_msg(err))
     end
+    for expr in (Fn.Round("payload__lap"), Fn.Sum("payload__lap"), Fn.Abs("payload__lap"))
+      @test _mdt_refusal(MDT.Field_validation_scratch, expr; conn = conn) === nothing
+    end
+    for expr in (Fn.Round("boolean_field"), Fn.Abs("boolean_field"))
+      @test _mdt_refusal(MDT.New_join_position, expr; conn = conn) === nothing
+    end
+    err = _mdt_refusal(MDT.New_join_position, Fn.Sum("boolean_field"); conn = conn)
+    @test err isa QueryBuildError && occursin("(#953)", _mdt_msg(err)) && !occursin("#1387", _mdt_msg(err))
   end
 end
 

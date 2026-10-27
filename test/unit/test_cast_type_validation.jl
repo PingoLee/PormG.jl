@@ -29,8 +29,10 @@ using PormG.Models: IntegerField, CharField, BinaryField, PositiveIntegerField, 
 # Mock connections — only their type matters (dispatch selects the PG vs SQLite body).
 struct _PgCastConn <: PormG.PormGPostgres end
 struct _SlCastConn <: PormG.PormGSQLite end
+struct _MyCastConn1356 <: PormG.PormGMySQL end
 const _CPG = _PgCastConn()
 const _CSL = _SlCastConn()
+const _CMY = _MyCastConn1356()
 PormG.backend_sqlite_version(::_SlCastConn) = 3045000
 PormG.config["cast696_mock"] = PormG.Configuration.Settings(
   connections = _CSL, change_data = true, db_def_folder = "cast696_mock",
@@ -445,4 +447,53 @@ end
     @test PormG.QueryBuilder._sql_type_field("numeric(10,2)") isa PormG.Models.sDecimalField
     @test PormG.QueryBuilder._sql_type_field("varchar(20)") isa PormG.Models.sCharField
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1356: an integer cast applies its declared range on MySQL and SQLite
+# What: `Cast(x, "smallint" | "integer" | "bigint")` (and a field struct) rendered on each engine.
+# Expected SQL:
+#   PostgreSQL `(x)::integer`, unchanged — its cast raises 22003 itself;
+#   MySQL `CAST(IF(CAST(x AS SIGNED) BETWEEN lo AND hi, CAST(x AS SIGNED), ~0 + ABS(CAST(x AS SIGNED)))
+#   AS SIGNED)`, and for `bigint` the range checked as `DECIMAL(65,0)` with `+ 1` in the raising arm;
+#   SQLite `CASE WHEN CAST(x AS INTEGER) BETWEEN lo AND hi THEN CAST(x AS INTEGER) ELSE abs(… - 1) END`
+#   for 16 and 32 bits, and a plain `CAST(x AS INTEGER)` for `bigint`. An operand that binds a value
+#   binds it once per occurrence, in text order.
+# Why: MySQL's `SIGNED` is 64-bit (a 32-bit overflow came back as the value, and past 64 bits it wrapped or
+# clamped) and SQLite applies no range below 64 bits: each returned a value where the cast means an error.
+# The guard names its operand three times, so a value bound once would misbind silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1356: an integer cast applies its range on MySQL and SQLite" begin
+  proj(expr, conn) = inspect_query((q = Cast696Models.Cast696_result.objects; q.values("id", "c" => expr); q);
+                                   connection = conn)
+  col_my, col_sl = "CAST(`Tb`.`positionorder` AS SIGNED)", "CAST(\"Tb\".\"positionorder\" AS INTEGER)"
+  for (type, lo, hi) in (("integer", -2147483648, 2147483647), ("smallint", -32768, 32767))
+    @test occursin("CAST(IF($(col_my) BETWEEN $(lo) AND $(hi), $(col_my), ~0 + ABS($(col_my))) AS SIGNED) as `c`",
+                   proj(Cast("positionorder", type), _CMY)[:sql_text])
+    @test occursin("CASE WHEN $(col_sl) BETWEEN $(lo) AND $(hi) THEN $(col_sl) " *
+                   "ELSE abs($(col_sl) * 0 - 9223372036854775807 - 1) END as \"c\"",
+                   proj(Cast("positionorder", type), _CSL)[:sql_text])
+  end
+  @test occursin("CAST(IF(CAST(`Tb`.`positionorder` AS DECIMAL(65,0)) BETWEEN -9223372036854775808 AND " *
+                 "9223372036854775807, $(col_my), ~0 + ABS($(col_my)) + 1) AS SIGNED) as `c`",
+                 proj(Cast("positionorder", "bigint"), _CMY)[:sql_text])
+  # SQLite is 64-bit natively, and saturates past it where no guard can tell: no guard.
+  @test occursin("$(col_sl) as \"c\"", proj(Cast("positionorder", "bigint"), _CSL)[:sql_text])
+  # A field struct declares the same width.
+  @test occursin("BETWEEN -2147483648 AND 2147483647", proj(Cast("positionorder", IntegerField()), _CMY)[:sql_text])
+  @test occursin("BETWEEN -9223372036854775808 AND", proj(Cast("positionorder", BigIntegerField()), _CMY)[:sql_text])
+  # PostgreSQL's own cast is the meaning.
+  @test occursin("(\"Tb\".\"positionorder\")::integer as \"c\"", proj(Cast("positionorder", "integer"), _CPG)[:sql_text])
+  # A bound operand: its value bound for each of the three occurrences, in step, in a projection and a filter.
+  for conn in (_CMY, _CSL)
+    r = proj(Cast(PormG.QueryBuilder.F("positionorder") + 1, "integer"), conn)
+    @test (count(==('?'), r[:sql_text]), r[:parameters]) == (3, Any[1, 1, 1])
+    f = inspect_query((q = Cast696Models.Cast696_result.objects;
+                       q.filter(Cast(PormG.QueryBuilder.F("positionorder") * 2, "smallint") > 5); q.values("id"); q);
+                      connection = conn)
+    @test (count(==('?'), f[:sql_text]), f[:parameters]) == (4, Any[2, 2, 2, 5])
+  end
+  # A cast to anything but an integer is untouched.
+  @test !occursin("BETWEEN", proj(Cast("points", "numeric(10,2)"), _CMY)[:sql_text])
+  @test !occursin("BETWEEN", proj(Cast("points", "text"), _CSL)[:sql_text])
 end

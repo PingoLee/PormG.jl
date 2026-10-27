@@ -245,6 +245,7 @@ function PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteExcepti
   occursin("no such table", msg) && return :statement    # server-text-match-ok: SQLite, as above
   occursin("no such column", msg) && return :statement   # server-text-match-ok: SQLite, as above
   occursin("syntax error", msg) && return :statement     # server-text-match-ok: SQLite, as above
+  occursin("integer overflow", msg) && return :statement # server-text-match-ok: SQLite, as above
   # Unrecognized: core maps :unknown onto StatementError, so the umbrella still has no hole.
   return :unknown
 end
@@ -252,8 +253,11 @@ end
 # The reason as data (#987). SQLite reports no SQLSTATE and no separate fields, and its messages
 # name the table and column, never the value (`UNIQUE constraint failed: driver.code`), because a
 # bound value never enters SQLite's text — so the whole message is the safe primary.
+# #1356: SQLite's "integer overflow" (an integer cast's range guard, `abs()` of the smallest integer, a
+# `sum()` past 64 bits) is the overflow PostgreSQL reports as SQLSTATE 22003, so it carries that code.
 PormG.backend_error_fields(e::SQLite.SQLiteException) =
-  (sqlstate = nothing, constraint = nothing, table = nothing, column = nothing,
+  (sqlstate = occursin("integer overflow", lowercase(e.msg)) ? "22003" : nothing,  # server-text-match-ok: SQLite's own literal
+   constraint = nothing, table = nothing, column = nothing,
    message = isempty(e.msg) ? nothing : String(e.msg))
 
 # Window-function support probe used by src/Dialect.jl.

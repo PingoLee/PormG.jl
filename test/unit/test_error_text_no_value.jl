@@ -325,6 +325,9 @@ wrap987(T, adapter, cause) = T(adapter, cause; PormG.backend_error_fields(cause)
   @test PormG.backend_error_fields(SQLITE_UNIQUE987) ==
         (sqlstate = nothing, constraint = nothing, table = nothing, column = nothing,
          message = "UNIQUE constraint failed: driver.code")
+  # …except its "integer overflow", PostgreSQL's 22003 (#1356): what an integer cast's range guard raises.
+  overflow = PormG.backend_error_fields(SQLite.SQLiteException("integer overflow"))
+  @test (overflow.sqlstate, overflow.message) == ("22003", "integer overflow")
 
   # Anything else — a mock's ErrorException, an interrupt — reports nothing.
   @test PormG.backend_error_fields(ErrorException("mock: $(SECRET987)")) == PormG._NO_ERROR_FIELDS

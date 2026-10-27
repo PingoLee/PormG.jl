@@ -374,6 +374,15 @@ _duration_seconds_spelling(::PormGPostgres) = "Extract(d, \"epoch\")"
 _duration_seconds_spelling(::PormGSQLite) = nothing
 _duration_seconds_spelling(::PormGMySQL) = "Extract(d, \"epoch\")"
 
+# #1387 — whether `Extract(x, "epoch")` reads the seconds of a date, a timestamp or a time, which the
+# refusal of a number function over one names (`_non_number_math_refusal`). PostgreSQL reads all three
+# (a time's seconds since midnight); MySQL a date's and a timestamp's, and refuses a time's
+# (`Dialect.EXTRACT`); SQLite has no `EPOCH` part.
+_extracts_epoch_of(::PormGPostgres, ::Union{CDate,CDateTime,CTime}) = true
+_extracts_epoch_of(::PormGSQLite, ::Union{CDate,CDateTime,CTime}) = false
+_extracts_epoch_of(::PormGMySQL, ::Union{CDate,CDateTime}) = true
+_extracts_epoch_of(::PormGMySQL, ::CTime) = false
+
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
 _inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)
 _inspection_dialect(::PormGSQLite) = (:sqlite, :positional)

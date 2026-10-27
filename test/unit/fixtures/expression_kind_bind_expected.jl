@@ -6433,4 +6433,34 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM `Tb`.`date`) + 0)) > ?", params = [("10", "Int64")]),
+  ("Round Extract year | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM \"Tb\".\"date\")::integer)::numeric)::integer > \$1", params = [("10", "Int64")]),
+  ("Round Extract year | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Round Extract year | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((EXTRACT(YEAR FROM `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((EXTRACT(YEAR FROM \"R2\".\"date\")::integer)::numeric)::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round Extract year | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(strftime('%Y', \"R2\".\"date\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM(EXTRACT(HOUR FROM `Tb`.`time`)) DIV 1) > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(EXTRACT(HOUR FROM \"Tb\".\"time\")::integer) > \$1", params = [("10", "Int64")]),
+  ("Sum Extract hour time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(CAST(strftime('%H', \"Tb\".\"time\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum Extract hour time | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM(EXTRACT(HOUR FROM `R2`.`time`)) DIV 1) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(EXTRACT(HOUR FROM \"R2\".\"time\")::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Extract hour time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(CAST(strftime('%H', \"R2\".\"time\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
 )

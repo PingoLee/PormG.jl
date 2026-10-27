@@ -1253,6 +1253,19 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE801_SL.objects.values("raceid",
             "d" => PormG.Functions.Case([PormG.Functions.When("raceid" => 1, then = PormG.QueryBuilder.F("date"))], default = 0) + 1).list(show_query = :dict),
     ),
+    # #1387 — *Mathematical Functions* (functions_and_dates.md) and field_expressions.md say a number
+    # function, `Sum` included, over a date or a timestamp raises `QueryBuildError` on every engine.
+    # Every function and kind is pinned in `test/unit/test_math_over_date_refused.jl`.
+    (
+        "read/functions_and_dates.md — Round over a DateField is refused on every engine (#1387)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name", "r" => PormG.Functions.Round("date")).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md + read/field_expressions.md + src/querybuilder/functions.jl — Sum/Avg docstrings: Sum over a DateTimeField is refused on SQLite (#1387)",
+        QueryBuildError,
+        () -> DOCERR_RACE801_SL.objects.values("raceid", "s" => PormG.Functions.Sum("start_at")).list(show_query = :dict),
+    ),
     # #964 — *Case / When Expressions* (functions_and_dates.md), api.md and the `When` docstring say a
     # `When` with no `otherwise` raises when it stands as a value. Every value position is pinned in
     # `test/unit/test_filter_aggregate_expression.jl`.

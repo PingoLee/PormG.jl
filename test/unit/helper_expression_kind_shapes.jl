@@ -17,7 +17,7 @@ using TimeZones
 
 # The primary key of each base model, which the CTE and Subquery contexts correlate on.
 const EKM_PK = Dict(:Result => "resultid", :Race => "raceid", :Constructor_results => "constructorresultsid",
-                    :New_join_position => "id")
+                    :New_join_position => "id", :Field_validation_scratch => "id")
 
 _ekm_over(base) = PormG.QueryBuilder.WindowOver(order_by = EKM_PK[base])
 
@@ -396,6 +396,29 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Extract hour F datetime - datetime", :Race,     m -> _EKM_FN.Extract(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"), "hour")),
   ("Extract minute F interval * 2", :Result,        m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "minute")),
   ("Extract epoch F interval * 2", :Result,         m -> _EKM_FN.Extract(_EKM_Q.F("fastestlaptime") * 2, "epoch")),
+  # ── #1387: a number function over a date, a timestamp, a time or a UUID ─────────────────────────
+  ("Round date",              :Race,                m -> _EKM_FN.Round("date")),
+  ("Floor datetime",          :Race,                m -> _EKM_FN.Floor("start_at")),
+  ("Ceil time",               :Race,                m -> _EKM_FN.Ceil("time")),
+  ("Sqrt date",               :Race,                m -> _EKM_FN.Sqrt("date")),
+  ("Exp datetime",            :Race,                m -> _EKM_FN.Exp("start_at")),
+  ("Ln time",                 :Race,                m -> _EKM_FN.Ln("time")),
+  ("Power date 2",            :Race,                m -> _EKM_FN.Power("date", 2)),
+  ("Mod datetime 3",          :Race,                m -> _EKM_FN.Mod("start_at", 3)),
+  ("Abs date",                :Race,                m -> _EKM_FN.Abs("date")),
+  ("Abs time",                :Race,                m -> _EKM_FN.Abs("time")),
+  ("Sum date",                :Race,                m -> _EKM_FN.Sum("date")),
+  ("Avg datetime",            :Race,                m -> _EKM_FN.Avg("start_at")),
+  ("Sum time",                :Race,                m -> _EKM_FN.Sum("time")),
+  ("Round hop date",          :Result,              m -> _EKM_FN.Round("raceid__date")),
+  ("Round F date + Day(1)",   :Race,                m -> _EKM_FN.Round(_EKM_Q.F("date") + Day(1))),
+  ("Floor Max date",          :Race,                m -> _EKM_FN.Floor(_EKM_FN.Max("date"))),
+  ("Round uuid",              :Field_validation_scratch, m -> _EKM_FN.Round("uuid_token")),
+  ("Sum uuid",                :Field_validation_scratch, m -> _EKM_FN.Sum("uuid_token")),
+  # The spellings the refusal names keep building: a calendar part and a clock part (a day count is
+  # `Abs F date - date`, above).
+  ("Round Extract year",      :Race,                m -> _EKM_FN.Round(_EKM_FN.Extract("date", "year"))),
+  ("Sum Extract hour time",   :Race,                m -> _EKM_FN.Sum(_EKM_FN.Extract("time", "hour"))),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

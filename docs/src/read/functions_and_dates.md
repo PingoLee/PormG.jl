@@ -682,6 +682,24 @@ A value with no answer is an engine's own: `Sqrt` of a negative number, `Ln` of 
 raise on PostgreSQL and read as `missing` on SQLite and MySQL. An `Exp` or `Power` too large for a
 double raises on PostgreSQL and MySQL and reads as `Inf` on SQLite.
 
+**A date, a timestamp, a time or a UUID** under any of these functions, or under `Sum` or `Avg`,
+raises `QueryBuildError` on every engine when the query is built (#1387): none of them is a number. A
+column, a path across a relation (`"raceid__date"`) and a date expression (`F("date") + Day(1)`,
+`Max("date")`) are all refused. PostgreSQL raised at the server (`round(date)` does not exist), SQLite
+computed on the stored text (`Round("date")` read the year's digits), and MySQL on the number the
+date's digits spell. Name the number you mean, and apply the function to that:
+
+- a calendar part of a date or a timestamp: `Extract("date", "year")`, or the transform
+  `"date__@year"`;
+- a clock part of a timestamp or a time: `Extract("time", "hour")`;
+- a day count, the difference of two dates: on `Result`, `F("raceid__date") - F("driverid__dob")` is
+  an integer on every engine;
+- the seconds, `Extract(x, "epoch")`: since 1970 for a date or a timestamp on PostgreSQL and MySQL,
+  since midnight for a time on PostgreSQL. SQLite has no `EPOCH` part, and MySQL none for a time.
+
+A UUID holds no number, so nothing is named for one. Text and a JSON key lookup keep their own rules
+(below), and so does a boolean.
+
 ### Rounding to decimal places
 
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders

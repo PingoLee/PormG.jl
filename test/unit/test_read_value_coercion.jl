@@ -568,8 +568,12 @@ end
     for fn in (F_.Sum, F_.Avg)
       @test _rvc_kinds(q -> q.values("s" => fn("amount")))[:s] == PormG.CDecimal(nothing, nothing)
     end
-    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("d",)
-      @test !haskey(_rvc_kinds(q -> q.values("s" => fn(col))), :s)
+    @test !haskey(_rvc_kinds(q -> q.values("s" => F_.Count("d"))), :s)
+    # #1387: a `Sum` or `Avg` of a date was this testset's other computed aggregate; a date is not a
+    # number, so it is refused on every engine now, before any kind is recorded.
+    for fn in (F_.Sum, F_.Avg)
+      err = try _rvc_kinds(q -> q.values("s" => fn("d"))); nothing catch e; e end
+      @test err isa PormG.QueryBuildError && occursin("(#1387)", sprint(showerror, err))
     end
     @test !haskey(_rvc_kinds(q -> q.values("s" => F_.Count("amount"))), :s)
     # #900: `Sum`/`Avg` over an interval are an interval, as PostgreSQL's `sum(interval)` and

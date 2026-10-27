@@ -742,18 +742,30 @@ end
 # raised at the server, SQLite computed on the `HH:MM:SS` text (`Round` read `0.0`, `Sqrt` NULL), MySQL
 # on the count of microseconds. Read after the operands render, from the type walk, so a column, a
 # `Sum` of one, interval arithmetic and a CTE column holding one are all seen. An operand the walk
-# cannot type is let through. Only the `:interval` half of the domain is enforced here: text is read as
-# a number by its own rules (#1061, #1279), and a date or a time under a number function is outside
-# this issue's decided scope.
+# cannot type is let through.
+#
+# #1387 — a date, a timestamp, a time and a UUID are not numbers either, under any number function,
+# `Sum` and `Avg` included (their domain holds `:interval`, never these). PostgreSQL raised at the
+# server (`round(date)` does not exist), SQLite computed on the stored text (a date's leading year
+# digits), MySQL on the number a date's digits spell. Refused on every engine, as a duration is. Text
+# and a JSON key lookup keep their own rules (#1061, #1279), and a boolean its own (#1386): neither
+# kind is checked here.
 function _check_operand_domain(p::FObject, instruc::SQLInstruction)
   domain = _operand_domain(p)
-  (domain === nothing || :interval in domain) && return nothing
+  domain === nothing && return nothing
   for x in (p.column isa AbstractVector ? p.column : (p.column,))
     _is_null_literal(x isa SQLText ? x.field : x) && continue
-    _expression_kind(x, instruc) isa CInterval && throw(_duration_math_refusal(p.function_name, instruc.connection))
+    kind = _expression_kind(x, instruc)
+    if kind isa CInterval
+      :interval in domain || throw(_duration_math_refusal(p.function_name, instruc.connection))
+    elseif kind isa _NonNumberKind
+      throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
+    end
   end
   return nothing
 end
+const _NonNumberKind = Union{CDate,CDateTime,CTime,CUUID}
+_non_number_operand(x, instruc::SQLInstruction) = _expression_kind(x, instruc) isa _NonNumberKind
 _check_operand_domain(::Any, ::SQLInstruction) = nothing
 # The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
 function _duration_math_refusal(function_name::AbstractString, conn)
@@ -768,6 +780,33 @@ function _duration_math_refusal(function_name::AbstractString, conn)
   return QueryBuildError("`$(name)` of a duration is not supported: a duration is not a number, so `$(name)` " *
                          "has no meaning over one on any engine (#1324). $(remedy)")
 end
+# #1387 — the same reason over a date, a timestamp, a time or a UUID. The remedy names the numbers a
+# caller may mean: a calendar part (and the column's own `__@year` transform, when the operand is a
+# column path with no transform of its own), a clock part, a day count between two dates, and the seconds where the engine's
+# `EPOCH` reads that kind (`_extracts_epoch_of`). A UUID holds no number, so it names none.
+function _non_number_math_refusal(function_name::AbstractString, kind::CanonicalType,
+                                  label::Union{String,Nothing}, conn)
+  name = uppercasefirst(lowercase(function_name))
+  noun = _non_number_noun(kind)
+  head = "`$(name)` of $(noun) is not supported: $(noun) is not a number, so `$(name)` has no meaning " *
+         "over one on any engine (#1387)."
+  kind isa CUUID && return QueryBuildError("$(head) A UUID holds no number to compute `$(name)` over.")
+  letter = kind isa CTime ? "t" : "d"
+  # A column path only: a handle (`CTE(…)`) or a path that already ends in a transform has none.
+  transform = label === nothing || occursin('(', label) || occursin("__@", label) ? "" : ", or \"$(label)__@year\""
+  spellings = String[]
+  kind isa CTime || push!(spellings, "a calendar part (Extract(d, \"year\")$(transform))")
+  kind isa CDate || push!(spellings, "a clock part (Extract($(letter), \"hour\"))")
+  kind isa CDate && push!(spellings, "a day count (the difference of two DateFields, F(a) - F(b))")
+  _extracts_epoch_of(conn, kind) &&
+    push!(spellings, "its seconds since $(kind isa CTime ? "midnight" : "1970") (Extract($(letter), \"epoch\"))")
+  return QueryBuildError("$(head) For a number from $(noun) $(letter), write $(join(spellings, ", ", ", or ")), " *
+                         "and apply `$(name)` to that.")
+end
+_non_number_noun(::CDate) = "a date"
+_non_number_noun(::CDateTime) = "a timestamp"
+_non_number_noun(::CTime) = "a time"
+_non_number_noun(::CUUID) = "a UUID"
 
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
 # measurements above). The kind comes from the type walk (`_expression_kind`, #1034 step 5c): a column,

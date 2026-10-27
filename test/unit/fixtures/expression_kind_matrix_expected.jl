@@ -5492,6 +5492,366 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Round date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor datetime | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Floor datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a timestamp is not supported: a timestamp is not a number, so `Floor` has no meaning over one on any engine ("),
+  ("Ceil time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Ceil time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ceil` of a time is not supported: a time is not a number, so `Ceil` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Sqrt date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sqrt` of a date is not supported: a date is not a number, so `Sqrt` has no meaning over one on any engine (#1387). For "),
+  ("Exp datetime | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Exp datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Exp` of a timestamp is not supported: a timestamp is not a number, so `Exp` has no meaning over one on any engine (#138"),
+  ("Ln time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Ln time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Ln` of a time is not supported: a time is not a number, so `Ln` has no meaning over one on any engine (#1387). For a nu"),
+  ("Power date 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Power date 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Power` of a date is not supported: a date is not a number, so `Power` has no meaning over one on any engine (#1387). Fo"),
+  ("Mod datetime 3 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Mod datetime 3 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Mod` of a timestamp is not supported: a timestamp is not a number, so `Mod` has no meaning over one on any engine (#138"),
+  ("Abs date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a date is not supported: a date is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Abs time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Abs` of a time is not supported: a time is not a number, so `Abs` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a date is not supported: a date is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Avg datetime | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Avg datetime | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Avg` of a timestamp is not supported: a timestamp is not a number, so `Avg` has no meaning over one on any engine (#138"),
+  ("Sum time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Sum time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a time is not supported: a time is not a number, so `Sum` has no meaning over one on any engine (#1387). For a "),
+  ("Round hop date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round hop date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Round F date + Day(1) | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Floor Max date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of a date is not supported: a date is not a number, so `Floor` has no meaning over one on any engine (#1387). Fo"),
+  ("Round uuid | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Round uuid | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a UUID is not supported: a UUID is not a number, so `Round` has no meaning over one on any engine (#1387). A "),
+  ("Sum uuid | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Sum uuid | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` of a UUID is not supported: a UUID is not a number, so `Sum` has no meaning over one on any engine (#1387). A UUID"),
+  ("Round Extract year | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Round Extract year | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round Extract year | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round Extract year | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round Extract year | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round Extract year | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round Extract year | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Round Extract year | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round Extract year | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Extract hour time | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

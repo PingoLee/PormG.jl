@@ -20,6 +20,7 @@ Sibling coverage:
 using Test
 using PormG
 using PormG.Models
+using Dates
 
 struct JsonLookupMockSQLite <: PormG.PormGSQLite end
 struct JsonLookupMockPostgres <: PormG.PormGPostgres end
@@ -45,7 +46,24 @@ PormG.Models.set_models(@__MODULE__, "json_lookup_mock")
 end
 
 const JL = JsonLookupModels
-import PormG.QueryBuilder: inspect_query
+
+# #1381: a model with a date and a number beside the JSON column, for the `When`-on-alias renders.
+PormG.config["json_lookup_when_mock"] = PormG.Configuration.Settings(
+  connections = _JL_SL, change_data = true, db_def_folder = "json_lookup_when_mock",
+)
+module JsonWhenModels
+import PormG
+import PormG.Models
+Lap_scratch = Models.Model("lap_scratch",
+  id = Models.IDField(),
+  payload = Models.JSONField(null = true),
+  day = Models.DateField(null = true),
+  laps = Models.IntegerField(null = true),
+)
+PormG.Models.set_models(@__MODULE__, "json_lookup_when_mock")
+end
+const JW = JsonWhenModels
+import PormG.QueryBuilder: inspect_query, Case, When
 
 # Resolve a query's SQL under a specific dialect (default = mock SQLite).
 _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q; connection = conn))
@@ -365,14 +383,6 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The same document through a projection alias and through `F("payload") ==` (#1360)
-  # Both bound a bare marker on MySQL, so each matched no row with no error; and `F ==` bound
-  # `$1::text` on PostgreSQL, `jsonb = text`, which has no operator (measured: SQLSTATE 42883).
-  # Expected SQL: MySQL `CAST(? AS JSON)` for `=`, `@ne`, `@in` on the alias and for `F ==`/`!=`; a
-  # pattern lookup on the alias and a key lookup either way stay bare; PostgreSQL binds an uncast `$1`
-  # (typed from the jsonb column, as the filter arm binds it) and SQLite a bare `?`.
-  # ─────────────────────────────────────────────────────────────────────────────
-  # ─────────────────────────────────────────────────────────────────────────────
   # #1382: an alias over a key lookup compares as the key lookup does
   # What: `values("d" => F("payload__driver"))` then `filter`/`Q` on `d`, on the three engines.
   # Expected SQL: the key lookup's own comparison — `#>> '{"driver"}' = $1` bound text on PostgreSQL,
@@ -409,6 +419,71 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test_throws PormG.InvalidValueError _sql(whole; conn = _JL_PG)
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #1381: a `When` condition on a projection alias binds as the alias's `Q` binds
+  # What: `values(alias => F(col))` then `Case([When(alias => v, then = 1)], default = 0)`, in a filter
+  # and in the projection, for an alias over a JSON document, a JSON key, a date and a number.
+  # Expected SQL: the `Q(alias => v)` predicate's own value and marker inside `CASE WHEN … THEN`:
+  # `CAST(? AS JSON)` for a whole document on MySQL, a date bound as its text, a number as the
+  # integer formatter binds it; an invalid value raises InvalidValueError as `Q` does.
+  # Why: the `When` arm bound the value raw, so on MySQL a document was compared as a JSON string
+  # scalar (no row), and on every engine an invalid date or number was sent to the database.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a When condition on a projection alias binds as Q does (#1381)" begin
+    doc = "{\"driver\":\"hamilton\"}"
+    projected(alias, src) = (q = JW.Lap_scratch.objects; q.values("id", alias => src); q)
+    when_q(alias, src, key, v) = (q = projected(alias, src); q.filter(Case([When(key => v, then = 1)], default = 0) == 1); q)
+    q_q(alias, src, key, v) = (q = projected(alias, src); q.filter(Q(key => v)); q)
+    cases = (("p", F("payload"), "p", doc), ("p", F("payload"), "p__@ne", doc), ("p", F("payload"), "p__@in", [doc]),
+             ("k", F("payload__driver"), "k", "hamilton"), ("k", F("payload__driver"), "k__@gt", 5),
+             ("dd", F("day"), "dd", Date(2020, 1, 2)), ("dd", F("day"), "dd__@in", [Date(2020, 1, 2)]),
+             ("n", F("laps"), "n", 2.5), ("n", F("laps"), "n__@gte", 5), ("n", F("laps"), "n__@range", [1, 9]),
+             ("dd", F("day"), "dd__@range", [Date(2020, 1, 1), Date(2020, 2, 1)]))
+    for conn in (_JL_PG, _JL_SL, _JL_MY), (alias, src, key, v) in cases
+      w = _sql(when_q(alias, src, key, v); conn = conn)
+      q = _sql(q_q(alias, src, key, v); conn = conn)
+      # The `When` predicate is the `Q` one; its bound value comes first, before THEN's and ELSE's.
+      pred = strip(last(split(q[:sql_text], "WHERE ")))
+      pred = pred[nextind(pred, 1):prevind(pred, lastindex(pred))]   # the `Q`'s own parentheses
+      @test (typeof(conn), key, occursin("CASE WHEN $(pred) THEN", replace(w[:sql_text], r"\s+" => " ")),
+             w[:parameters][1:length(q[:parameters])]) == (typeof(conn), key, true, q[:parameters])
+    end
+    # The same condition inside the projection.
+    sel = (q = projected("p", F("payload")); q.values("id", "p" => F("payload"), "w" => Case([When("p" => doc, then = 1)], default = 0)); q)
+    @test occursin("WHEN `Tb`.`payload` = CAST(? AS JSON) THEN", _sql(sel; conn = _JL_MY)[:sql_text])
+    # An invalid value raises as the `Q` spelling does, on every engine.
+    for conn in (_JL_PG, _JL_SL, _JL_MY), (alias, src, v) in (("p", F("payload"), "notjson"), ("dd", F("day"), "not-a-date"),
+                                                             ("n", F("laps"), "five"))
+      @test_throws PormG.InvalidValueError _sql(when_q(alias, src, alias, v); conn = conn)
+      @test_throws PormG.InvalidValueError _sql(q_q(alias, src, alias, v); conn = conn)
+    end
+    @test_throws PormG.InvalidValueError _sql(when_q("dd", F("day"), "dd__@range", ["x", "y"]); conn = _JL_PG)
+    # `@isnull` on an alias over a key lookup renders as the key lookup's own `IS NULL`, on SQLite too,
+    # where the generic arm refused a `json_extract(…)` column (FilterError).
+    @test occursin("WHEN json_extract(\"Tb\".\"payload\", '\$.driver') IS NULL THEN",
+                   _sql(when_q("k", F("payload__driver"), "k__@isnull", true); conn = _JL_SL)[:sql_text])
+    # A column expression on the right is a column comparison, as it was: no value to bind or check.
+    for conn in (_JL_PG, _JL_SL, _JL_MY)
+      qt = conn isa PormG.PormGMySQL ? "`" : "\""
+      idcol = "= $(qt)Tb$(qt).$(qt)id$(qt)"
+      q = projected("k", F("payload__driver")); q.filter("k" => F("id"))
+      r = _sql(q; conn = conn)
+      @test (typeof(conn), occursin(idcol, r[:sql_text]), r[:parameters]) == (typeof(conn), true, Any[])
+      w = _sql(when_q("k", F("payload__driver"), "k", F("id")); conn = conn)
+      @test (typeof(conn), occursin(idcol, w[:sql_text]), length(w[:parameters])) == (typeof(conn), true, 3)
+      # A queryset on the right keeps its refusal: it needs a membership operator.
+      @test_throws PormG.FilterError _sql(when_q("k", F("payload__driver"), "k", JL.Json_scratch.objects); conn = conn)
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The same document through a projection alias and through `F("payload") ==` (#1360)
+  # Both bound a bare marker on MySQL, so each matched no row with no error; and `F ==` bound
+  # `$1::text` on PostgreSQL, `jsonb = text`, which has no operator (measured: SQLSTATE 42883).
+  # Expected SQL: MySQL `CAST(? AS JSON)` for `=`, `@ne`, `@in` on the alias and for `F ==`/`!=`; a
+  # pattern lookup on the alias and a key lookup either way stay bare; PostgreSQL binds an uncast `$1`
+  # (typed from the jsonb column, as the filter arm binds it) and SQLite a bare `?`.
+  # ─────────────────────────────────────────────────────────────────────────────
   @testset "a whole JSON document through an alias or F(...) == (#1360)" begin
     doc = "{\"driver\":\"hamilton\"}"
     other = "{\"driver\":\"max\"}"

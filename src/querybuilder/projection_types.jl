@@ -1698,6 +1698,19 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # it; the `*_exact` and regex (#635) pattern lookups take the value verbatim and must NOT be
   # decorated, which is why that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately
   # different sets (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
+  placeholder = _bind_alias_value(v, having_key, instruc)
+  # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
+  # `IN`/`NOT IN` membership case this branch used to special-case, adds the
+  # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
+  # unknown-operator refusal that was missing here entirely.
+  return _render_predicate(string(field), v.operator, placeholder, instruc;
+                           expression = isnull_aggregate)
+end
+
+# The value of one predicate on a projection alias, formatted and checked as the alias's type and
+# bound in the current clause: what a `filter`/`Q` on the alias binds (`_render_alias_predicate_node`)
+# and, since #1381, a `When` condition on it (`_render_filter_oper`), which bound the value raw.
+function _bind_alias_value(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)
   placeholder = _bind_predicate_value(instruc, v.operator,
                   _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
   # #1360: an alias over the whole JSON document compares as JSON, as the column's own filter arm does
@@ -1707,12 +1720,7 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   placeholder isa AbstractString && !(v.operator in PATTERN_LOOKUP_OPERATORS) &&
     source isa SQLTypeField && _json_document_operand(source.field, instruc) &&
     (placeholder = _json_document_marker(instruc.connection, placeholder))
-  # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
-  # `IN`/`NOT IN` membership case this branch used to special-case, adds the
-  # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
-  # unknown-operator refusal that was missing here entirely.
-  return _render_predicate(string(field), v.operator, placeholder, instruc;
-                           expression = isnull_aggregate)
+  return placeholder
 end
 
 # #1021 — `values("doc" => SearchVector(…)).filter("doc__@search" => q)`, Django's multi-column search.

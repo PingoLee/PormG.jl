@@ -162,6 +162,11 @@ end
             @test length(keyed("pts", "payload__points", "pts__@gte", 9).list()) == 1     # 15 >= 9, as numbers
             @test length(keyed("pts", "payload__points", "pts__@gt", 15).list()) == 0
             @test length(keyed("sp", "payload__sponsor", "sp__@isnull", true).list()) == 1
+            # A `When` on the alias (#1381) matches the same row, a number ordered as a number: on
+            # PostgreSQL the When arm compared the text '15' with '9', which is false.
+            q = base(); q.values("id", "pts" => F("payload__points"))
+            q.filter(Case([When("pts__@gte" => 9, then = 1)], default = 0) == 1)
+            @test length(q.list()) == 1
         end
 
         # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.

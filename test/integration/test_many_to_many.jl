@@ -350,6 +350,60 @@ end
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
 end
 
+# What: an `add` of several targets is all or nothing, on its own and inside the caller's `atomic`.
+# SQL: PostgreSQL and MySQL send `INSERT … SELECT … WHERE NOT EXISTS (…)` per target inside one
+# BEGIN … COMMIT, or inside the caller's; SQLite one `INSERT OR IGNORE … VALUES (?, ?), …`. A target with
+# no sponsor row fails its foreign key — at its INSERT on MySQL and SQLite outside a transaction, at
+# COMMIT where the foreign keys are deferred (PostgreSQL, and SQLite inside one).
+# Why (#1399): PostgreSQL's and MySQL's INSERTs each ran in autocommit, so the add raised and kept the
+# links written before the failing target.
+@testset "Many-to-Many: an add whose last target fails links none of them (#1399)" begin
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+    sponsor_a = M.M2m_sponsor_scratch.objects.create("name" => "AtomicA")
+    sponsor_b = M.M2m_sponsor_scratch.objects.create("name" => "AtomicB")
+    sponsor_c = M.M2m_sponsor_scratch.objects.create("name" => "AtomicC")
+    driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "atomic1399")
+    manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
+    linked() = sort(PormG.QueryBuilder._m2m_current_ids(manager))
+    ghost = 99_999_999
+
+    # Outside a transaction.
+    @test_throws PormG.IntegrityError manager.add(sponsor_a, sponsor_b, ghost)
+    @test isempty(linked())
+
+    # A successful add is unchanged, and targets already linked are skipped (NOT EXISTS).
+    @test manager.add(sponsor_a, sponsor_b) === nothing
+    @test linked() == sort(Any[sponsor_a[:id], sponsor_b[:id]])
+    @test manager.add(sponsor_a, sponsor_b, sponsor_c) === nothing
+    @test linked() == sort(Any[sponsor_a[:id], sponsor_b[:id], sponsor_c[:id]])
+    manager.clear()
+
+    # Inside the caller's transaction, the failed add rolls back with the caller's own writes.
+    @test_throws PormG.IntegrityError PormG.atomic(PORMG_DB_FOLDER) do
+        manager.add(sponsor_c)
+        manager.add(sponsor_a, sponsor_b, ghost)
+    end
+    @test isempty(linked())
+
+    # And a successful add inside the caller's transaction rolls back when the caller's block fails.
+    err = try
+        PormG.atomic(PORMG_DB_FOLDER) do
+            manager.add(sponsor_a, sponsor_b)
+            @test linked() == sort(Any[sponsor_a[:id], sponsor_b[:id]])
+            error("caller failure 1399")
+        end
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test isempty(linked())
+
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+end
+
 @testset "Many-to-Many: empty and no-op mutators" begin
     M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)

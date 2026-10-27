@@ -367,6 +367,14 @@ driver.sponsors.add(2, 3)
 driver.sponsors.add(Dict(:id => 4))
 ```
 
+An `add` of several targets is all or nothing: its statements run in one transaction, or in yours when
+one is open, so a target that fails (an id with no row, which fails the foreign key) leaves none of
+them linked. Inside your `atomic` block the `add` opens no savepoint: an error that leaves the block
+rolls the whole block back, while one you catch inside it (on MySQL, which checks each statement) keeps
+the targets written before the failing one. On PostgreSQL the foreign keys PormG creates are checked at
+`COMMIT`, as SQLite's are inside a transaction, so there the failure is reported when your block ends
+rather than at the `add`, and the whole block rolls back.
+
 ### `.remove(targets...)` — Removing relationships
 
 Unlink specific items from the relationship. It takes the exact same arguments as `.add`. Any number of targets works: a `remove` that binds more parameters than one statement takes on the connection is split into several statements, run in one transaction, as `bulk_insert` splits its rows.

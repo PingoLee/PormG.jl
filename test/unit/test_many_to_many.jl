@@ -1656,3 +1656,88 @@ PormG.backend_mysql_parameter_limit(::M2MLimitMySQL1355) = 4096
   # One statement runs as it did, with no transaction of its own.
   @test QB._m2m_in_one_transaction(() -> :ran, PormG.config["m2m_mock"], 1) === :ran
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1399: PostgreSQL's and MySQL's add runs its statements in one transaction
+# What: the statements a many-to-many `add` sends on a PostgreSQL pool (the method is MySQL's too): one
+# target is one statement with no transaction of its own; several are one transaction, which a failing
+# target rolls back; inside a caller's transaction they run on its connection with no BEGIN of their own.
+# SQL: `BEGIN;`, `INSERT INTO … SELECT $1, $2 WHERE NOT EXISTS (…);` per target, then `COMMIT;` — or
+# `ROLLBACK;` when one fails. Asserted live in test/integration/test_many_to_many.jl on every engine.
+# Why: each INSERT ran in autocommit, so an add whose last target had no row left the earlier links
+# written; SQLite's add and every engine's remove already ran their statements in one transaction (#1355).
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct FakeConn1399
+  id::Int
+end
+mutable struct MockPGPool1399 <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  fail_on::Int              # the INSERT, counted from 1, that fails; 0 for none
+  inserts::Int
+  executed::Vector{String}  # every statement the "driver" received, in order
+end
+MockPGPool1399() = MockPGPool1399(Any[FakeConn1399(1)], [true], "mock://pg1399", 1, ReentrantLock(), 0, 0, String[])
+PormG.backend_is_alive(::MockPGPool1399, conn) = conn isa FakeConn1399
+PormG.backend_connect(::MockPGPool1399; kwargs...) = FakeConn1399(2)
+function PormG.backend_execute_async(pool::MockPGPool1399, conn, sql::String, params)
+  push!(pool.executed, sql)
+  failing = startswith(sql, "INSERT") && (pool.inserts += 1) == pool.fail_on
+  return @async begin
+    failing && error("mock: foreign key violation")
+    NamedTuple[]
+  end
+end
+
+const POOL_1399 = MockPGPool1399()
+PormG.config["m2m_tx_mock_1399"] = PormG.Configuration.Settings(
+  connections = POOL_1399, change_data = true, db_def_folder = "m2m_tx_mock_1399")
+
+module ManyToManyTx1399
+import PormG
+import PormG.Models
+Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
+Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
+  drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
+end
+
+@testset "#1399: PostgreSQL's and MySQL's many-to-many add runs in one transaction" begin
+  rel = Models.get_many_to_many_relation(ManyToManyTx1399.Season, "drivers")
+  manager = PormG.QueryBuilder.ManyToManyManager(ManyToManyTx1399.Season, ManyToManyTx1399.Driver, rel, 1)
+  sent() = [first(split(sql)) for sql in POOL_1399.executed]
+  function reset!(fail_on::Int = 0)
+    empty!(POOL_1399.executed)
+    POOL_1399.inserts = 0
+    POOL_1399.fail_on = fail_on
+  end
+
+  # One target: one statement, as before.
+  reset!()
+  @test PormG.QueryBuilder.add(manager, 7) === nothing
+  @test sent() == ["INSERT"]
+
+  # Several targets: one transaction around them.
+  reset!()
+  @test PormG.QueryBuilder.add(manager, 7, 8, 9) === nothing
+  @test sent() == ["BEGIN;", "INSERT", "INSERT", "INSERT", "COMMIT;"]
+  @test all(sql -> occursin("WHERE NOT EXISTS", sql), POOL_1399.executed[2:4])
+
+  # The last target fails: the transaction is rolled back, never committed.
+  reset!(3)
+  @test_throws PormG.PormGError PormG.QueryBuilder.add(manager, 7, 8, 9)
+  @test sent() == ["BEGIN;", "INSERT", "INSERT", "INSERT", "ROLLBACK;"]
+  @test all(POOL_1399.available)   # the connection is back in the pool
+
+  # Inside the caller's transaction, the add opens none of its own: the caller commits.
+  reset!()
+  PormG.ConnectionPool.atomic("m2m_tx_mock_1399") do
+    PormG.QueryBuilder.add(manager, 7, 8)
+  end
+  @test sent() == ["BEGIN;", "INSERT", "INSERT", "COMMIT;"]
+  @test all(POOL_1399.available)
+  reset!()
+end

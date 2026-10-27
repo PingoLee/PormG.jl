@@ -20,8 +20,8 @@
 ##
 ## Read-only: it never writes, so it runs on a seeded database as is (`runtests.jl` seeds it). It does
 ## not take the integration suite's lock, so a suite reseeding the same database during the run
-## invalidates the numbers; the row counts are read again after the timed section, and a change
-## there stops the report. db_sl runs with `-t 1`, as the suite does.
+## invalidates the numbers; each query's row count (a count's value) is read again after the timed
+## section, and a net change there stops the report. db_sl runs with `-t 1`, as the suite does.
 using PormG
 using Dates
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -78,13 +78,17 @@ function _time_ns(f::F) where {F}
 end
 
 _rows(x) = x isa AbstractVector ? length(x) : 1
+# What the re-check after the timed section compares: the rows a list returns, the value a count does.
+_fingerprint(x) = x isa Integer ? x : _rows(x)
 
 const PHASES = (:build, :read)
 _thunk(c, phase::Symbol) = phase === :build ? (() -> c.run(:sql)) : (() -> c.run(:execute))
 
 function measure(rounds::Int)
   thunks = [(c.name, p, _thunk(c, p)) for c in CASES for p in PHASES]
-  rows = Dict(c.name => _rows(c.run(:execute)) for c in CASES)
+  first_read = Dict(c.name => c.run(:execute) for c in CASES)
+  rows = Dict(n => _rows(x) for (n, x) in first_read)
+  before = Dict(n => _fingerprint(x) for (n, x) in first_read)
   for (_, _, f) in thunks, _ in 1:2   # compile every closure and both barriers
     _alloc(f); _time_ns(f)
   end
@@ -100,8 +104,8 @@ function measure(rounds::Int)
   end
   gcd = Base.GC_Diff(Base.gc_num(), gc0)
   live1 = Base.gc_live_bytes()
-  after = Dict(c.name => _rows(c.run(:execute)) for c in CASES)
-  after == rows || error("the row counts changed during the run ($(rows) → $(after)): something wrote " *
+  after = Dict(c.name => _fingerprint(c.run(:execute)) for c in CASES)
+  after == before || error("the results changed during the run ($(before) → $(after)): something wrote " *
                          "to $(DB_FOLDER) meanwhile, so these numbers measure a different database")
   return (; thunks, rows, allocs, times, gcd, live0, live1)
 end

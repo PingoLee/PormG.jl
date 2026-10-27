@@ -944,10 +944,26 @@ operand is not `NULL`: `update("grid" => Coalesce("grid", "racedate"))` stored t
 integer column on the rows where `grid` was `NULL`. Say which value you mean, for example the date's
 year, `Coalesce("grid", Extract("racedate", "year"))`. An `output_field` does not lift this one either.
 
-Two pairs are not checked. A UUID beside text builds: SQLite and MySQL hold a UUID as its text, so
+**A boolean or a JSON document beside another type** is refused the same way (#1386). A boolean
+beside a number does not say whether it means the flag or a count: SQLite and MySQL store the flag as
+`0`/`1` and answered a number, and PostgreSQL fails at the server. Write the number the flag means
+with a `Case`, which builds on every engine. Beside text, write the text the same way:
+
+```julia
+using PormG.Functions: Case, When
+
+# ✗ a boolean and a number: refused
+M.New_join_position.objects.values("v" => Coalesce("boolean_field", "result"))
+# ✓ the count the flag means
+M.New_join_position.objects.values("v" => Case(When("boolean_field" => true, then = 1), default = 0))
+```
+
+A whole JSON document (a `JSONField` column) beside a number, text, a boolean or a date has no common
+type either. A JSON key lookup (`"payload__driver"`) is not checked: its type is the data's.
+
+One pair is not checked. A UUID beside text builds: SQLite and MySQL hold a UUID as its text, so
 `Coalesce("token", Cast("name", "uuid"))` is that text there, and PostgreSQL raises at the server for
-a text column beside a UUID. A boolean or a JSON value beside another type builds as written: a
-boolean is not classed as a number here, and a JSON key's type is the data's.
+a text column beside a UUID.
 
 ### `Cast` — Type Conversion
 

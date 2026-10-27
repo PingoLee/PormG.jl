@@ -5943,95 +5943,95 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce F time - time int | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Coalesce bool int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
   ("Coalesce bool int literal | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Coalesce bool int literal | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
   ("Greatest int bool | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Greatest int bool | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
   ("Case then true default 0 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Case then true default 0 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
   ("Coalesce bool text | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
   ("Coalesce bool comparison | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | alone", :sqlite) =>
@@ -6451,66 +6451,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
-  ("Coalesce bool int | alone", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int | alone", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int | alone", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int | subquery", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int | subquery", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int | subquery", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | alone", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | alone", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | alone", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | subquery", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | subquery", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool int literal | subquery", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Greatest int bool | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | alone", :sqlite) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | alone", :mysql) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | subquery", :sqlite) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Case then true default 0 | subquery", :mysql) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | alone", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | alone", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | alone", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | subquery", :postgres) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | subquery", :sqlite) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
-  ("Coalesce bool text | subquery", :mysql) =>
-    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

@@ -6449,66 +6449,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce bool int | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int | alone", :postgres, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | alone", :postgres, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool int literal | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Greatest int bool | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "GREATEST(COALESCE(`Tb`.`result`, `Tb`.`boolean_field`), COALESCE(`Tb`.`boolean_field`, `Tb`.`result`)) > ?", params = [("10", "Int64")]),
-  ("Greatest int bool | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "GREATEST(\"Tb\".\"result\", \"Tb\".\"boolean_field\") > \$1", params = [("10", "Int64")]),
-  ("Greatest int bool | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "MAX(COALESCE(\"Tb\".\"result\", \"Tb\".\"boolean_field\"), COALESCE(\"Tb\".\"boolean_field\", \"Tb\".\"result\")) > ?", params = [("10", "Int64")]),
-  ("Greatest int bool | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(COALESCE(`R2`.`result`, `R2`.`boolean_field`), COALESCE(`R2`.`boolean_field`, `R2`.`result`)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Greatest int bool | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(\"R2\".\"result\", \"R2\".\"boolean_field\") as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Greatest int bool | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(COALESCE(\"R2\".\"result\", \"R2\".\"boolean_field\"), COALESCE(\"R2\".\"boolean_field\", \"R2\".\"result\")) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CASE\nWHEN `Tb`.`result` = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"result\" = \$4 THEN \$5::boolean\nELSE \$6::bigint\nEND\n > \$7", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"result\" = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN `R2`.`result` = ? THEN ?\nELSE ?\nEND\n as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"result\" = \$5 THEN \$6::boolean\nELSE \$7::bigint\nEND\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Case then true default 0 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"result\" = ? THEN ?\nELSE ?\nEND\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Coalesce bool text | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool text | alone", :postgres, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool text | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool text | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool text | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
-  ("Coalesce bool text | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool comparison | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool comparison | alone", :mysql, "v__@gt", "bool true") =>

@@ -645,8 +645,15 @@ end
 # as text, so there the explicit spelling, `Coalesce("token", Cast(x, "uuid"))`, is text beside a
 # UUID column; refusing the pair would refuse it on those engines only. They answer the UUID's text,
 # its meaning, and PostgreSQL raises at the server for a text column beside one (the #1087
-# tie-breaker). A boolean and a JSON value have no class here: a boolean beside a number is its own
-# meaning question (#1147), and a JSON key's type is the data's.
+# tie-breaker).
+#
+# #1386 — a boolean and a whole JSON document are classes too. A boolean beside a number is explicit
+# intent, as a sum of booleans is: SQLite and MySQL store the flag as `0`/`1` and answer a number,
+# PostgreSQL has no common type, and the query does not say whether it means the flag or a count.
+# Beside a date, text or a UUID it has no reading on any engine. A JSON document beside another type is
+# the same: SQLite answers the document's text, PostgreSQL fails at the server. A JSON key lookup
+# (`"payload__driver"`) stays unclassified, since its type is the data's: the walk names it `CJSON`,
+# as its field, so `_temporal_mix` skips it by the record of rendered lookups (`_json_key_lookup_operand`).
 #
 # Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
 # and a kind of any other family are let through, and a conflict between two typed operands is refused
@@ -660,6 +667,8 @@ _temporal_mix_class(::CInterval) = :interval
 _temporal_mix_class(::Union{CText,CVarChar}) = :text
 _temporal_mix_class(::Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}) = :number
 _temporal_mix_class(::CUUID) = :uuid
+_temporal_mix_class(::CBool) = :bool
+_temporal_mix_class(::CJSON) = :json
 _temporal_mix_class(::Any) = nothing
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
 
@@ -668,9 +677,10 @@ const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CAS
 _is_mix(a::Symbol, b::Symbol) = a !== b && !(a in (:uuid, :text) && b in (:uuid, :text))
 # #1327 — a declared `output_field` casts the value OUTSIDE the function (#852), so the engine still
 # meets both operands inside it: PostgreSQL raises, MySQL's `GREATEST('10', 9)` compares as strings
-# before the cast. It lifts the #1200 pairs, as it did; a pair with a number or a UUID side (#1321) is
-# refused under one too, since the declaration would not make the engines agree.
-_declaration_lifts(a::Symbol, b::Symbol) = !(:number in (a, b) || :uuid in (a, b))
+# before the cast. It lifts the #1200 pairs, as it did; a pair with a number or a UUID side (#1321), or
+# a boolean or a JSON side (#1386), is refused under one too, since the declaration would not make the
+# engines agree.
+_declaration_lifts(a::Symbol, b::Symbol) = !any(in((a, b)), (:number, :uuid, :bool, :json))
 _declares_mix_type(p::FObject) = get(p.kwargs, "output_field", nothing) isa AbstractString
 _declares_mix_type(::WindowFunction) = false
 
@@ -691,6 +701,8 @@ function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction
   for value in _temporal_mix_values(p)
     class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
     class === nothing && continue
+    # #1386: a key lookup is typed as its JSONField, but its value is the key's, of the data's type.
+    class === :json && _json_key_lookup_operand(value, instruc) && continue
     side = (class, _temporal_mix_label(value), value isa SQLText)
     for seen in sides
       _is_mix(seen[1], class) && !(declared && _declaration_lifts(seen[1], class)) && return (seen, side)

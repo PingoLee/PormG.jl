@@ -27,7 +27,7 @@ julia --project=test/integration test/unit/test_function_literal_operands.jl
 using Test
 using Dates
 using PormG
-using PormG.Models: Model, IDField, FloatField, CharField, DateField
+using PormG.Models: Model, IDField, FloatField, CharField, DateField, BooleanField
 using PormG.QueryBuilder: inspect_query, _is_agg
 using PormG.Functions: Coalesce, Greatest, Least, NullIf, Power, Mod, Replace, Concat, Sum, Value, LPad, RPad
 
@@ -46,7 +46,7 @@ PormG.config["lit_op_sl"] = PormG.Configuration.Settings(connections = LitOpMock
 
 const _LIT_OP_MODELS = map((("lit_op_pg", :postgres), ("lit_op_sl", :sqlite))) do (key, backend)
   m = Model("lit_op_results", resultid = IDField(), points = FloatField(), surname = CharField(),
-            race_date = DateField())
+            race_date = DateField(), finished = BooleanField(null = true))
   m.connect_key = key
   (backend, m)
 end
@@ -65,7 +65,8 @@ end
            ("NullIf", NullIf("points", 0), 0),
            ("Power", Power("points", 2), 2),
            ("Mod", Mod("points", 2), 2),
-           ("a Bool", Coalesce("points", true), true),
+           # Beside a boolean column: a `Bool` beside a number is refused since #1386.
+           ("a Bool", Coalesce("finished", true), true),
            ("Concat's number part", Concat("surname", 7), 7))
   for (backend, Model_) in _LIT_OP_MODELS, (label, expr, literal) in cases
     @testset "$backend — $label" begin
@@ -73,7 +74,8 @@ end
       q.values("resultid", "x" => expr)
       insp = inspect_query(q)
       # The column is still a column…
-      @test occursin("\"Tb\".\"$(label == "Concat's number part" ? "surname" : "points")\"", insp[:sql_text])
+      column = label == "Concat's number part" ? "surname" : label == "a Bool" ? "finished" : "points"
+      @test occursin("\"Tb\".\"$(column)\"", insp[:sql_text])
       # …and the literal is a bound parameter, in text order. On SQLite a two-operand
       # Greatest/Least renders one COALESCE per rotation (#844), so its literal appears — and
       # binds — twice; everywhere else it binds once.

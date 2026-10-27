@@ -147,10 +147,11 @@ unresolvable `ForeignKey`). Catch `DefinitionError` to get both.
 
 | Field | PostgreSQL / SQLite | Key parameters |
 | :--- | :--- | :--- |
-| `IDField()` | `BIGINT` identity / `INTEGER` PK | `generated_always` |
+| `IDField()` | `BIGINT` identity / `INTEGER` PK | `generated = false` (no identity: you supply the key), `generated_always`; `auto_increment` raises `FieldValidationError` |
 | `CharField(max_length)` | `VARCHAR(n)` | `max_length`, `choices`, `default` |
 | `TextField()` | `TEXT` | |
-| `EmailField()` / `URLField()` / `SlugField()` | `VARCHAR` | `max_length`; `SlugField` indexes by default |
+| `EmailField()` | `TEXT` | no `max_length` (it raises): use `CharField(max_length = …)` for a width |
+| `URLField()` / `SlugField()` | `VARCHAR(n)` | `max_length` (200 / 50); `SlugField` indexes by default |
 | `UUIDField()` | `UUID` / `TEXT` | `auto_add = true` generates one |
 | `GenericIPAddressField()` | `inet` / — | **PostgreSQL only** (SQLite: `BackendCapabilityError` at `makemigrations`). One host address, read as a `String`; `protocol` (`"both"`, `"IPv4"`, `"IPv6"`), `unpack_ipv4`; a `/prefix` is refused |
 | `CIDRField()` | `cidr` / — | **PostgreSQL only.** One network, always stored with its prefix; host bits set → `InvalidValueError` |
@@ -163,14 +164,18 @@ unresolvable `ForeignKey`). Catch `DefinitionError` to get both.
 | `DurationField()` | `INTERVAL` | |
 | `JSONField()` | `JSONB` / `TEXT` | `Dict`, `Vector` or a scalar; the JSONB lookups are PostgreSQL-only |
 | `BinaryField()` | `BYTEA` / `BLOB` | `Vector{UInt8}`; `max_length` counts **bytes** |
-| `PasswordField()` | `VARCHAR(128)` | **storage only — PormG does not hash.** Hash in your app (Django `pbkdf2_sha256$…` format) and assign the string; `auto_hash` is accepted for Django compatibility and does nothing |
-| `ImageField()` | `VARCHAR` | stores a path |
+| `PasswordField()` | `TEXT` | **storage only — PormG does not hash.** Hash in your app (Django `pbkdf2_sha256$…` format) and assign the string; `auto_hash` is accepted for Django compatibility and does nothing |
+| `ImageField()` | `TEXT` | stores a path |
 | `ForeignKey(Model)` | `BIGINT` + FK constraint | `on_delete`, `related_name`, `null` |
 | `OneToOneField(Model)` | `BIGINT UNIQUE` + FK | `on_delete` |
 | `ManyToManyField(Model)` | a join table | managed from a row — see [`writing.md`](writing.md) |
 
 **On every field:** `null = false`, `blank = false`, `unique = false`, `default = nothing`,
-`db_index = false`, `db_column = nothing`, `editable = true`.
+`db_index = false`, `db_column = nothing`, `editable = true` — except that `PasswordField` takes no
+`unique`, `db_index` or `default`, `IDField` no `db_default`, and `ManyToManyField` no `null` or
+`db_index`. A keyword a field does not take raises `FieldValidationError` when the model is defined;
+only the ones that cannot change a column (`help_text`, `choices`, `auto_now`, `related_name`, …)
+are warned about and ignored.
 
 **`on_delete`:** `"CASCADE"`, `"RESTRICT"`, `"PROTECT"`, `"SET_NULL"`, `"SET_DEFAULT"`,
 `"DO_NOTHING"`. Deleting a row that a `PROTECT`/`RESTRICT` key still references raises

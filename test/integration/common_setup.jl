@@ -226,6 +226,19 @@ _to_backticks(sql::AbstractString) = replace(sql, r"'(?:[^']|'')*'|\"(?:[^\"]|\"
 end)
 engine_sql(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
     by_engine(conn; postgres = String(sql), sqlite = String(sql), mysql = _to_backticks(sql))
+# - `drop_scratch_tables!(pool, tables...)`: a test's own tables dropped in the order given, child first
+#   (#276), so no engine needs CASCADE or suspended key checks, then checked gone. Not `Dialect.drop_table`:
+#   on MySQL that is three statements meant for one connection, which `fetch` cannot run, and the
+#   `try … catch` around it hid the error, so the tables were left for the next run (#1410). Nothing is
+#   swallowed here: a drop that fails, or a table still there, fails the test.
+function drop_scratch_tables!(pool, tables...)
+    for t in tables
+        PormG.ConnectionPool.fetch(pool, engine_sql("""DROP TABLE IF EXISTS "$(t)" """; conn = pool))
+    end
+    left = [String(t) for t in tables if PormG.Migrations._live_table_exists(pool, String(t))]
+    isempty(left) || error("drop_scratch_tables!: still in the database after the drop: $(join(left, ", "))")
+    return nothing
+end
 # - `engine_quote()`: the character the engine quotes an identifier with, for a `Regex` over rendered SQL
 #   that `engine_sql` cannot write (`Regex("JOIN $(Q)driver$(Q)")`).
 engine_quote(; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =

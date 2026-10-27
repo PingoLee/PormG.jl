@@ -2983,7 +2983,9 @@ if only_on(:postgres, "the built-in ignore prefix is PostgreSQL's (postgres_igno
         scratch.db_config_settings = Dict{String,Any}("ignore_tables" => others)
         models_path = joinpath(folder, scratch.model_file)
         write(models_path, "module models\nimport PormG.Models\n" *
-          "Account_pormg_it818 = Models.Model(\"$(tbl)\"; id = Models.BigIntegerField(primary_key = true), " *
+          # `IDField(generated = false)` is the declaration of a `BIGINT PRIMARY KEY` with no identity;
+          # `BigIntegerField(primary_key = true)` was written here before #1333 refused it.
+          "Account_pormg_it818 = Models.Model(\"$(tbl)\"; id = Models.IDField(generated = false), " *
           "created_at = Models.DateTimeField(auto_now_add = true))\nend\n")
         plan_file = joinpath(folder, "migrations", "pending_migrations.jl")
 

@@ -1146,6 +1146,14 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.column, SQLTypeField) && memo_json_lookup(instruc, memo_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
   end
+  # #1381: a `When` condition on a projection alias — every filter on one takes `_render_alias_predicate`
+  # first, so only a `When` gets here. `alias_key` is set when the alias is projected; its value binds
+  # as the alias's own filter binds it (`_bind_alias_value`, below), and a comparison on an alias over a
+  # key lookup renders as the key lookup does (#1382).
+  alias_key = (alias !== nothing && _projected_source(memo_key(:base, alias), instruc) !== nothing) ?
+              memo_key(:base, alias) : nothing
+  alias_key !== nothing && _alias_projects_json_key(alias_key, instruc) && !_expression_operand(v.values) &&
+    v.operator in _JSON_KEY_COMPARISON_OPERATORS && return _render_json_lookup_comparison(v, column, instruc)
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
   # all get it. #903: a `When` condition on a projection alias renders here too, and has no field —
   # the alias's formatter is what says it projects a network column.
@@ -1357,9 +1365,13 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # a `Date` bound as a `Date` rather than as the text form its equality twin binds. It takes the
       # terminal field from the memo exactly as the joined-path equality arm below does (#474/#576).
       range_field, range_label = _operand_field(v, instruc)
-      formatted = range_field === nothing ? v.values :
-        _guarded_format(range_field.formatter, v.values, v.operator, range_label, range_field.type)
-      placeholders = _bind_predicate_value(instruc, v.operator, formatted)
+      if range_field === nothing && alias_key !== nothing
+        placeholders = _bind_alias_value(v, alias_key, instruc)   # #1381
+      else
+        formatted = range_field === nothing ? v.values :
+          _guarded_format(range_field.formatter, v.values, v.operator, range_label, range_field.type)
+        placeholders = _bind_predicate_value(instruc, v.operator, formatted)
+      end
     elseif haskey(instruc.object.model.fields, v.column.field)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
@@ -1416,19 +1428,15 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-      # #596: this arm resolves no field, so it cannot prove the column holds bytes — and it binds
-      # `v.values` RAW, which would send a payload to `add_parameter!(::AbstractArray)` and expand it
-      # into one marker per byte. Fail closed by passing no field.
-      #
-      # NO TEST REACHES THIS CALL, and that is a statement about the arm, not a gap in coverage:
-      # every spelling we could construct resolves through `model.fields` or the memo first, so the
-      # review's mutation of this line left the whole #596 testset green while mutating either of the
-      # other two call sites failed it loudly. Kept as a fail-safe rather than deleted because the arm
-      # itself is a fallback whose reachability is not pinned by anything — if a future column kind
-      # lands here, the silent expansion is what it would get. Do not "cover" it by reaching in past
-      # the public API; if a real spelling is ever found, that is the test.
+      # #596: this arm resolves no field, so it cannot prove the column holds bytes. Fail closed by
+      # passing no field: a byte payload is refused rather than expanded into one marker per byte.
       _guard_vector_equality(v, nothing, string(v.column.field))
-      placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
+      # #1381: a `When` condition on a projection alias is the spelling that reaches this arm — the
+      # comment here once said no test did, and `When("total__@gte" => 100)` over a `Sum` alias always
+      # had. It bound the value raw: no check of the alias's type, and on MySQL no JSON marker for a
+      # whole document. It binds as the alias's own filter binds it now; anything else stays raw.
+      placeholders = alias_key !== nothing ? _bind_alias_value(v, alias_key, instruc) :
+        add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
       throw(UnknownFieldError("Field \"$(v.column.field)\" not found in model $(instruc.object.model.name)"))

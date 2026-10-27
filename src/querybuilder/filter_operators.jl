@@ -41,6 +41,8 @@ _json_finite(value::AbstractFloat) = isfinite(value) ? value :
 #     (a JSON number stays a number → `5 = 5`, not `5 = '5'`) and comparisons need no cast.
 #   - MySQL reads text, as PostgreSQL does, and compares that text with a bound number as a double,
 #     so `<`/`>` need no cast there (`_json_numeric_operand`).
+# The operators `_render_json_lookup_comparison` renders; it refuses every other one.
+const _JSON_KEY_COMPARISON_OPERATORS = ("ISNULL", "=", "!=", "<>", ">", ">=", "<", "<=")
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   op = v.operator
   # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at

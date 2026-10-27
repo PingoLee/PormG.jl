@@ -360,6 +360,36 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a CHECK Django built with double-quoted names matches the importer's bare declaration (#1368)
+# Django sends `"laps" >= 0` and SQLite keeps the text as sent. The importer now writes `laps >= 0`, since
+# a double-quoted name is a string on MySQL, so the planner compares the two spellings of a portable
+# name as one (`_comparable_sql_text`): the CHECK is adopted, with nothing planned — no rebuild.
+# A quoted name that is not portable (`"Laps"`) and a quoted string literal (`'laps'`) stay as written.
+# Mutation gate: compare `canonical_check_condition` in `_diff_checks` and the plan is a rebuild.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a CHECK Django built with double-quoted names matches the bare declaration (#1368)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "ck_django.sqlite"); pool_size = 1)
+    try
+      sql = PormG.Dialect.create_table(pool, _ck_result())
+      cut = findlast(')', sql)
+      fetch(pool, sql[1:prevind(sql, cut)] *
+                  ",\n  CONSTRAINT \"result_laps_dj\" CHECK (\"laps\" >= 0 AND \"grid\" <= \"laps\")\n" * sql[cut:end])
+      live = only(_ck_live(pool, "result"))
+      @test only(c.sql for c in live.checks if c.name == "result_laps_dj") == "\"laps\" >= 0 AND \"grid\" <= \"laps\""
+      bare = Models.CheckConstraint(condition = "laps >= 0 AND grid <= laps", name = "result_laps_dj")
+      @test _ck_converged(pool, ("result",), _ck_result(bare))
+      # Another condition is still another condition.
+      other = Models.CheckConstraint(condition = "laps >= 1 AND grid <= laps", name = "result_laps_dj")
+      @test _ck_keys(_ck_plan(pool, _ck_live(pool, "result"), _ck_result(other)), :result) == ["Alter table: result"]
+      @test PormG.Migrations._comparable_sql_text("(\"Laps\" >= 0 AND 'laps' <> \"user\")") == "\"Laps\" >= 0 AND 'laps' <> \"user\""
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SQLite: a declared `grid >= 0` is a table CHECK, not PormG's own column CHECK (#742)
 # A `PositiveIntegerField` renders `CHECK ("grid" >= 0)` and the reader turns it into the column fact
 # `NonNegativeCheck`. A declared CheckConstraint with the same condition must not: an `IntegerField`

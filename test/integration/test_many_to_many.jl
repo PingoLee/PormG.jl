@@ -308,6 +308,48 @@ end
     @test length(manager.all().list()) == 2
 end
 
+# What: `remove` with more ids than one statement binds, and on SQLite `add` with more targets than one
+# `INSERT OR IGNORE … VALUES` binds, on each engine's real limit (SQLite 32766, MySQL.jl 4096, PostgreSQL
+# 65535). SQL: `DELETE … WHERE owner = ? AND related IN (?, …)` and the `INSERT OR IGNORE` per group.
+# Why (#1355): each was one statement whatever the count, so the remove raised QueryBuildError on MySQL
+# before it was sent and failed at the driver on SQLite, as did SQLite's add; split under the limit in one
+# transaction, as the bulk writers are, they complete.
+@testset "Many-to-Many: a write past one statement's bind limit is split (#1355)" begin
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+    sponsor_a = M.M2m_sponsor_scratch.objects.create("name" => "LimitA")
+    sponsor_b = M.M2m_sponsor_scratch.objects.create("name" => "LimitB")
+    sponsor_c = M.M2m_sponsor_scratch.objects.create("name" => "LimitC")
+    driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "limit1355")
+    manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
+    limit = PormG.QueryBuilder._backend_parameter_limit(PormG.config[PORMG_DB_FOLDER].connections)
+    @test limit == by_engine(sqlite = 32766, postgres = 65535, mysql = 4096)
+
+    manager.add(sponsor_a, sponsor_b, sponsor_c)
+    # One parameter per id plus the owner's: `limit` ids no sponsor has, and two that are linked.
+    ghosts = Any[10_000_000 + i for i in 1:limit]
+    @test manager.remove(vcat(ghosts, Any[sponsor_a[:id], sponsor_b[:id]])) === nothing
+    @test [row[:name] for row in manager.all().list()] == ["LimitC"]
+
+    # SQLite's add binds two parameters per target: the same target past one statement, which the join
+    # table's unique index makes INSERT OR IGNORE take once — one link row each, read from the table
+    # itself (`all()` is a semi-join, blind to a repeated row). PostgreSQL and MySQL insert one target
+    # per statement, four parameters each, whatever the count, so no add of theirs is split.
+    add_binds_all_targets = by_engine(postgres = false, sqlite = true, mysql = false)
+    if add_binds_all_targets
+        @test manager.add(fill(sponsor_a, fld(limit, 2) + 1)) === nothing
+        @test sort(PormG.QueryBuilder._m2m_current_ids(manager)) == sort(Any[sponsor_a[:id], sponsor_c[:id]])
+        # The split runs in one transaction: a target with no sponsor row, in the second statement, fails
+        # its foreign key, and the first statement's links go with it.
+        manager.remove(sponsor_a)
+        @test_throws PormG.PormGError manager.add(vcat(fill(sponsor_b, fld(limit, 2)), Any[99_999_999]))
+        @test PormG.QueryBuilder._m2m_current_ids(manager) == Any[sponsor_c[:id]]
+    end
+
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+end
+
 @testset "Many-to-Many: empty and no-op mutators" begin
     M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)

@@ -186,8 +186,9 @@ end
 # Synthetic catalog rows for the tables above, as MySQL 8.4 reports them after `migrate`.
 _mm_col(tbl, col, ctype, nullable, dflt, extra, key; comment = "") =
   (tbl = tbl, col = col, ctype = ctype, nullable = nullable, dflt = dflt, extra = extra, ckey = key, comment = comment)
-_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing) =
-  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr)
+_mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = "", expr = missing, index_type = "BTREE") =
+  (tbl = tbl, idx = idx, non_unique = non_unique, col = col, coll = coll, sub_part = sub_part, comment = comment, expr = expr,
+   index_type = index_type)
 
 # What: `_mysql_live_table` over the rows MySQL reports for the DDL above, against `column_spec`.
 # SQL: none.
@@ -195,6 +196,7 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
 # created must compile to the specs its declaration compiles to, or the next `makemigrations` re-plans
 # it. Two MySQL-only facts ride on it: InnoDB's index for a foreign key is named after the constraint
 # and declares nothing, and an inline `UNIQUE` is an index named after its column.
+# A prefix index and a hand-made FULLTEXT or SPATIAL one (#1369) are not read at all, so no plan drops them.
 @testset "#1268: a table PormG created reads back as its declaration" begin
   cols = [_mm_col("result", "resultid", "bigint", "NO", missing, "auto_increment", "PRI"),
           _mm_col("result", "driverid", "bigint", "NO", missing, "", "MUL"),
@@ -238,6 +240,15 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
   @test isempty(dlive.indexes)
   @test sort!([(c.name, c.columns, c.unique, c.descending) for c in dlive.composites]) ==
         [("driver_code_uniq", ["code"], true, [false]), ("driver_f_d_idx", ["forename", "dob"], false, [false, true])]
+  # #1369: a FULLTEXT or SPATIAL index made by hand is not read — not a composite (the next plan would drop
+  # it), and at one column not `db_index` either. MySQL reports no COLLATION on one.
+  ftstats = vcat(dstats, [_mm_stat("driver", "driver_ft", 1, "forename", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_ft", 1, "code", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_ft1", 1, "forename", missing; index_type = "FULLTEXT"),
+                          _mm_stat("driver", "driver_sp", 1, "dob", missing; index_type = "SPATIAL")])
+  ftlive = _MM._mysql_live_table(_mm_my, "driver", dcols, ftstats, Any[], Any[])
+  @test isempty(ftlive.indexes)
+  @test sort!([c.name for c in ftlive.composites]) == ["driver_code_uniq", "driver_f_d_idx"]
   # A CHECK that is not one of PormG's two column shapes is the table's.
   other = _MM._mysql_live_table(_mm_my, "driver", dcols, Any[], Any[],
                                 [(tbl = "driver", name = "driver_chk_1", clause = "(`dob` > _utf8mb4'1950-01-01')")])
@@ -449,6 +460,45 @@ end
   end
   # The same columns without a key or index build.
   @test haskey(_mm_plan(_mm_my, "", "Lap = Models.Model(\"lap\", id = Models.IDField(), note = Models.TextField(), raw = Models.BinaryField(null = true))"), :lap)
+end
+
+# What: a double-quoted name in a CheckConstraint condition, an Index expression or a UniqueConstraint
+# expression, refused on MySQL for the whole models file before the diff, naming the bare spelling.
+# SQL: none.
+# Why: MySQL's session `sql_mode` has no `ANSI_QUOTES`, so `"code" <> ''` is a CHECK comparing the text
+# `'code'` and `LOWER("forename")` an index on a constant; both converge with their own declaration, so
+# nothing would ever report them (#1368). On PostgreSQL and SQLite the same text names the column.
+# `ensure_table!` renders a table outside the plan, so it refuses the same text.
+@testset "#1368: a double-quoted name in SQL text is refused on MySQL, before the plan" begin
+  drv(tail) = "Driver = Models.Model(\"driver\", driverid = Models.IDField(), " *
+              "forename = Models.CharField(max_length = 100), code = Models.CharField(max_length = 8), " *
+              "user = Models.IntegerField(null = true); $(tail))"
+  check = drv(raw"""constraints = [Models.CheckConstraint(condition = "\\"code\\" <> ''", name = "code_set")]""")
+  index = drv(raw"""indexes = [Models.Index(expressions = ("LOWER(\\"forename\\")",), name = "drv_lf_idx")]""")
+  uniq = drv(raw"""constraints = [Models.UniqueConstraint(expressions = ("LOWER(\\"code\\")",), name = "drv_lc_uniq")]""")
+  for (label, src, what) in (("a CHECK", check, "CheckConstraint 'code_set'"),
+                             ("an Index expression", index, "Index 'drv_lf_idx'"),
+                             ("a UniqueConstraint expression", uniq, "UniqueConstraint 'drv_lc_uniq'"))
+    for (when, live) in (("a new table", ""), ("a table already declared so", src))
+      e = _mm_err(() -> _mm_plan(_mm_my, live, src))
+      msg = e isa PormG.InvalidMigrationError ? sprint(showerror, e) : ""
+      @test (label, when, occursin(what, msg) && occursin("On MySQL a double-quoted name is a string literal", msg) &&
+                          occursin("Write the name bare", msg)) == (label, when, true)
+    end
+    # The same declaration names the column on PostgreSQL, and plans.
+    @test (label, _mm_plan(MmMockPostgres(), "", src) isa AbstractDict) == (label, true)
+    # `ensure_table!` renders a table outside the plan, and refuses it too.
+    model = only(values(_mm_schema(src)))[:model]
+    @test (label, _mm_err(() -> _MM._ensure_table_statements(_mm_my, model)) isa PormG.InvalidMigrationError) == (label, true)
+  end
+  # A reserved word has no bare spelling: the refusal says so rather than suggest one.
+  e = _mm_err(() -> _mm_plan(_mm_my, "", drv(raw"""constraints = [Models.CheckConstraint(condition = "\\"user\\" > 0", name = "user_pos")]""")))
+  @test e isa PormG.InvalidMigrationError && occursin("`user` has no spelling that names the column on every engine", sprint(showerror, e))
+  # A double quote inside a string literal is data, and bare names build.
+  @test _MM._refuse_double_quoted_names(
+          _mm_schema(drv(raw"""constraints = [Models.CheckConstraint(condition = "code <> '\\"x\\"'", name = "code_set")]""")), _mm_my) === nothing
+  @test haskey(_mm_plan(_mm_my, "", drv(raw"""indexes = [Models.Index(expressions = ("LOWER(forename)",), name = "drv_lf_idx")]""")), :driver)
+  @test (_MM._double_quote_is_identifier(_mm_my), _MM._double_quote_is_identifier(MmMockPostgres())) == (false, true)
 end
 
 # What: the rows a key added to a table that exists would reject, counted in MySQL's own SQL.

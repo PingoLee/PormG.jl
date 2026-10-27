@@ -78,6 +78,8 @@ using PormG.Functions: Sum, Avg
 # SQL and to fire the backend-capability guards. No DB, no pool.
 struct DocErrMockPostgres <: PormG.PormGPostgres end
 struct DocErrMockSQLite <: PormG.PormGSQLite end
+# #1368: the MySQL guide's double-quoted-name refusal, asked of the planner's own check.
+struct DocErrMockMySQL <: PormG.PormGMySQL end
 # #742 — a PostgreSQL stand-in whose catalog is empty, for the one claim whose plan asks it
 # something (a column rename looks up the old column's constraints) before the error fires.
 struct DocErrCatalogFreePg742 <: PormG.PormGPostgres end
@@ -2965,6 +2967,19 @@ const DOCERR_CASES = [
             PormG.Migrations.dry_run(DocErrMockPostgres(), st)
         end,
     ),
+    # #1368: a double-quoted name in a CheckConstraint condition is a string literal on MySQL, refused
+    # by `makemigrations` for the whole models file before the diff — asked of that check directly.
+    (
+        "mysql.md / models.md — a double-quoted name in a CheckConstraint condition raises InvalidMigrationError on MySQL (#1368)",
+        InvalidMigrationError,
+        () -> begin
+            m = Model("docerr_1368_result"; id = IDField(), laps = IntegerField(),
+                      constraints = [PormG.Models.CheckConstraint(condition = "\"laps\" >= 0", name = "docerr_laps_ck")])
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :docerr_1368_result => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+            PormG.Migrations._refuse_double_quoted_names(schema, DocErrMockMySQL())
+        end,
+    ),
     # #733: the two repair ops that change an existing record. The only case here that needs a
     # database, because the lookup reads the history table; an in-memory SQLite one is enough.
     (
@@ -3334,6 +3349,21 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a pattern lookup on a Value(2.5) alias raises FilterError on SQLite (#1183)",
         FilterError,
         () -> DOCERR_RACE1183_SL.objects.values("raceid", "v" => PormG.Functions.Value(2.5)).filter("v__@startswith" => "2").list(show_query = :dict),
+    ),
+    (
+        "fields.md — a keyword a field does not accept raises FieldValidationError (#1333)",
+        FieldValidationError,
+        () -> PormG.Models.BigIntegerField(primary_key = true),
+    ),
+    (
+        "src/models/fields.jl — ForeignKey docstring: a keyword it does not accept raises FieldValidationError (#1333)",
+        FieldValidationError,
+        () -> ForeignKey("Circuit"; max_length = 10),
+    ),
+    (
+        "fields.md — IDField `auto_increment` is refused with FieldValidationError (#1334)",
+        FieldValidationError,
+        () -> IDField(auto_increment = false),
     ),
 ]
 

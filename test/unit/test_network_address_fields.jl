@@ -198,9 +198,9 @@ const NET28_CIDR_CORPUS = [
     e = try NA.GenericIPAddressField(protocol = "ipv6", unpack_ipv4 = true); nothing catch err; err end
     @test occursin("only use `unpack_ipv4` if `protocol` is set to \"both\"", _plain28(e.msg))
 
-    # `primary_key` is not accepted: warned about and ignored, as for JSONField.
-    pk = @test_logs (:warn, r"Unexpected parameter") match_mode = :any NA.GenericIPAddressField(primary_key = true)
-    @test pk.primary_key == false
+    # `primary_key` is not accepted, and since #1333 it is refused rather than warned about and
+    # ignored: the table would otherwise have no primary key.
+    @test_throws PormG.FieldValidationError NA.GenericIPAddressField(primary_key = true)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

@@ -160,10 +160,19 @@ else
     # network-address fields (+26), 364 until #28 added ArrayField (+13), and 377 until #1021 added
     # SearchVectorField (+13).
     @test length(actual) >= 390
-    # No probe may error — every common keyword must remain accepted (or ignored with a warning) by
-    # every constructor. An ERROR row would mean a keyword stopped being accepted, which breaks the
-    # `Model_to_str` round-trip contract (generated model files reload through this kwargs form).
-    @test all(r -> !startswith(split(r, "|"; limit = 3)[3], "ERROR:"), actual)
+    # No probe of an ACCEPTED keyword may error: an ERROR row there would mean a keyword stopped being
+    # accepted, which breaks the `Model_to_str` round-trip contract (generated model files reload
+    # through this kwargs form). A probe of a keyword the constructor does not take errors since
+    # #1333 — `PasswordField(unique = …)`, `IDField(db_default = …)`, most keywords on a
+    # `ManyToManyField` — unless it is schema-neutral, and the fixture records those rows as errors.
+    probe_key = Dict(label => (isempty(kw) ? nothing : first(keys(kw))) for (label, kw) in FKE_PROBES)
+    for r in actual
+        name, label, line = split(r, "|"; limit = 3)
+        k = probe_key[label]
+        refused = k !== nothing && !(k in FKE_M._accepted_field_kwargs(name)) &&
+                  !(k in FKE_M._SCHEMA_NEUTRAL_FIELD_KWARGS)
+        @test startswith(line, "ERROR:") == refused
+    end
 
     if actual != expected
         # Report only the differing rows — 286 identical lines are noise.
@@ -187,21 +196,23 @@ else
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Unaccepted keywords are warned about and GENUINELY ignored (#260 review finding)
+# Unaccepted keywords: refused, or warned about and GENUINELY ignored (#260, #1333)
 # The pre-#260 preambles never extracted a keyword outside the accepted set, so even a wrongly-typed
-# value slid by with just the "It will be ignored" warning. The first version of `_common_kwargs`
-# read every common keyword from kwargs regardless, which turned that into warn-then-throw — the
-# warning lied. The snapshot testset above cannot see this (it probes valid inputs only), so it is
-# pinned here. Mutation: revert `_take` to a plain `get(kwargs, …)` and this fails.
+# value slid by with just the "It will be ignored" warning. #1333 made every unaccepted keyword an
+# error except the schema-neutral ones, and those must still be ignored outright: a wrongly-typed
+# one reaching a guard would turn the warning into warn-then-throw, a warning that lies. The
+# snapshot testset above cannot see either side (it probes valid inputs only), so both are pinned here.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "unaccepted keywords are warned and ignored (#260)" begin
-    # IntegerField does not accept primary_key: a wrongly-typed value must not reach a guard.
-    f = @test_logs (:warn, r"Unexpected parameter for IntegerField") FKE_M.IntegerField(primary_key = "not-a-bool")
-    @test f.primary_key === false          # the constructor's hardcoded value, untouched
+@testset "unaccepted keywords: refused, or warned and ignored (#260, #1333)" begin
+    # IntegerField does not accept primary_key: refused, whatever the value's type, before any guard.
+    @test_throws PormG.FieldValidationError FKE_M.IntegerField(primary_key = "not-a-bool")
+    @test_throws PormG.FieldValidationError FKE_M.IntegerField(primary_key = true)
 
-    # A correctly-typed unaccepted keyword is equally ignored — not silently honored.
-    f2 = @test_logs (:warn, r"Unexpected parameter for IntegerField") FKE_M.IntegerField(primary_key = true)
-    @test f2.primary_key === false
+    # A schema-neutral keyword IntegerField does not take, with a value of the wrong type: warned,
+    # and the struct is the bare one.
+    f = @test_logs (:warn, r"Unexpected parameter for IntegerField") FKE_M.IntegerField(auto_now = "not-a-bool")
+    @test f.primary_key === false
+    @test f.null === false
 end
 
 end # FKE_REGEN

@@ -4359,6 +4359,8 @@ end
 function _ensure_table_statements(connection::_SQLEngine, model::PormGModel;
                                   indexes::Bool = true)::Vector{String}
   plan = OrderedDict{Symbol, OrderedDict{String, String}}()
+  # #1368: the refusal `get_migration_plan` makes before the diff, for the one table this renders.
+  _refuse_double_quoted_names(model, model_table_name(model), connection)
   _add_new_table(connection, plan, Symbol(model_table_name(model)), model)
   return String[last(entry) for entry in _ordered_entries(values(plan))
                 if indexes || !startswith(first(entry), "Create index")]

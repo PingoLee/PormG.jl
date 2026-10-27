@@ -191,18 +191,24 @@ end
 #
 # ## Defaults are NOT uniform — this is the part that bites
 #
-# Four keywords carry a different default in some constructors, so the helper takes overrides rather
-# than assuming the majority:
+# Four keywords carry a different default in some constructors, so each constructor's row in
+# `_FIELD_KWARG_SPECS` states its overrides rather than assuming the majority:
 #
 #     unique       true in IDField, OneToOneField
 #     db_index     true in IDField, OneToOneField, SlugField, ForeignKey
-#     editable     true in CharField, PasswordField, FileField, UUIDField, URLField, SlugField, JSONField
-#     primary_key  true in IDField                 (`nothing` = the constructor does not accept it)
+#     editable     true in CharField, PasswordField, FileField, UUIDField, URLField, SlugField, JSONField,
+#                  GenericIPAddressField, CIDRField, ArrayField
+#     primary_key  true in IDField                 (absent = the constructor does not accept it)
 #
-# Passing them explicitly makes each deviation visible at the call site, where previously it hid
-# inside a `get(kwargs, …)` line identical to its neighbours. `test_field_kwargs_equivalence.jl`
-# pins every constructor's resulting struct against a frozen snapshot, so a flipped default fails
-# loudly instead of silently.
+# Stating them in the row makes each deviation visible, where previously it hid inside a
+# `get(kwargs, …)` line identical to its neighbours. `test_field_kwargs_equivalence.jl` pins every
+# constructor's resulting struct against a frozen snapshot, so a flipped default fails loudly instead
+# of silently.
+#
+# The rows are a table rather than keyword arguments at each call site (#1333) so the accepted set
+# can be asked for without building a field: the Django importer drops the options a PormG
+# constructor does not take before it calls it (`_accepted_field_kwargs`), since the constructor now
+# refuses them.
 #
 # ## Contract: accepted keyword NAMES are frozen
 #
@@ -210,13 +216,22 @@ end
 # at `Models.jl`'s `Model(name; fields...)`), so this helper may reorganize validation but must never
 # rename, add or drop an accepted keyword.
 #
-# #516 is the one deliberate exception, and it is what the contract is FOR. `on_update`, `deferrable`
+# #516 was the first deliberate exception, and it is what the contract is FOR. `on_update`, `deferrable`
 # and `initially_deferred` were dropped from `ForeignKey`/`OneToOneField` — and because generated
-# files reload through this form, dropping them into the `@warn "Unexpected parameter"` arm below
+# files reload through this form, dropping them into the warn-and-ignore arm that existed then
 # would have loaded an old generated file as a quietly different model (the #501 silent-drop shape).
-# So the names stay recognized here for the sole purpose of REFUSING them, the way #408 retired
-# `AutoField`. `_RETIRED_FK_KWARGS` is that refusal; deleting an accepted keyword without one is
-# still forbidden.
+# So the names stay recognized here for the sole purpose of REFUSING them with their own reason, the
+# way #408 retired `AutoField`. `_RETIRED_FK_KWARGS` is that refusal. #1334 is the second:
+# `IDField`'s `auto_increment`, refused by `_reject_retired_idfield_kwargs`. Deleting an accepted
+# keyword without such a refusal is still forbidden.
+#
+# ## A keyword a constructor does not accept is refused (#1333)
+#
+# It used to be warned about and dropped, and a dropped keyword can be a schema the user declared and
+# did not get: `BigIntegerField(primary_key = true)` built a table with no primary key. Now it raises
+# `FieldValidationError`, typos included — nobody can tell that `nul = true` was not meant to change
+# the column. `_SCHEMA_NEUTRAL_FIELD_KWARGS` is the one exception, keywords that cannot reach the
+# DDL on any field; they keep the warning.
 #
 # ## Validation order (deliberate)
 #
@@ -225,11 +240,11 @@ end
 # constructor interleaved these ad hoc, so when a call has SEVERAL invalid keywords, the one
 # reported first may differ from before. The raised type is `FieldValidationError` either way.
 #
-# `bools` declares the constructor's own Boolean keywords with their defaults — they get the same
-# extraction and guard treatment. `extra` lists keywords the caller validates itself (`max_length`,
-# `choices`, `on_delete`, …), which are accepted but passed through untouched. `exclude` drops a
-# common keyword a constructor genuinely does not take (`PasswordField` has no `unique`, `db_index`
-# or `default`).
+# In a row, `bools` declares the constructor's own Boolean keywords with their defaults — they get
+# the same extraction and guard treatment. `extra` lists keywords the caller validates itself
+# (`max_length`, `choices`, `on_delete`, …), which are accepted but passed through untouched.
+# `exclude` drops a common keyword a constructor genuinely does not take (`PasswordField` has no
+# `unique`, `db_index` or `default`).
 const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default,
                               :db_default, :editable)
 
@@ -434,10 +449,9 @@ const _RETIRED_FK_KWARGS = (
       "of what is declared, and SQLite renders no deferrability clause at all",
 )
 
-# Refuse a retired keyword instead of dropping it into the `@warn "Unexpected parameter"` arm — see
-# the frozen-names contract above for why silence is the wrong failure here. Scoped to the two
-# constructors that accepted them, so `CharField(deferrable = true)` keeps its old "unexpected
-# parameter" warning rather than gaining an error this issue never argued for.
+# Refuse a retired keyword with the reason it was retired — see the frozen-names contract above for
+# why silence is the wrong failure here. Scoped to the two constructors that accepted them;
+# `CharField(deferrable = true)` is refused too, but as a keyword `CharField` never took (#1333).
 function _reject_retired_fk_kwargs(field_type::AbstractString, kwargs)
   field_type in ("ForeignKey", "OneToOneField") || return nothing
   # Cheap early-out FIRST. This runs on every `ForeignKey`/`OneToOneField` construction and the
@@ -471,26 +485,157 @@ function _reject_retired_fk_kwargs(field_type::AbstractString, kwargs)
     "`PormG.upgrade_guide`."))
 end
 
-function _common_kwargs(field_type::AbstractString, kwargs;
-                        bools::NamedTuple = NamedTuple(),
-                        extra::Tuple = (),
-                        exclude::Tuple = (),
-                        unique::Bool = false,
-                        db_index::Bool = false,
-                        editable::Bool = false,
-                        primary_key::Union{Bool,Nothing} = nothing)
+# Each constructor's keyword row (see "Defaults are NOT uniform" above), keyed by its name. A
+# NamedTuple rather than a Dict so a constructor's `Val(:Name)` lookup infers its row's concrete type
+# and `_common_kwargs` returns a concrete NamedTuple, as it did with keyword arguments at each call
+# site. Keys a row may carry:
+# `primary_key` (its default; absent = not accepted), `unique`, `db_index`, `editable` (defaults that
+# differ from `false`), `bools`, `extra`, `exclude`. `ManyToManyField` is not here: it builds no
+# column and validates its own keywords (`_M2M_KWARGS`).
+const _FIELD_KWARG_SPECS = (
+  IDField = (primary_key = true, unique = true, db_index = true,
+    # `db_default` is excluded, and it is FORCED rather than chosen (#496). `sIDField` renders
+    # `GENERATED … AS IDENTITY` on PostgreSQL (`Dialect.field_to_column`), and PostgreSQL rejects
+    # a column that is both an identity column and carries a `DEFAULT`. Accepting the keyword
+    # here would make invalid DDL *declarable*, which is the one outcome #496's design forbids —
+    # so `sIDField` has no slot either, and the two agree by construction. The schema readers
+    # never populate one for this arm for the same reason (`_integer_key_arm`), and
+    # `Migrations.check` keeps its matching carve-out.
+    exclude = (:db_default,),
+    bools = (generated = true, generated_always = false)),
+  ForeignKey = (primary_key = false, db_index = true, bools = (db_constraint = true,),
+    extra = (:pk_field, :on_delete, :how, :related_name)),
+  OneToOneField = (primary_key = false, unique = true, db_index = true, bools = (db_constraint = true,),
+    extra = (:pk_field, :on_delete, :how, :related_name)),
+  CharField = (primary_key = false, editable = true, extra = (:max_length, :choices)),
+  IntegerField = (;),
+  PositiveSmallIntegerField = (;),
+  PositiveIntegerField = (;),
+  BigIntegerField = (;),
+  BooleanField = (;),
+  DateField = (bools = (auto_now = false, auto_now_add = false),),
+  DateTimeField = (bools = (auto_now = false, auto_now_add = false), extra = (:type,)),
+  DecimalField = (primary_key = false, extra = (:max_digits, :decimal_places)),
+  EmailField = (;),
+  PasswordField = (editable = true, exclude = (:unique, :db_index, :default, :db_default),
+    extra = (:max_length,), bools = (auto_hash = true,)),
+  FloatField = (primary_key = false,),
+  ImageField = (;),
+  FileField = (editable = true, extra = (:upload_to, :max_length)),
+  TextField = (;),
+  TimeField = (;),
+  BinaryField = (extra = (:max_length,),),
+  DurationField = (;),
+  UUIDField = (primary_key = false, editable = true, bools = (auto_add = false,)),
+  GenericIPAddressField = (editable = true, bools = (unpack_ipv4 = false,), extra = (:protocol,)),
+  CIDRField = (editable = true,),
+  SearchVectorField = (extra = (:generated_from, :config, :weights),),
+  URLField = (editable = true, extra = (:max_length,)),
+  SlugField = (db_index = true, editable = true, extra = (:max_length,)),
+  JSONField = (editable = true,),
+  ArrayField = (editable = true, extra = (:size,)),
+)
+
+const _M2M_KWARGS = (:verbose_name, :through, :related_name, :db_table, :source_field, :target_field)
+
+"""
+    _accepted_field_kwargs(field_type) -> Set{Symbol}
+
+The keywords the `field_type` constructor accepts (#1333), read from its `_FIELD_KWARG_SPECS` row
+(or `_M2M_KWARGS`) without building a field. Raises for a name that is not a field type.
+"""
+function _accepted_field_kwargs(field_type::AbstractString)::Set{Symbol}
+  field_type == "ManyToManyField" && return Set{Symbol}(_M2M_KWARGS)
+  spec = getfield(_FIELD_KWARG_SPECS, Symbol(field_type))
+  exclude = get(spec, :exclude, ())
   accepted = Set{Symbol}(k for k in _COMMON_FIELD_KWARGS if !(k in exclude))
-  primary_key === nothing || push!(accepted, :primary_key)
-  for k in keys(bools); push!(accepted, k); end
-  for k in extra;        push!(accepted, k); end
+  haskey(spec, :primary_key) && push!(accepted, :primary_key)
+  for k in keys(get(spec, :bools, NamedTuple())); push!(accepted, k); end
+  for k in get(spec, :extra, ());                  push!(accepted, k); end
+  return accepted
+end
 
-  _reject_retired_fk_kwargs(field_type, kwargs)
+# The keywords that may still be passed to a constructor that does not take them, with a warning
+# rather than an error (#1333): none of them can reach the DDL of any field, so ignoring one leaves
+# the table the user declared.
+#
+#   * `help_text` — Django's form label; no PormG field takes it.
+#   * `verbose_name`, `blank`, `editable`, `choices`, `related_name`, `how` — model-layer only
+#     (`Migrations.NON_DB_ATTRS`); a `ManyToManyField` takes none but `verbose_name`/`related_name`.
+#   * `auto_now`, `auto_now_add`, `auto_add`, `auto_hash` — PormG computes the value in Julia on
+#     write; none is a column default (`NON_DB_ATTRS`, #325, #334).
+#   * `upload_to` — `FileField`'s storage path, never stored on the struct.
+#   * `unpack_ipv4`, `protocol` — `GenericIPAddressField`'s write-time validation (`NON_DB_ATTRS`).
+#   * `size` — `ArrayField`'s bound, checked on write; PostgreSQL does not keep it (`NON_DB_ATTRS`).
+#
+# `db_index` is in `NON_DB_ATTRS` and is NOT here: it creates an index. Neither are `ManyToManyField`'s
+# `through`, `db_table`, `source_field` and `target_field`: they name the join table.
+# `test_field_unaccepted_kwargs.jl` fails when an entry here is one `column_spec` reads.
+const _SCHEMA_NEUTRAL_FIELD_KWARGS = (:help_text, :verbose_name, :blank, :editable, :choices,
+                                      :related_name, :how, :auto_now, :auto_now_add, :auto_add,
+                                      :auto_hash, :upload_to, :unpack_ipv4, :protocol, :size)
 
-  for (k, v) in kwargs
-    if !(k in accepted)
-      @warn "Unexpected parameter for $field_type. It will be ignored." field=field_type param=k value=v
+# #1333: refuse the keywords `field_type` does not accept, ALL of them in one message, and warn about
+# the schema-neutral ones. Never names a value (#971): a `default` can be anything.
+function _refuse_unaccepted_kwargs(field_type::AbstractString, kwargs, accepted)
+  refused = Symbol[]
+  for (k, _) in kwargs
+    k in accepted && continue
+    if k in _SCHEMA_NEUTRAL_FIELD_KWARGS
+      @warn "Unexpected parameter for $field_type. It will be ignored: it does not change the schema." field=field_type param=k
+    else
+      push!(refused, k)
     end
   end
+  isempty(refused) && return nothing
+  one = length(refused) == 1
+  names = join(("`$k`" for k in refused), ", ", " and ")
+  msg = "$field_type does not accept $names. $(one ? "It was" : "They were") ignored with a warning " *
+        "before (#1333), and a dropped keyword can be a schema the table then does not have."
+  if :primary_key in refused
+    msg *= " A $field_type column cannot be a primary key: for an integer key the caller supplies, " *
+           "declare `IDField(generated = false)`; for a text key, `CharField(primary_key = true, " *
+           "max_length = …)` or `UUIDField(primary_key = true)`."
+  end
+  others = filter(!=(:primary_key), refused)
+  if !isempty(others)
+    msg *= " Remove $(length(others) == 1 ? "it" : "them"), correct a misspelling, or use a field type that takes " *
+           "$(length(others) == 1 ? "it" : "them")."
+  end
+  msg *= " $field_type accepts: " * join(("`$k`" for k in sort!(collect(accepted))), ", ") * "."
+  throw(_fielderr(msg))
+end
+
+# #1334: `IDField` accepted `auto_increment`, stored it, and no DDL path read it. On PostgreSQL the
+# identity follows `generated`, and SQLite and MySQL render AUTOINCREMENT/AUTO_INCREMENT on every
+# `IDField` key, so `IDField(auto_increment = false)` read as "a key the database does not generate"
+# and still rendered `GENERATED BY DEFAULT AS IDENTITY`. Refused rather than mapped onto `generated`
+# so one keyword controls identity. Like #516, the name stays recognized to give its own reason: a
+# generated models file can carry it (inspectdb wrote `auto_increment=false` for some SQLite keys).
+function _reject_retired_idfield_kwargs(field_type::AbstractString, kwargs)
+  (field_type == "IDField" && :auto_increment in keys(kwargs)) || return nothing
+  throw(_fielderr(
+    "IDField: `auto_increment` was removed in #1334 — it was stored and never rendered. On " *
+    "PostgreSQL the identity follows `generated`, and SQLite and MySQL auto-increment every IDField " *
+    "key, so the keyword changed no column on any engine. For an integer key the caller supplies, " *
+    "declare `IDField(generated = false)`: PostgreSQL then renders no identity. `auto_increment = " *
+    "true` was the default: delete it. If it appears in a GENERATED models file, re-run " *
+    "`generate_models_from_db`, or delete the keyword by hand. See `PormG.upgrade_guide`."))
+end
+
+function _common_kwargs(::Val{T}, kwargs) where {T}
+  field_type = String(T)
+  spec = getfield(_FIELD_KWARG_SPECS, T)
+  bools = get(spec, :bools, NamedTuple())
+  unique = get(spec, :unique, false)
+  db_index = get(spec, :db_index, false)
+  editable = get(spec, :editable, false)
+  primary_key = get(spec, :primary_key, nothing)
+  accepted = _accepted_field_kwargs(field_type)
+
+  _reject_retired_fk_kwargs(field_type, kwargs)
+  _reject_retired_idfield_kwargs(field_type, kwargs)
+  _refuse_unaccepted_kwargs(field_type, kwargs, accepted)
 
   _bool(name::Symbol, value) = value isa Bool ? value :
     throw(_fielderr("$field_type: '$name' must be a Boolean, got $(typeof(value))"))
@@ -502,11 +647,11 @@ function _common_kwargs(field_type::AbstractString, kwargs;
     value isa AbstractString ? String(value) :
     throw(_fielderr("$field_type: '$name' must be a String or nothing, got $(typeof(value))"))
 
-  # Read a keyword from kwargs ONLY if this constructor accepts it. An unaccepted keyword was
-  # warned about above and must be GENUINELY ignored — the pre-#260 preambles never extracted it,
-  # so even a wrongly-typed value slid by with just the warning. Consulting kwargs here would turn
-  # "warn and ignore" into "warn then throw", making the warning a lie
-  # (test_field_kwargs_equivalence.jl pins this).
+  # Read a keyword from kwargs ONLY if this constructor accepts it. An unaccepted keyword that got
+  # past the refusal above is a schema-neutral one, warned about there, and must be GENUINELY
+  # ignored: consulting kwargs here would turn "warn and ignore" into "warn then throw", making the
+  # warning a lie (test_field_kwargs_equivalence.jl pins this). No row excludes a schema-neutral
+  # common keyword today, so this is the guard for the row that one day does.
   _take(key::Symbol, default) = key in accepted ? get(kwargs, key, default) : default
 
   # #496. Extracted HERE rather than by each constructor the way `:default` is, because unlike
@@ -552,6 +697,8 @@ end
 struct sIDField <: PormGField
   verbose_name::Union{String, Nothing}
   primary_key::Bool
+  # Always `true` since #1334: no keyword sets it. The write paths read it as "the key is an
+  # IDField" (`_is_auto_generated_bulk_primary_key`); no DDL path reads it.
   auto_increment::Bool
   unique::Bool
   blank::Bool
@@ -569,80 +716,70 @@ end
 """
     IDField(; kwargs...)
 
-A field type for auto-incrementing integer primary keys, equivalent to PostgreSQL's BIGSERIAL or GENERATED AS IDENTITY columns.
+A 64-bit integer primary key, generated by the database by default.
 
-The `IDField` is typically used as the primary key for models and automatically generates unique integer values for each record. It maps to a PostgreSQL BIGINT column with auto-increment capabilities.
+`generated` is the keyword that controls identity. It decides the PostgreSQL column:
+`GENERATED BY DEFAULT AS IDENTITY` (the default), `GENERATED ALWAYS AS IDENTITY` with
+`generated_always = true`, or no identity at all with `generated = false`, for a key the caller
+supplies (a source system's id). SQLite and MySQL auto-increment every `IDField` key whatever
+`generated` says (`INTEGER PRIMARY KEY AUTOINCREMENT`, `AUTO_INCREMENT`).
 
 # Keyword Arguments
 - `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
 - `primary_key::Bool = true`: Whether this field is the primary key for the table
-- `auto_increment::Bool = true`: Whether the field should auto-increment (generate values automatically)
 - `unique::Bool = true`: Whether values in this field must be unique across all records
 - `blank::Bool = false`: Whether the field can be left blank in forms (not applicable for ID fields)
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field
-- `default::Union{Int64, Nothing} = nothing`: Default value for the field (rarely used with auto-increment)
+- `default::Union{Int64, Nothing} = nothing`: Default value for the field (rarely used with a generated key)
 - `editable::Bool = false`: Whether the field should be editable in forms (typically false for ID fields)
-- `generated::Bool = true`: Whether to use PostgreSQL's GENERATED AS IDENTITY feature
-- `generated_always::Bool = false`: Whether to use GENERATED ALWAYS AS IDENTITY (stricter than regular GENERATED)
+- `generated::Bool = true`: Whether PostgreSQL generates the key (`GENERATED … AS IDENTITY`).
+  `false` declares a key the caller supplies
+- `generated_always::Bool = false`: `GENERATED ALWAYS AS IDENTITY` on PostgreSQL, which refuses an
+  explicit key value; a no-op on SQLite and MySQL
+
+`auto_increment` is refused (#1334). It was stored and never rendered on any engine; use
+`generated = false` for a key the database does not generate on PostgreSQL.
 
 # Database Mapping
-- **PostgreSQL Type**: BIGINT with GENERATED AS IDENTITY or GENERATED ALWAYS AS IDENTITY
-- **Auto-increment**: Supported through PostgreSQL's identity columns
-- **Index**: Automatically indexed as primary key
+
+| Declaration | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|
+| `IDField()` | `bigint … GENERATED BY DEFAULT AS IDENTITY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | `BIGINT … AUTO_INCREMENT PRIMARY KEY` |
+| `IDField(generated_always = true)` | `bigint … GENERATED ALWAYS AS IDENTITY` | same as `IDField()` | same as `IDField()` |
+| `IDField(generated = false)` | `bigint PRIMARY KEY UNIQUE NOT NULL` | same as `IDField()` | same as `IDField()` |
 
 # Examples
 
-Basic usage (most common):
 ```julia
-User = Models.Model(
-    id::PormGField = IDField()
-    name::PormGField = CharField(max_length=100)
-    email::PormGField = EmailField()
+Driver = Models.Model(
+  driverid = Models.IDField(),
+  surname = Models.CharField(max_length = 255)
+)
+
+# A key the caller supplies, e.g. copied from another system
+Circuit_source = Models.Model("circuit_source",
+  circuitid = Models.IDField(generated = false),
+  name = Models.CharField(max_length = 255)
 )
 ```
-
-Using GENERATED ALWAYS (stricter identity):
-```julia
-Order = Models.Model(
-    id::PormGField = IDField(generated_always=true)
-    customer_id::PormGField = ForeignKey("Customer")
-    order_date::PormGField = DateTimeField()
-)
-```
-
-# Notes
-- The `IDField` is designed to be the primary key and should typically be the first field in your model
-- Values are automatically generated by the database, so you don't need to provide them when creating records
-- The field uses BIGINT type to support large ranges of ID values
-- When `generated_always=true`, the database will reject any attempts to manually insert ID values
-- This field type is PostgreSQL-specific and optimized for PormG's PostgreSQL backend
 
 # Validation
 - All boolean parameters are validated to ensure type safety
 - The `verbose_name` must be a String or nothing
 - The `default` value, if provided, must be convertible to Int64
-- Invalid parameters will trigger warnings but won't cause errors (they'll be ignored)
+- A keyword `IDField` does not accept raises `FieldValidationError` (#1333), except the
+  schema-neutral ones listed under *Keywords a field does not accept* in the fields guide
 """
 function IDField(; kwargs...)
-  (; verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, editable,
+  (; verbose_name, primary_key, unique, blank, null, db_index, db_column, editable,
      generated, generated_always) =
-    _common_kwargs("IDField", kwargs;
-      primary_key = true, unique = true, db_index = true,
-      # `db_default` is excluded, and it is FORCED rather than chosen (#496). `sIDField` renders
-      # `GENERATED … AS IDENTITY` on PostgreSQL (`Dialect.field_to_column`), and PostgreSQL rejects
-      # a column that is both an identity column and carries a `DEFAULT`. Accepting the keyword
-      # here would make invalid DDL *declarable*, which is the one outcome #496's design forbids —
-      # so `sIDField` has no slot either, and the two agree by construction. The schema readers
-      # never populate one for this arm for the same reason (`_integer_key_arm`), and
-      # `Migrations.check` keeps its matching carve-out.
-      exclude = (:db_default,),
-      bools = (auto_increment = true, generated = true, generated_always = false))
+    _common_kwargs(Val(:IDField), kwargs)
 
   default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IDField", format2int64)
 
   return sIDField(
-    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default,
+    verbose_name, primary_key, true, unique, blank, null, db_index, db_column, default,
     editable, "BIGINT", format_number_sql, generated, generated_always
   )
 end
@@ -794,8 +931,10 @@ Message = Models.Model(
 - The `to` parameter must be a valid model name or PormGModel instance
 - All boolean parameters are validated for type safety
 - The `on_delete` parameter is validated against allowed values
-- Unrecognized parameters trigger a warning and are ignored — except `on_update`, `deferrable` and
-  `initially_deferred`, retired in #516, which raise `FieldValidationError` (see the upgrade log)
+- A keyword this field does not accept raises `FieldValidationError` (#1333); `on_update`,
+  `deferrable` and `initially_deferred`, retired in #516, name their own reason. Only the
+  schema-neutral keywords listed under *Keywords a field does not accept* in the fields guide
+  are warned about and ignored
 
 # Notes
 - The field stores the primary key value of the referenced object
@@ -809,9 +948,7 @@ Message = Models.Model(
 """
 function ForeignKey(to::Union{AbstractString, PormGModel}; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint, db_default) =
-    _common_kwargs("ForeignKey", kwargs; primary_key = false, db_index = true,
-      bools = (db_constraint = true,),
-      extra = (:pk_field, :on_delete, :how, :related_name))
+    _common_kwargs(Val(:ForeignKey), kwargs)
 
   default = get(kwargs, :default, nothing)
   pk_field = get(kwargs, :pk_field, nothing)
@@ -947,15 +1084,7 @@ has two pointing at the same model, as on a self-relation. A `through` model who
 map to differently-named columns needs no pin: `db_column` is resolved on its own.
 """
 function ManyToManyField(to::Union{AbstractString, PormGModel}; kwargs...)
-  accepted = Set([
-    :verbose_name, :through, :related_name, :db_table, :source_field, :target_field
-  ])
-
-  for (k, v) in kwargs
-    if !(k in accepted)
-      @warn "Unexpected parameter for ManyToManyField. It will be ignored." field="ManyToManyField" param=k value=v
-    end
-  end
+  _refuse_unaccepted_kwargs("ManyToManyField", kwargs, _accepted_field_kwargs("ManyToManyField"))
 
   verbose_name = get(kwargs, :verbose_name, nothing)
   through = get(kwargs, :through, nothing)
@@ -1170,8 +1299,10 @@ changed: an `ALTER` that re-rendered the column unchanged, and a full table rebu
 - All boolean parameters are validated for type safety
 - The `on_delete` parameter is validated against allowed values
 - Uniqueness is automatically enforced at the database level
-- Unrecognized parameters trigger a warning and are ignored — except `on_update`, `deferrable` and
-  `initially_deferred`, retired in #516, which raise `FieldValidationError` (see the upgrade log)
+- A keyword this field does not accept raises `FieldValidationError` (#1333); `on_update`,
+  `deferrable` and `initially_deferred`, retired in #516, name their own reason. Only the
+  schema-neutral keywords listed under *Keywords a field does not accept* in the fields guide
+  are warned about and ignored
 
 # Notes
 - Deferrability is not configurable (#516): PostgreSQL emits every foreign-key constraint
@@ -1184,9 +1315,7 @@ changed: an `ALTER` that re-rendered the column unchanged, and a full table rebu
 """
 function OneToOneField(to::Union{AbstractString, PormGModel}; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint, db_default) =
-    _common_kwargs("OneToOneField", kwargs; primary_key = false, unique = true, db_index = true,
-      bools = (db_constraint = true,),
-      extra = (:pk_field, :on_delete, :how, :related_name))
+    _common_kwargs(Val(:OneToOneField), kwargs)
 
   default = get(kwargs, :default, nothing)
   pk_field = get(kwargs, :pk_field, nothing)
@@ -1503,7 +1632,7 @@ Task = Models.Model(
 """
 function CharField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
-    _common_kwargs("CharField", kwargs; primary_key = false, editable = true, extra = (:max_length, :choices))
+    _common_kwargs(Val(:CharField), kwargs)
 
   max_length = get(kwargs, :max_length, 250)
   default = get(kwargs, :default, nothing)
@@ -1630,7 +1759,7 @@ Review = Models.Model(
 """
 function IntegerField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("IntegerField", kwargs)
+    _common_kwargs(Val(:IntegerField), kwargs)
 
   default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IntegerField", format2int64)
 
@@ -1700,7 +1829,7 @@ Standing = Models.Model(
 """
 function PositiveSmallIntegerField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("PositiveSmallIntegerField", kwargs)
+    _common_kwargs(Val(:PositiveSmallIntegerField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -1785,7 +1914,7 @@ Lap_times = Models.Model(
 """
 function PositiveIntegerField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("PositiveIntegerField", kwargs)
+    _common_kwargs(Val(:PositiveIntegerField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -1898,7 +2027,7 @@ SocialMedia = Models.Model(
 """
 function BigIntegerField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("BigIntegerField", kwargs)
+    _common_kwargs(Val(:BigIntegerField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -1976,7 +2105,7 @@ The field handles various input formats:
 """
 function BooleanField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("BooleanField", kwargs)
+    _common_kwargs(Val(:BooleanField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2098,7 +2227,7 @@ these raised a raw `MethodError` until the `default=` converter stopped being th
 """
 function DateField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add, db_default) =
-    _common_kwargs("DateField", kwargs; bools = (auto_now = false, auto_now_add = false))
+    _common_kwargs(Val(:DateField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2185,7 +2314,7 @@ deadline = DateTimeField(null=true, blank=true)```
 """
 function DateTimeField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add, db_default) =
-    _common_kwargs("DateTimeField", kwargs; bools = (auto_now = false, auto_now_add = false), extra = (:type,))
+    _common_kwargs(Val(:DateTimeField), kwargs)
 
   default = get(kwargs, :default, nothing)
   #TIMESTAMPTZ
@@ -2388,7 +2517,7 @@ discount = DecimalField(
 """
 function DecimalField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
-    _common_kwargs("DecimalField", kwargs; primary_key = false, extra = (:max_digits, :decimal_places))
+    _common_kwargs(Val(:DecimalField), kwargs)
 
   default = get(kwargs, :default, nothing)
   max_digits = get(kwargs, :max_digits, 10)
@@ -2481,7 +2610,7 @@ primary_email = EmailField(
 """
 function EmailField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("EmailField", kwargs)
+    _common_kwargs(Val(:EmailField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2587,7 +2716,7 @@ Users can continue to log in without any password reset.
 """
 function PasswordField(; kwargs...)
   (; verbose_name, blank, null, db_column, editable, auto_hash, db_default) =
-    _common_kwargs("PasswordField", kwargs; editable = true, exclude = (:unique, :db_index, :default, :db_default), extra = (:max_length,), bools = (auto_hash = true,))
+    _common_kwargs(Val(:PasswordField), kwargs)
 
   max_length = get(kwargs, :max_length, 128)
 
@@ -2656,7 +2785,7 @@ weight = FloatField(null=true)
 """
 function FloatField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
-    _common_kwargs("FloatField", kwargs; primary_key = false)
+    _common_kwargs(Val(:FloatField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2738,7 +2867,7 @@ banner = ImageField(
 """
 function ImageField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("ImageField", kwargs)
+    _common_kwargs(Val(:ImageField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2768,7 +2897,7 @@ Accepted kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`, `default
 """
 function FileField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("FileField", kwargs; editable = true, extra = (:upload_to, :max_length))
+    _common_kwargs(Val(:FileField), kwargs)
 
   default = get(kwargs, :default, nothing)
   default = _default_string("FileField", default)    # #612
@@ -2843,7 +2972,7 @@ template = TextField(
 """
 function TextField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("TextField", kwargs)
+    _common_kwargs(Val(:TextField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -2904,7 +3033,7 @@ See also [`DateField`](@ref), [`DateTimeField`](@ref), [`DurationField`](@ref).
 """
 function TimeField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("TimeField", kwargs)
+    _common_kwargs(Val(:TimeField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -3012,7 +3141,7 @@ See also [`FileField`](@ref), [`TextField`](@ref), [`CharField`](@ref).
 """
 function BinaryField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("BinaryField", kwargs; extra = (:max_length,))
+    _common_kwargs(Val(:BinaryField), kwargs)
 
   default = get(kwargs, :default, nothing)
   max_length = get(kwargs, :max_length, nothing)
@@ -3105,7 +3234,7 @@ See also [`TimeField`](@ref), [`DateTimeField`](@ref).
 """
 function DurationField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("DurationField", kwargs)
+    _common_kwargs(Val(:DurationField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -3196,7 +3325,7 @@ Session = Models.Model(
 """
 function UUIDField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_add, db_default) =
-    _common_kwargs("UUIDField", kwargs; primary_key = false, editable = true, bools = (auto_add = false,))
+    _common_kwargs(Val(:UUIDField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -3331,8 +3460,7 @@ See also [`CIDRField`](@ref).
 """
 function GenericIPAddressField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, unpack_ipv4, db_default) =
-    _common_kwargs("GenericIPAddressField", kwargs; editable = true, bools = (unpack_ipv4 = false,),
-                   extra = (:protocol,))
+    _common_kwargs(Val(:GenericIPAddressField), kwargs)
 
   protocol = _ip_protocol_kwarg(get(kwargs, :protocol, "both"))
   # Django's own rule and wording: unpacking turns an IPv6 value into an IPv4 one, so it only means
@@ -3416,7 +3544,7 @@ See also [`GenericIPAddressField`](@ref).
 """
 function CIDRField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("CIDRField", kwargs; editable = true)
+    _common_kwargs(Val(:CIDRField), kwargs)
 
   default = _network_default("CIDRField", get(kwargs, :default, nothing), format_cidr_sql)
 
@@ -3560,7 +3688,7 @@ See also [`search_vector_expression`](@ref), which indexes a document computed a
 """
 function SearchVectorField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("SearchVectorField", kwargs; editable = false, extra = (:generated_from, :config, :weights))
+    _common_kwargs(Val(:SearchVectorField), kwargs)
   generated_from, config, weights = _generated_search_vector_kwargs(
     get(kwargs, :generated_from, nothing), get(kwargs, :config, nothing), get(kwargs, :weights, nothing))
   generated_from !== nothing && db_default !== nothing && throw(_fielderr(
@@ -3726,7 +3854,7 @@ Circuit = Models.Model(
 """
 function URLField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("URLField", kwargs; editable = true, extra = (:max_length,))
+    _common_kwargs(Val(:URLField), kwargs)
 
   max_length = get(kwargs, :max_length, 200)
   default = get(kwargs, :default, nothing)
@@ -3807,7 +3935,7 @@ Race = Models.Model(
 """
 function SlugField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("SlugField", kwargs; db_index = true, editable = true, extra = (:max_length,))
+    _common_kwargs(Val(:SlugField), kwargs)
 
   max_length = get(kwargs, :max_length, 50)
   default = get(kwargs, :default, nothing)
@@ -3892,7 +4020,7 @@ Race = Models.Model(
 """
 function JSONField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("JSONField", kwargs; editable = true)
+    _common_kwargs(Val(:JSONField), kwargs)
 
   default = get(kwargs, :default, nothing)
 
@@ -4160,7 +4288,7 @@ Race_strategy = Models.Model("race_strategy",
 """
 function ArrayField(base_field; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("ArrayField", kwargs; editable = true, extra = (:size,))
+    _common_kwargs(Val(:ArrayField), kwargs)
 
   kind = _array_base_field(base_field)
   size = get(kwargs, :size, nothing)

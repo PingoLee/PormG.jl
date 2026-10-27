@@ -1706,8 +1706,8 @@ end
         # #934: the partial and the functional one are imported with their text — the partial's
         # `Q(ativo=True)` in Django's own spelling (#934 commit 4), the functional one as `LOWER`.
         @test occursin("Models.UniqueConstraint(fields = (\"apelido\",), name = \"uniq_apelido_ativo\", " *
-                       "condition = \"\\\"ativo\\\"\")", generated)
-        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(\\\"apelido\\\")\",), " *
+                       "condition = \"ativo\")", generated)
+        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(apelido)\",), " *
                        "name = \"uniq_apelido_lower\")", generated)
 
         # The rejected forms never become constraints. `cpf` is the column both of them cover, so a
@@ -1761,46 +1761,47 @@ end
     )
     ck(body) = "models.CheckConstraint($(body), name=\"ck\")"
 
-    # Admitted: element → the exact condition. Every column is double-quoted, as Django renders it.
+    # Admitted: element → the exact condition. A column is written bare where it is a plain lower-case name
+    # no engine reserves (#1368: a double-quoted name is a string on MySQL), double-quoted otherwise.
     translated = [
-        ck("check=Q(dias__gte=0)")                       => "\"dias\" >= 0",
-        ck("check=Q(dias__gt=0, dias__lt=10)")           => "\"dias\" > 0 AND \"dias\" < 10",
+        ck("check=Q(dias__gte=0)")                       => "dias >= 0",
+        ck("check=Q(dias__gt=0, dias__lt=10)")           => "dias > 0 AND dias < 10",
         # `db_column` is what the CHECK names, not the Django field.
-        ck("check=Q(dias__lte=F(\"limite\"))")           => "\"dias\" <= \"limite_dias\"",
-        ck("condition=models.Q(dias__gte=models.F('limite'))") => "\"dias\" >= \"limite_dias\"",
-        ck("check=Q(tipo=\"ferias\")")                   => "\"tipo\" = 'ferias'",
+        ck("check=Q(dias__lte=F(\"limite\"))")           => "dias <= limite_dias",
+        ck("condition=models.Q(dias__gte=models.F('limite'))") => "dias >= limite_dias",
+        ck("check=Q(tipo=\"ferias\")")                   => "tipo = 'ferias'",
         # Quotes are doubled, so a value cannot close the literal and add SQL of its own.
-        ck("check=Q(tipo__exact=\"d'arc\")")             => "\"tipo\" = 'd''arc'",
-        ck("check=Q(tipo=\"x') OR (1=1\")")              => "\"tipo\" = 'x'') OR (1=1'",
-        ck("check=Q(tipo=\"a--b\")")                     => "\"tipo\" = 'a--b'",
-        ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "\"tipo\" IN ('a', 'b')",
-        ck("check=Q(dias__in=[1, 2, 3])")                => "\"dias\" IN (1, 2, 3)",
-        ck("check=Q(homologado=True)")                   => "\"homologado\"",
+        ck("check=Q(tipo__exact=\"d'arc\")")             => "tipo = 'd''arc'",
+        ck("check=Q(tipo=\"x') OR (1=1\")")              => "tipo = 'x'') OR (1=1'",
+        ck("check=Q(tipo=\"a--b\")")                     => "tipo = 'a--b'",
+        ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "tipo IN ('a', 'b')",
+        ck("check=Q(dias__in=[1, 2, 3])")                => "dias IN (1, 2, 3)",
+        ck("check=Q(homologado=True)")                   => "homologado",
         # The FK's Django name and its `_id` name both resolve to the `_id` column.
-        ck("check=Q(servidor__isnull=False)")            => "\"servidor_id\" IS NOT NULL",
-        ck("check=Q(servidor_id=None)")                  => "\"servidor_id\" IS NULL",
-        ck("check=Q(dias__range=(1, 365))")              => "\"dias\" BETWEEN 1 AND 365",
-        ck("check=Q(nota__gte=-1.5)")                    => "\"nota\" >= -1.5",
-        # A reserved word stays a column: bare `user` is CURRENT_USER on PostgreSQL.
+        ck("check=Q(servidor__isnull=False)")            => "servidor_id IS NOT NULL",
+        ck("check=Q(servidor_id=None)")                  => "servidor_id IS NULL",
+        ck("check=Q(dias__range=(1, 365))")              => "dias BETWEEN 1 AND 365",
+        ck("check=Q(nota__gte=-1.5)")                    => "nota >= -1.5",
+        # A reserved word keeps its quotes: bare `user` is CURRENT_USER on PostgreSQL.
         ck("check=Q(user__gt=0)")                        => "\"user\" > 0",
         # Python precedence: `~` binds tighter than `&`, `&` tighter than `|`.
         ck("check=Q(dias=1) | Q(dias=2) & ~Q(homologado=True)") =>
-            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\"))",
+            "dias = 1 OR (dias = 2 AND NOT (homologado))",
         ck("check=(Q(dias=1) | Q(dias=2)) & Q(homologado=True)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\"",
+            "(dias = 1 OR dias = 2) AND homologado",
         ck("check=Q(Q(dias=1) | Q(dias=2), homologado=False)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND NOT \"homologado\"",
+            "(dias = 1 OR dias = 2) AND NOT homologado",
         # A BETWEEN beside another AND is parenthesised, so its own AND cannot be misread.
         ck("check=Q(dias__range=(0, 10), homologado=True)") =>
-            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\"",
+            "(dias BETWEEN 0 AND 10) AND homologado",
         # An integral float is the integer Django's `int()` makes of it; an integer column may meet a
         # float column through F().
-        ck("check=Q(dias=1.0)")                          => "\"dias\" = 1.0",
-        ck("check=Q(dias__lte=F(\"nota\"))")             => "\"dias\" <= \"nota\"",
+        ck("check=Q(dias=1.0)")                          => "dias = 1.0",
+        ck("check=Q(dias__lte=F(\"nota\"))")             => "dias <= nota",
         # The trailing comma is what makes a one-element tuple.
-        ck("check=Q(tipo__in=(\"ferias\",))")            => "\"tipo\" IN ('ferias')",
+        ck("check=Q(tipo__in=(\"ferias\",))")            => "tipo IN ('ferias')",
         # The escapes PormG decodes as Python does.
-        ck("check=Q(tipo='d\\'arc')")                    => "\"tipo\" = 'd''arc'",
+        ck("check=Q(tipo='d\\'arc')")                    => "tipo = 'd''arc'",
     ]
     for (element, condition) in translated
         c = translate(element, fields)
@@ -1891,7 +1892,7 @@ class Volta(models.Model):
 """
     generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_768_violation_unit.jl")
     try
-        @test occursin("Models.CheckConstraint(condition = \"\\\"tempo\\\" > 0\", name = \"volta_tempo\")", generated)
+        @test occursin("Models.CheckConstraint(condition = \"tempo > 0\", name = \"volta_tempo\")", generated)
         @test occursin("# PormG: CheckConstraint 'volta_tempo' on 'Volta' was imported without its " *
                        "violation_error_message", generated)
         # The second CHECK reuses the UniqueConstraint's name: dropped, and never called imported.
@@ -1920,10 +1921,10 @@ end
         # The four translated CHECKs, in declaration order, as ONE list on the model.
         @test occursin(
             "constraints = [" *
-            "Models.CheckConstraint(condition = \"\\\"dias\\\" >= 0 AND \\\"dias\\\" <= \\\"limite_dias\\\"\", name = \"ck_afast_dias\"), " *
-            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT \\\"homologado\\\"\", name = \"ck_afast_tipo\"), " *
-            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR NOT \\\"homologado\\\"\", name = \"ck_afast_servidor\"), " *
-            "Models.CheckConstraint(condition = \"\\\"limite_dias\\\" BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
+            "Models.CheckConstraint(condition = \"dias >= 0 AND dias <= limite_dias\", name = \"ck_afast_dias\"), " *
+            "Models.CheckConstraint(condition = \"tipo IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT homologado\", name = \"ck_afast_tipo\"), " *
+            "Models.CheckConstraint(condition = \"NOT (servidor_id IS NULL) OR NOT homologado\", name = \"ck_afast_servidor\"), " *
+            "Models.CheckConstraint(condition = \"limite_dias BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
             generated,
         )
 
@@ -2347,8 +2348,8 @@ end
         # part 2 the functional and the partial one do too — so the fixture's indexes drop none.
         @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
         @test count("an index on 'Servidor' was dropped", generated) == 0
-        @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"idx_apelido_lower\")", generated)
-        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\"\")", generated)
+        @test occursin("Models.Index(expressions = (\"LOWER(apelido)\",), name = \"idx_apelido_lower\")", generated)
+        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"ativo\")", generated)
         @test occursin("Models.Index(fields = (\"-cpf\", \"apelido\",), name = \"idx_servidor_cpf_desc\")", generated)
         @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"gin_servidor\", method = \"gin\")", generated)
         # And what it CAN express reached the model: the composite index, plus the single-column
@@ -2398,8 +2399,8 @@ end
         @test length(rc) == 3                                   # #934: the partial and functional ones too
         @test rc[1].fields == ["cpf", "lotacao_id"]
         @test rc[1].name == "uniq_servidor_cpf_lotacao"
-        @test (rc[2].fields, rc[2].condition) == (["apelido"], "\"ativo\"")
-        @test rc[3].expressions == ["LOWER(\"apelido\")"]
+        @test (rc[2].fields, rc[2].condition) == (["apelido"], "ativo")
+        @test rc[3].expressions == ["LOWER(apelido)"]
 
         # A model declaring no db_table must not have acquired one on the way through.
         # (#345 note: this fixture imports with NO prefix — `temp_import_config!` defaults to
@@ -2620,7 +2621,8 @@ end
         @test occursin("fantasma = Models.CharField(max_length=10)", generated)
 
         # Only CharField has a choices slot. `_common_kwargs` would warn anonymously
-        # ("Unexpected parameter for TextField"); this names the field and class.
+        # ("Unexpected parameter for TextField", a schema-neutral keyword since #1333); this names
+        # the field and class.
         @test occursin("TextField has no choices slot in PormG", generated)
         @test occursin("corpo = Models.TextField()", generated)
 
@@ -4006,5 +4008,69 @@ class Pilot(models.Model):
                        "as a Primary Key", sprint(showerror, err))
     finally
         cleanup_import_test!(config_key2, existed2)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1333: a field constructor refuses a keyword it does not accept, so the importer drops the Django
+# options with no PormG counterpart itself, where it can name the class and field, instead of letting
+# one of them abort the whole import. Expected: the import completes; `points` comes through as a
+# plain IntegerField with the existing lost-key marker (#369), which advises IDField(generated =
+# false); `email`'s and `bio`'s `max_length`, the many-to-many's `symmetrical` and the array
+# element's `max_length` are dropped with a marker each; an index declared on a PasswordField, which
+# takes no `db_index`, is dropped with its marker instead of being written as `db_index=true` into a
+# file that would refuse to load; and the model after them is still in the file. Each of the four
+# drop arms (column, many-to-many, element, Meta index) aborted the import or wrote an unloadable
+# file without its fix.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django options a PormG field does not take are dropped and reported (#1333)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+class Circuit(models.Model):
+    circuitref = models.CharField(max_length=255, primary_key=True)
+
+class Season(models.Model):
+    points = models.IntegerField(primary_key=True)
+    email = models.EmailField(max_length=320)
+    bio = models.TextField(max_length=500, null=True)
+    circuits = models.ManyToManyField(Circuit, symmetrical=False)
+    tags = ArrayField(models.TextField(max_length=5))
+    secret = models.PasswordField(max_length=128)
+
+    class Meta:
+        indexes = [models.Index(fields=['secret'])]
+
+class Race(models.Model):
+    name = models.CharField(max_length=255)
+"""
+    generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_1333_unit.jl")
+    try
+        @test occursin("points = Models.IntegerField()", generated)
+        @test occursin("# PormG: 'Season' declares its primary key on 'points'", generated)
+        # `primary_key` gets no #1333 marker of its own: the lost-key marker above is the report.
+        @test !occursin("declares `primary_key`", generated)
+        @test occursin("email = Models.EmailField()", generated)
+        @test occursin("# PormG: field 'email' on 'Season' declares `max_length`, which PormG's " *
+                       "EmailField does not take — dropped.", generated)
+        @test occursin("bio = Models.TextField(null=true)", generated)
+        @test occursin("# PormG: field 'bio' on 'Season' declares `max_length`, which PormG's TextField", generated)
+        @test occursin("an integer key as IDField(generated = false)", generated)
+        @test occursin("# PormG: field 'circuits' on 'Season' declares `symmetrical`, which PormG's " *
+                       "ManyToManyField does not take — dropped. Check the join table", generated)
+        @test occursin("tags = Models.ArrayField(Models.TextField())", generated)
+        @test occursin("# PormG: field 'tags' on 'Season' declares, on its ArrayField element, " *
+                       "`max_length`, which PormG's TextField does not take", generated)
+        @test occursin("secret = Models.PasswordField()", generated)
+        @test !occursin("db_index=true", generated)
+        @test occursin("'Season'.secret was dropped — that field type has no db_index option", generated)
+        # The generated file loads: nothing in it is a keyword a constructor refuses.
+        mod = Module(:Gen1333)
+        Core.eval(mod, :(import PormG.Models))
+        @test Base.include_string(mod, replace(generated, r"^module\s+\w+\s*\n"m => "", r"\nend\s*$" => "\n")) !== nothing
+        @test occursin("\nRace = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
     end
 end

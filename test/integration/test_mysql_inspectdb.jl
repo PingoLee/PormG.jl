@@ -100,7 +100,8 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
 
         # What: a schema made by hand: an `INT` key, an unsigned integer, an `enum`, a `datetime(6)`, a
         # `timestamp`, `text`, a generated column, a reserved-word column and its CHECK, a plain CHECK, a
-        # default in no declarable form; and a view over a table dropped since.
+        # default in no declarable form, two FULLTEXT indexes and a prefix index (#1369); and a view over a
+        # table dropped since.
         # SQL: the catalog reads; then the plan the imported models give.
         # Why: what holds PormG's values must read as its fields and plan nothing; what does not must be
         # said, by name — a retyped column, a generated column declared plain, a CHECK left out — never
@@ -111,7 +112,9 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
                  "`twice` INT GENERATED ALWAYS AS (`u` * 2) VIRTUAL, `hid` INT GENERATED ALWAYS AS (`u` + 1) VIRTUAL INVISIBLE, " *
                  "`order` INT NULL, " *
                  "`odd` VARCHAR(9) NULL DEFAULT (concat('a\\\\b')), " *
-                 "CONSTRAINT `m4c_legacy_order_pos` CHECK (`order` > 0), CONSTRAINT `m4c_legacy_note` CHECK (`note` <> 'x')) " *
+                 "CONSTRAINT `m4c_legacy_order_pos` CHECK (`order` > 0), CONSTRAINT `m4c_legacy_note` CHECK (`note` <> 'x'), " *
+                 "FULLTEXT KEY `m4c_legacy_ft` (`note`, `odd`), FULLTEXT KEY `m4c_legacy_ft1` (`note`), " *
+                 "KEY `m4c_legacy_pfx` (`note`(10))) " *
                  "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin")
             exec("CREATE TABLE `m4c_gone` (`goneid` BIGINT NOT NULL PRIMARY KEY)")
             exec("CREATE VIEW `m4c_gone_view` AS SELECT `goneid` FROM `m4c_gone`")
@@ -130,6 +133,12 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
             @test warned(r"CHECK whose condition MySQL prints") == ["m4c_legacy_order_pos"]
             @test any(l -> get(Dict(l.kwargs), :column, nothing) == "odd" && l.level == Base.CoreLogging.Warn, logs)
             @test warned(r"view could not be read") == ["m4c_gone_view"]
+            # #1369: each index no declaration states is named, with its kind, and left out of the model.
+            @test sort!([(string(Dict(l.kwargs)[:index]), match(r"inspectdb: (an? [^:]*?) is left out", string(l.message))[1])
+                         for l in logs if l.level == Base.CoreLogging.Warn &&
+                         occursin("is left out of the model: no declaration states one", string(l.message))]) ==
+                  [("m4c_legacy_ft", "a FULLTEXT index"), ("m4c_legacy_ft1", "a FULLTEXT index"),
+                   ("m4c_legacy_pfx", "an index over a column prefix")]
             text = read(models_path, String)
             @test !occursin("concat", text)
             @test occursin("at = Models.DateTimeField", text) && occursin("stamp = Models.DateTimeField", text) &&
@@ -142,12 +151,17 @@ if only_on(:mysql, "inspectdb on MySQL (phase 4c)")
             @test occursin("MODIFY COLUMN `u` LONGTEXT", plan) && occursin("MODIFY COLUMN `e` LONGTEXT", plan) &&
                   occursin("MODIFY COLUMN `legacyid` BIGINT", plan)
             @test !occursin(r"MODIFY COLUMN `(at|stamp|note|order)`", plan) && !occursin("m4c_legacy_order_pos", plan)
+            # #1369: neither FULLTEXT index is read as a composite or as `note`'s db_index, so none is dropped.
+            @test !occursin("m4c_legacy_ft", plan) && !occursin("m4c_legacy_pfx", plan) && !occursin("db_index", text)
             # The hand-made CHECK the model now declares is adopted: MySQL renames no CHECK, so its marker is
             # written by re-creating it, in one statement; after that the plan is empty.
             @test occursin("DROP CHECK `m4c_legacy_note`, ADD CONSTRAINT `m4c_legacy_note` CHECK (", plan) &&
                   occursin("pormg:check:", plan)
             Mig.migrate(folder; interactive = false, atomic = false, destructive = true)
             @test converged()
+            @test sort!(String.(raw("SELECT DISTINCT INDEX_NAME AS i FROM information_schema.STATISTICS WHERE " *
+                                    "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'm4c_legacy' AND INDEX_NAME LIKE 'm4c_legacy_%'")[!, :i])) ==
+                  ["m4c_legacy_ft", "m4c_legacy_ft1", "m4c_legacy_pfx"]
             # A MODIFY for another change keeps the default the model could not hold (`odd`'s backslash).
             write(models_path, replace(read(models_path, String), r"odd = Models\.CharField\(([^)]*)null\s*=\s*true" =>
                                                                    s"odd = Models.CharField(\1null = false"))

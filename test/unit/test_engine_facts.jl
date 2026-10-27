@@ -123,6 +123,8 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_bitwise_sql, :_bitwise_not_sql, :_xor_sql, :_json_document_marker,
                                # ... and the text a pattern lookup reads from a non-text column.
                                :_pattern_text_operand,
+                               # #1368: a double-quoted name in declared SQL text is a string literal.
+                               :_double_quote_is_identifier,
                                # ... and JSON path lookups, read as text.
                                :_json_extract_expr, :_json_path_extracts_text, :_json_numeric_operand,
                                # ... and explain(): EXPLAIN FORMAT=JSON, read as its facts.

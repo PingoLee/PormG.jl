@@ -1155,6 +1155,8 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #   is `1`). A boolean is `1`/`0` on both, and passes;
 # - `:integer` and `:number` (#1259): an interval is no number, so its cast to any number type is an
 #   error, and SQLite reads its stored text's hours;
+# - `:number` over a boolean (#1319): a boolean is a number only as the integer `1` / `0`, so its cast
+#   to a float or a `numeric` is an error, which SQLite and MySQL compute from the integer they store;
 # - `:scale` (#1040): a `numeric(p, s)` cast over an operand with more than `s` fractional digits
 #   (`_scale_divergent_operand`) means the value rounded to `s`; SQLite keeps every digit;
 # - `:precision` (#1087): a literal `Cast` operand too large for `p` (`_precision_overflow_operand`)
@@ -1199,6 +1201,12 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
     for operand in operands
       side = _temporal_number_operand(operand, instruc)
       side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
+      # #1319: a boolean is a number only as an integer; its cast to a float or a `numeric` is no value.
+      numeric_target === :number || continue
+      side = _concat_textless_operand(operand, instruc)
+      (side !== nothing && side[1] === :bool) || continue
+      d = departs(:bool, side[2], :number, _concat_flag(operand))
+      d === nothing || return d
     end
   end
   # #1040: a scaled numeric target rounds on PostgreSQL only.

@@ -6491,114 +6491,42 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(EXTRACT(HOUR FROM \"R2\".\"time\")::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sum Extract hour time | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(CAST(strftime('%H', \"R2\".\"time\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool float8 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DOUBLE) > ?", params = [("10", "Int64")]),
-  ("Cast bool float8 | alone", :mysql, "v__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DOUBLE) > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool float8 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::float8 > \$1", params = [("10", "Int64")]),
   ("Cast bool float8 | alone", :postgres, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::float8 > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool float8 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS FLOAT8) > ?", params = [("10", "Int64")]),
-  ("Cast bool float8 | alone", :sqlite, "v__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS FLOAT8) > ?", params = [("10.5", "Float64")]),
-  ("Cast bool float8 | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
-  ("Cast bool float8 | cte", :mysql, "g__v__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool float8 | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast bool float8 | cte", :postgres, "g__v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool float8 | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
-  ("Cast bool float8 | cte", :sqlite, "g__v__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
-  ("Cast bool float8 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DOUBLE) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool float8 | subquery", :mysql, "w__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DOUBLE) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Cast bool float8 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::float8 as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast bool float8 | subquery", :postgres, "w__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::float8 as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
-  ("Cast bool float8 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS FLOAT8) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool float8 | subquery", :sqlite, "w__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS FLOAT8) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
-  ("Cast bool numeric | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DECIMAL(65,30)) > ?", params = [("10", "Int64")]),
-  ("Cast bool numeric | alone", :mysql, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DECIMAL(65,30)) > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool numeric | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::decimal > \$1", params = [("10", "Int64")]),
   ("Cast bool numeric | alone", :postgres, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::decimal > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool numeric | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS NUMERIC) > ?", params = [("10", "Int64")]),
-  ("Cast bool numeric | alone", :sqlite, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS NUMERIC) > ?", params = [("10.5", "Decimal")]),
-  ("Cast bool numeric | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
-  ("Cast bool numeric | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool numeric | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast bool numeric | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool numeric | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
-  ("Cast bool numeric | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
-  ("Cast bool numeric | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DECIMAL(65,30)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool numeric | subquery", :mysql, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DECIMAL(65,30)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Cast bool numeric | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::decimal as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast bool numeric | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::decimal as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
-  ("Cast bool numeric | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS NUMERIC) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool numeric | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS NUMERIC) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
-  ("Cast bool to scale 2 | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DECIMAL(65,2)) > ?", params = [("10", "Int64")]),
-  ("Cast bool to scale 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`boolean_field` AS DECIMAL(65,2)) > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool to scale 2 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::numeric(10,2) > \$1", params = [("10", "Int64")]),
   ("Cast bool to scale 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::numeric(10,2) > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool to scale 2 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS NUMERIC(10,2)) > ?", params = [("10", "Int64")]),
-  ("Cast bool to scale 2 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"boolean_field\" AS NUMERIC(10,2)) > ?", params = [("10.5", "Decimal")]),
-  ("Cast bool to scale 2 | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
-  ("Cast bool to scale 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
   ("Cast bool to scale 2 | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Cast bool to scale 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
-  ("Cast bool to scale 2 | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
-  ("Cast bool to scale 2 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
-  ("Cast bool to scale 2 | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DECIMAL(65,2)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool to scale 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`boolean_field` AS DECIMAL(65,2)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Cast bool to scale 2 | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::numeric(10,2) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast bool to scale 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::numeric(10,2) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
-  ("Cast bool to scale 2 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS NUMERIC(10,2)) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast bool to scale 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"boolean_field\" AS NUMERIC(10,2)) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Cast bool to integer | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(IF(CAST(`Tb`.`boolean_field` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`Tb`.`boolean_field` AS SIGNED), ~0 + ABS(CAST(`Tb`.`boolean_field` AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast bool to integer | alone", :postgres, "v__@gt", "10") =>

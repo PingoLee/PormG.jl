@@ -6125,57 +6125,57 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast bool float8 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast bool float8 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool float8 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool float8 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast bool float8 | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool float8 | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool float8 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast bool float8 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool float8 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
   ("Cast bool numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast bool numeric | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool numeric | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast bool numeric | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool numeric | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast bool numeric | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool numeric | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
   ("Cast bool to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast bool to scale 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to scale 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast bool to scale 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to scale 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast bool to scale 2 | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to scale 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
   ("Cast bool to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast bool to integer | alone", :sqlite) =>

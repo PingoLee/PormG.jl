@@ -26,7 +26,7 @@
 # decision nobody made; `test/unit/test_meaning_departures.jl` fails on it, so a new backend (#1130)
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
-# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
+# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
@@ -73,6 +73,16 @@ const _MEANING_DEPARTURES = (
    computes = (PormGSQLite => _ -> "the leading digits of its `HH:MM:SS` text, the hour",
                PormGMySQL => _ -> "its digits read as one number (`06:00:00` → `60000`)"),
    fix = (flag, _) -> "Name the number you mean with a part: its hour, $(_temporal_part_spelling(flag, "hour")), or another part \e[32mExtract\e[0m names."),
+  # #1319: a boolean is a number only as the integer `1` or `0`, which every engine casts alike
+  # (PostgreSQL has `boolean::integer`), so that cast has no row. Its cast to a float or a `numeric`
+  # is an error by the #1259 tie-breaker: PostgreSQL has no such cast. SQLite stores a boolean as
+  # `1` / `0` and casts that integer (measured on 3.45.1: `CAST(1 AS FLOAT8)` is `1.0`, `CAST(1 AS
+  # NUMERIC)` stays `1`); MySQL's is a `TINYINT(1)`, cast as the integer (`1`).
+  (targets = (:number,), kinds = (:bool,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1319",
+   meaning = _ -> "an error, since a boolean is a number only as the integer `1` or `0`",
+   computes = (PormGSQLite => _ -> "the integer it stores, `1` or `0` (`1.0` as a float)",
+               PormGMySQL => _ -> "`1` or `0`, the integer it stores"),
+   fix = (flag, declared) -> "Cast it to the integer first, which every engine computes alike: \e[32mCast(Cast(\"$(flag)\", IntegerField()), \"$(something(declared, "float8"))\")\e[0m, or say the values: \e[32mCase([When(\"$(flag)\" => true, then = Value(1.0)), When(\"$(flag)\" => false, then = Value(0.0))])\e[0m."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite. MySQL's
   # `DECIMAL(p, s)` rounds a decimal, a double and text alike (measured: `1.235` → `1.24`).

@@ -4591,77 +4591,29 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Sum Extract hour time | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool float8 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast bool float8 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
   ("Cast bool float8 | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast bool float8 | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool float8 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast bool float8 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool float8 | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool numeric | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast bool numeric | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
   ("Cast bool numeric | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast bool numeric | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool numeric | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast bool numeric | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool numeric | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool to scale 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast bool to scale 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
   ("Cast bool to scale 2 | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast bool to scale 2 | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast bool to scale 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast bool to scale 2 | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast bool to scale 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast bool to integer | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),

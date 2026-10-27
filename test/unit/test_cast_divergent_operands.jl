@@ -944,6 +944,56 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1319: a boolean cast to a float or a `numeric` is refused on SQLite and MySQL
+# MEANING: a boolean is a number only as the integer `1` / `0`, which every engine casts alike
+# (PostgreSQL's `boolean::integer`). PostgreSQL has no cast from a boolean to a float or a `numeric`
+# and rejects the query when it runs: the meaning, by the #1259 tie-breaker. SQLite casts the integer
+# it stores (`1.0`), MySQL its `TINYINT(1)` (`1`): a number the query never stated. A column, an
+# extremum over one, and the `output_field` sites, to a float, an unscaled and a scaled `numeric`.
+# The integer cast, and the two spellings the message names, build on every engine.
+# Expected SQL, PostgreSQL: ("Tb"."active")::float8
+# Why: before #1319 SQLite and MySQL answered `1.0` / `1` where PostgreSQL raised.
+# ─────────────────────────────────────────────────────────────────────────────
+struct CcdMockMySQL <: PormG.PormGMySQL end
+const _CCD_MY = CcdMockMySQL()
+@testset "#1319: a boolean cast to a float or a numeric is refused on SQLite and MySQL" begin
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), output_field = output_field)
+  for (expr, named) in (
+      (Fn.Cast("active", "float8"), "the BooleanField `active`"),
+      (Fn.Cast("active", Models.FloatField()), "the BooleanField `active`"),
+      (Fn.Cast("active", "numeric"), "the BooleanField `active`"),
+      (Fn.Cast("active", "numeric(10,2)"), "the BooleanField `active`"),
+      (Fn.Cast("active", Models.DecimalField()), "the BooleanField `active`"),
+      (Fn.Cast(Fn.Max("active"), "float8"), "`MAX(…)` over the BooleanField `active`"),
+      (Fn.Coalesce("active", false; output_field = "float8"), "the BooleanField `active`"),
+      (case(_CF("active"); output_field = "numeric"), nothing))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1319", named = named)
+    @test occursin("a boolean is a number only as the integer `1` or `0`", _ccd_msg(errs.sqlite))
+    @test occursin("Cast it to the integer first", _ccd_msg(errs.sqlite))
+    my = _ccd_refusal(expr; conn = _CCD_MY)
+    msg = my === nothing ? "" : _ccd_msg(my)
+    @test my isa QueryBuildError
+    @test occursin("MySQL computes `1` or `0`, the integer it stores, so PormG refuses it on MySQL (#1319)", msg)
+    @test !occursin("SQLite", msg) && !occursin("PostgreSQL", msg)
+  end
+  @test occursin("(\"Tb\".\"active\")::float8 as \"x\"", _ccd_render(Fn.Cast("active", "float8"); conn = _CCD_PG))
+  # The integer spelling keeps the type the cast asked for (review of #1319).
+  @test occursin("Cast(Cast(\"active\", IntegerField()), \"numeric(10,2)\")",
+                 _ccd_msg(_ccd_refusal(Fn.Cast("active", "numeric(10,2)"); conn = _CCD_SL)))
+  # A single-precision target: SQLite answers #1215 first (it rounds no value to a `Float32`); MySQL
+  # keeps single precision, so it reads the operand and refuses the boolean.
+  @test occursin("(#1215)", _ccd_msg(_ccd_refusal(Fn.Cast("active", "real"); conn = _CCD_SL)))
+  @test occursin("(#1319)", _ccd_msg(_ccd_refusal(Fn.Cast("active", "real"); conn = _CCD_MY)))
+  # The integer, and the spellings the message offers, build on every engine.
+  for expr in (Fn.Cast("active", Models.IntegerField()), Fn.Cast("active", "integer"),
+               Fn.Cast(Fn.Cast("active", Models.IntegerField()), "float8"),
+               Fn.Case([Fn.When("active" => true, then = Fn.Value(1.0)), Fn.When("active" => false, then = Fn.Value(0.0))]))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1221: a DecimalField declaration is its numeric(max_digits, decimal_places), as the string is
 # `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` and the same `output_field` used to keep
 # only the field's `"DECIMAL"` and render an unscaled `decimal`, so neither engine applied the scale the

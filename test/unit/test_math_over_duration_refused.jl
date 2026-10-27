@@ -16,13 +16,14 @@ operand of one that means numbers only is refused on every engine, naming the sp
 seconds where the engine has one (`Extract(d, "epoch")` on PostgreSQL and MySQL; SQLite has no `EPOCH`
 part). `Sum` and `Avg` mean a duration's total and mean, and keep building.
 
-MySQL also holds a duration EXPRESSION as its count of microseconds, so a clock part of one
-(`Extract(F("start_at") - F("date"), "hour")`) read that count as a time; it is refused on MySQL,
-which departs, and only `EPOCH` builds there. PostgreSQL and SQLite do not move for a clock part.
+#1388: every part but `EPOCH` of a duration expression is refused on every engine, as #1070 refuses
+it over a `DurationField` column. A CALENDAR part (`Extract(F("fastestlaptime") * 2, "year")`, `@date`,
+`@quarter`, `@week_day`) has no meaning: a duration has no calendar date. A CLOCK part
+(`Extract(F("start_at") - F("date"), "hour")`) has no single one: PostgreSQL reads a component that
+depends on how the interval was formed, SQLite read `NULL` above 24 h, and MySQL its count of
+microseconds as a time.
 
-#1388: a CALENDAR part of a duration expression (`Extract(F("fastestlaptime") * 2, "year")`, `@date`,
-`@quarter`, `@week_day`) is refused on every engine, as #1070 refuses it over a `DurationField` column:
-a duration has no calendar date.
+#1406: on PostgreSQL a time of day minus a time of day is a duration, so all of the above cover it.
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -164,7 +165,7 @@ end
     err = _mod_refusal(expr; conn = _MOD_PG)
     @test err isa QueryBuildError && occursin("`$(name)` of a duration is not supported", _mod_msg(err))
   end
-  for part in ("year", "quarter", "dow")
+  for part in ("year", "quarter", "dow", "hour", "second")
     err = _mod_refusal(Fn.Extract(diff(), part); conn = _MOD_PG)
     @test err isa QueryBuildError &&
           occursin("The $(part) part over a duration is not supported", _mod_msg(err))
@@ -218,26 +219,58 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1324: a clock part of a duration expression is refused on MySQL, which departs
-# MySQL holds a duration as its count of microseconds, so `EXTRACT(HOUR FROM <that count>)` read the
-# count as a time where PostgreSQL reads the interval's hours component. Refused on MySQL, naming
-# `Extract(d, "epoch")`, which builds there; PostgreSQL and SQLite do not move for a clock part (the
-# calendar parts are #1388's, below). Expected SQL on PostgreSQL: the part of the interval,
-# `EXTRACT(HOUR FROM (…))`.
+# #1388: a clock part of a duration expression is refused on every engine
+# #1324 refused it on MySQL alone, which read its count of microseconds as a time; PostgreSQL and
+# SQLite built it. Measured on the F1 fixture (#1388): SQLite read `NULL` for a duration of 24 hours
+# or more and for a negative one, and PostgreSQL's component depends on how the interval was formed
+# (a 62-hour timestamp difference reads hour 14, a 208-hour sum 208). The build now refuses it on every
+# engine, as #1070 refuses it over a `DurationField` column, naming the engine's spelling of a
+# duration's seconds (none on SQLite). Expected SQL: none.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1324: a clock part over a duration expression on MySQL" begin
-  for (expr, part) in ((Fn.Extract(_MF("start_at") - _MF("start_at"), "hour"), "hour"),
-                       (Fn.Extract(_MF("fastestlaptime") * 2, "minute"), "minute"),
-                       (Fn.Extract(Fn.Sum("fastestlaptime"), "second"), "second"))
-    err = _mod_refusal(expr; conn = _MOD_MY)
+@testset "#1388: a clock part over a duration expression is refused on every engine" begin
+  shapes = ((Fn.Extract(_MF("start_at") - _MF("start_at"), "hour"), "hour"),
+            (Fn.Extract(_MF("start_at") - _MF("date"), "minute"), "minute"),
+            (Fn.Extract(_MF("fastestlaptime") * 2, "minute"), "minute"),
+            (Fn.Extract(_MF("fastestlaptime") * 2, "second"), "second"),
+            (Fn.Extract(Fn.Sum("fastestlaptime"), "second"), "second"),
+            (Fn.Extract(Fn.Avg("fastestlaptime"), "hour"), "hour"),
+            (Fn.Extract(_MF("fastestlaptime") * 2, "milliseconds"), "milliseconds"),
+            (Fn.Extract(_MF("fastestlaptime") * 2, "microseconds"), "microseconds"))
+  for (expr, part) in shapes, (conn, engine) in _MOD_ENGINES
+    err = _mod_refusal(expr; conn = conn)
     @test err isa QueryBuildError
     err isa QueryBuildError || continue
     msg = _mod_msg(err)
-    @test occursin("Extract(…, \"$(part)\") over a duration expression is not supported on MySQL", msg)
-    @test occursin("Extract(d, \"epoch\")", msg)
-    @test _mod_refusal(expr; conn = _MOD_PG) === nothing
+    @test occursin("The $(part) part over a duration is not supported: the part reads a time of day, " *
+                   "and a duration has none", msg)
+    @test occursin("(#1388)", msg)
+    if conn === _MOD_SL
+      @test occursin("SQLite has no spelling for a duration's seconds", msg) && !occursin("epoch", msg)
+    else
+      @test occursin("For a duration's seconds, write Extract(d, \"epoch\").", msg)
+    end
   end
-  @test _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, "epoch"); conn = _MOD_MY) === nothing
+  # The alias, filtered: the same refusal, before any value is compared.
+  for (conn, _) in _MOD_ENGINES
+    err = try
+      inspect_query((q = MOD.Mod_result.objects; q.values("h" => Fn.Extract(_MF("fastestlaptime") * 2, "hour"));
+                     q.filter("h" => 1); q); connection = conn)
+      nothing
+    catch e
+      e
+    end
+    @test err isa QueryBuildError && occursin("The hour part over a duration", _mod_msg(err))
+  end
+  # A `TIMEZONE` part reads a zoned timestamp, which a duration is not: no meaning at all, not "no
+  # single" one.
+  for (conn, _) in _MOD_ENGINES, part in ("timezone", "timezone_hour")
+    err = _mod_refusal(Fn.Extract(_MF("start_at") - _MF("date"), part); conn = conn)
+    @test err isa QueryBuildError
+    err isa QueryBuildError || continue
+    msg = _mod_msg(err)
+    @test occursin("over a duration is not supported: the part reads a timestamp with a time zone, and a " *
+                   "duration has none, so the part has no meaning over one on any engine (#1388)", msg)
+  end
 end
 
 # The #1388 refusal, without colour: the part, the reason that holds on every engine, no remedy.
@@ -294,28 +327,23 @@ _mod_calendar_refused(msg, label) =
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1388: what the calendar refusal leaves alone
-# A clock part over a duration expression keeps building on PostgreSQL and SQLite (its meaning is
-# measured on #1388, not decided here), and MySQL keeps #1324's refusal, which names EPOCH. EPOCH
-# builds where the engine has it. A date plus a duration is a timestamp, so its calendar parts build.
-# A `DurationField` column keeps #1070's message. Expected SQL on PostgreSQL for the clock part:
-# `EXTRACT(HOUR FROM (…))::integer`.
+# #1388: what the duration refusal leaves alone
+# EPOCH builds where the engine has it. A date plus a duration is a timestamp, so its calendar and
+# clock parts build. A clock part of a timestamp difference's own operands, and of a time column,
+# builds. A `DurationField` column keeps #1070's message. Expected SQL on PostgreSQL for a timestamp's
+# hour: `EXTRACT(HOUR FROM (…))::integer`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1388: clock parts, EPOCH, timestamps and columns are unchanged" begin
+@testset "#1388: EPOCH, timestamps and columns are unchanged" begin
   for (conn, engine) in _MOD_ENGINES
-    for part in ("hour", "minute", "second")
-      err = _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, part); conn = conn)
-      if conn === _MOD_MY
-        @test err isa QueryBuildError && occursin("Extract(d, \"epoch\")", _mod_msg(err))
-      else
-        @test err === nothing
-      end
-    end
     @test _mod_refusal(Fn.Extract(_MF("date") + _MF("fastestlaptime"), "year"); conn = conn) === nothing
-    err = _mod_refusal(Fn.Extract("fastestlaptime", "year"); conn = conn)
-    @test err isa QueryBuildError && occursin("(#1070)", _mod_msg(err)) && !occursin("#1388", _mod_msg(err))
+    @test _mod_refusal(Fn.Extract(_MF("start_at") + _MF("fastestlaptime"), "hour"); conn = conn) === nothing
+    @test _mod_refusal(Fn.Extract("time", "hour"); conn = conn) === nothing
+    for part in ("year", "hour")
+      err = _mod_refusal(Fn.Extract("fastestlaptime", part); conn = conn)
+      @test err isa QueryBuildError && occursin("(#1070)", _mod_msg(err)) && !occursin("#1388", _mod_msg(err))
+    end
   end
-  @test occursin("EXTRACT(HOUR FROM", _mod_render(Fn.Extract(_MF("fastestlaptime") * 2, "hour"); conn = _MOD_PG))
+  @test occursin("EXTRACT(HOUR FROM", _mod_render(Fn.Extract(_MF("start_at") + _MF("fastestlaptime"), "hour"); conn = _MOD_PG))
   for conn in (_MOD_PG, _MOD_MY)
     @test _mod_refusal(Fn.Extract(_MF("fastestlaptime") * 2, "epoch"); conn = conn) === nothing
   end

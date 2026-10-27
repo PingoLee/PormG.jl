@@ -231,17 +231,20 @@ M.Race.objects.values("h" => Extract("date", "hour"))  # the same QueryBuildErro
 ```
 
 The check covers columns PormG can name a field for: a model field, or one reached through a
-join (`"raceid__date__@week"`). An expression or a subquery has no field. For one of them, only the
-calendar parts (the last row of the table) are checked, against the expression's type. A duration
-expression has no calendar date, as a `DurationField` has none: a timestamp difference, interval
-arithmetic, or a `Sum` or `Avg` of a duration raises `QueryBuildError` on every engine. Any other
-expression is passed through as written, and so is a time-of-day part over a duration expression
-(except on MySQL, which refuses it: see
-[Subtracting two dates](field_expressions.md#Subtracting-two-dates)).
+join (`"raceid__date__@week"`). An expression or a subquery has no field. For one of them, the
+part is checked against the duration the type walk names, by the same rows as a column. A duration
+expression reads only `EPOCH`, as a `DurationField` does: under any other part, a timestamp
+difference, interval arithmetic, a `Sum` or `Avg` of a duration, or a time minus a time on PostgreSQL
+raises `QueryBuildError` on every engine. A calendar part has no meaning over a duration, and a
+time-of-day part has no single one (see
+[Subtracting two dates](field_expressions.md#Subtracting-two-dates)). Any other expression is passed
+through as written.
 
 ```julia
 M.Result.objects.values("y" => Extract(F("fastestlaptime") * 2, "year"))   # QueryBuildError: a duration has no calendar date
 M.Race.objects.values("q" => Extract(F("start_at") - F("date"), "quarter"))  # the same QueryBuildError
+M.Race.objects.values("h" => Extract(F("start_at") - F("date"), "hour"))     # QueryBuildError: a duration has no time of day
+M.Race.objects.values("s" => Extract(F("start_at") - F("date"), "epoch"))    # its seconds: builds on PostgreSQL and MySQL
 M.Result.objects.values("y" => Extract(F("raceid__date") + F("fastestlaptime"), "year"))  # a timestamp: builds
 ```
 

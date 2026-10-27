@@ -530,12 +530,16 @@ mean a duration's total and mean, and keep building on every engine. A date, a t
 UUID is refused under all of them, `Sum` and `Avg` included (#1387; see
 [Mathematical Functions](functions_and_dates.md#Mathematical-Functions)).
 
-A calendar part of a duration expression (`Extract(F("fastestlaptime") * 2, "year")`, or
-`Extract(…, "quarter")` and `ToChar(…, "YYYY-MM")` over a timestamp difference or a `Sum` of a duration)
-is refused on every engine, because a duration has no calendar date ([Which columns a transform reads](functions_and_dates.md#Which-columns-a-transform-reads)).
-On MySQL a time-of-day part of one (`Extract(F("start_at") - F("date"), "hour")`, a `Sum` of a duration
-under `Extract(…, "second")`) is refused too. MySQL holds the duration as its count of microseconds,
-and the part would read that count as a time. `Extract(…, "epoch")` builds there.
+Every part but `EPOCH` of a duration expression raises `QueryBuildError` on every engine, as over a
+`DurationField` column ([Which columns a transform reads](functions_and_dates.md#Which-columns-a-transform-reads)).
+A calendar part (`Extract(F("fastestlaptime") * 2, "year")`, or `Extract(…, "quarter")` and
+`ToChar(…, "YYYY-MM")` over a timestamp difference or a `Sum` of a duration) has no meaning, because a
+duration has no calendar date. A time-of-day part (`Extract(F("start_at") - F("date"), "hour")`, a `Sum`
+of a duration under `Extract(…, "second")`) has no single meaning (#1388): PostgreSQL reads a component
+that depends on how the interval was formed (a 62-hour timestamp difference reads hour `14`, a 208-hour
+sum reads `208`), SQLite read `NULL` for a duration over 24 hours and for a negative one, and
+MySQL would read its count of microseconds as a time. For a duration's seconds, write
+`Extract(d, "epoch")` on PostgreSQL and MySQL; SQLite has no `EPOCH` part.
 
 **Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
 still returns the text, but PormG sorts and compares the milliseconds behind it. Sorting the text

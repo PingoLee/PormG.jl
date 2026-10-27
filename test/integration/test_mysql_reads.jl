@@ -637,11 +637,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             laps = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("resultid", "fastestlaptime",
                 "e" => Extract("fastestlaptime", "epoch")).list()
             @test !isempty(laps) && all(r -> Float64(r[:e]) == Dates.tons(r[:fastestlaptime]) / 1e9, laps)
-            # #1324: a date part of a duration EXPRESSION read its count of microseconds as a date (measured
-            # on 8.4: `EXTRACT(HOUR FROM 87706000)` and `QUARTER(87706000)` are NULL), so it is refused before
-            # any SQL; its EPOCH is its seconds, twice the lap's for the product.
+            # #1324/#1388: a date part of a duration EXPRESSION read its count of microseconds as a date
+            # (measured on 8.4: `EXTRACT(HOUR FROM 87706000)` and `QUARTER(87706000)` are NULL); it is refused
+            # before any SQL, on every engine; its EPOCH is its seconds, twice the lap's for the product.
             e = try; M.Result.objects.values("v" => Extract(F("fastestlaptime") * 2, "minute")).list(); nothing; catch err; err; end
-            @test e isa PormG.QueryBuildError && occursin("over a duration expression is not supported on MySQL", msg(e))
+            @test e isa PormG.QueryBuildError && occursin("over a duration is not supported", msg(e)) &&
+                  occursin("Extract(d, \"epoch\")", msg(e))
             twice = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("resultid", "fastestlaptime",
                 "e" => Extract(F("fastestlaptime") * 2, "epoch")).list()
             @test !isempty(twice) && all(r -> Float64(r[:e]) == 2 * Dates.tons(r[:fastestlaptime]) / 1e9, twice)

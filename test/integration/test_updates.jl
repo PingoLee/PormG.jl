@@ -1582,6 +1582,44 @@ end
     end
 end
 
+@testset "update writes Value, a joined column and a Subquery into a number field (#1320)" begin
+    # What: on result 1, `update("grid" => Value(3))` stores 3; through
+    # `cjoin_on("Driver", alias = "d", …)`, `update("grid" => Joined("d", "driverid"))` stores the
+    # driver's id (`SET "grid" = "d"."driverid"`, UPDATE … FROM); `update("grid" => Subquery(…))`
+    # stores the driver's count of standings rows (`SET "grid" = (SELECT COUNT(…) … WHERE
+    # "R1"."driverid" = "Tb"."driverid")`); and `Joined("d", "dob")` (a date) is refused with #1297's
+    # QueryBuildError and writes nothing. Why: before #1320 the three raised InvalidValueError from
+    # the number field's literal check, even with a number to write.
+    q() = M.Result.objects.filter("resultid" => 1)
+    grid() = (q().values("grid").list() |> first)[:grid]
+    start = grid()
+    driver = (q().values("driverid").list() |> first)[:driverid]
+    joined() = (j = q(); j.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")]); j)
+    try
+        q().update("grid" => Value(3))
+        @test grid() == 3
+
+        joined().update("grid" => Joined("d", "driverid"))
+        @test grid() == driver
+
+        standings = M.Driver_standings.objects
+        standings.filter("driverid" => OuterRef("driverid"))
+        standings.values("total" => Count("driverstandingsid"))
+        q().update("grid" => Subquery(standings))
+        @test grid() == M.Driver_standings.objects.filter("driverid" => driver).count()
+
+        q().update("grid" => start)
+        err = try joined().update("grid" => Joined("d", "dob")); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+        @test occursin("which is a date, into the IntegerField `grid`", msg)
+        @test occursin("(#1297)", msg)
+        @test grid() == start
+    finally
+        q().update("grid" => start)
+    end
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pagination guard on update():
 # Standard SQL UPDATE does not natively support LIMIT, OFFSET, or ORDER BY.

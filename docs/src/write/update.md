@@ -399,3 +399,60 @@ when either fails:
   per row (the rule is in [Custom Joins](../read/custom_joins.md), under *When PormG treats a
   `cjoin_on` join as to-many*).
   Otherwise the database would set each row from an arbitrary one of its matches.
+
+The joined column can go into a field of any type, a number field included. The type checks an `F`
+expression gets apply to it too: a date, a UUID or another non-number column into a number field
+raises `QueryBuildError` (#1297), and on SQLite so does a `DecimalField` with more decimal places than
+the field it is written into (#1279):
+
+```julia
+# Each British driver's permanent number becomes the car number of their result in race 18
+query.update("number" => Joined("d", "number"))
+```
+
+```sql
+UPDATE "result" AS "Tb"
+SET "number" = "d"."number"
+FROM "driver" AS "d"
+WHERE ("d"."driverid" = "Tb"."driverid") AND "d"."nationality" = $2 AND "Tb"."raceid" = $1
+```
+
+### Setting a column from a subquery
+
+A [`Subquery`](@ref) that projects one column is an update value too, as in Django's
+`update(number=Subquery(...))`. It correlates to the row being updated through [`OuterRef`](@ref), and
+its values are bound in the `SET` clause:
+
+```julia
+# Driver 1's number becomes the car number of their latest race
+latest = M.Result.objects
+latest.filter("driverid" => OuterRef("driverid"))
+latest.order_by("-raceid__date")
+latest.limit(1)
+latest.values("number")
+
+query = M.Driver.objects
+query.filter("driverid" => 1)
+query.update("number" => Subquery(latest))
+```
+
+```sql
+UPDATE "driver" AS "Tb"
+SET "number" = (SELECT
+    "R1"."number" as "number"
+FROM "result" as "R1"
+ INNER JOIN "race" AS "R1_1" ON "R1"."raceid" = "R1_1"."raceid"
+WHERE "R1"."driverid" = "Tb"."driverid"
+ORDER BY "R1_1"."date" DESC NULLS FIRST
+LIMIT $2
+)
+WHERE "Tb"."driverid" = $1
+```
+
+The same type checks apply: a subquery that projects a date or a UUID is refused into a number field.
+
+### `Value(x)` writes `x`
+
+`Value(x)` wraps a literal, so `update("number" => Value(44))` is `update("number" => 44)`: the same
+checks, the same statement and the same bound value. A `Value` around an expression, such as
+`Value(F("driverid"))`, raises `InvalidValueError`: write the expression itself.

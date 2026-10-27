@@ -88,6 +88,10 @@ It is also a **filter value** (#926), as in Django's `filter(grid=Subquery(...))
 `F("milliseconds") == Subquery(fastest)`, a `Q`/`When` condition and a join condition.
 `@in`/`@nin` take the query itself instead, unwrapped.
 
+It is also an **`update` value** (#1320), as in Django's `update(number=Subquery(...))`:
+`update("number" => Subquery(latest))` renders `SET "number" = (SELECT …)`. A subquery that is no
+number is refused into a number field, as an `F` expression is (#1297).
+
 !!! note "Outer `GROUP BY` — guarded (#194)"
     A correlated subquery that is evaluated *after* the outer query groups — in the `SELECT` list or
     in `HAVING` — is only well-defined when its correlated column is grouped. When it is not, PormG

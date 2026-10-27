@@ -502,15 +502,25 @@ end
 _write_formatter(f_meta, conn) = f_meta isa Models.sDurationField ? value_formatter(CInterval(), conn) : f_meta.formatter
 _write_formatter(f_meta, ::Nothing) = f_meta.formatter
 
+# Every expression `update` writes into its SET clause as SQL (#1320): an `F` expression, a function,
+# a joined-copy or CTE column and a scalar `Subquery`. `Value(x)` is not one: it wraps a literal, and
+# `update` writes `x` (`update()` unwraps it before validating).
+const _SetExpression = Union{SQLTypeF,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE,SubqueryObject}
+
+_expression_noun(::Union{SQLTypeF,SQLTypeFunction}) = "an F expression or a SQL function"
+_expression_noun(::SQLTypeJoined) = "a joined column"
+_expression_noun(::SQLTypeCTE) = "a CTE column"
+_expression_noun(::SubqueryObject) = "a subquery"
+
 # #1283 — the refusal of an SQL expression where a value is written: every writer but `update`, which
 # writes one into its SET clause as SQL. One text for `_validate_field_value` (step 4) and the bulk
 # writers' depuration pass, which runs the bare formatter first and would otherwise report its
 # `MethodError` instead. Names the expression's type, never the expression.
 function _refuse_expression_value(model::PormGModel, field::AbstractString, value, operation::AbstractString)
-  (value isa SQLTypeF || value isa SQLTypeFunction) || return nothing
+  value isa _SetExpression || return nothing
   expr_type = nameof(typeof(value))
   _validation_error(String(operation), model, String(field),
-    "an F expression or a SQL function ($(expr_type)) is not a value: `update` writes one into the column as SQL, and $(operation) takes values only";
+    "$(_expression_noun(value)) ($(expr_type)) is not a value: `update` writes one into the column as SQL, and $(operation) takes values only";
     suggestion = "write the value itself, or write the row and then set the column with filter(…).update(\"$(field)\" => expression)",
     kind = :type)
 end
@@ -538,9 +548,9 @@ Checks:
 Returns `true` if valid. An unknown field **name** throws an `UnknownFieldError` (#462); every
 other rejection — a bad **value**, a protected primary key, a many-to-many relation, a generated
 column (#1032) — throws an `InvalidValueError` (#231; was `ErrorException`).
-An SQL expression (`SQLTypeF`, `SQLTypeFunction`) skips the value checks under `update`, which writes
-it into the statement as SQL; under any other operation it is refused as an `InvalidValueError` of
-kind `:type` (#1283).
+An SQL expression (an `F` expression, a SQL function, a `Joined` or `CTE` column, a `Subquery`) skips
+the value checks under `update`, which writes it into the statement as SQL (#1320); under any other
+operation it is refused as an `InvalidValueError` of kind `:type` (#1283).
 """
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
                              allow_generated::Bool = false)
@@ -577,11 +587,13 @@ So a check added to the write path is in this one too. This includes:
 - a value the engine cannot bind.
 
 `create`'s rules apply: a primary key may be given, and a generated column may not. `update`
-also refuses a primary key. It checks values, not expressions: `update` writes an `F` expression
-or a SQL function into the statement as SQL and resolves the names inside it when the statement is
-built, so a double's `update` passes such a value through without calling this. `create` does not
+also refuses a primary key. It checks values, not expressions: `update` writes an `F` expression,
+a SQL function, a `Joined` column or a `Subquery` into the statement as SQL and resolves the names
+inside it when the statement is built, so a double's `update` passes such a value through without
+calling this. `create` does not
 accept one, and neither does this: for any field, both raise an `InvalidValueError` of kind `:type`
-that names the field and says `update` writes expressions (#1283).
+that names the field and says `update` writes expressions (#1283). `update` writes `Value(x)` as `x`,
+while this refuses a `Value` as `create` does, so a double's `update` unwraps it before calling this.
 
 What it does **not** check is what only the database knows: uniqueness, foreign keys, `CHECK`
 constraints, and a row's other fields. It sends nothing. It needs the model's connection key to be
@@ -659,8 +671,10 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
     #    its SET clause as SQL, so its check ends here; every other writer binds values only, where it
     #    reached the field's formatter and raised a raw `MethodError` naming no field (#1283). Django
     #    refuses an `F()` the same way ("F() expressions can only be used to update, not to insert");
-    #    PormG refuses every function too, a column reference or not.
-    if value isa SQLTypeF || value isa SQLTypeFunction
+    #    PormG refuses every function too, a column reference or not. A joined or CTE column and a
+    #    `Subquery` are SQL in the same way (#1320): skipped, they reach the SET branch, whose type
+    #    checks (#1279, #1297) read them as they read an `F` expression.
+    if value isa _SetExpression
         operation == "update" && return true
         _refuse_expression_value(model, field, value, operation)
     end

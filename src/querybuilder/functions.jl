@@ -162,6 +162,10 @@ means, to 15 significant digits.
 A `Sum` over a `BooleanField` is refused with a `QueryBuildError` on every engine (#953): the query
 does not say which number a flag counts as. Count the true rows explicitly —
 `Sum(When("is_active" => true, then = 1, otherwise = 0))`.
+
+A `Sum` over a duration is the total duration. A `Sum` over a date, a timestamp, a time or a UUID is
+refused with a `QueryBuildError` on every engine (#1387): none is a number. Sum the number you mean,
+such as `Sum(Extract("time", "hour"))`.
 """
 function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
@@ -206,6 +210,10 @@ which PormG reads as a `Decimal` to 15 significant digits.
 
 An `Avg` over a `BooleanField` is refused with a `QueryBuildError`, as [`Sum`](@ref) is (#953): the
 share of true rows is `Avg(When("is_active" => true, then = 1, otherwise = 0))`.
+
+The mean of a duration is a duration. An `Avg` over a date, a timestamp, a time or a UUID is refused
+with a `QueryBuildError` on every engine (#1387): none is a number. Average the number you mean, such
+as `Avg("date__@year")`.
 
 See also [Filters and Aggregates](@ref).
 """

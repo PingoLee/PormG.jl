@@ -864,8 +864,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       # precision built where the engine has it). It asks at the widest scale, which no number
       # exceeds, so a decimal or float branch ahead of a text one (`Coalesce("price", "surname")`)
       # does not answer first; the classifier only compares the scale.
+      # #1387: a time renders through the text formatter, but it is a time, which the operand-domain
+      # check after Phase 3 refuses with its own reason; so is a date, a timestamp or a UUID.
       divergent = _scale_divergent_operand(v.column, digits > 0 ? Int(digits) : typemax(Int), instruc)
-      divergent !== nothing && divergent[1] === :text && throw(_round_text_refusal(digits, divergent[2]))
+      divergent !== nothing && divergent[1] === :text && !_non_number_operand(v.column, instruc) &&
+        throw(_round_text_refusal(digits, divergent[2]))
     end
   end
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is). An

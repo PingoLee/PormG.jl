@@ -526,7 +526,9 @@ number, so none of them has a meaning over one. PostgreSQL raised at the server,
 `HH:MM:SS` text (`Round(F("fastestlaptime"))` read `0.0`), and MySQL on the count of microseconds. For
 the magnitude of an interval, write `Greatest(d, d * -1)`. For its seconds, write `Extract(d, "epoch")`
 on PostgreSQL and MySQL, and apply the function to that; SQLite has no `EPOCH` part. `Sum` and `Avg`
-mean a duration's total and mean, and keep building on every engine.
+mean a duration's total and mean, and keep building on every engine. A date, a timestamp, a time or a
+UUID is refused under all of them, `Sum` and `Avg` included (#1387; see
+[Mathematical Functions](functions_and_dates.md#Mathematical-Functions)).
 
 On MySQL a date part of a duration expression (`Extract(F("start_at") - F("date"), "hour")`, a
 `Sum` of a duration under `Extract(…, "second")`) is refused too, since MySQL holds the duration as its

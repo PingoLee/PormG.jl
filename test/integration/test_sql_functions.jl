@@ -2878,3 +2878,33 @@ end
     q.values("k" => Case(When("raceid" => 0, then = Value(Date(2000, 1, 1))), default = zdt, output_field = "date"))
     @test Date(string(only(q.list())[:k])[1:10]) == Date(2020, 12, 31)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1387: a number function over a date, a timestamp, a time or a UUID is refused; the numbers it names
+# read back on every engine
+# `Round("date")`, `Sum("start_at")`, `Avg("time")` and `Round("uuid_token")` raise `QueryBuildError`
+# before any SQL runs. SQLite used to read `Round("date")` as the year's digits and `Avg("time")` as the
+# hours of the `HH:MM:SS` text, and PostgreSQL failed at the server. The spellings the refusal names
+# read the number they mean: `Round(Extract("date", "year"))` is the race's year, `Sum(Extract("time",
+# "hour"))` the start hours added up, and `F("raceid__date") - F("driverid__dob")` the driver's age in
+# days, on every engine.
+# Why: none of these kinds is a number, so no engine had an answer the function means; the remedy must
+# work on the live engine, not only build.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1387: a number function over a date, a time or a UUID is refused; the parts it names read back" begin
+    for (q, expr) in ((M.Race.objects, Round("date")), (M.Race.objects, Sum("start_at")),
+                      (M.Race.objects, Avg("time")), (M.Field_validation_scratch.objects, Round("uuid_token")))
+        e = try; q.values("v" => expr).list(); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("(#1387)", sprint(showerror, e))
+    end
+    r = only(M.Race.objects.filter("raceid" => 1).values("date", "y" => Round(Extract("date", "year"))).list())
+    @test r[:y] == year(r[:date])
+    timed = M.Race.objects.filter("year" => 2009, "time__@isnull" => false).values("time").list()
+    @test !isempty(timed)
+    total = only(M.Race.objects.filter("year" => 2009, "time__@isnull" => false).
+        values("h" => Sum(Extract("time", "hour"))).list())[:h]
+    @test total == sum(hour(t[:time]) for t in timed)
+    a = only(M.Result.objects.filter("resultid" => 1).
+        values("raceid__date", "driverid__dob", "days" => F("raceid__date") - F("driverid__dob")).list())
+    @test a[:days] == Dates.value(a[:raceid__date] - a[:driverid__dob])
+end

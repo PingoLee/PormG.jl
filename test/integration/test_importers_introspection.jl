@@ -38,7 +38,6 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &&
 @testset "Schema Importer / Introspection ($(PORMG_DB_FOLDER))" begin
   settings = PormG.config[PORMG_DB_FOLDER]
   pool = settings.connections
@@ -61,7 +60,7 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
               # deliberately avoided while the generic arm could still abort the read.
               "pormg_it_expr_defaults")
   drop_fixtures() = for t in fixtures
-    try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
+    try; ddl(engine_sql("DROP TABLE IF EXISTS \"$(t)\"")); catch; end
   end
 
   # Each engine's own DDL (#1179). The VARCHAR/NUMERIC primary keys only stress the
@@ -69,18 +68,23 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # key reads as the `UUIDField(primary_key = true)` that renders it there (#522), the INTEGER
   # one as an `IDField`; either way a "PK, no crash" check on the SQLite introspection path.
   #
-  # Whether a textual fixture column below declares a length: `VARCHAR(n)` on PostgreSQL, a bare
-  # `TEXT` on SQLite. The expectations that follow from the length read this, not the engine.
-  sized_text = by_engine(postgres = true, sqlite = false)
+  # Whether a textual fixture column below declares a length: `VARCHAR(n)` on PostgreSQL and MySQL, a
+  # bare `TEXT` on SQLite. The expectations that follow from the length read this, not the engine.
+  sized_text = by_engine(postgres = true, sqlite = false, mysql = true)
+  # MySQL's rows (#1362) declare each foreign key as a table-level `FOREIGN KEY` clause: MySQL 8.4 parses
+  # an inline column `REFERENCES t(c)` and creates no constraint (measured: the column read back plain).
   natural_pk_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_natural_key" (code VARCHAR(20) PRIMARY KEY, label VARCHAR(100))""",
-    sqlite = """CREATE TABLE "pormg_it_natural_key" (code TEXT PRIMARY KEY, label TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_natural_key" (code TEXT PRIMARY KEY, label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_natural_key` (code VARCHAR(20) PRIMARY KEY, label VARCHAR(100))""")
   numeric_pk_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_numeric_key" (id NUMERIC(10,0) PRIMARY KEY, amount NUMERIC(8,2))""",
-    sqlite = """CREATE TABLE "pormg_it_numeric_key" (id INTEGER PRIMARY KEY, amount REAL)""")
+    sqlite = """CREATE TABLE "pormg_it_numeric_key" (id INTEGER PRIMARY KEY, amount REAL)""",
+    mysql = """CREATE TABLE `pormg_it_numeric_key` (id NUMERIC(10,0) PRIMARY KEY, amount NUMERIC(8,2))""")
   ignored_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note VARCHAR(50))""",
-    sqlite = """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_ignored` (id INTEGER PRIMARY KEY, note VARCHAR(50))""")
 
   # #292 fixture: one parent plus a child carrying one FK per referential action. The SET DEFAULT
   # column has a REAL column default, which is the combination #287 made a hard failure and #291
@@ -88,7 +92,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # for it (#417) — it had the identical on_delete omission as ForeignKey.
   fk_parent_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_fk_parent" (id BIGINT PRIMARY KEY, label VARCHAR(50))""",
-    sqlite = """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_fk_parent` (id BIGINT PRIMARY KEY, label VARCHAR(50))""")
   fk_child_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_fk_child" (
          id            BIGINT PRIMARY KEY,
@@ -107,6 +112,17 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
          fk_setdefault INTEGER DEFAULT 1 REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET DEFAULT,
          fk_plain      INTEGER REFERENCES "pormg_it_fk_parent"(id),
          fk_o2o        INTEGER UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
+       )""",
+    mysql = """CREATE TABLE `pormg_it_fk_child` (
+         id            BIGINT PRIMARY KEY,
+         fk_cascade    BIGINT, fk_restrict BIGINT, fk_setnull BIGINT, fk_setdefault BIGINT DEFAULT 1,
+         fk_plain      BIGINT, fk_o2o BIGINT UNIQUE,
+         FOREIGN KEY (fk_cascade) REFERENCES `pormg_it_fk_parent`(id) ON DELETE CASCADE,
+         FOREIGN KEY (fk_restrict) REFERENCES `pormg_it_fk_parent`(id) ON DELETE RESTRICT,
+         FOREIGN KEY (fk_setnull) REFERENCES `pormg_it_fk_parent`(id) ON DELETE SET NULL,
+         FOREIGN KEY (fk_setdefault) REFERENCES `pormg_it_fk_parent`(id) ON DELETE SET DEFAULT,
+         FOREIGN KEY (fk_plain) REFERENCES `pormg_it_fk_parent`(id),
+         FOREIGN KEY (fk_o2o) REFERENCES `pormg_it_fk_parent`(id) ON DELETE CASCADE
        )""")
 
   # #389 fixture: the ONLY mixed-case identifiers in this file. Every other fixture is lowercase,
@@ -118,7 +134,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # transform: one identifier, one spelling, on every side.
   mixed_parent_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_MixedParent" ("Id" BIGINT PRIMARY KEY, "Label" VARCHAR(50))""",
-    sqlite = """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_MixedParent` (`Id` BIGINT PRIMARY KEY, `Label` VARCHAR(50))""")
   mixed_child_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_MixedChild" (
          id         BIGINT PRIMARY KEY,
@@ -127,6 +144,11 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     sqlite = """CREATE TABLE "pormg_it_MixedChild" (
          id         INTEGER PRIMARY KEY,
          "ParentId" INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )""",
+    mysql = """CREATE TABLE `pormg_it_MixedChild` (
+         id         BIGINT PRIMARY KEY,
+         `ParentId` BIGINT,
+         FOREIGN KEY (`ParentId`) REFERENCES `pormg_it_MixedParent`(`Id`) ON DELETE CASCADE
        )""")
 
   # #414 fixture: an identifier CONTAINING A SPACE, on the two axes that used to disagree about it.
@@ -154,6 +176,12 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
          id           INTEGER PRIMARY KEY,
          "driver ref" TEXT,
          "Parent Id"  INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )""",
+    mysql = """CREATE TABLE `pormg_it_spaced` (
+         id           BIGINT PRIMARY KEY,
+         `driver ref` VARCHAR(30),
+         `Parent Id`  BIGINT,
+         FOREIGN KEY (`Parent Id`) REFERENCES `pormg_it_MixedParent`(`Id`) ON DELETE CASCADE
        )""")
 
   # #415 fixture A: a foreign key that references a NON-PRIMARY-KEY unique column. Legal wherever
@@ -163,7 +191,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # of it, and the DDL PormG emitted named a different column than the live constraint does.
   uq_parent_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_uq_parent" (id BIGINT PRIMARY KEY, ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""",
-    sqlite = """CREATE TABLE "pormg_it_uq_parent" (id INTEGER PRIMARY KEY, ukey TEXT UNIQUE, label TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_uq_parent" (id INTEGER PRIMARY KEY, ukey TEXT UNIQUE, label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_uq_parent` (id BIGINT PRIMARY KEY, ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""")
   uq_child_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_uq_child" (
          id         BIGINT PRIMARY KEY,
@@ -172,6 +201,11 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     sqlite = """CREATE TABLE "pormg_it_uq_child" (
          id         INTEGER PRIMARY KEY,
          parent_key TEXT REFERENCES "pormg_it_uq_parent"(ukey) ON DELETE CASCADE
+       )""",
+    mysql = """CREATE TABLE `pormg_it_uq_child` (
+         id         BIGINT PRIMARY KEY,
+         parent_key VARCHAR(20),
+         FOREIGN KEY (parent_key) REFERENCES `pormg_it_uq_parent`(ukey) ON DELETE CASCADE
        )""")
 
   # #415 fixture B: a COMPOSITE-KEYED parent carrying both remaining shapes on one child table.
@@ -193,6 +227,9 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
        )""",
     sqlite = """CREATE TABLE "pormg_it_comp_parent" (
          a INTEGER UNIQUE, b INTEGER, label TEXT, PRIMARY KEY (a, b)
+       )""",
+    mysql = """CREATE TABLE `pormg_it_comp_parent` (
+         a BIGINT UNIQUE, b BIGINT, label VARCHAR(50), PRIMARY KEY (a, b)
        )""")
   comp_child_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_comp_child" (
@@ -208,6 +245,14 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
          ca       INTEGER,
          cb       INTEGER,
          FOREIGN KEY (ca, cb) REFERENCES "pormg_it_comp_parent"(a, b) ON DELETE CASCADE
+       )""",
+    mysql = """CREATE TABLE `pormg_it_comp_child` (
+         id       BIGINT PRIMARY KEY,
+         parent_a BIGINT,
+         ca       BIGINT,
+         cb       BIGINT,
+         FOREIGN KEY (parent_a) REFERENCES `pormg_it_comp_parent`(a) ON DELETE SET NULL,
+         FOREIGN KEY (ca, cb) REFERENCES `pormg_it_comp_parent`(a, b) ON DELETE CASCADE
        )""")
 
   # #415 fixture C: a parent with NO PRIMARY KEY, only a UNIQUE column. Legal on both engines — a
@@ -219,7 +264,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # join is what makes the two engines agree, and this is the fixture that says so.
   nopk_parent_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_nopk_parent" (ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""",
-    sqlite = """CREATE TABLE "pormg_it_nopk_parent" (ukey TEXT UNIQUE, label TEXT)""")
+    sqlite = """CREATE TABLE "pormg_it_nopk_parent" (ukey TEXT UNIQUE, label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_nopk_parent` (ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""")
   nopk_child_ddl = by_engine(
     postgres = """CREATE TABLE "pormg_it_nopk_child" (
          id         BIGINT PRIMARY KEY,
@@ -228,6 +274,11 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     sqlite = """CREATE TABLE "pormg_it_nopk_child" (
          id         INTEGER PRIMARY KEY,
          parent_key TEXT REFERENCES "pormg_it_nopk_parent"(ukey) ON DELETE RESTRICT
+       )""",
+    mysql = """CREATE TABLE `pormg_it_nopk_child` (
+         id         BIGINT PRIMARY KEY,
+         parent_key VARCHAR(20),
+         FOREIGN KEY (parent_key) REFERENCES `pormg_it_nopk_parent`(ukey) ON DELETE RESTRICT
        )""")
 
   # #318: TWO separate single-column UNIQUEs on one table plus a composite. This is the ONLY place
@@ -242,6 +293,10 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     sqlite = """CREATE TABLE "pormg_it_uniq" (
          id INTEGER PRIMARY KEY, slug TEXT UNIQUE, token TEXT UNIQUE,
          a INTEGER, b INTEGER, plain TEXT, UNIQUE (a, b)
+       )""",
+    mysql = """CREATE TABLE `pormg_it_uniq` (
+         id BIGINT PRIMARY KEY, slug VARCHAR(60) UNIQUE, token VARCHAR(60) UNIQUE,
+         a INT, b INT, plain TEXT, UNIQUE (a, b)
        )""")
 
   drop_fixtures()                      # clean slate if a prior run aborted mid-test
@@ -255,7 +310,7 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   ddl(spaced_ddl)
   # The index axis of #414. NOT on the UNIQUE column: the `indexes` CTE excludes `indisunique`, so a
   # unique column's backing index never reaches `index_map` and the assertion would be vacuous.
-  ddl("""CREATE INDEX "pormg_it_spaced_ref_idx" ON "pormg_it_spaced" ("driver ref")""")
+  ddl(engine_sql("""CREATE INDEX "pormg_it_spaced_ref_idx" ON "pormg_it_spaced" ("driver ref")"""))
   ddl(uq_parent_ddl)
   ddl(uq_child_ddl)
   ddl(comp_parent_ddl)
@@ -268,7 +323,7 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # introspection, so `inspectdb` on a legacy schema silently dropped them; reading them back is
   # what makes `Models.Index` a round trip rather than a one-way declaration. The reversed order is
   # the mutation gate — a reader aggregating by attribute number returns (a, b) here.
-  ddl("""CREATE INDEX "pormg_it_uniq_ba_idx" ON "pormg_it_uniq" (b, a)""")
+  ddl(engine_sql("""CREATE INDEX "pormg_it_uniq_ba_idx" ON "pormg_it_uniq" (b, a)"""))
   # …and a composite index with a DESC key. Until #29 PormG refused to read it — no declaration could
   # carry the order, so it would have regenerated ascending under the developer's name. It is read
   # now, with the direction, as `Models.Index(fields = ("-b", "a"))`: unmarked, so hand-made, so
@@ -278,7 +333,7 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # `indoption` is an `int2vector` with lower bound 0 while `WITH ORDINALITY` counts from 1, so an
   # off-by-one subscript examined the NEXT column's flags and missed a descending first column
   # entirely — with no false positives, so every other test stayed green.
-  ddl("""CREATE INDEX "pormg_it_uniq_desc_idx" ON "pormg_it_uniq" (b DESC, a)""")
+  ddl(engine_sql("""CREATE INDEX "pormg_it_uniq_desc_idx" ON "pormg_it_uniq" (b DESC, a)"""))
   # Three more shapes, each reached by a different per-column vector of PostgreSQL's catalog — so
   # they are fixtures where that catalog is read (`catalog_ix`), and the expected index set below
   # follows from them:
@@ -289,7 +344,7 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   #          re-emitting it as NULLS LAST.
   #   coll — an explicit `COLLATE` (`indcollation`), the PostgreSQL twin of SQLite's non-BINARY
   #          `coll` filter. Without it the two backends disagree on the same schema.
-  catalog_ix = by_engine(postgres = true, sqlite = false)
+  catalog_ix = by_engine(postgres = true, sqlite = false, mysql = false)
   if catalog_ix
     ddl("""CREATE INDEX "pormg_it_uniq_opc_idx"  ON "pormg_it_uniq" (plain text_pattern_ops, slug)""")
     ddl("""CREATE INDEX "pormg_it_uniq_nf_idx"   ON "pormg_it_uniq" (b NULLS FIRST, a)""")
@@ -329,7 +384,11 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
       sqlite = """CREATE TABLE "pormg_it_comma, parent" (
            id INTEGER PRIMARY KEY,
            "Ref, Key" TEXT UNIQUE,
-           label TEXT)"""))
+           label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_comma, parent` (
+           id BIGINT PRIMARY KEY,
+           `Ref, Key` VARCHAR(20) UNIQUE,
+           label VARCHAR(50))"""))
 
   ddl(by_engine(
       postgres = """CREATE TABLE "pormg_it_comma_child" (
@@ -345,15 +404,25 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
            plain_id      TEXT REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE SET NULL,
            "Idx, Col"    TEXT,
            note          TEXT NOT NULL DEFAULT 'ab',
-           team          TEXT DEFAULT 'Ferrari, Scuderia')"""))
+           team          TEXT DEFAULT 'Ferrari, Scuderia')""",
+    mysql = """CREATE TABLE `pormg_it_comma_child` (
+           id BIGINT PRIMARY KEY,
+           `Race, Total` VARCHAR(20),
+           plain_id      VARCHAR(20),
+           `Idx, Col`    VARCHAR(30),
+           note          TEXT NOT NULL DEFAULT (concat('a', 'b')),
+           team          VARCHAR(40) DEFAULT 'Ferrari, Scuderia',
+           FOREIGN KEY (`Race, Total`) REFERENCES `pormg_it_comma, parent`(`Ref, Key`) ON DELETE CASCADE,
+           FOREIGN KEY (plain_id) REFERENCES `pormg_it_comma, parent`(`Ref, Key`) ON DELETE SET NULL)"""))
 
-  ddl("""CREATE INDEX "pormg_it_comma_idx" ON "pormg_it_comma_child" ("Idx, Col")""")
+  ddl(engine_sql("""CREATE INDEX "pormg_it_comma_idx" ON "pormg_it_comma_child" ("Idx, Col")"""))
 
   # The PK axis needs its own table: `pk_cols` and `columns` tore on the same name, so the two sides
   # agreed on the same wrong names and the table came back with TWO phantom keys and no real one.
   ddl(by_engine(
       postgres = """CREATE TABLE "pormg_it_comma_key" ("Key, Col" BIGINT PRIMARY KEY, label VARCHAR(20))""",
-      sqlite = """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)"""))
+      sqlite = """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)""",
+    mysql = """CREATE TABLE `pormg_it_comma_key` (`Key, Col` BIGINT PRIMARY KEY, label VARCHAR(20))"""))
 
   # #472: expression defaults on columns that are NOT text — the shape that aborted the entire
   # `convert_schema_to_models` read, and therefore `inspectdb` and `makemigrations`, over a single
@@ -371,6 +440,10 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
   # exactly why a live fixture is worth having for it. The PostgreSQL spelling is `concat(...)`
   # rather than `now()` because PostgreSQL REFUSES `text DEFAULT now()`: there is no implicit cast
   # from timestamptz to text, so the fixture would fail to create.
+  #
+  # MySQL's key is `AUTO_INCREMENT`: an `IDField` is `BIGINT AUTO_INCREMENT` there, and `inspectdb` warns
+  # that a key without it will not converge (`_inspectdb_id_pk`), which the round trip below would count
+  # against the expression defaults it is about.
   ddl(by_engine(
       postgres = """CREATE TABLE "pormg_it_expr_defaults" (
            id BIGINT PRIMARY KEY,
@@ -388,7 +461,16 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
            n          INTEGER DEFAULT (abs(random()) % 10),
            ok         INTEGER DEFAULT 5,
            note       TEXT DEFAULT 'Ferrari',
-           note_expr  TEXT DEFAULT CURRENT_TIMESTAMP)"""))
+           note_expr  TEXT DEFAULT CURRENT_TIMESTAMP)""",
+    mysql = """CREATE TABLE `pormg_it_expr_defaults` (
+           id BIGINT AUTO_INCREMENT PRIMARY KEY,
+           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           d          DATE DEFAULT (CURRENT_DATE),
+           n          INT DEFAULT (floor(rand() * 10)),
+           u          CHAR(36) DEFAULT (uuid()),
+           ok         INT DEFAULT 5,
+           note       VARCHAR(20) DEFAULT 'Ferrari',
+           note_expr  TEXT DEFAULT (concat('a', 'b')))"""))
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -577,8 +659,9 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     @test [uc.fields for uc in ucs] == [["a", "b"]]
     # PostgreSQL names the constraint itself (`<table>_<cols>_key`) and that name is kept, so a
     # re-migration reproduces it. SQLite's `sqlite_autoindex_*` is reserved and is NOT written into
-    # the models file: PormG derives a name instead, and a derived name matches any live one.
-    @test isequal(ucs[1].name, by_engine(postgres = "pormg_it_uniq_a_b_key", sqlite = nothing))
+    # the models file: PormG derives a name instead, and a derived name matches any live one. MySQL
+    # names an unnamed UNIQUE index after its first column (`a`, measured), and that name is kept.
+    @test isequal(ucs[1].name, by_engine(postgres = "pormg_it_uniq_a_b_key", sqlite = nothing, mysql = "a"))
     @test occursin("Models.UniqueConstraint(fields = (\"a\", \"b\",)", uniq_src)
     @test [uc.fields for uc in uniq_reloaded.cache["unique_constraints"]["constraints"]] == [["a", "b"]]
 
@@ -726,7 +809,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     # advising `IntegerField` would trade the lost relation for a permanent `:type` proposal.
     # Per engine, from each fixture's DDL: SQLite's declares `INTEGER`, which is a different (correct)
     # answer.
-    member_type = by_engine(postgres = PormG.Models.sBigIntegerField, sqlite = PormG.Models.sIntegerField)
+    member_type = by_engine(postgres = PormG.Models.sBigIntegerField, sqlite = PormG.Models.sIntegerField,
+                            mysql = PormG.Models.sBigIntegerField)
     @test comp_child.fields["ca"] isa member_type
     @test comp_child.fields["cb"] isa member_type
 
@@ -811,9 +895,9 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     #    `, `, and it is the stronger one for a tear because it compares the text byte for byte.
     @test haskey(comma_child.fields, "note")
     @test !comma_child.fields["note"].null
-    # PostgreSQL's fixture default is the expression `concat(...)`, which is not kept as `default=`;
-    # SQLite's is the literal `'ab'`, which is.
-    @test isequal(comma_child.fields["note"].default, by_engine(postgres = nothing, sqlite = "ab"))
+    # PostgreSQL's and MySQL's fixture default is the expression `concat(...)`, which is not kept as
+    # `default=`; SQLite's is the literal `'ab'`, which is.
+    @test isequal(comma_child.fields["note"].default, by_engine(postgres = nothing, sqlite = "ab", mysql = nothing))
 
     # 7. The PK axis. `primary_keys` and `columns` tore on the SAME name, so the two sides agreed
     #    on both wrong names and the table came back with two phantom keys and no real column.
@@ -936,7 +1020,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
 
     # 1. Every column arrived. Pre-fix, none did — there was no model at all to look at.
     expected_cols = by_engine(postgres = ["id", "created_at", "d", "n", "u", "ok", "note", "note_expr"],
-                              sqlite = ["id", "created_at", "d", "n", "ok", "note", "note_expr"])
+                              sqlite = ["id", "created_at", "d", "n", "ok", "note", "note_expr"],
+                              mysql = ["id", "created_at", "d", "n", "u", "ok", "note", "note_expr"])
     @test Set(keys(expr_model.fields)) == Set(expected_cols)
 
     # 2. The expression defaults are CARRIED as `db_default` (#496) and the COLUMN keeps its real
@@ -957,9 +1042,10 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     #     spelling `pg_get_expr` / `PRAGMA table_info` hands back.
     @test expr_model.fields["d"].db_default == "CURRENT_DATE"
     @test expr_model.fields["created_at"].db_default ==
-          by_engine(postgres = (postgres = "now()",), sqlite = "CURRENT_TIMESTAMP")
+          by_engine(postgres = (postgres = "now()",), sqlite = "CURRENT_TIMESTAMP", mysql = "CURRENT_TIMESTAMP")
     @test expr_model.fields["n"].db_default ==
-          by_engine(postgres = (postgres = "random() * (10)::double precision",), sqlite = (sqlite = "abs(random()) % 10",))
+          by_engine(postgres = (postgres = "random() * (10)::double precision",), sqlite = (sqlite = "abs(random()) % 10",),
+                    mysql = (mysql = "floor((rand() * 10))",))
 
     # 3. …and NOT NULL survived. The guard rebuilds the field without the default, so a retry that
     #    lost the other kwargs would report this column nullable and make every `makemigrations`
@@ -979,7 +1065,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     @test expr_model.fields["note_expr"] isa PormG.Models.sTextField
     @test expr_model.fields["note_expr"].default === nothing
     @test expr_model.fields["note_expr"].db_default ==
-          by_engine(postgres = (postgres = "concat('a'::text, 'b'::text)",), sqlite = "CURRENT_TIMESTAMP")
+          by_engine(postgres = (postgres = "concat('a'::text, 'b'::text)",), sqlite = "CURRENT_TIMESTAMP",
+                    mysql = (mysql = "concat('a','b')",))
 
     # 5. `gen_random_uuid()` on a UUID column, the most common uuid default there is — in the
     #    fixture where it exists (`u`; SQLite has no UUID type). It reaches a DIFFERENT arm from the
@@ -988,7 +1075,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     if "u" in expected_cols
       @test expr_model.fields["u"] isa PormG.Models.sUUIDField
       @test expr_model.fields["u"].default === nothing
-      @test expr_model.fields["u"].db_default == (postgres = "gen_random_uuid()",)
+      @test expr_model.fields["u"].db_default == by_engine(postgres = (postgres = "gen_random_uuid()",),
+                                                            mysql = (mysql = "uuid()",))
     end
 
     # 6. NOTHING IS REPORTED any more. The warning existed to tell the user a default had been
@@ -1002,7 +1090,8 @@ not_yet_on(:mysql, "the importer corpus' per-engine DDL and readings (#1362)") &
     # checks `check()` against exactly this list — the diagnostic survives even though the warning
     # does not.
     expr_expected_cols = Set(by_engine(postgres = ["created_at", "d", "n", "u", "note_expr"],
-                                       sqlite = ["created_at", "d", "n", "note_expr"]))
+                                       sqlite = ["created_at", "d", "n", "note_expr"],
+                                       mysql = ["created_at", "d", "n", "u", "note_expr"]))
 
     # 7. The generated model file carries the expression as `db_default=` and never as `default=`.
     #    `Model_to_str` is what `inspectdb` writes to disk, so this is the artifact the user
@@ -1144,25 +1233,31 @@ end
 # when it applies the default, the live half hashed BY THE SERVER — so `owned !== nothing` below is
 # also the proof that PostgreSQL's `sha256` and Julia's `live_default_hash` agree. Plan → apply →
 # read → replan, the #751 pattern, then the three ways a marker stops vouching. SQLite keeps the
-# declared text verbatim and gets no marker; its arm pins that it still converges.
+# declared text verbatim and gets no marker; its arm pins that it still converges. MySQL re-prints the
+# default too (`lower(_utf8mb4'OPEN')`, read in declarable form) and stamps its marker in the column
+# comment, through a `PREPARE`d `MODIFY` rather than a `DO` block (#1362).
 # Mutation gate: the unit twin (test/unit/test_db_default.jl) carries it; this is the live half.
 # ─────────────────────────────────────────────────────────────────────────────
-not_yet_on(:mysql, "how MySQL re-spells an expression default, and its marker (#1362)") &&
 @testset "An expression default the deparser re-spells converges through its marker (#1037)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   M1037 = PormG.Models
   tbl = "pormg_it_1037"
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
-  drop1037!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  drop1037!() = try; ddl(engine_sql("DROP TABLE IF EXISTS \"$(tbl)\"")); catch; end
   pin(s) = NamedTuple{(engine_key(),)}((s,))    # pinned to the engine under test
   # Whether the engine re-spells a default, so PormG stamps an ownership marker on the column.
-  marks_default = by_engine(postgres = true, sqlite = false)
+  marks_default = by_engine(postgres = true, sqlite = false, mysql = true)
+  # The statement that stamps it, as the plan spells it.
+  stamp_sql = by_engine(postgres = "DO \$pormg\$", sqlite = "DO \$pormg\$", mysql = "PREPARE pormg_stamp")
+  # `||` is concatenation on PostgreSQL and SQLite and a logical OR on MySQL, so MySQL's declaration
+  # spells the same text with `concat`.
+  tag_sql = by_engine(postgres = "lower('A') || 'b'", sqlite = "lower('A') || 'b'", mysql = "concat(lower('A'), 'b')")
   model1037 = M1037.Model(tbl; id = M1037.IDField(),
     status = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('OPEN')")),
     code   = M1037.CharField(max_length = 20, null = true, db_default = pin("replace('P-1', '-', '')")),
     # A top-level operator: printed with outer parentheses the canonical form strips, so it is the
     # column that tells the raw `pg_get_expr` text from the canonical one (found in review).
-    tag    = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('A') || 'b'")))
+    tag    = M1037.CharField(max_length = 20, null = true, db_default = pin(tag_sql)))
   schema1037 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
     Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model1037, :exist => false))
   settings1037 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
@@ -1171,26 +1266,35 @@ not_yet_on(:mysql, "how MySQL re-spells an expression default, and its marker (#
   split1037 = split_statements
   apply1037!(plan) = foreach(sql -> foreach(ddl, split1037(sql)), values(plan))
   read1037() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
-  comment1037() = only(DataFrame(ddl("SELECT col_description('\"$(tbl)\"'::regclass, " *
-                           "(SELECT attnum FROM pg_attribute WHERE attrelid = '\"$(tbl)\"'::regclass " *
-                           "AND attname = 'status')) AS c")).c)
+  comment1037() = only(DataFrame(ddl(by_engine(
+    postgres = "SELECT col_description('\"$(tbl)\"'::regclass, " *
+               "(SELECT attnum FROM pg_attribute WHERE attrelid = '\"$(tbl)\"'::regclass " *
+               "AND attname = 'status')) AS c",
+    sqlite = "",
+    mysql = "SELECT COLUMN_COMMENT AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " *
+            "AND TABLE_NAME = '$(tbl)' AND COLUMN_NAME = 'status'"))).c)
+  # The default as the engine prints it back, in the text `read_live_schema` reports.
+  respelled = by_engine(
+    postgres = (status = "lower('OPEN'::text)", code = "replace('P-1'::text, '-'::text, ''::text)"),
+    sqlite = nothing,
+    mysql = (status = "lower('OPEN')", code = "replace('P-1','-','')"))
 
   drop1037!()
   try
     first_plan = plan1037(PormG.Migrations.LiveTable[])
     # A pinned expression renders verbatim; PostgreSQL also gets the stamp, SQLite none.
-    @test occursin("DO \$pormg\$", join(values(first_plan), "\n")) == marks_default
+    @test occursin(stamp_sql, join(values(first_plan), "\n")) == marks_default
     apply1037!(first_plan)
     live = read1037()
     @test live.columns["status"].default isa PormG.ExpressionDefault
     if marks_default
       # The deparser's spelling, which is what made the text compare churn…
-      @test live.columns["status"].default.sql == "lower('OPEN'::text)"
-      @test live.columns["code"].default.sql == "replace('P-1'::text, '-'::text, ''::text)"
+      @test live.columns["status"].default.sql == respelled.status
+      @test live.columns["code"].default.sql == respelled.code
       # …vouched for by a marker whose live half the server computed.
       @test live.columns["status"].default.owned == PormG.db_default_hash("lower('OPEN')")
       @test live.columns["code"].default.owned == PormG.db_default_hash("replace('P-1', '-', '')")
-      @test live.columns["tag"].default.owned == PormG.db_default_hash("lower('A') || 'b'")
+      @test live.columns["tag"].default.owned == PormG.db_default_hash(tag_sql)
     else
       # The declared text kept verbatim, and no marker.
       @test live.columns["status"].default.sql == "lower('OPEN')"
@@ -1202,34 +1306,44 @@ not_yet_on(:mysql, "how MySQL re-spells an expression default, and its marker (#
     # The three ways a marker stops vouching — only where there is a marker.
     if marks_default
       # 1. A comment written over the marker: the column is compared as text again, exactly as
-      #    before #1037, so it plans; applying that re-stamps and KEEPS the user's text.
-      ddl("COMMENT ON COLUMN \"$(tbl)\".status IS 'Race status, set by the steward'")
+      #    before #1037, so it plans; applying that re-stamps and KEEPS the user's text. On MySQL the
+      #    re-print of `lower('OPEN')`, in declarable form, IS the declared text (measured), so the text
+      #    compare converges without the marker and nothing is planned.
+      ddl(by_engine(postgres = "COMMENT ON COLUMN \"$(tbl)\".status IS 'Race status, set by the steward'",
+                    sqlite = "",
+                    mysql = "ALTER TABLE `$(tbl)` MODIFY COLUMN status VARCHAR(20) NULL DEFAULT (lower('OPEN')) " *
+                            "COMMENT 'Race status, set by the steward'"))
       unmarked = read1037()
       @test unmarked.columns["status"].default.owned === nothing
       replan = plan1037([unmarked])
-      @test collect(keys(replan)) == ["Alter field: status"]
-      apply1037!(replan)
-      @test startswith(comment1037(), "Race status, set by the steward pormg:default:")
-      @test isempty(plan1037([read1037()]))
-      # Re-stamping replaces the marker rather than appending a second one.
-      apply1037!(replan)
-      @test count("pormg:default:", comment1037()) == 1
+      text_converges = by_engine(postgres = false, sqlite = true, mysql = true)
+      @test collect(keys(replan)) == (text_converges ? String[] : ["Alter field: status"])
+      if !text_converges
+        apply1037!(replan)
+        @test startswith(comment1037(), "Race status, set by the steward pormg:default:")
+        @test isempty(plan1037([read1037()]))
+        # Re-stamping replaces the marker rather than appending a second one.
+        apply1037!(replan)
+        @test count("pormg:default:", comment1037()) == 1
+      end
 
       # 2. A default changed by hand keeps the comment, and the live half is what notices.
-      ddl("ALTER TABLE \"$(tbl)\" ALTER COLUMN status SET DEFAULT lower('CLOSED')")
+      ddl(by_engine(postgres = "ALTER TABLE \"$(tbl)\" ALTER COLUMN status SET DEFAULT lower('CLOSED')",
+                    sqlite = "",
+                    mysql = "ALTER TABLE `$(tbl)` ALTER COLUMN status SET DEFAULT (lower('CLOSED'))"))
       by_hand = read1037()
       @test by_hand.columns["status"].default.owned === nothing
       replan = plan1037([by_hand])
       @test collect(keys(replan)) == ["Alter field: status"]
       apply1037!(replan)
-      @test read1037().columns["status"].default.sql == "lower('OPEN'::text)"
+      @test read1037().columns["status"].default.sql == respelled.status
       @test isempty(plan1037([read1037()]))
 
       # 3. A changed declaration: the marker vouches for the OLD one, so the new one plans.
       model_b = M1037.Model(tbl; id = M1037.IDField(),
         status = M1037.CharField(max_length = 20, null = true, db_default = pin("upper('open')")),
         code   = M1037.CharField(max_length = 20, null = true, db_default = pin("replace('P-1', '-', '')")),
-        tag    = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('A') || 'b'")))
+        tag    = M1037.CharField(max_length = 20, null = true, db_default = pin(tag_sql)))
       schema1037[Symbol(tbl)][:model] = model_b
       @test collect(keys(plan1037([read1037()]))) == ["Alter field: status"]
     end
@@ -2502,7 +2616,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)
-# The live half of test/unit/test_composite_diff.jl's part-2 testsets, on both engines. A functional
+# The live half of test/unit/test_composite_diff.jl's part-2 testsets, on every engine. A functional
 # index, a partial one, an explicitly collated one and (PostgreSQL) a GIN index over an expression are
 # each created under the hashed marker of their declared text and read back with the CATALOG's text —
 # rewritten by PostgreSQL (`lower(surname::text)`), verbatim on SQLite — yet converge, because the
@@ -2512,26 +2626,31 @@ end
 # name to other text with the adopting declaration in the message. A changed condition is a
 # destructive drop and create; removing a column the text names is refused. Undeclared, PormG's go
 # and the hand-made one stays (on SQLite also once adopted: adopting writes no marker there).
+# MySQL (#1362): no partial index (`partial_indexes`, refused by the plan), so its run declares the
+# functional and the collated index; its marker is the index COMMENT, which MySQL cannot change in place,
+# so it adopts no index, as SQLite does; and its catalog text is MySQL's re-print in declarable form.
 # Dropped in `finally`.
 # Mutation gate: make `_index_definition_elements` return `nothing` and the functional and partial
 # indexes stop reading back on both engines, so the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
-not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its partial-index refusal (#1362)") &&
 @testset "Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)          # DDL: no result set on SQLite
   # Engine facts, one row each (#1179):
   #   marks_in_comment — the marker lives in the index's own COMMENT, which adopting an index writes
   #                      (after a DBA's note); on SQLite it closes the CREATE INDEX text, which
-  #                      adopting cannot rewrite, so an adopted index stays unmarked there;
+  #                      adopting cannot rewrite, so an adopted index stays unmarked there; MySQL keeps
+  #                      it in a COMMENT it cannot change in place, so it adopts none either;
+  #   partial          — the engine has a partial index (the capability table);
   #   catalog_shapes   — two more declared shapes this engine builds and reads back: a GIN index over
   #                      a tsvector expression, and a NULLS placement inside an index expression
   #                      (SQLite has neither).
-  marks_in_comment = by_engine(postgres = true, sqlite = false)
-  catalog_shapes = by_engine(postgres = true, sqlite = false)
+  marks_in_comment = by_engine(postgres = true, sqlite = false, mysql = false)
+  catalog_shapes = by_engine(postgres = true, sqlite = false, mysql = false)
+  partial = requires(:partial_indexes)
   q29b(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
   tbl = "pormg_it_29b_driver"
-  drop29b!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  drop29b!() = try; ddl(engine_sql("DROP TABLE IF EXISTS \"$(tbl)\"")); catch; end
   M29b = PormG.Models
   IX = M29b.Index
   model29b(indexes...; with_surname = true) = M29b.Model(tbl;
@@ -2553,14 +2672,18 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
     postgres = name -> (r = q29b("SELECT obj_description('\"$(name)\"'::regclass, 'pg_class') AS c")[1, :c];
                         r === missing ? nothing : String(r)),
     sqlite = name -> PormG.Migrations._sqlite_index_marker(
-                       String(q29b("SELECT sql FROM sqlite_master WHERE name = '$(name)'")[1, :sql])))
+                       String(q29b("SELECT sql FROM sqlite_master WHERE name = '$(name)'")[1, :sql])),
+    mysql = name -> (r = q29b("SELECT INDEX_COMMENT AS c FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = " *
+                              "DATABASE() AND TABLE_NAME = '$(tbl)' AND INDEX_NAME = '$(name)' LIMIT 1")[1, :c];
+                     (r === missing || isempty(r)) ? nothing : String(r)))
 
   lower = IX(expressions = ("lower(surname)",), name = "pormg_it_29b_surname_lower")
   finishers(cond) = IX(fields = ("raceid", "-points"), condition = cond, name = "pormg_it_29b_finishers")
   # An explicit collation, in each engine's own collation name.
-  collation = by_engine(postgres = "surname COLLATE \"C\"", sqlite = "surname COLLATE NOCASE")
+  collation = by_engine(postgres = "surname COLLATE \"C\"", sqlite = "surname COLLATE NOCASE",
+                        mysql = "surname COLLATE utf8mb4_0900_ai_ci")
   collated = IX(expressions = (collation,), name = "pormg_it_29b_surname_coll")
-  declared = Any[lower, finishers("position IS NOT NULL"), collated]
+  declared = partial ? Any[lower, finishers("position IS NOT NULL"), collated] : Any[lower, collated]
   catalog_shapes && push!(declared, IX(expressions = ("to_tsvector('simple', surname)",), method = "gin", name = "pormg_it_29b_surname_tsv"))
   # A NULLS placement written as an expression: PostgreSQL stores a plain column with `indoption` 1,
   # which the reader takes as text — so it is read back, and the plan converges (SQLite has no NULLS
@@ -2572,6 +2695,8 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
   try
     apply29b!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema29b(model29b()), pool,
                                                    settings29b; interactive = false))
+    # Without a partial index, its declaration is refused by the plan, naming the feature.
+    partial || @test_throws PormG.BackendCapabilityError plan29b(model29b(lower, finishers("position IS NOT NULL")))
     p = plan29b(model29b(declared...))
     @test sort(keys29b(p)) == sort(["Create index: $(n)" for n in names])
     apply29b!(p)
@@ -2586,11 +2711,14 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
     # Measured: PostgreSQL's pretty deparse (`pg_get_indexdef(oid, 0, true)`) — the cast unparenthesised,
     # a keyword-named column quoted in the predicate.
     @test byname["pormg_it_29b_surname_lower"].expressions ==
-          [by_engine(postgres = "lower(surname::text)", sqlite = "lower(surname)")]
-    fin = byname["pormg_it_29b_finishers"]
-    @test (fin.columns, fin.descending) == (["raceid", "points"], [false, true])
-    @test fin.condition == by_engine(postgres = "\"position\" IS NOT NULL", sqlite = "position IS NOT NULL")
-    @test byname["pormg_it_29b_surname_coll"].expressions == [collation]
+          [by_engine(postgres = "lower(surname::text)", sqlite = "lower(surname)", mysql = "lower(surname)")]
+    if partial
+      fin = byname["pormg_it_29b_finishers"]
+      @test (fin.columns, fin.descending) == (["raceid", "points"], [false, true])
+      @test fin.condition == by_engine(postgres = "\"position\" IS NOT NULL", sqlite = "position IS NOT NULL")
+    end
+    @test byname["pormg_it_29b_surname_coll"].expressions ==
+          [by_engine(postgres = collation, sqlite = collation, mysql = "(surname collate utf8mb4_0900_ai_ci)")]
     catalog_shapes && @test byname["pormg_it_29b_surname_tsv"].expressions == ["to_tsvector('simple'::regconfig, surname::text)"]
     @test isempty(live29b().indexes)                 # none is a `db_index`: one owner per index
     @test all(isempty, values(plan29b(model29b(declared...))))
@@ -2604,26 +2732,34 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
     # inspectdb writes the catalog's text, which plans nothing against the live table.
     read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
     src = PormG.Models.Model_to_str(read_back)
-    @test occursin(by_engine(postgres = "name = \"pormg_it_29b_finishers\", condition = \"\\\"position\\\" IS NOT NULL\")",
-                             sqlite = "name = \"pormg_it_29b_finishers\", condition = \"position IS NOT NULL\")"), src)
+    partial && @test occursin(by_engine(postgres = "name = \"pormg_it_29b_finishers\", condition = \"\\\"position\\\" IS NOT NULL\")",
+                                        sqlite = "name = \"pormg_it_29b_finishers\", condition = \"position IS NOT NULL\")"), src)
     @test occursin(by_engine(postgres = "Models.Index(expressions = (\"lower(surname::text)\",)",
-                             sqlite = "Models.Index(expressions = (\"lower(surname)\",)"), src)
+                             sqlite = "Models.Index(expressions = (\"lower(surname)\",)",
+                             mysql = "Models.Index(expressions = (\"lower(surname)\",)"), src)
     mod29b = Module()
     Core.eval(mod29b, :(import PormG.Models))
     regenerated = Core.eval(mod29b, Meta.parse(src))
     @test all(isempty, values(plan29b(regenerated)))
 
-    # A hand-made functional + partial index: read, unmarked, never planned away…
-    ddl("CREATE INDEX pormg_it_29b_hand ON \"$(tbl)\" (upper(surname)) WHERE points > 10")
+    # A hand-made functional + partial index (functional only where there is no partial one): read,
+    # unmarked, never planned away…
+    ddl(by_engine(postgres = "CREATE INDEX pormg_it_29b_hand ON \"$(tbl)\" (upper(surname)) WHERE points > 10",
+                  sqlite = "CREATE INDEX pormg_it_29b_hand ON \"$(tbl)\" (upper(surname)) WHERE points > 10",
+                  mysql = "CREATE INDEX pormg_it_29b_hand ON `$(tbl)` ((upper(surname)))"))
     marks_in_comment && ddl("COMMENT ON INDEX pormg_it_29b_hand IS 'built by ops for the standings page'")
     hand = only(c for c in live29b().composites if c.name == "pormg_it_29b_hand")
     @test hand.marker === nothing && !PormG.Migrations.composite_is_owned(hand)
     @test all(isempty, values(plan29b(model29b(declared...))))
     # …its name refused to other text, with the declaration that adopts it in the message…
-    err = try; plan29b(model29b(declared..., IX(expressions = ("upper(surname)",), name = "pormg_it_29b_hand"))); nothing
+    # Not the hand-made index's own text. Without a partial index that index is `upper(surname)` itself
+    # (MySQL's re-print of it, in declarable form, is that text), which a declaration would adopt.
+    other_text = partial ? "upper(surname)" : "upper(surname) DESC"
+    err = try; plan29b(model29b(declared..., IX(expressions = (other_text,), name = "pormg_it_29b_hand"))); nothing
           catch e; e; end
     @test err isa PormG.InvalidMigrationError
-    @test occursin("Models.Index(expressions = ($(repr(only(hand.expressions))),), condition = $(repr(hand.condition)), " *
+    @test occursin("Models.Index(expressions = ($(repr(only(hand.expressions))),), " *
+                   (partial ? "condition = $(repr(hand.condition)), " : "") *
                    "name = \"pormg_it_29b_hand\")", err.msg)
     # …and adopted by a declaration of the catalog's text: a COMMENT on PostgreSQL, nothing on SQLite.
     adopting = model29b(declared..., IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand"))
@@ -2635,14 +2771,16 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
     @test all(isempty, values(plan29b(adopting)))
 
     # A changed condition: drop and create the one name, destructive. (The adopted index stays declared.)
-    adopted = IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand")
-    changed = model29b(lower, finishers("position > 0"), declared[3:end]..., adopted)
-    p = plan29b(changed)
-    @test keys29b(p) == ["Remove composite index: pormg_it_29b_finishers", "Create index: pormg_it_29b_finishers"]
-    @test PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
-    apply29b!(p)
-    @test marker29b("pormg_it_29b_finishers") == PormG.index_text_marker(String[], "position > 0")
-    @test all(isempty, values(plan29b(changed)))
+    if partial
+      adopted = IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand")
+      changed = model29b(lower, finishers("position > 0"), declared[3:end]..., adopted)
+      p = plan29b(changed)
+      @test keys29b(p) == ["Remove composite index: pormg_it_29b_finishers", "Create index: pormg_it_29b_finishers"]
+      @test PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
+      apply29b!(p)
+      @test marker29b("pormg_it_29b_finishers") == PormG.index_text_marker(String[], "position > 0")
+      @test all(isempty, values(plan29b(changed)))
+    end
 
     # A column the declared text names cannot be removed under it.
     err = try; plan29b(model29b(lower; with_surname = false)); nothing; catch e; e; end
@@ -2655,7 +2793,9 @@ not_yet_on(:mysql, "MySQL's functional-index marker and catalog text, and its pa
     apply29b!(p)
     left = Set(String(n) for n in q29b(by_engine(
       postgres = "SELECT indexname AS n FROM pg_indexes WHERE tablename = '$(tbl)' AND indexname <> '$(tbl)_pkey'",
-      sqlite = "SELECT name AS n FROM pragma_index_list('$(tbl)') WHERE origin = 'c'")).n)
+      sqlite = "SELECT name AS n FROM pragma_index_list('$(tbl)') WHERE origin = 'c'",
+      mysql = "SELECT DISTINCT INDEX_NAME AS n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() " *
+              "AND TABLE_NAME = '$(tbl)' AND INDEX_NAME <> 'PRIMARY'")).n)
     @test left == (marks_in_comment ? Set{String}() : Set(["pormg_it_29b_hand"]))
     @test all(isempty, values(plan29b(model29b())))
   finally
@@ -2665,28 +2805,31 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Partial and functional UniqueConstraints: declared, marked, enforced, read back, adopted (#934)
-# The live half of test/unit/test_composite_diff.jl's #934 UniqueConstraint testsets, on both engines.
+# The live half of test/unit/test_composite_diff.jl's #934 UniqueConstraint testsets, on every engine.
 # Each is created as a CREATE UNIQUE INDEX under the hashed marker of its declared text, enforces
 # exactly what it says, reads back unique with the catalog's text (PostgreSQL rewrites
 # `lower(code)` to `lower(code::text)`) and converges. inspectdb writes `UniqueConstraint` back with
 # that text, and its output plans nothing. A hand-made unique partial index is never planned away until
 # declared, then adopted. Undeclared, PormG's go and the hand-made one stays. Dropped in `finally`.
+# MySQL (#1362): no partial index, so its run declares the functional one, the partial one is refused by
+# the plan, and the hand-made index is a functional unique one; it adopts none, as SQLite does.
 # Mutation gate: put back `unique && (as_text || is_partial) && continue` in the SQLite reader (or
 # `unique && advanced && continue` in PostgreSQL's) and the declared constraints stop reading back, so
 # the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
-not_yet_on(:mysql, "MySQL's functional unique index and its partial-unique refusal (#1362)") &&
 @testset "Partial and functional UniqueConstraints: declared, marked, enforced, read back, adopted (#934)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)
   # Where the marker lives, as in the #29 part 2 testset above: in the index's COMMENT, which adopting
-  # writes, or (SQLite) closing the CREATE INDEX text, which adopting cannot rewrite.
-  marks_in_comment = by_engine(postgres = true, sqlite = false)
+  # writes, or (SQLite) closing the CREATE INDEX text, which adopting cannot rewrite; MySQL's COMMENT
+  # cannot be changed in place, so it adopts none either.
+  marks_in_comment = by_engine(postgres = true, sqlite = false, mysql = false)
+  partial = requires(:partial_indexes)
   # The catalog's text for the declared `lower(code)`, in each engine's own deparse.
-  code_ci_text = by_engine(postgres = "lower(code::text)", sqlite = "lower(code)")
+  code_ci_text = by_engine(postgres = "lower(code::text)", sqlite = "lower(code)", mysql = "lower(code)")
   q934(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
   tbl = "pormg_it_934_driver"
-  drop934u!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  drop934u!() = try; ddl(engine_sql("DROP TABLE IF EXISTS \"$(tbl)\"")); catch; end
   M = PormG.Models
   UC = M.UniqueConstraint
   model934u(constraints...) = M.Model(tbl; id = M.IDField(), raceid = M.IntegerField(),
@@ -2703,7 +2846,7 @@ not_yet_on(:mysql, "MySQL's functional unique index and its partial-unique refus
   end
   inserts(rows...) = try
     for (r, g, c) in rows
-      PormG.ConnectionPool.fetch(pool, "INSERT INTO \"$(tbl)\" (raceid, grid, code) VALUES ($r, $g, '$c')")
+      PormG.ConnectionPool.fetch(pool, engine_sql("INSERT INTO \"$(tbl)\" (raceid, grid, code) VALUES ($r, $g, '$c')"))
     end
     true
   catch
@@ -2712,27 +2855,30 @@ not_yet_on(:mysql, "MySQL's functional unique index and its partial-unique refus
 
   per_grid = UC(fields = ("raceid", "grid"), condition = "grid > 0", name = "pormg_it_934_one_per_grid")
   code_ci = UC(expressions = ("lower(code)",), name = "pormg_it_934_code_ci")
-  declared = (per_grid, code_ci)
+  declared = partial ? (per_grid, code_ci) : (code_ci,)
   names = [c.name for c in declared]
 
   drop934u!()
   try
     apply934u!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema934u(model934u()), pool,
                                                     settings934u; interactive = false))
+    # Without a partial index, the partial UniqueConstraint is refused by the plan, naming the feature.
+    partial || @test_throws PormG.BackendCapabilityError plan934u(model934u(per_grid))
     p = plan934u(model934u(declared...))
     @test sort(keys934u(p)) == sort(["Create unique constraint: $(n)" for n in names])
     apply934u!(p)
 
     # Enforced, and only where the condition says: two pit-lane starts (grid 0) share a grid.
     @test inserts((1, 0, "ham"), (1, 0, "ver"), (1, 1, "lec"))
-    @test !inserts((1, 1, "nor"))                    # a second driver on pole
+    partial && @test !inserts((1, 1, "nor"))         # a second driver on pole
     @test !inserts((2, 5, "HAM"))                    # `ham` already exists, whatever the case
-    ddl("DELETE FROM \"$(tbl)\"")
+    @test inserts((2, 5, "sai"))                     # …while a new code goes in: the refusal is the index's
+    ddl(engine_sql("DELETE FROM \"$(tbl)\""))
 
     # Read back unique, with the catalog's text, under the declared text's marker — and converged.
     byname = Dict(c.name => c for c in live934u().composites)
     @test issubset(names, keys(byname))
-    @test byname["pormg_it_934_one_per_grid"].unique && byname["pormg_it_934_one_per_grid"].condition == "grid > 0"
+    partial && @test byname["pormg_it_934_one_per_grid"].unique && byname["pormg_it_934_one_per_grid"].condition == "grid > 0"
     @test byname["pormg_it_934_code_ci"].unique &&
           byname["pormg_it_934_code_ci"].expressions == [code_ci_text]
     @test byname["pormg_it_934_code_ci"].marker == PormG.index_text_marker(["lower(code)"], nothing)
@@ -2741,20 +2887,24 @@ not_yet_on(:mysql, "MySQL's functional unique index and its partial-unique refus
     # inspectdb writes the catalog's text back as UniqueConstraints, and its own output plans nothing.
     read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
     src = PormG.Models.Model_to_str(read_back)
-    @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"grid\",), name = \"pormg_it_934_one_per_grid\", " *
-                   "condition = \"grid > 0\")", src)
+    partial && @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"grid\",), name = \"pormg_it_934_one_per_grid\", " *
+                              "condition = \"grid > 0\")", src)
     @test occursin("Models.UniqueConstraint(expressions = (\"$(code_ci_text)\",), " *
                    "name = \"pormg_it_934_code_ci\")", src)
     mod934u = Module()
     Core.eval(mod934u, :(import PormG.Models))
     @test all(isempty, values(plan934u(Core.eval(mod934u, Meta.parse(src)))))
 
-    # A hand-made unique partial index: read, never planned away, then adopted by its own text.
-    ddl("CREATE UNIQUE INDEX pormg_it_934_hand ON \"$(tbl)\" (code) WHERE grid IS NULL")
+    # A hand-made unique partial index (a functional one where there is no partial index): read, never
+    # planned away, then adopted by its own text.
+    ddl(partial ? engine_sql("CREATE UNIQUE INDEX pormg_it_934_hand ON \"$(tbl)\" (code) WHERE grid IS NULL") :
+                  engine_sql("CREATE UNIQUE INDEX pormg_it_934_hand ON \"$(tbl)\" ((upper(code)))"))
     hand = only(c for c in live934u().composites if c.name == "pormg_it_934_hand")
     @test hand.unique && hand.marker === nothing
     @test all(isempty, values(plan934u(model934u(declared...))))
-    adopting = model934u(declared..., UC(fields = ("code",), condition = hand.condition, name = "pormg_it_934_hand"))
+    adopting = model934u(declared..., partial ?
+      UC(fields = ("code",), condition = hand.condition, name = "pormg_it_934_hand") :
+      UC(expressions = Tuple(hand.expressions), name = "pormg_it_934_hand"))
     p = plan934u(adopting)
     @test keys934u(p) == (marks_in_comment ? ["Adopt index: pormg_it_934_hand"] : String[])
     apply934u!(p)

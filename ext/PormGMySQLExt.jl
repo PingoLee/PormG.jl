@@ -511,8 +511,9 @@ end
 # ambiguous column, a broken query) under it too, and an `IntegrityError` for it would send a caller's
 # duplicate-key retry after a statement that can never succeed. 1062 / 1022 / 1586 / 1557 duplicate key,
 # 1169 duplicate on a unique constraint, 1761 / 1762 duplicate key through a foreign key, 1451 / 1452
-# foreign key (parent / child row), 1216 / 1217 the older foreign-key numbers, 1048 NOT NULL, 3819 CHECK.
-const _INTEGRITY_ERRNOS = (1062, 1022, 1586, 1557, 1169, 1761, 1762, 1451, 1452, 1216, 1217, 1048, 3819)
+# foreign key (parent / child row), 1216 / 1217 the older foreign-key numbers, 1048 / 1364 NOT NULL (an
+# explicit NULL / the column left out with no default, SQLSTATE HY000; #1411), 3819 CHECK.
+const _INTEGRITY_ERRNOS = (1062, 1022, 1586, 1557, 1169, 1761, 1762, 1451, 1452, 1216, 1217, 1048, 1364, 3819)
 # The server or the session, not the statement: 1205 lock wait timeout, 3572 a row another transaction
 # holds under `NOWAIT` (PostgreSQL's 55P03), 1213 deadlock, 3024 statement timeout, 1317 interrupted
 # (`KILL QUERY`), 1040 too many connections, 1203 / 1226 a user's connection or resource limit, 1053

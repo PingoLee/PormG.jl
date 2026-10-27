@@ -160,6 +160,9 @@ end
   @test classify(_my_err(1062, "23000")) === :integrity
   @test classify(_my_err(1452, "23000")) === :integrity
   @test classify(_my_err(1048, "23000")) === :integrity
+  # #1411: a NOT NULL column with no default left out of the INSERT, filed under HY000 (measured on 8.4):
+  # the same rule as 1048, so the same class as PostgreSQL's 23502 and SQLite's NOT NULL constraint.
+  @test classify(_my_err(1364)) === :integrity
   @test classify(_my_err(3819)) === :integrity              # CHECK constraint, SQLSTATE HY000
   @test classify(_my_err(1205)) === :operational            # lock wait timeout, HY000
   # a row another transaction holds, under NOWAIT (HY000; PostgreSQL's 55P03 is operational too)

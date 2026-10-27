@@ -242,7 +242,7 @@ _fts31_err(f) = try f(); nothing catch e; e end
         # #1032: a third, on ONE column with `form = :vector`, serves a single-column SearchVector
         # alias, whose document is COALESCE'd and so is not the lookup's bare expression.
         @testset "GIN indexes from search_vector_expression serve @search, on a column and on an alias" begin
-            drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS31_TABLE)); catch; end
+            drop() = drop_scratch_tables!(pool, FTS31_TABLE)
             model = Models.Model(FTS31_TABLE;
                 id   = Models.IDField(),
                 body = Models.CharField(max_length = 200),
@@ -352,7 +352,7 @@ const FTS1021_TABLE = "pormg_fts1021_report"
 
 @testset "SearchVectorField, live ($(PORMG_DB_FOLDER)) (#1021)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS1021_TABLE)); catch; end
+    drop() = drop_scratch_tables!(pool, FTS1021_TABLE)
     model = Models.Model(FTS1021_TABLE;
         id     = Models.IDField(),
         title  = Models.CharField(max_length = 200),
@@ -470,7 +470,7 @@ const FTS1032_TABLE = "pormg_fts1032_story"
 
 @testset "Generated SearchVectorField, live ($(PORMG_DB_FOLDER)) (#1032)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS1032_TABLE)); catch; end
+    drop() = drop_scratch_tables!(pool, FTS1032_TABLE)
     story(; title = Models.CharField(max_length = 200), search = nothing) = (m = Models.Model(FTS1032_TABLE;
         id     = Models.IDField(),
         title  = title,
@@ -557,7 +557,7 @@ const FTS1032_TABLE = "pormg_fts1032_story"
                     @test PormG.Migrations.field_from_spec(cfg_live.columns["search"], cfg_live, pool).config == "pg_catalog.english"
                     @test isempty(get_migration_plan([cfg_live], cfg_schema, pool, settings(); interactive = false))
                 finally
-                    try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, cfg_table)); catch; end
+                    drop_scratch_tables!(pool, cfg_table)
                 end
                 col = only(live()).columns["search"]
                 @test col.default isa PormG.GeneratedExpression && col.default.stored

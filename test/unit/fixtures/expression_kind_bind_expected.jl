@@ -6461,6 +6461,146 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM (\"R2_1\".\"date\" + \"R2\".\"fastestlaptime\"))::integer as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year F hop date + interval | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%Y', strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"R2_1\".\"date\") + ((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0))) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract second F interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "trunc(EXTRACT(SECOND FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint)))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract second F interval * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%S', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract second F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    trunc(EXTRACT(SECOND FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract second F interval * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%S', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour Sum interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "EXTRACT(HOUR FROM SUM(\"Tb\".\"fastestlaptime\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract hour Sum interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT SUM(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms))) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract hour Sum interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM SUM(\"R2\".\"fastestlaptime\"))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour Sum interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%H', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT SUM(((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F datetime - date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MINUTE FROM (\"Tb\".\"start_at\" - \"Tb\".\"date\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract minute F datetime - date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"date\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract minute F datetime - date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MINUTE FROM (\"R2\".\"start_at\" - \"R2\".\"date\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract minute F datetime - date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%M', (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"date\")) * 86400000) AS INTEGER) AS _pormg_ms))) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" - \"Tb\".\"time\") > \$1", params = [("10", "Int64")]),
+  ("F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" - \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
+  ("Max F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract year F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract year F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM (\"R2\".\"time\" - \"R2\".\"time\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract hour F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(HOUR FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract hour F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM (\"R2\".\"time\" - \"R2\".\"time\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
+  ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round F time - time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "ROUND(((\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Round F time - time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "ROUND(((\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric, \$2::integer) > \$3", params = [("0", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round F time - time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(((\"R2\".\"time\" - \"R2\".\"time\"))::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Round F time - time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(((\"R2\".\"time\" - \"R2\".\"time\"))::numeric, \$3::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce F time - time int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"time\" - \"Tb\".\"time\"), \"Tb\".\"year\") > \$1", params = [("10", "Int64")]),
+  ("Coalesce F time - time int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"time\" - \"R2\".\"time\"), \"R2\".\"year\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce bool int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool int literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Greatest int bool | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "GREATEST(COALESCE(`Tb`.`result`, `Tb`.`boolean_field`), COALESCE(`Tb`.`boolean_field`, `Tb`.`result`)) > ?", params = [("10", "Int64")]),
+  ("Greatest int bool | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "GREATEST(\"Tb\".\"result\", \"Tb\".\"boolean_field\") > \$1", params = [("10", "Int64")]),
+  ("Greatest int bool | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "MAX(COALESCE(\"Tb\".\"result\", \"Tb\".\"boolean_field\"), COALESCE(\"Tb\".\"boolean_field\", \"Tb\".\"result\")) > ?", params = [("10", "Int64")]),
+  ("Greatest int bool | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(COALESCE(`R2`.`result`, `R2`.`boolean_field`), COALESCE(`R2`.`boolean_field`, `R2`.`result`)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Greatest int bool | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    GREATEST(\"R2\".\"result\", \"R2\".\"boolean_field\") as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Greatest int bool | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(COALESCE(\"R2\".\"result\", \"R2\".\"boolean_field\"), COALESCE(\"R2\".\"boolean_field\", \"R2\".\"result\")) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN `Tb`.`result` = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"result\" = \$4 THEN \$5::boolean\nELSE \$6::bigint\nEND\n > \$7", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"result\" = ? THEN ?\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN `R2`.`result` = ? THEN ?\nELSE ?\nEND\n as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"result\" = \$5 THEN \$6::boolean\nELSE \$7::bigint\nEND\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then true default 0 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"result\" = ? THEN ?\nELSE ?\nEND\n as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce bool text | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool text | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool text | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool text | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool text | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool text | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(`Tb`.`boolean_field`, (`Tb`.`result` > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"boolean_field\", (\"Tb\".\"result\" > \$2::bigint)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"boolean_field\", (\"Tb\".\"result\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`boolean_field`, (`R2`.`result` > ?)) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"boolean_field\", (\"R2\".\"result\" > \$3::bigint)) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(\"R2\".\"boolean_field\", (\"R2\".\"result\" > ?)) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
   ("Round Extract year | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM `Tb`.`date`) + 0)) > ?", params = [("10", "Int64")]),
   ("Round Extract year | alone", :postgres, "v__@gt", "10") =>

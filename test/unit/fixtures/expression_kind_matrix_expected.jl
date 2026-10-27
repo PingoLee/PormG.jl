@@ -5762,6 +5762,294 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year F hop date + interval | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract second F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract second F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract second F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract second F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract hour Sum interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour Sum interval | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour Sum interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour Sum interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour Sum interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour Sum interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract hour Sum interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour Sum interval | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract hour Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+  ("Extract minute F datetime - date | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract minute F datetime - date | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract minute F datetime - date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract minute F datetime - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract minute F datetime - date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract minute F datetime - date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("Extract minute F datetime - date | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract minute F datetime - date | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract minute F datetime - date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+  ("F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Max F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract year F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract hour F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Extract hour F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract epoch F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce F time - time int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce F time - time int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce F time - time int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce bool int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool int literal | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool int literal | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Greatest int bool | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Greatest int bool | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Greatest int bool | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Greatest int bool | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+  ("Case then true default 0 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+  ("Case then true default 0 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (BooleanField and IntegerFie"),
+  ("Case then true default 0 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then true default 0 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool text | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Coalesce bool comparison | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Round date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
   ("Round date | alone", :sqlite) =>
@@ -6163,6 +6451,70 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Round F time - time | alone", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round F time - time | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Coalesce bool int | alone", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int | alone", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int | alone", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int | subquery", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int | subquery", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int | subquery", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | alone", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | alone", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | alone", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | subquery", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | subquery", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool int literal | subquery", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | alone", :postgres) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | alone", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | alone", :mysql) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | subquery", :postgres) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | subquery", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Greatest int bool | subquery", :mysql) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then true default 0 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | alone", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | alone", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | alone", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | subquery", :postgres) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | subquery", :sqlite) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
+  ("Coalesce bool text | subquery", :mysql) =>
+    [(:gap, "read=none vs formatter=bool"), (:gap, "read=none vs textless=bool")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

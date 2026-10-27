@@ -3345,6 +3345,11 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> ForeignKey("Circuit"; max_length = 10),
     ),
+    (
+        "fields.md — IDField `auto_increment` is refused with FieldValidationError (#1334)",
+        FieldValidationError,
+        () -> IDField(auto_increment = false),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

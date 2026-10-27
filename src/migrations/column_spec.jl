@@ -369,8 +369,9 @@ end
 
 # Identity is engine-specific in a way the field struct is not: `sIDField` carries `generated`,
 # `generated_always` AND `auto_increment` at all times, but PostgreSQL renders only the first two and
-# SQLite renders only the third (`PRIMARY KEY AUTOINCREMENT`, and only for `sIDField`). Reading the
+# SQLite renders none of them (`PRIMARY KEY AUTOINCREMENT` for every `sIDField` key). Reading the
 # slots the engine cannot express would manufacture a difference out of a constructor default.
+# (`auto_increment` is always `true` since #1334, which refuses the keyword.)
 function _column_identity(field::PormGField, ::PormGPostgres)::Union{Nothing, ColumnIdentity}
   _slot(field, :generated, false)::Bool || return nothing
   return ColumnIdentity(true, _slot(field, :generated_always, false)::Bool, false)
@@ -388,7 +389,8 @@ function _column_identity(field::PormGField, ::PormGSQLite)::Union{Nothing, Colu
   #
   # That is the "two answers to one fact" shape this whole file exists to remove, so it is spelled
   # once, here, against the renderer. If `field_to_column` ever learns to honour the slot, this moves
-  # with it.
+  # with it. (#1334 then refused the keyword, so the slot is always `true` and the history above
+  # cannot recur from a declaration; the condition stays the renderer's.)
   (field isa Models.sIDField && _slot(field, :primary_key, false)::Bool) || return nothing
   return ColumnIdentity(false, false, true)
 end
@@ -1828,11 +1830,10 @@ end
 function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
                           table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
   if _integer_key_arm(arm, ctype)
-    # `auto_increment` is cosmetic on SQLite (`_column_identity` reads the renderer's condition,
-    # not this slot) and is kept as the readers always set it: only an exact `INTEGER` is a rowid
-    # alias, which is the one spelling that can carry AUTOINCREMENT.
-    return Models.IDField(null = false, primary_key = true,
-                          auto_increment = uppercase(strip(spec.raw)) == "INTEGER")
+    # No `auto_increment`: the keyword is refused since #1334 (no DDL path read it). This reader
+    # wrote `auto_increment = false` for a key that is not an exact `INTEGER` (not a rowid alias),
+    # which put the keyword into generated models files and changed nothing.
+    return Models.IDField(null = false, primary_key = true)
   elseif ctype isa CText
     # A bare `TEXT PRIMARY KEY` is what `UUIDField(primary_key = true)` renders on SQLite (the
     # reverse map writes `TEXT` for `UUID`), and it is the ONE lengthless textual key PormG can
@@ -1851,14 +1852,15 @@ function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, 
     @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
           "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
           "the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
-    return Models.IDField(null = false, primary_key = true, auto_increment = false)
+    return Models.IDField(null = false, primary_key = true)
   end
 end
 
 # MySQL (#1130 phase 4c): an `IDField` is `BIGINT AUTO_INCREMENT` there (`_column_identity(::PormGMySQL)`
-# reads the renderer, not the `auto_increment` slot), so every fall-through key is declared as one, and a
-# key of another shape — an `INT`, one without `AUTO_INCREMENT`, a text key — says so: the next plan changes
-# the column to PormG's, which MySQL refuses on a key another table's foreign key references (3780).
+# reads the renderer; the `auto_increment` slot is always `true` since #1334), so every fall-through
+# key is declared as one, and a key of another shape — an `INT`, one without `AUTO_INCREMENT`, a text
+# key — says so: the next plan changes the column to PormG's, which MySQL refuses on a key another
+# table's foreign key references (3780).
 function _inspectdb_id_pk(conn::PormGMySQL, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
                           table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
   if !(ctype isa CInt64 && spec.identity !== nothing)

@@ -235,7 +235,9 @@ join (`"raceid__date__@week"`). An expression or a subquery has no field. For on
 calendar parts (the last row of the table) are checked, against the expression's type. A duration
 expression has no calendar date, as a `DurationField` has none: a timestamp difference, interval
 arithmetic, or a `Sum` or `Avg` of a duration raises `QueryBuildError` on every engine. Any other
-expression is passed through as written, and so is a time-of-day part over a duration expression.
+expression is passed through as written, and so is a time-of-day part over a duration expression
+(except on MySQL, which refuses it: see
+[Subtracting two dates](field_expressions.md#Subtracting-two-dates)).
 
 ```julia
 M.Result.objects.values("y" => Extract(F("fastestlaptime") * 2, "year"))   # QueryBuildError: a duration has no calendar date

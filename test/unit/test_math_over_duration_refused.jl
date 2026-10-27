@@ -294,7 +294,8 @@ end
   catch e
     e
   end
-  for part in ("year", "quarter", "dow", "isoyear")
+  # `century` and `julian` have no MySQL spelling, and still meet the duration's refusal first.
+  for part in ("year", "quarter", "dow", "isoyear", "century", "julian")
     err = extract(part)
     @test err isa QueryBuildError && _mod_calendar_refused(_mod_msg(err), "Extract(…, \"$(part)\")")
   end

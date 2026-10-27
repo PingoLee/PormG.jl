@@ -1454,12 +1454,15 @@ const _MYSQL_EXTRACT_NATIVE = Dict(
   "MILLISECONDS" => "(EXTRACT(SECOND_MICROSECOND FROM %s) / 1000)",
 )
 const _MYSQL_CALENDAR_PARTS = ("YEAR", "MONTH", "DAY", "QUARTER", "DOW", "ISODOW", "DOY", "WEEK", "ISOYEAR")
+# #1388: every calendar part, the ones MySQL has no spelling for included, so a duration meets the same
+# refusal whichever part it is; the build check (`_check_temporal_expression`) reads the same rows.
+const _MYSQL_DURATION_CALENDAR_PARTS = (_MYSQL_CALENDAR_PARTS..., "CENTURY", "DECADE", "MILLENNIUM", "JULIAN")
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   part = format["part"]
   up = extract_part(part)
   kind = get(format, "temporal_kind", nothing)
   kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
-  kind === :interval && up in _MYSQL_CALENDAR_PARTS && throw(_duration_calendar_refusal("Extract(…, \"$(part)\")"))
+  kind === :interval && up in _MYSQL_DURATION_CALENDAR_PARTS && throw(_duration_calendar_refusal("Extract(…, \"$(part)\")"))
   kind === :interval && up != "EPOCH" && throw(_mysql_part_of_interval_refusal("Extract(…, \"$(part)\")"))
   template = get(_MYSQL_EXTRACT_NATIVE, up, nothing)
   template === nothing || return replace(template, "%s" => column)
@@ -1484,7 +1487,7 @@ _refuse_date_of_time(format::Dict{String,Any}, label::String) =
 # expression.
 _mysql_part_of_interval_refusal(label::String) = QueryBuildError(
   "$(label) over a duration expression is not supported on MySQL, which holds a duration as its count " *
-  "of microseconds there: the part would read that count as a date or a time. For a duration's seconds, " *
+  "of microseconds there: the part would read that count as a time. For a duration's seconds, " *
   "write Extract(d, \"epoch\").")
 # #1388 — a calendar part (a year, a quarter, a day of the week, `@date`) of a duration, which has no
 # calendar date on any engine. The build refuses it on every engine (`_check_temporal_operand`) before

@@ -2573,9 +2573,16 @@ end
         e = try; q.values("v" => expr).list(); nothing; catch err; err; end
         @test e isa PormG.QueryBuildError && occursin("(#1388)", sprint(showerror, e))
     end
-    clock = M.Result.objects.filter("fastestlaptime__@isnull" => false, "resultid__@lte" => 200).
+    # The clock part: built on PostgreSQL and SQLite, refused on MySQL, which holds the duration as its
+    # microseconds (#1324). Closures, since `by_engine` evaluates every row it is given.
+    clock() = M.Result.objects.filter("fastestlaptime__@isnull" => false, "resultid__@lte" => 200).
         values("resultid", "m" => Extract(F("fastestlaptime") * 2, "minute")).list()
-    @test !isempty(clock)
+    builds = () -> @test !isempty(clock())
+    refused = () -> begin
+        e = try; clock(); nothing; catch err; err; end
+        @test e isa PormG.QueryBuildError && occursin("Extract(d, \"epoch\")", sprint(showerror, e))
+    end
+    by_engine(postgres = builds, sqlite = builds, mysql = refused)()
     rows = M.Result.objects.filter("fastestlaptime__@isnull" => false, "resultid__@lte" => 200).
         values("raceid__date", "y" => Extract(F("raceid__date") + F("fastestlaptime"), "year")).list()
     @test !isempty(rows)

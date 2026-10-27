@@ -300,6 +300,10 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   # whose `String` arm reads a string as a COLUMN PATH — `Value("points")` would be typed as the
   # `points` column.
   (source === nothing || source isa SQLTypeText) && return nothing
+  # #1382: an alias over a JSON key lookup holds the key's value, text or a JSON scalar, not a document:
+  # the JSON formatter refused every plain string compared with it. The comparisons bind as the key
+  # lookup's own filter binds them (`_render_json_lookup_comparison`); any other operator, as given.
+  _json_key_lookup_operand(source.field, instruc) && return nothing
   formatter = _expression_formatter(source.field, instruc)
   # #900: a `Sum`/`Avg` over an interval is an interval, not the number `_expression_formatter` names
   # for every sum, and `"total__@gt" => Hour(1)` raised a `MethodError` from the number formatter. The
@@ -798,6 +802,30 @@ function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, i
   return !memo_json_lookup(instruc, p isa String ? memo_key(:base, p) : memo_key(p))
 end
 _json_document_operand(::Any, ::SQLInstruction) = false
+
+# #1382: the other half — an operand that is a KEY LOOKUP into a JSONField (`F("payload__driver")`), the
+# key's value rather than the document. Its field is the JSONField all the same (`_render_json_lookup`
+# memoizes it so), so the field alone cannot tell the two apart; the record of rendered key lookups can,
+# and for a CTE column the kind its body recorded (only the document records `CJSON`). Decided by that
+# evidence, never as "not known to be the document": a handle `_json_document_operand` lets through is
+# not thereby a key.
+_json_key_lookup_operand(p::SQLField, instruc::SQLInstruction) = _json_key_lookup_operand(p.field, instruc)
+_json_key_lookup_operand(p::FExpression, instruc::SQLInstruction) =
+  p.operation === nothing && _json_key_lookup_operand(p.field_name, instruc)
+_json_key_lookup_operand(p::String, instruc::SQLInstruction) =
+  _alias_column_field(p, instruc) isa Models.sJSONField && memo_json_lookup(instruc, memo_key(:base, p))
+_json_key_lookup_operand(p::JoinedReference, instruc::SQLInstruction) =
+  _alias_column_field(p, instruc) isa Models.sJSONField && memo_json_lookup(instruc, memo_key(p))
+_json_key_lookup_operand(p::CTEReference, instruc::SQLInstruction) =
+  _alias_column_field(p, instruc) isa Models.sJSONField && !(_expression_kind(p, instruc) isa CJSON)
+_json_key_lookup_operand(::Any, ::SQLInstruction) = false
+
+# #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`
+# compares, through `_render_json_lookup_comparison`, for the operators that renders.
+function _alias_projects_json_key(having_key::MemoKey, instruc::SQLInstruction)::Bool
+  source = _projected_source(having_key, instruc)
+  return source isa SQLTypeField && _json_key_lookup_operand(source.field, instruc)
+end
 
 # #1127, #1034 phase 3 step 2c — the classification of a CTE column, from what its body recorded:
 # - an integer quotient an engine departs on (`_DIVISION_KINDS`), from the division record
@@ -1645,6 +1673,13 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # #894: an interval alias compared with a duration compares milliseconds on SQLite.
   interval = _render_interval_alias_predicate(v, having_key, instruc)
   interval === nothing || return interval
+  # #1382: an alias over a JSON key lookup compares as the key lookup does — text on PostgreSQL and
+  # MySQL, the native value on SQLite, a number ordered as a number — for the operators that comparison
+  # renders, against a value. A pattern lookup, a membership list or an expression or a queryset on the
+  # right (`_expression_operand`) renders as it did.
+  _alias_projects_json_key(having_key, instruc) && v.operator in _JSON_KEY_COMPARISON_OPERATORS &&
+    !_expression_operand(v.values) &&
+    return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
   alias_formatter = _having_alias_formatter(having_key, instruc)

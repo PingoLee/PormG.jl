@@ -150,6 +150,20 @@ end
             @test q.count() == 1
         end
 
+        # #1382: a projection alias over a key lookup holds the key's value, and a filter on it compares as
+        # `filter("payload__driver" => …)` does. Before, it ran the JSON formatter: "hamilton" raised
+        # InvalidValueError on every engine, a number bound as text matched no row on SQLite, and an
+        # ordering compared text. Expected: the seeded row through each spelling, none for another value.
+        @testset "an alias over a key lookup compares as the key lookup does (#1382)" begin
+            keyed(alias, path, k, v) = (q = base(); q.values("id", alias => F(path)); q.filter(k => v); q)
+            @test length(keyed("d", "payload__driver", "d", "hamilton").list()) == 1
+            @test length(keyed("d", "payload__driver", "d", "verstappen").list()) == 0
+            @test length(keyed("pts", "payload__points", "pts", 15).list()) == 1
+            @test length(keyed("pts", "payload__points", "pts__@gte", 9).list()) == 1     # 15 >= 9, as numbers
+            @test length(keyed("pts", "payload__points", "pts__@gt", 15).list()) == 0
+            @test length(keyed("sp", "payload__sponsor", "sp__@isnull", true).list()) == 1
+        end
+
         # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.
         # Before, PostgreSQL's jsonb rejected the `\u0000` escape on the server (a StatementError,
         # under LibPQ and Postgres.jl alike) while SQLite stored it — so this is the one place a real

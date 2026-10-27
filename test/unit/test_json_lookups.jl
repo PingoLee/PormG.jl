@@ -372,6 +372,43 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # pattern lookup on the alias and a key lookup either way stay bare; PostgreSQL binds an uncast `$1`
   # (typed from the jsonb column, as the filter arm binds it) and SQLite a bare `?`.
   # ─────────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #1382: an alias over a key lookup compares as the key lookup does
+  # What: `values("d" => F("payload__driver"))` then `filter`/`Q` on `d`, on the three engines.
+  # Expected SQL: the key lookup's own comparison — `#>> '{"driver"}' = $1` bound text on PostgreSQL,
+  # `json_extract(…) = ?` bound native on SQLite, `(JSON_UNQUOTE(…)) = ?` on MySQL; an ordering casts
+  # `::numeric` on PostgreSQL and binds a number; `@isnull` is `IS NULL`; a pattern lookup binds text.
+  # Why: the alias was typed as the JSONField, so a plain string raised InvalidValueError, a number
+  # bound as the text "5" (no row on SQLite, where `json_extract` returns 5), and an ordering
+  # compared text on PostgreSQL — while `filter("payload__driver" => …)` did none of this.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "an alias over a key lookup compares as the key lookup does (#1382)" begin
+    keyed(key, value; q_wrap = false) = (q = JL.Json_scratch.objects; q.values("id", "d" => F("payload__driver"));
+                                         q.filter(q_wrap ? Q(key => value) : key => value); q)
+    direct(key, value; q_wrap = false) = (q = JL.Json_scratch.objects; q.values("id", "d" => F("payload__driver"));
+                                          k = replace(key, r"^d" => "payload__driver");
+                                          q.filter(q_wrap ? Q(k => value) : k => value); q)
+    for conn in (_JL_PG, _JL_SL, _JL_MY), (key, value) in (("d", "hamilton"), ("d", 5), ("d__@gt", 5),
+                                                           ("d__@lte", 2.5), ("d__@ne", "x"), ("d__@isnull", true))
+      for wrap in (false, true)
+        a = _sql(keyed(key, value; q_wrap = wrap); conn = conn)
+        b = _sql(direct(key, value; q_wrap = wrap); conn = conn)
+        # The same predicate and the same bound value as the key lookup itself.
+        where(r) = last(split(r[:sql_text], "WHERE "))
+        @test (typeof(conn), key, wrap, where(a), a[:parameters]) == (typeof(conn), key, wrap, where(b), b[:parameters])
+      end
+    end
+    @test occursin("(\"Tb\".\"payload\" #>> '{\"driver\"}')::numeric > \$1", _sql(keyed("d__@gt", 5); conn = _JL_PG)[:sql_text])
+    @test _sql(keyed("d", 5); conn = _JL_SL)[:parameters] == Any[5]
+    @test _sql(keyed("d", 5); conn = _JL_PG)[:parameters] == Any["5"]
+    # A pattern lookup and a membership list bind as given, as they did: the key's text, unchecked.
+    @test _sql(keyed("d__@contains", "ham"); conn = _JL_PG)[:parameters] == Any["%ham%"]
+    @test _sql(keyed("d__@in", ["a", "b"]); conn = _JL_SL)[:parameters] == Any["a", "b"]
+    # An alias over the whole document keeps the JSON formatter and the #1360 marker.
+    whole = (q = JL.Json_scratch.objects; q.values("id", "p" => F("payload")); q.filter("p" => "notjson"); q)
+    @test_throws PormG.InvalidValueError _sql(whole; conn = _JL_PG)
+  end
+
   @testset "a whole JSON document through an alias or F(...) == (#1360)" begin
     doc = "{\"driver\":\"hamilton\"}"
     other = "{\"driver\":\"max\"}"

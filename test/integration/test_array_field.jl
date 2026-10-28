@@ -108,6 +108,12 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
             @test err !== nothing && occursin("PostgreSQL", sprint(showerror, err))
             @test isempty(live())
         end
+        # A cast to one is refused the same way, naming arrays, rather than cast to text (#1438).
+        err = _af28_err(() -> PormG.QueryBuilder.query(
+            (q = M.Driver.objects; q.values("s" => PormG.Functions.Cast("surname", Models.ArrayField(Models.CharField()))); q);
+            show_query = :sql))
+        @test err isa PormG.BackendCapabilityError
+        @test err !== nothing && occursin("needs array types", sprint(showerror, err))
     else
         drop()
         try
@@ -330,6 +336,24 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
                 # RETURNING reads the arrays back like `list` does.
                 res = bulk_insert(model, DataFrame(label = ["ret-1"], laps = [[9, 9]]); returning = ["laps"])
                 @test res.rows[1, "laps"] == [9, 9]
+            end
+
+            # ─────────────────────────────────────────────────────────────────────
+            # A cast to an ArrayField declaration (#1438)
+            # `Cast(x, ArrayField(CharField(max_length = 3)))` is `::varchar(3)[]`, the element's own cast
+            # type with `[]`, so PostgreSQL cuts each element to 3 characters; `ArrayField(IntegerField())`
+            # is `::integer[]`. Before #1438 both rendered `::array`, which is no type.
+            # The text array is read through its text, `{SOF,MED}`: LibPQ hands a projected cast to a
+            # text array back as that literal, unparsed (a read-path gap older than #1438: #1439).
+            # ─────────────────────────────────────────────────────────────────────
+            @testset "a cast to an ArrayField declaration" begin
+                S().create("label" => "cast-1438", "compounds" => ["SOFT", "MEDIUM"], "sectors" => [7, 8])
+                short = PormG.Functions.Cast("compounds", Models.ArrayField(Models.CharField(max_length = 3)))
+                row = only(S().filter("label" => "cast-1438").values(
+                    "short" => PormG.Functions.Cast(short, "text"),
+                    "narrow" => PormG.Functions.Cast("sectors", Models.ArrayField(Models.IntegerField()))).list())
+                @test row["short"] == "{SOF,MED}"
+                @test row["narrow"] == [7, 8]
             end
         finally
             drop()

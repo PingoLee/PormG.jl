@@ -1075,9 +1075,11 @@ What each row covers:
 
 - **text**: `CharField()`, `TextField()`, `"text"`, `"varchar"`, and the `output_field` of
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
-- **a length**: `"varchar(n)"`, `"character varying(n)"`, `"char(n)"`, `"character(n)"`, an unsized
-  `"char"` or `"character"`, which is one character (`'H'`), and `CharField(max_length = n)`, and the
-  same `output_field` (#1252). Every operand is refused on
+- **a length**: `"varchar(n)"`, `"character varying(n)"`, `"char(n)"`, `"character(n)"`, PostgreSQL's
+  `"bpchar(n)"` and `"nchar(n)"`, an unsized `"char"`, `"character"` or `"nchar"`, which is one
+  character (`'H'`), `CharField(max_length = n)`, `SlugField` and `URLField`, and the same
+  `output_field` (#1252, #1438). PormG maps `bpchar` and `nchar` to no MySQL CAST target, so they are
+  PostgreSQL's spellings: MySQL refuses them with `UnsupportedConnectionError`. Every operand is refused on
   SQLite, which enforces no declared length, so the text would come back whole where PostgreSQL and
   MySQL cut it. For the text on every engine, cast to text of no declared length (`"text"` or
   `CharField()`) and cut the fetched value in Julia (`first(s, n)`). A `Concat`'s `output_field`
@@ -1177,7 +1179,13 @@ an `output_field`. So the unscaled cast is the string `"numeric"`, not `DecimalF
 A `CharField` object given a `max_length` declares that length too (#1252), as Django's does:
 `Cast(x, CharField(max_length = 3))` is `Cast(x, "varchar(3)")`, an explicit `max_length = 250`
 included. `CharField()` declares no length, so it stays the unbounded text it casts to on every
-engine, although its column is `varchar(250)`.
+engine, although its column is `varchar(250)`. A `SlugField` and a `URLField` declare the length of
+their column, as Django's do (#1438): `SlugField()` is `varchar(50)`, `URLField()` is `varchar(200)`.
+An `EmailField` has no length in PormG, so it casts to unbounded text.
+
+An `ArrayField` casts to its element's type with `[]` (#1438): `ArrayField(CharField(max_length = 3))`
+is `varchar(3)[]`, which cuts each element. Arrays are PostgreSQL's, so the cast raises
+`BackendCapabilityError` on SQLite and MySQL, as the column does.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"float8"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.

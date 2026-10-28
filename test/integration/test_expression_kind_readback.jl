@@ -481,3 +481,39 @@ end
   end
   @test only(surname(PormG.Models.CharField()).list())[:s] == "Hamilton"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The sized text declarations #1252 did not reach, read back (#1438)
+# On the driver `hamilton`: a `SlugField`/`URLField` given `max_length = 3` renders `::varchar(3)` /
+# `CHAR(3)` and reads back `"Ham"`; `SlugField()` is `varchar(50)`, which keeps `"Hamilton"`.
+# PostgreSQL's `bpchar(3)` and `nchar(3)` are `char(3)` and read back `"Ham"`; MySQL has no such CAST
+# target and refuses the name, and SQLite refuses each by #1252. An `EmailField` declares no length and
+# reads back the whole `"Hamilton"` on every engine. Why: `nchar` is PostgreSQL grammar, not a catalog
+# type, and this is where its meaning is measured rather than assumed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "The Slug/URL, bpchar and nchar casts cut the text where they build (#1438)" begin
+  surname(target) = (q = M.Driver.objects; q.filter("driverref" => "hamilton");
+                     q.values("s" => PormG.Functions.Cast("surname", target)); q)
+  outcome(target) = try only(surname(target).list())[:s] catch e; e end
+  for (target, cut) in (PormG.Models.SlugField(max_length = 3) => "Ham", PormG.Models.URLField(max_length = 3) => "Ham",
+                        PormG.Models.SlugField() => "Hamilton")
+    got = outcome(target)
+    if by_engine(postgres = false, sqlite = true, mysql = false)
+      @test got isa PormG.QueryBuildError && occursin("(#1252)", sprint(showerror, got))
+    else
+      @test got == cut
+    end
+  end
+  for target in ("bpchar(3)", "nchar(3)")
+    got = outcome(target)
+    expect = by_engine(postgres = :cuts, sqlite = :refuses, mysql = :unmapped)
+    if expect === :cuts
+      @test got == "Ham"
+    elseif expect === :refuses
+      @test got isa PormG.QueryBuildError && occursin("(#1252)", sprint(showerror, got))
+    else
+      @test got isa PormG.UnsupportedConnectionError
+    end
+  end
+  @test outcome(PormG.Models.EmailField()) == "Hamilton"
+end

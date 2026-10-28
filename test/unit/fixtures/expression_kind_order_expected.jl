@@ -4815,8 +4815,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast text SlugField | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text SlugField | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text SlugField | cte", :mysql, "g__v") =>
     (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
   ("Cast text SlugField | cte", :mysql, "w") =>
@@ -4825,21 +4823,13 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text SlugField | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text SlugField | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text SlugField | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text SlugField | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast text SlugField | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text SlugField | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text URLField(20) | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast text URLField(20) | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text URLField(20) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text URLField(20) | cte", :mysql, "g__v") =>
     (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
@@ -4849,15 +4839,9 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text URLField(20) | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text URLField(20) | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text URLField(20) | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text URLField(20) | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast text URLField(20) | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text URLField(20) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text EmailField | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
@@ -4885,26 +4869,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text bpchar(3) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text bpchar(3) | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text bpchar(3) | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text bpchar(3) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text nchar(3) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text nchar(3) | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text nchar(3) | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text nchar(3) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text ArrayField(CharField(3)) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text ArrayField(CharField(3)) | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text ArrayField(CharField(3)) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
 )

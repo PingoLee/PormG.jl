@@ -766,8 +766,11 @@ engine's own spelling. A `DecimalField` casts to its own precision and scale (#1
 `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, and
 `DecimalField()` is `numeric(10,2)`. A `CharField` given a `max_length` casts to that length (#1252):
 `Cast(x, CharField(max_length = 3))` is `Cast(x, "varchar(3)")`, while `CharField()` declares none
-and casts to unbounded text. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
-`"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
+and casts to unbounded text. A `SlugField` or `URLField` casts to the length its column has (#1438),
+`varchar(50)` / `varchar(200)` by default; an `EmailField` declares none. An `ArrayField` casts to its
+element's type with `[]` (`ArrayField(CharField(max_length = 3))` is `"varchar(3)[]"`), on PostgreSQL
+only: SQLite and MySQL raise `BackendCapabilityError`. A string is accepted when it is a single type
+name (`"integer"`, `"bigint"`, `"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
 `"character varying"`, `"bit varying"`, `"timestamp with time zone"` (and `without`, and the `time`
 forms), optionally followed by a size `(n)` or `(n, m)` — `"numeric(10,2)"`, `"varchar(20)"` — and,
 on PostgreSQL only, array brackets (`"integer[]"`). Anything else raises `InvalidValueError` when
@@ -796,7 +799,7 @@ different value raises `QueryBuildError` when the query is built, and the others
   value rounded to a 4-byte float, a `Float32`, and SQLite, which keeps the 8-byte double, refuses
   it (#1215). Cast to `"float8"` or `FloatField()`, a `Float64` on every engine;
 - to text of a declared length (`"varchar(n)"`, `"char(n)"`, `"char"`, which is `char(1)`,
-  `CharField(max_length = n)`), any value
+  PostgreSQL's `"bpchar(n)"` and `"nchar(n)"`, `CharField(max_length = n)`, `SlugField`, `URLField`), any value
   means the text cut to `n` characters, and SQLite, which enforces no length, refuses it (#1252).
   Cast to `"text"` or `CharField()` and cut the fetched value in Julia.
 
@@ -829,6 +832,14 @@ _field_cast_type(f::Models.sDecimalField) = "numeric($(f.max_digits),$(f.decimal
 # meets the same rule as the string `"varchar(n)"`: a length cuts the text, and SQLite, which keeps every
 # character, refuses it (`:sized_text`).
 _field_cast_type(f::Models.sCharField) = f.max_length_given ? "varchar($(f.max_length))" : f.type
+# #1438: a `SlugField` and a `URLField` declare the length their column has, the default included, since
+# their defaults (50, 200) are Django's own, and Django's `Cast` sizes them the same. An `EmailField` has
+# no length in PormG (its column is `TEXT`), so it keeps `f.type`.
+_field_cast_type(f::Union{Models.sSlugField, Models.sURLField}) = "varchar($(f.max_length))"
+# #1438: an array is its element's cast type with `[]`, as its column is (`varchar(3)[]`). Its `type` is
+# `"ARRAY"`, which rendered `::array` on PostgreSQL and `TEXT` on SQLite; the `[]` suffix is what the
+# dialect refuses on an engine without arrays. A nested `ArrayField` is refused when it is built.
+_field_cast_type(f::Models.sArrayField) = _field_cast_type(f.base_field) * "[]"
 
 """
     Concat(expressions; output_field=nothing)

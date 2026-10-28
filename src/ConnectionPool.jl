@@ -3353,7 +3353,8 @@ atomic(f::Function, db::String; durable::Bool=false) = atomic(f, get_settings(db
 atomic(f::Function, settings::PormGSettings; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
 
 """
-    with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0) -> result
+    with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,
+                    inside_transaction::Symbol = :raise) -> result
 
 Run `f()` and, when it raises [`OperationalError`](@ref), run it again — at most `attempts` more
 times, sleeping `backoff` seconds before each retry. With the default `attempts = 1`, `f` runs at
@@ -3384,22 +3385,39 @@ the reads you know are.
 - Inside an open transaction it raises `TransactionError` without running `f`: a lost connection
   loses the whole transaction, so retry the transaction — the `atomic` block — not one statement
   in it (#138).
+- `inside_transaction = :run_once` runs `f` once there instead, with no retry and no error; an
+  `OperationalError` it raises propagates, so the enclosing `atomic` block rolls back. It is for a
+  library that reads on an application's behalf and cannot know whether the application's own
+  transaction is open around the call. Any open transaction counts, on any database, as for the
+  default. Outside a transaction the block is retried as usual, so it must still be safe to run
+  twice. Any `Symbol` other than `:raise` (the default) or `:run_once` raises `InvalidValueError`.
 - When every attempt fails, the last `OperationalError` propagates.
 
 See also [`atomic`](@ref).
 """
-function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0)
+function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,
+                         inside_transaction::Symbol = :raise)
   attempts >= 0 || throw(InvalidValueError("with_read_retry: `attempts` must be zero or more"))
   (backoff >= 0 && isfinite(backoff)) ||
     throw(InvalidValueError("with_read_retry: `backoff` must be a finite number of seconds, zero or more"))
+  # Checked on every call, not only inside a transaction: a library's misspelling would otherwise
+  # surface only on the call an application happens to make inside one (#1443).
+  inside_transaction in (:raise, :run_once) ||
+    throw(InvalidValueError("with_read_retry: `inside_transaction` must be :raise or :run_once"))
   # Refused before `f` runs, not when a drop happens: the misuse surfaces on the first call instead of
   # during an outage. Any open transaction counts: one on the same database would retry half a
   # transaction, and an ORM read on another database is already refused by the transaction scope check.
   # A raw `fetch` on another pool is allowed there and refused here too — `f` is opaque, so the helper
   # cannot tell which pools it reaches.
-  in_transaction_context() && throw(TransactionError(
-    "with_read_retry cannot run inside a transaction: a lost connection loses the whole transaction, " *
-    "so retry the transaction, not the statement"))
+  if in_transaction_context()
+    # A library caller that cannot know the application's transaction state runs the read once: a
+    # drop then propagates, the application's own block rolls back, and the application retries it as
+    # a whole (#1443).
+    inside_transaction === :run_once && return f()
+    throw(TransactionError(
+      "with_read_retry cannot run inside a transaction: a lost connection loses the whole transaction, " *
+      "so retry the transaction, not the statement"))
+  end
   retries = 0
   while true
     try

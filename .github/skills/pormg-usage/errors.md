@@ -112,7 +112,9 @@ end
 - Outside a transaction, wrap a read you know is safe to run twice in `with_read_retry() do … end`:
   it runs the block again on `OperationalError` (once by default; `attempts`, `backoff` seconds),
   except a cancelled statement (a statement timeout, a cancel or `KILL QUERY`), and raises
-  `TransactionError` inside a transaction. PormG never retries a dropped read on its own.
+  `TransactionError` inside a transaction. Library code that cannot know whether the app's
+  transaction is open passes `inside_transaction = :run_once`: inside one the block runs once, with
+  no retry. PormG never retries a dropped read on its own.
 
 ## What raises what
 

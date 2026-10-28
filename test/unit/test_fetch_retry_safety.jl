@@ -438,14 +438,88 @@ end
   @test count(!, pool.available) == 0
 end
 
-@testset "with_read_retry: a negative attempts or backoff is refused (#1148)" begin
-  # What: `attempts = -1`, `backoff = -1`. Expected: `InvalidValueError` before the block runs. Why: a
-  # negative count or sleep has no meaning, and silently treating it as zero would hide a typo.
+@testset "with_read_retry: inside_transaction = :run_once inside atomic runs the block once (#1443)" begin
+  # What: `with_read_retry(; inside_transaction = :run_once)` inside `atomic` on the mock pool, with no
+  # drop. Expected: the block runs once, its value reaches the caller, nothing is logged, the SELECT
+  # reaches the driver once and the connection is returned. Why: a library reading on an application's
+  # behalf cannot know whether the application's transaction is open; the default raises there.
+  pool = MockPGPool1042(1)
+  runs = 0
+  result = @test_logs CP.atomic(pool) do
+    with_read_retry(; inside_transaction = :run_once) do
+      runs += 1
+      (rows = CP.fetch(pool, SELECT_1148), run = runs)
+    end
+  end
+  @test result.run == 1
+  @test result.rows == NamedTuple[]
+  @test runs == 1
+  @test count(==(SELECT_1148), pool.executed) == 1
+  @test count(!, pool.available) == 0
+end
+
+@testset "with_read_retry: inside_transaction = :run_once does not retry a drop inside atomic (#1443)" begin
+  # What: the SELECT drops once, inside `atomic`, under `inside_transaction = :run_once`. Expected:
+  # `OperationalError` after one run, nothing logged (fetch raises a drop inside a transaction without
+  # its "not retried" warn, and there is no retry warn), and the mock's transaction rolls back and
+  # returns its connection. Why: a lost connection loses the whole transaction (#138); running the
+  # read again would continue a transaction that no longer exists.
+  pool = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1)
+  runs = 0
+  err = @test_logs begin
+    try
+      CP.atomic(pool) do
+        with_read_retry(; inside_transaction = :run_once) do
+          runs += 1
+          CP.fetch(pool, SELECT_1148)
+        end
+      end
+      nothing
+    catch e
+      e
+    end
+  end
+  @test err isa PormG.OperationalError
+  @test runs == 1
+  @test count(==(SELECT_1148), pool.executed) == 1
+  @test count(!, pool.available) == 0
+end
+
+@testset "with_read_retry: inside_transaction = :run_once still retries outside a transaction (#1443)" begin
+  # What: one codeless drop under `inside_transaction = :run_once`, with no transaction open.
+  # Expected: two runs and both warns, as with the default. Why: the keyword changes only the
+  # in-transaction branch; a library that sets it still gets the retry it asked for.
+  pool = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1)
+  runs = 0
+  @test_logs (:warn, NOT_RETRIED_1042) (:warn, READ_RETRIED_1148) with_read_retry(; inside_transaction = :run_once) do
+    runs += 1
+    CP.fetch(pool, SELECT_1148)
+  end
+  @test runs == 2
+  @test count(==(SELECT_1148), pool.executed) == 2
+end
+
+@testset "with_read_retry: a negative attempts or backoff, or an unknown inside_transaction, is refused (#1148, #1443)" begin
+  # What: `attempts = -1`, `backoff = -1`, `inside_transaction = :run`. Expected: `InvalidValueError`
+  # before the block runs. Why: a negative count or sleep has no meaning, and silently treating it as
+  # zero would hide a typo; an unknown `inside_transaction` silently read as either value would too.
   runs = 0
   @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); attempts = -1)
   @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); backoff = -1)
   @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); backoff = Inf)
   @test runs == 0
+
+  # An unknown `inside_transaction` (#1443) is refused on every call, not only inside a transaction,
+  # so a misspelling surfaces before the one call an application makes inside its own block.
+  raised(f) = try f(); nothing catch e; e end
+  names_keyword(e) = e isa PormG.InvalidValueError && occursin("inside_transaction", PormG.error_message(e))
+  @test names_keyword(raised(() -> with_read_retry(() -> (runs += 1); inside_transaction = :run)))
+  pool = MockPGPool1042(1)
+  @test names_keyword(raised(() -> CP.atomic(pool) do
+    with_read_retry(() -> (runs += 1); inside_transaction = :run)
+  end))
+  @test runs == 0
+  @test count(!, pool.available) == 0
 end
 
 @testset "with_read_retry: a retry sleeps `backoff` and logs the error with its count (#1148)" begin

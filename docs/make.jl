@@ -76,6 +76,7 @@ makedocs(
             "Async & Concurrency" => "async.md",
             "Advisory Locks" => "advisory_lock.md",
             "Import from Django" => "import_django.md",
+            "Testing Your App" => "testing.md",
             "Upgrading PormG" => "upgrading.md",
         ],
         "Internals" => [

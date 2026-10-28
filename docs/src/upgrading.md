@@ -102,6 +102,10 @@ Every entry shows the ✗ old form and the ✓ new one. Edit each call site to t
 Run your app's test or integration suite against the upgraded PormG. An entry is done for your app
 only when the code is updated **and** the tests pass — not when the edit compiles.
 
+An offline golden-SQL suite makes this step cheap: it pins the SQL your app issues, needs no
+database, and shows each change as a diff to read against the entries. The recipe is on
+[Testing Your App](testing.md).
+
 ### 5. Bump the pin
 
 Once green, bump your app's PormG dependency to the version you upgraded to. That pin is the app's

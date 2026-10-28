@@ -288,6 +288,20 @@ const DOCERR_RACE1183_PG, DOCERR_RACE1183_SL = map(("docerr_pg", "docerr_sl")) d
     m.connect_key = key; m._module = Main; m
 end
 
+# #1442 — the testing page's offline fixture: models registered on a `register_offline` key, which
+# renders SQL and refuses to run it. Registered through `set_models`, as `@import_models` does, so the
+# Driver carries the reverse relation from Result: a `delete()` of it has a cascade to plan (#1453).
+PormG.Configuration.register_offline("docerr_offline")
+const DOCERR_DRIVER_OFFLINE = let mod = Module(:DocErrOffline1442)
+    Core.eval(mod, :(import PormG.Models))
+    Core.eval(mod, :(Driver = Models.Model("docerr_driver1442",
+                                           driverid = Models.IDField(), surname = Models.CharField())))
+    Core.eval(mod, :(Result = Models.Model("docerr_result1442", resultid = Models.IDField(),
+                                           driverid = Models.ForeignKey(Driver, pk_field = "driverid"))))
+    Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline")
+    Base.invokelatest(getfield, mod, :Driver)
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -3419,6 +3433,21 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> IDField(auto_increment = false),
     ),
+    (
+        "testing.md — a query run on a `register_offline` key raises InvalidConfigurationError (#1442)",
+        InvalidConfigurationError,
+        () -> DOCERR_DRIVER_OFFLINE.objects.filter("surname" => "Senna").list(),
+    ),
+    (
+        "testing.md — `register_offline(key; adapter = :mysql)` raises InvalidConfigurationError (#1442)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration.register_offline("docerr_offline_mysql"; adapter = :mysql),
+    ),
+    (
+        "testing.md — `delete(show_query = :dict)` of a referenced model on a `register_offline` key raises InvalidConfigurationError (#1453)",
+        InvalidConfigurationError,
+        () -> DOCERR_DRIVER_OFFLINE.objects.filter("surname" => "Senna").delete(show_query = :dict),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3445,6 +3474,20 @@ const DOCERR_CASES = [
             @test !(err isa ArgumentError)
         end
     end
+end
+
+# testing.md (#1442): the refusal an offline key raises is the offline one. A missing driver raises
+# the same type (`InvalidConfigurationError`), so the type alone cannot tell the page's claim apart
+# from a setup mistake; the message names `register_offline`, and the driver hint does not.
+@testset "testing.md — running a query on an offline key names register_offline (#1442)" begin
+    err = try
+        DOCERR_DRIVER_OFFLINE.objects.filter("surname" => "Senna").list()
+        nothing
+    catch e
+        e
+    end
+    @test err isa InvalidConfigurationError
+    @test occursin("register_offline", error_message(err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

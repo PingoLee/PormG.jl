@@ -125,7 +125,8 @@ end
 # (`_require_outer_joins`). A keyless model's constant-SET update takes the EXISTS fence alone, which
 # rewrites RIGHT to INNER and FULL to LEFT (`_target_predicate`) and so never asks the engine for an
 # outer join: refusing it refused a feature the statement does not use. An update whose SET reads a
-# joined column takes UPDATE … FROM, which refuses every non-INNER join on every engine (#1430).
+# joined column takes UPDATE … FROM, which joins through its FROM list and never prints a join type
+# either: it refuses a LEFT or FULL join on every engine and runs a RIGHT one as the INNER it means (#1430).
 function _require_outer_join(conn, how::AbstractString)::Nothing
   how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
   how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")

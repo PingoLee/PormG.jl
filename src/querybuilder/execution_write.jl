@@ -987,24 +987,7 @@ end
 function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
                                   rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
   for row in row_join
-    # #1430: a path join's anchor lands in WHERE, so a LEFT, RIGHT or FULL join acts as an INNER one on
-    # every engine: a row with no match is not updated, where the join it was declared as keeps it
-    # with the joined column read as NULL. A path through a nullable ForeignKey is LEFT by default
-    # (`_determine_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
-    # is NULL, silently. A filter's join is flattened the same way (`"fk__col__@isnull" => true` then
-    # matches nothing), so the rule covers every path join in the statement, as #174 did beside a
-    # `cjoin_on`. Refused rather than rendered: the caller names which of the two meanings they want.
-    if row isa ModelJoin && row.how != "INNER"
-      throw(QueryBuildError(
-        "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into a correlated " *
-        "UPDATE ... FROM (setting a column from a joined table): that statement joins in its WHERE clause, " *
-        "so it would act as an INNER join and skip the rows with no match instead of keeping them. " *
-        (row.how == "LEFT" ? "A path through a nullable ForeignKey is joined LEFT. " : "") *
-        "To update only the rows with a match, declare the " *
-        "path with on(\"<path>\", join_type = \"INNER\"); to write NULL where there is none, set the column " *
-        "from Subquery(<Model>.objects.filter(\"<pk>\" => OuterRef(\"<fk>\")).values(\"<column>\")) (#1430, #174)."))
-    end
-    # #1002: the same rule for a path join. A reverse, ManyToMany or non-unique-link join in the FROM
+    # #1002: a path join must be to-one, as a `cjoin_on` must below (#174). A reverse, ManyToMany or non-unique-link join in the FROM
     # list matches several rows per updated row, so SET reads an arbitrary one — `build()` lets it
     # through because `update()` builds as a semi-join, which holds only for the `pk IN (…)` form.
     if row isa ModelJoin && row.to_many
@@ -1058,6 +1041,27 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
                     "UPDATE ... FROM (setting a column from a joined table): that statement joins in its WHERE " *
                     "clause on the key columns only, so the condition would be dropped. Scope the mutation " *
                     "with a filter instead (#977)."))
+    end
+    # #1430: a path join's anchor lands in WHERE, so a LEFT or FULL join acts as an INNER one on every
+    # engine: a row with no match is not updated, where the join it was declared as keeps it with the
+    # joined column read as NULL. A path through a nullable ForeignKey is LEFT by default
+    # (`_determine_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
+    # is NULL, silently. A filter's join is flattened the same way (`"fk__col__@isnull" => true` then
+    # matches nothing), so the rule covers every path join in the statement, as #174 did beside a
+    # `cjoin_on`. Refused rather than rendered: the caller names which of the two meanings they want.
+    # RIGHT is not refused: the chain is left-deep and rooted at the target, so a RIGHT hop null-extends
+    # only the target side, rows an UPDATE cannot write. Flattened, it updates exactly the rows INNER
+    # does, the equivalence `_target_predicate` rewrites by. Checked after the refusals no join type
+    # fixes (a to-many hop, a CTE, an `on()` condition), so its advice is not a step into one of them.
+    if row isa ModelJoin && (row.how == "LEFT" || row.how == "FULL")
+      throw(QueryBuildError(
+        "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into this update's " *
+        "correlated UPDATE ... FROM, which joins in its WHERE clause: it would act as an INNER join and skip " *
+        "the rows with no match instead of keeping them. " *
+        (row.how == "LEFT" ? "A path through a nullable ForeignKey is joined LEFT. " : "") *
+        "To update only the rows with a match, declare the path with on(\"<path>\", join_type = \"INNER\"); " *
+        "to write NULL where there is none, set the column from " *
+        "Subquery(<Model>.objects.filter(\"<pk>\" => OuterRef(\"<fk>\")).values(\"<column>\")) (#1430, #174)."))
     end
   end
   conditions = String[]
@@ -1648,8 +1652,9 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         """
       else
         # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
-        # (`_update_from_sql`). No capability check (#1431): `_get_join_condition_list` refuses every
-        # non-INNER join here, on every engine (#1430), which is what an old SQLite must hear too.
+        # (`_update_from_sql`). No capability check (#1431): the FROM list prints no join type, and
+        # `_get_join_condition_list` refuses a LEFT or FULL join on every engine (#1430), which is what an
+        # old SQLite must hear too; a RIGHT one updates exactly the rows INNER does.
         from_clause = _build_from_tables(instruction.row_join, connection)
         join_conditions = _build_join_conditions(instruction.row_join, connection;
                                                  rendered_on = instruction.cjoin_on_rendered)

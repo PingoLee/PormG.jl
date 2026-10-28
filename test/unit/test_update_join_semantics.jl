@@ -111,20 +111,47 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# update(): an explicit RIGHT join is refused in UPDATE … FROM (#1430)
-# A declared join type is flattened the same way. RIGHT is a feature of all three engines here, so the
-# refusal is the meaning one, and it names the RIGHT join without the nullable-ForeignKey note.
+# update(): an explicit FULL join is refused in UPDATE … FROM, a RIGHT one runs as INNER (#1430)
+# A declared join type is flattened the same way. FULL keeps a result with no driver, so flattened it
+# skips that row: refused, naming the FULL join without the nullable-ForeignKey note. RIGHT keeps only
+# a driver with no result, a row the target side is NULL in, which no UPDATE writes, so it updates
+# exactly the rows INNER does: it builds, the FROM list carrying no join type.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "update(): an explicit RIGHT join is refused in UPDATE … FROM (#1430)" begin
+@testset "update(): an explicit FULL join is refused in UPDATE … FROM, a RIGHT one runs as INNER (#1430)" begin
   for (engine, M) in _UJ_ENGINES
     q = M.Result.objects
-    q.on("driverid", join_type = "RIGHT")
+    q.on("driverid", join_type = "FULL")
     q.filter("resultid" => 1)
     err = _uj_err(() -> q.update("number" => F("driverid__number"), show_query = :sql))
     @test err isa PormG.QueryBuildError
     msg = _uj_msg(err)
-    @test occursin("The RIGHT join to \"driver\"", msg)
+    @test occursin("The FULL join to \"driver\"", msg)
     @test !occursin("nullable ForeignKey", msg)
+
+    q = M.Result.objects
+    q.on("driverid", join_type = "RIGHT")
+    q.filter("resultid" => 1)
+    sql = q.update("number" => F("driverid__number"), show_query = :sql)
+    @test occursin("driver", sql) && !occursin("RIGHT", sql) && !occursin("EXISTS", sql)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# update(): an OuterRef path in a SET Subquery adds an INNER outer join, so UPDATE … FROM (#1430, #1414)
+# `Subquery(Driver.filter("code" => OuterRef("driverid__code"))…)` joins `driver` on the OUTER statement
+# while SET renders. `Result.driverid` is not nullable, so that join is INNER and the statement builds
+# as UPDATE … FROM (MySQL: the multi-table UPDATE). This is the shape #1414's set-reads record exists
+# for, kept here on a non-null key now that a nullable one is refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update(): an OuterRef path in a SET Subquery adds an INNER outer join, so UPDATE … FROM (#1430, #1414)" begin
+  for (engine, M) in _UJ_ENGINES
+    s = M.Driver.objects
+    s.filter("code" => OuterRef("driverid__code"))
+    s.values("number")
+    s.limit(1)
+    sql = M.Result.objects.filter("resultid" => 1).update("number" => Subquery(s), show_query = :sql)
+    @test !occursin("EXISTS", sql) && !occursin("IN (SELECT", sql)
+    @test occursin(engine == "MySQL" ? "`result` AS `Tb`, `driver` AS `Tb_1`" : "FROM \"driver\" AS \"Tb_1\"", sql)
   end
 end
 
@@ -203,16 +230,22 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# update(): a joined SET over RIGHT or FULL hears the meaning refusal, not the capability one (#1431)
-# UPDATE … FROM refuses every non-INNER join on every engine (#1430), so on a backend without RIGHT or
-# FULL the caller learns that, not that a newer library would help: upgrading would only move the
-# error. Expected: `QueryBuildError` that is not a `BackendCapabilityError`.
+# update(): a joined SET never asks for RIGHT or FULL: FULL is refused for its meaning, RIGHT builds (#1431)
+# UPDATE … FROM joins through its FROM list and WHERE, so it never prints a join type. A FULL join there
+# is refused on every engine (#1430), so on a backend without FULL the caller learns that, not that a
+# newer library would help: upgrading would only move the error. A RIGHT join runs as the INNER join it
+# means here, so it builds on SQLite 3.38. Expected: `QueryBuildError` that is not a
+# `BackendCapabilityError` for FULL; SQL with no RIGHT JOIN for RIGHT.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "update(): a joined SET over RIGHT or FULL hears the meaning refusal, not the capability one (#1431)" begin
+@testset "update(): a joined SET never asks for RIGHT or FULL: FULL is refused for its meaning, RIGHT builds (#1431)" begin
   for (engine, M, lacking) in _UJ_LACKING, how in lacking
     q = M.Result.objects
     q.on("driverid", join_type = how)
     q.filter("resultid" => 1)
+    if how == "RIGHT"
+      @test !occursin("RIGHT", q.update("number" => F("driverid__number"), show_query = :sql))
+      continue
+    end
     err = _uj_err(() -> q.update("number" => F("driverid__number"), show_query = :sql))
     @test err isa PormG.QueryBuildError
     @test !(err isa PormG.BackendCapabilityError)

@@ -209,11 +209,14 @@ end
   query.create("name" => "temp", "test_result" => 1, "test_result_set_default" => nothing) # Result 1 driver is Lewis Hamilton
   
   # Join from Just_a_test_deletion -> Result -> Driver. `test_result` is nullable, so the path is
-  # declared INNER: UPDATE … FROM refuses a LEFT join (#1430).
-  query.on("test_result", join_type = "INNER")
+  # declared INNER: UPDATE … FROM refuses a LEFT join (#1430). On a handler of its own, so the read
+  # below stays join-free.
+  joined = M.Just_a_test_deletion.objects
+  joined.on("test_result", join_type = "INNER")
+  joined.filter("id__@gt" => 0)
+  joined.update("name" => F("test_result__driverid__forename"))
   query.filter("id__@gt" => 0)
-  query.update("name" => F("test_result__driverid__forename"))
-  
+
     updated_row = query.list() |> first
   @test updated_row[:name] == "Lewis"
 

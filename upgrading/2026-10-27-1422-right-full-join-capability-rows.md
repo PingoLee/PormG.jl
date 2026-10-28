@@ -1,6 +1,6 @@
 ## A `"RIGHT"` or `"FULL"` join type on SQLite older than 3.39.0 raises `BackendCapabilityError` while the query is built (#1422)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1422, #1431 ; `src/capabilities.jl` (`right_joins`, `full_joins`), `src/querybuilder/build_query.jl` (`_require_outer_join`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change, SQLite older than 3.39.0 only: a statement the server used to reject now raises `BackendCapabilityError` instead, before any SQL. PostgreSQL and SQLite 3.39.0 or newer are unchanged. MySQL is unreleased; there `"FULL"` is refused and `"RIGHT"` renders.

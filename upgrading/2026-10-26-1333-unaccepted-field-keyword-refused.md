@@ -1,6 +1,6 @@
 ## Field constructors refuse a keyword they do not accept (#1333)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1333 ; `src/models/fields.jl` (`_common_kwargs`, `_FIELD_KWARG_SPECS`, `_SCHEMA_NEUTRAL_FIELD_KWARGS`), `src/migrations/importers.jl` (`_drop_unaccepted_django_options!`)
 - **Recorded**: 2026-10-26
 - **Severity**: breaking. A model that loaded with an "Unexpected parameter … It will be ignored" warning now raises `FieldValidationError` when it is defined.

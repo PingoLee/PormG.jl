@@ -100,7 +100,8 @@ PormG at HEAD is running them, and `upgrade_guide` surfaces them by default.
 
 | Train | Cut |
 |---|---|
-| Unreleased — next `0.9.0` | — |
+| Unreleased — next `0.10.0` | — |
+| `0.9.0` | 2026-10-28 |
 | `0.8.0` | 2026-10-14 |
 | `0.7.0` | 2026-09-29 |
 | `0.6.0` | 2026-09-18 |

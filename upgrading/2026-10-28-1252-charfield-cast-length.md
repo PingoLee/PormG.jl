@@ -1,6 +1,6 @@
 ## A `CharField(max_length = n)`, `SlugField` or `URLField` cast keeps its length; a sized text cast is refused on SQLite (#1252, #1438)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1252, #1438 ; `src/querybuilder/functions.jl` (`_field_cast_type`), `src/querybuilder/engine_departures.jl` (`:sized_text`), `src/querybuilder/projection_types.jl` (`_sized_text_length`), `src/models/fields.jl` (`sCharField.max_length_given`)
 - **Recorded**: 2026-10-28
 - **Severity**: behavior change. A cast to a `CharField` given a length, a `SlugField` or a `URLField` now cuts the text on PostgreSQL and MySQL, and a cast to text of a declared length raises `QueryBuildError` on SQLite, where it built. A cast to an `ArrayField` now raises `BackendCapabilityError` on SQLite, where it cast to text. Each holds for the same field given as the `output_field` of `Coalesce`, `Greatest`, `Least` or `Case`.

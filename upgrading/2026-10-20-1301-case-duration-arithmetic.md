@@ -1,6 +1,6 @@
 ## Arithmetic over a `Case` whose value is a duration is an interval: refused on SQLite, typed on PostgreSQL (#1301, #1311)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1301, #1311 ; `src/querybuilder/expression_kind.jl` (`_render_side_kind`), `src/querybuilder/expression_render.jl` (`_render_interval_left`, `_projected_unordered_interval`), `src/querybuilder/projection_types.jl` (`_render_interval_alias_predicate`)
 - **Recorded**: 2026-10-20
 - **Severity**: behavior change, both engines. On SQLite the expression raises `QueryBuildError` when the query is built, where it returned a wrong number with no error, and so does ordering any interval with no millisecond form (`Case`, `Lag`, `NullIf` over a duration): against a duration inside `F` or `When`, with an ordering filter on its alias, or with `order_by` on its alias, where each compared or sorted text (#1311). On PostgreSQL a comparison of such a `Case` builds where it raised, and the SQL and its value are unchanged, but the result now has a type: a filter on its alias checks and binds a duration, and a pattern lookup or a `Concat` over it raises where it built.

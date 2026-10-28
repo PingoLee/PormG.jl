@@ -1,6 +1,6 @@
 ## `update` of an expression into a scaled `DecimalField` is refused on SQLite when it can carry more places than the field (#1279)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1279 ; `src/querybuilder/execution_write.jl` (`_refuse_update_scale_departure`), which reuses the #1040 classifier `_scale_divergent_operand` and the `:scale` row of `_MEANING_DEPARTURES`
 - **Recorded**: 2026-10-16
 - **Severity**: breaking, on SQLite. `update(field => <expression>)` into a `DecimalField(max_digits, decimal_places)` raises `QueryBuildError` there, before any SQL, when the expression can carry more than `decimal_places` fractional digits. It used to write every digit. PostgreSQL builds it as before, and its column rounds the value.

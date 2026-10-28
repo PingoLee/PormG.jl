@@ -1,6 +1,6 @@
 ## Generated model files — delete the legacy `Models.set_models(@__MODULE__, @__DIR__)` line (#1231)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1231 ; `src/Generator.jl` (no longer emits it), `src/Models.jl` (`set_models`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. Nothing changed in this release for this line itself; the

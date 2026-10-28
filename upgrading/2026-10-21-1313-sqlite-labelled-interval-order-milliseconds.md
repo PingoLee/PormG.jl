@@ -1,6 +1,6 @@
 ## SQLite: a labelled order term over an interval sorts its length (#1313)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1313 ; `src/querybuilder/build_select.jl` (`get_order_query`)
 - **Recorded**: 2026-10-21
 - **Severity**: behavior change, SQLite only. A labelled order term whose expression is an interval with a millisecond form returns its rows in the interval's order, where it returned them in its `HH:MM:SS` text's order, with no error. PostgreSQL is unchanged.

@@ -1,6 +1,6 @@
 ## An expression `update` too wide for its `DecimalField` raises 22003 on SQLite as it writes (#1330)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1330, amends the #1110 entry (`2026-10-21-1110-sqlite-numeric-overflow-raises-on-read.md`) ; `src/Dialect.jl` (`decimal_assignment_guard_sql`), `src/querybuilder/execution_write.jl` (`_decimal_assignment_guard`), `src/querybuilder/engine_facts.jl` (`_unchecked_decimal_assignment_width`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change, SQLite only. `update(field => <expression>)` into a `DecimalField(max_digits = p, decimal_places = s)` raises `StatementError` with `sqlstate == "22003"` on a row whose value needs more than `p - s` digits before the point, and the `UPDATE` writes nothing, where it used to store the value. PostgreSQL and MySQL are unchanged: their column already refuses it.

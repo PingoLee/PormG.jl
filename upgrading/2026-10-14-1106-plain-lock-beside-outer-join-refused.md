@@ -1,6 +1,6 @@
 ## A row lock without `of` beside an outer join is refused before the query runs, on PostgreSQL and SQLite (#1106)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1106 ; `src/querybuilder/execution_read.jl` (`_refuse_plain_lock_beside_outer_joins`)
 - **Recorded**: 2026-10-14
 - **Severity**: behavior change. On PostgreSQL most of these queries already failed at the server and now raise `QueryBuildError` before execution; the shapes its planner turned into an `INNER` join, which ran, now raise too. On SQLite a query that ran now raises.

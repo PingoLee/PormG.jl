@@ -1,6 +1,6 @@
 ## `IDField(auto_increment = …)` raises `FieldValidationError`; `generated` controls identity (#1334)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1334 ; `src/models/fields.jl` (`IDField`, `_reject_retired_idfield_kwargs`), `src/migrations/column_spec.jl` (`_inspectdb_id_pk`)
 - **Recorded**: 2026-10-26
 - **Severity**: breaking. A model that declared `IDField(auto_increment = …)` raises when it is defined.

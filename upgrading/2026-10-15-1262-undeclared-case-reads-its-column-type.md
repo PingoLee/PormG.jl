@@ -1,6 +1,6 @@
 ## A Case with no output_field reads back as its branches' column type (#1262)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1262 ; `src/querybuilder/expression_kind.jl` (`_read_kind`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. On SQLite a `Case` without `output_field` reads back as a typed value where it read back as stored text or a number before. On PostgreSQL its value is normalized as the column's is: an array as a 1-based `Vector`, an interval as a `Dates.CompoundPeriod` on every driver.

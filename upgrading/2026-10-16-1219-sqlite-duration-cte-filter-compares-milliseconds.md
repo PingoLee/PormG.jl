@@ -1,6 +1,6 @@
 ## A filter on a duration CTE column compares its length on SQLite, not its text (#1219)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1219 ; `src/querybuilder/filter_nodes.jl` (`_is_sqlite_duration_column`)
 - **Recorded**: 2026-10-16
 - **Severity**: behavior change, SQLite only. A filter on a CTE column that holds a duration can return different rows, and binds milliseconds instead of text. PostgreSQL is unchanged.

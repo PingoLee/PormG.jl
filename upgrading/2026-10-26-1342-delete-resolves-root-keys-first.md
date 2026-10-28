@@ -1,6 +1,6 @@
 ## `delete()` that cascades reads the root's keys first, so it deletes the rows its filter matched (#1342, #1370)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1342, #1370 ; `src/querybuilder/deletion.jl` (`_root_key_plan`, `_resolve_root_keys!`, `_root_key_chunks`)
 - **Recorded**: 2026-10-26 (amended for #1370 the same day)
 - **Severity**: bug fix that changes a value. A cascading `delete()` now deletes exactly the rows its filter matched and returns counts that say so. With a filter that reads another table it used to delete some or all of the children and keep the root (#1342); with a filter on the root's own columns, when a `SET_NULL` / `SET_DEFAULT` statement wrote the root's table, it deleted rows it should only have updated (#1370). No error either way. The `show_query` / `inspect_query` output of every filtered cascading delete gains a key read, and loses the `FOR SHARE` lock steps.

@@ -1,6 +1,6 @@
 ## An interval cast to a number is refused on SQLite, which read its text's hours (#1259)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1259 ; `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_interval_operand`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. Expressions that built on SQLite now raise `QueryBuildError` when the query is built. PostgreSQL is unchanged.

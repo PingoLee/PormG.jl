@@ -1,6 +1,6 @@
 ## An `update()` that sets a column from a joined table refuses a `LEFT` or `FULL` join (#1430)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1430 ; `src/querybuilder/execution_write.jl` (`_get_join_condition_list`)
 - **Recorded**: 2026-10-28
 - **Severity**: behavior change, every engine. An `update()` whose `SET` reads a joined column, in a statement with a `LEFT` or `FULL` path join, used to run as if that join were `INNER`, which skipped the rows it had no match for. It now raises `QueryBuildError` when the query is built.

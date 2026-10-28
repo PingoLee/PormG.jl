@@ -1,6 +1,6 @@
 ## `Value(ip"…")` on SQLite raises `BackendCapabilityError` while the query is built (#1372)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1372 ; `src/querybuilder/parameters.jl` (`add_parameter!(::SQLInstruction, ::Sockets.IPAddr)`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change, SQLite only. A `Sockets.IPv4` / `Sockets.IPv6` literal raises `BackendCapabilityError` where it raised `InvalidValueError`. PostgreSQL is unchanged: it binds the literal as an `inet`. MySQL is unreleased.

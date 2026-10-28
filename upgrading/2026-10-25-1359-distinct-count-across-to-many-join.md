@@ -1,6 +1,6 @@
 ## `distinct().count()` and `distinct().offset(n).exists()` across a to-many filter count each row once (#1359)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1359 ; `src/querybuilder/execution_read.jl` (`_count`, `_exists_projection`), `src/querybuilder/filter_nodes.jl` (`_build_exists_query`)
 - **Recorded**: 2026-10-25
 - **Severity**: bug fix that changes a value. An unprojected `distinct().count()` across a to-many filter returns the number of matching rows, where it returned the number of (row, related row) pairs, and `distinct().offset(n).exists()`, or `Exists(...)` over such a query, skips `n` of those rows, where it skipped `n` pairs. Every other count and existence probe is unchanged.

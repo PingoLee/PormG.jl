@@ -1,6 +1,6 @@
 ## `Cast(x, DecimalField(…))` and `output_field = DecimalField(…)` cast to the field's own precision and scale (#1221)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1221 ; `src/querybuilder/functions.jl` (`_field_cast_type`, `Cast`, `_output_field_type`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. On PostgreSQL the value is rounded to the field's scale where it was not; on SQLite an operand with more places than the scale now raises `QueryBuildError` (#1040) where it built.

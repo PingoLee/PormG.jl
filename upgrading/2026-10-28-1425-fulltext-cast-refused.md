@@ -1,6 +1,6 @@
 ## A cast to `tsvector` or `tsquery` is refused on SQLite (#1425)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1425 ; `src/Dialect.jl` (`_check_fts_cast`, called by `cast_type_sql` on SQLite and MySQL)
 - **Recorded**: 2026-10-28
 - **Severity**: behavior change. On SQLite, `Cast(x, "tsvector")` and `Cast(x, "tsquery")` used to build and return a value the cast never meant. Both now raise `BackendCapabilityError` when the query is built. PostgreSQL is unchanged.

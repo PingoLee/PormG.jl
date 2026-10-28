@@ -1,6 +1,6 @@
 ## A number cast to a date is refused on SQLite and MySQL (#1417)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1417 ; `src/querybuilder/engine_departures.jl` (the `:date` row), `src/querybuilder/projection_types.jl` (`_number_operand`, `_cast_divergent_operand`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On SQLite, `Cast(x, "date")` over a number used to build and return a date the number never meant. It now raises `QueryBuildError` when the query is built. On PostgreSQL the query is unchanged and still fails at the server.

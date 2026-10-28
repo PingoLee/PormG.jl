@@ -1,6 +1,6 @@
 ## `update` writes `Joined(…)`, `Subquery(…)` and `Value(…)` into any field, number fields included (#1320)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1320 ; `src/querybuilder/value_validation.jl` (`_SetExpression`, `_refuse_expression_value`), `src/querybuilder/execution_write.jl` (`update`), `src/querybuilder/expression_render.jl`
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. Calls that raised `InvalidValueError` now build: a `Joined` column into a number field, and a `Subquery` or a `Value(x)` into any field. A few calls raise a different error: a non-number `Joined` column or `Subquery` into a number field raises #1297's `QueryBuildError`; on SQLite, one with more decimal places than a `DecimalField` raises #1279's; a `CTE` column into a number field raises update's own no-WITH refusal (#433); `create` and the bulk writers refuse a `Joined` column or a `Subquery` with #1283's message.

@@ -1,6 +1,6 @@
 ## A time of day minus a time of day is a duration on PostgreSQL (#1406)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1406 ; `src/querybuilder/expression_kind.jl` (`_temporal_result_kind`), `src/querybuilder/engine_facts.jl` (`_subtracts_times`), `src/querybuilder/expression_render.jl`
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On PostgreSQL, a query over `F(<TimeField>) - F(<TimeField>)` that

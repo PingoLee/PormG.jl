@@ -1,6 +1,6 @@
 ## Arithmetic on a time of day is refused on SQLite and MySQL (#1323)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1323 ; `src/querybuilder/expression_render.jl` (`_time_arithmetic_side`, `_time_arithmetic_refusal`, `_refuse_unnamed_temporal`), `src/querybuilder/expression_kind.jl` (`_is_temporal_kind`, `_side_walk_kind`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change, SQLite and MySQL. Arithmetic (`+`, `-`, `*`, `/`) with a `TimeField` on either side, and an ordering between a time and a value PormG cannot type (a JSON key lookup), used to build and return a number computed on the time's text. They now raise `QueryBuildError` when the query is built. PostgreSQL is unchanged.

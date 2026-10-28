@@ -1,6 +1,6 @@
 ## A cast to `smallint` or `integer` raises 22003 on SQLite for a value outside the type (#1356, #1405)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1356, #1405 ; `src/Dialect.jl` (`integer_cast_guard_sql`), `src/querybuilder/select_nodes.jl` (`_integer_cast_guard`, `_guarded_integer_type`), `ext/PormGSQLiteExt.jl` (`backend_error_fields`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change, SQLite. `Cast(x, "smallint")` / `Cast(x, "integer")` (and `IntegerField()`), and a `Coalesce`, `Greatest`, `Least` or `Case` declaring the same `output_field`, over a value outside the type raises `StatementError` with `sqlstate == "22003"` where it returned the value. Any SQLite "integer overflow" error now carries `sqlstate == "22003"`. PostgreSQL is unchanged. MySQL is unreleased.

@@ -1,6 +1,6 @@
 ## `ToChar` over a duration is refused on every engine, under every format (#1416)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1416 ; `src/querybuilder/select_nodes.jl` (`_check_tochar_of_duration`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. Expressions that built on PostgreSQL and SQLite now raise `QueryBuildError` when the query is built.

@@ -1,6 +1,6 @@
 ## `update` of a non-number expression into a number field is refused on every engine (#1297)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1297 ; `src/querybuilder/execution_write.jl` (`_refuse_update_non_number`), which types the operand with the expression-kind walk (`_expression_kind`)
 - **Recorded**: 2026-10-21
 - **Severity**: breaking. `update(field => <expression>)` into a number field (`IntegerField`, `BigIntegerField`, `PositiveIntegerField`, `PositiveSmallIntegerField`, `FloatField`, `DecimalField`, or a `ForeignKey` to an integer key) raises `QueryBuildError` before any SQL when the expression is a UUID, a date, a timestamp, a time, an interval, binary data, a network address or a full-text document. On SQLite it used to store the value's text, or a blob's bytes. On PostgreSQL it used to fail at execute with a `StatementError`.

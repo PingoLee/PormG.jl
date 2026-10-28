@@ -1,6 +1,6 @@
 ## A `numeric(p, s)` value that overflows on SQLite raises `StatementError` as it is read, as on PostgreSQL (#1110)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1110, supersedes the "overflow of a column or a computed value" gap the 0.8.0 entry for #1040 records ; `src/Dialect.jl` (`_parse_sqlite_decimal`), `src/value_repr.jl` (`value_parser`), `src/querybuilder/expression_kind.jl` (`_unapplied_declared_decimal`), `src/querybuilder/engine_facts.jl` (`_unapplied_decimal_width`)
 - **Recorded**: 2026-10-21
 - **Severity**: behavior change, SQLite only. A value read through a declared `numeric(p, s)` (a `Cast`, a decimal `output_field`, a `DecimalField` column) that needs more than `p - s` digits before the point raises `StatementError` with `sqlstate == "22003"` where it used to come back as it was, and a value with more than `s` places comes back rounded to `s`. PostgreSQL is unchanged: it already rounds, and raises the same error when the query runs. MySQL is unchanged.

@@ -1,6 +1,6 @@
 ## The Django importer writes column names bare in CHECK and index SQL (#1368)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1368 ; `src/migrations/importers.jl` (`_q_ident`), `src/migrations/introspection.jl` (`_comparable_sql_text`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change, PostgreSQL and SQLite. `import_models_from_django` writes a different SQL text for a converted `CheckConstraint`, a partial index or constraint condition, and a functional index. After a re-import, `makemigrations` on PostgreSQL drops and re-creates, once, each such object whose stored text is not the new text exactly — most of them — and that plan is destructive. On SQLite nothing is re-created. MySQL is unreleased.

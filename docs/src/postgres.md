@@ -166,6 +166,8 @@ Race_strategy = Models.Model("race_strategy",
 
 - A native one-dimensional array of the element field's type. A value is a Julia `Vector`, and it
   reads back as `Vector{T}` with `T` the element field's scalar read type, on both PostgreSQL drivers.
+  A projected cast to the same array type reads back the same way: `Cast("pit_laps", "bigint[]")`,
+  `Cast(x, ArrayField(CharField(max_length = 3)))`.
 - `size` is checked by PormG on write. PostgreSQL neither enforces nor keeps it, so it is not part of
   the schema.
 - A vector filter value is an equality against the whole array. The array lookups are

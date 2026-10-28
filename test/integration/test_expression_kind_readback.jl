@@ -57,8 +57,16 @@ function _ekr_observe(id::String)
   PormG.QueryBuilder.query(probe; show_query = :sql)
   kind = get(probe.object.projection_kinds, name, nothing)
   v = only(q.list())[name]
-  return (type = string(nameof(typeof(v))), value = string(v),
-          read = kind === nothing ? nothing : replace(string(kind), "PormG.Kernel." => ""))
+  read = kind === nothing ? nothing : replace(string(kind), "PormG.Kernel." => "")
+  # #1439: an array prints its element type qualified or not by what `Main` has `using`-ed
+  # (`Decimals.Decimal[…]`), so it is recorded by bare names too: its element type (each member of a
+  # `Union{Missing, T}`) and each element.
+  if v isa AbstractVector
+    names = sort!([string(nameof(t)) for t in Base.uniontypes(eltype(v))])
+    T = length(names) == 1 ? only(names) : "Union{$(join(names, ", "))}"
+    return (type = "Vector{$(T)}", value = "[" * join(string.(v), ", ") * "]", read = read)
+  end
+  return (type = string(nameof(typeof(v))), value = string(v), read = read)
 end
 
 # Measured on every engine (MySQL's rows on 8.4, #1130 phase 5c). `read` is the kind the build recorded
@@ -98,6 +106,18 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum F int + epoch / 2 | alone", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
   ("Sum F int + epoch / 2 | cte", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
   ("Sum F int + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
+  # #1439: a cast to an array reads back as the `Vector` an `ArrayField` of its element does. Flagged
+  # `:unparsed` only because a PostgreSQL cell asks SQLite's parser table, which has no array parser
+  # (SQLite and MySQL refuse the cast, so there is nothing to read back there). Before #1439 LibPQ
+  # returned the text cells as their `{…}` literal, a `String`.
+  ("Cast text varchar[] | alone", :postgres) => (type = "Vector{String}", value = "[SOFT, MEDIUM]", read = "CArray(CVarChar(nothing))"),
+  ("Cast text varchar[] | subquery", :postgres) => (type = "Vector{String}", value = "[SOFT, MEDIUM]", read = "CArray(CVarChar(nothing))"),
+  ("Cast text ArrayField(CharField(3)) | alone", :postgres) => (type = "Vector{String}", value = "[SOF, MED]", read = "CArray(CVarChar(3))"),
+  ("Cast text ArrayField(CharField(3)) | subquery", :postgres) => (type = "Vector{String}", value = "[SOF, MED]", read = "CArray(CVarChar(3))"),
+  ("Cast int integer[] | alone", :postgres) => (type = "Vector{Int32}", value = "[7, 8]", read = "CArray(CInt32())"),
+  ("Cast int integer[] | subquery", :postgres) => (type = "Vector{Int32}", value = "[7, 8]", read = "CArray(CInt32())"),
+  ("Cast decimal numeric(10,2)[] | alone", :postgres) => (type = "Vector{Decimal}", value = "[1.5, 2]", read = "CArray(CDecimal(10, 2))"),
+  ("Cast decimal numeric(10,2)[] | subquery", :postgres) => (type = "Vector{Decimal}", value = "[1.5, 2]", read = "CArray(CDecimal(10, 2))"),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on two engines, by the table above. Every

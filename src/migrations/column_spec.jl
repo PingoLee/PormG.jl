@@ -140,12 +140,6 @@ _arg(args::Vector{Int}, i::Int) = length(args) >= i ? args[i] : nothing
 # its element type and one `[]`, whatever was declared, so the brackets carry nothing to keep.
 const _PG_ARRAY_SUFFIX = r"^(.*?)\s*((?:\[\s*\d*\s*\])+)\s*$"
 
-# The element kinds an `ArrayField` can declare (`Models.array_element_kind`). Any other element — a
-# `smallint[]`, an `inet[]`, a `jsonb[]` — is an array PormG could not have written, and stays
-# `CUnsupported` like every other spelling PormG never renders.
-const _ArrayElementKind = Union{CVarChar, CText, CInt32, CInt64, CFloat64, CDecimal, CBool, CDate,
-                                CDateTime, CUUID}
-
 """
     parse_canonical_type(raw, conn) -> CanonicalType
 

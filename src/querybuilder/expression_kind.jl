@@ -537,7 +537,24 @@ _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.colum
 # the casts classify either as a float, and a CTE column over it is a `FloatField`, which binds either.
 # A reader that must tell the widths apart is the point to add a `CFloat32`.
 # On SQLite a uuid or network cast renders `CAST(x AS TEXT)` (`_declared_type_formatter`), so it is text.
+#
+# #1439: a one-dimensional array of an element an `ArrayField` can declare is `CArray(element)`, read
+# back by the parser an `ArrayField` column has (`value_parser(::CArray, …)`), so `"varchar[]"` reads a
+# `Vector{String}` on both PostgreSQL drivers instead of LibPQ's `{…}` literal. Any other array names
+# nothing and arrives as the driver hands it over: `CArray` is one-dimensional, and `smallint[]` and
+# `real[]` are arrays PormG never writes (a `real` element is a `Float32`, which `CFloat64` would widen,
+# #1258). `_sql_type_field` still answers `nothing` for an array (#852): both of its readers take its
+# field for a scalar. SQLite and MySQL refuse an array cast before this is read.
+# The suffix is the last `[]` (or `[n]`) only, so `integer[][]` reads its element as `integer[]`, a
+# `CArray`, which is no `_ArrayElementKind`.
+const _ONE_ARRAY_SUFFIX = r"^\s*(.*?)\s*\[\s*\d*\s*\]\s*$"
 function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,Nothing}
+  array = Base.endswith(rstrip(type_name), ']') ? match(_ONE_ARRAY_SUFFIX, type_name) : nothing
+  if array !== nothing
+    _single_precision_cast(strip(array.captures[1])) && return nothing
+    element = _declared_kind(array.captures[1], conn)
+    return element isa _ArrayElementKind ? CArray(element) : nothing
+  end
   size = _numeric_cast_size(type_name)
   size === nothing || return CDecimal(size...)
   field = _sql_type_field(type_name)

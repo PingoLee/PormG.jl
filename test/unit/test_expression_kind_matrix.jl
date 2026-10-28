@@ -254,6 +254,7 @@ function _ekm_kind_family(s::String)
   startswith(s, "CDecimal(") && return :decimal
   startswith(s, "CDateTime(") && return :datetime
   startswith(s, "CVarChar(") && return :text
+  startswith(s, "CArray(") && return :array   # #1439: a cast to an array, PostgreSQL only
   return :other
 end
 # `format_number_sql` formats every number column (integer, float and decimal alike) and

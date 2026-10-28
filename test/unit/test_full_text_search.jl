@@ -13,7 +13,8 @@ Pinned here, with mock connections and no database:
      `InvalidValueError`, at the constructor and again at render (the node's kwargs are mutable).
   3. **Operands are not values.** A `SearchVector` or `SearchQuery` projected, compared, wrapped or
      put on the right of another lookup is refused, as is `@search` on a non-text column or an alias.
-  4. **SQLite refuses**, naming the feature, never as a `MethodError`.
+  4. **SQLite refuses**, naming the feature, never as a `MethodError` — a `Cast` to `tsvector` or
+     `tsquery` too (#1425).
 
 The live results — stemming, ranking order, headline markup, and the index the literal config exists
 for — are in `test/integration/test_full_text_search.jl`.
@@ -26,7 +27,7 @@ using PormG
 using PormG.Models
 import PormG.QueryBuilder: inspect_query
 using PormG.Functions: SearchQuery, SearchVector, SearchRank, SearchHeadline, Lower, Concat, Coalesce,
-                       Value, When, Case
+                       Value, When, Case, Cast
 using DataFrames: DataFrame
 
 include("helper_marker_alignment.jl")
@@ -369,7 +370,8 @@ end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # SQLite refuses at build, naming the feature
+  # SQLite refuses at build, naming the feature — the lookup, each function, and a cast to `tsvector`
+  # or `tsquery` (#1425), which SQLite would otherwise read as text or as a number.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "SQLite: every piece raises BackendCapabilityError, never a MethodError" begin
     cases = (
@@ -378,6 +380,12 @@ end
       ("SearchRank", () -> _q31(; vals = Any["driverid", "r" => SearchRank(SearchVector("surname"), "senna")], conn = _FTS_SL)),
       ("SearchHeadline", () -> _q31(; model = _F.Race, vals = Any["raceid", "h" => SearchHeadline("name", "prix")], conn = _FTS_SL)),
       ("SearchVector", () -> _q31(; vals = Any["driverid", "v" => SearchVector("surname")], conn = _FTS_SL)),
+      # #1425: a cast to either type is the feature too. Before, `tsvector` rendered `CAST(… AS TEXT)`
+      # and `tsquery` `CAST(… AS TSQUERY)`, a NUMERIC-affinity name that reads 'senna' as 0.
+      ("Cast: a cast to \"tsvector\"", () -> _q31(; vals = Any["driverid", "c" => Cast("surname", "tsvector")], conn = _FTS_SL)),
+      ("Cast: a cast to \"TSQUERY\"", () -> _q31(; vals = Any["driverid", "c" => Cast("surname", "TSQUERY")], conn = _FTS_SL)),
+      ("output_field: a cast to \"tsquery\"",
+       () -> _q31(; vals = Any["driverid", "c" => Coalesce("surname", "forename"; output_field = "tsquery")], conn = _FTS_SL)),
     )
     for (what, f) in cases
       e = _err31(f)

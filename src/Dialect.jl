@@ -960,6 +960,18 @@ end
 # `test_operators.jl` reads an untyped 3-arg function as an undeclared text-lookup renderer.)
 _map_cast_name(map::AbstractDict, name::AbstractString, suffix::AbstractString) = Base.startswith(suffix, "(") ? name : get(map, uppercase(name), name)
 
+# #1425: `tsvector` and `tsquery` are full-text search, a row of the capability table. A backend without
+# it refuses the cast as it refuses `@search` and the Search* functions, naming the feature and the
+# backends that have it. Before, SQLite cast a `tsvector` to `TEXT` (the migration-only `TSVECTOR` entry
+# of its reverse map), where PostgreSQL parses the text into lexemes, and a `tsquery` to `TSQUERY`, a
+# NUMERIC-affinity name that turns 'senna' into 0; MySQL refused naming no feature. Called after the
+# array check, so a `tsvector[]` names arrays.
+const _FTS_CAST_TYPES = ("tsvector", "tsquery")
+function _check_fts_cast(conn::PormGBackend, name::AbstractString, suffix::AbstractString, context::AbstractString)
+  (lowercase(name) in _FTS_CAST_TYPES && !_supports(conn, :full_text_search)) || return nothing
+  throw(fts_capability_error(conn, "$(context): a cast to $(repr(name * suffix))"))
+end
+
 """
     cast_type_sql(type, conn) -> String
 
@@ -976,6 +988,7 @@ end
 function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
   occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
+  _check_fts_cast(conn, name, suffix, context)
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
 end
 # #1130 phase 2b — MySQL's `CAST` takes a closed set of targets (`CHAR`, `SIGNED`, `DECIMAL`, `DOUBLE`,
@@ -998,7 +1011,8 @@ end
 # which no cast target names), `bytea` (MySQL's `BINARY` cast reads back as text), a zoned time, a
 # user-defined type — has no CAST target that holds its meaning, so it is refused before any SQL rather
 # than passed through to the server; the bytea refusal is permanent (#1423). Any other unmapped name
-# (`double`, `year`, `tsvector`, …) gets the same refusal: PormG passes no type name through unmapped.
+# (`double`, `year`, …) gets the same refusal: PormG passes no type name through unmapped. A `tsvector`
+# or `tsquery` is full-text search, a feature MySQL lacks (`:full_text_search`, #1425).
 const _MYSQL_CAST_TARGETS = Dict{String,String}(
   "text" => "CHAR", "varchar" => "CHAR", "character varying" => "CHAR", "char" => "CHAR", "character" => "CHAR",
   "smallint" => "SIGNED", "int2" => "SIGNED", "integer" => "SIGNED", "int" => "SIGNED", "int4" => "SIGNED",
@@ -1017,6 +1031,7 @@ const _MYSQL_SIZED_CAST_TARGETS = ("CHAR", "DECIMAL", "FLOAT", "DATETIME", "TIME
 function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
   occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
+  _check_fts_cast(conn, name, suffix, context)
   key = lowercase(name)
   key in ("inet", "cidr") && throw(_capability_error(conn, :network_types, "$(context): a cast to $(repr(name * suffix))"))
   # The parser keeps `with/without time zone` after a size (`timestamp(3) with time zone`) in the

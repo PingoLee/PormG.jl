@@ -62,7 +62,7 @@ import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres
 # are reachable. `column_delta` is imported rather than merely reachable because the compiler adds
 # the `(field, field, conn)` method to it.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
-              CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, CVarChar, CDecimal, CDateTime, CUnsupported,
+              CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, _ArrayElementKind, CVarChar, CDecimal, CDateTime, CUnsupported,
               ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault, GeneratedExpression,
               CheckKind, NonNegativeCheck, ByteLengthCheck,
               ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,

@@ -343,17 +343,44 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
             # `Cast(x, ArrayField(CharField(max_length = 3)))` is `::varchar(3)[]`, the element's own cast
             # type with `[]`, so PostgreSQL cuts each element to 3 characters; `ArrayField(IntegerField())`
             # is `::integer[]`. Before #1438 both rendered `::array`, which is no type.
-            # The text array is read through its text, `{SOF,MED}`: LibPQ hands a projected cast to a
-            # text array back as that literal, unparsed (a read-path gap older than #1438: #1439).
+            # Since #1439 the text array reads back as a `Vector{String}` on both drivers, as the
+            # `ArrayField` it declares does; its text is still the `{SOF,MED}` literal.
             # ─────────────────────────────────────────────────────────────────────
             @testset "a cast to an ArrayField declaration" begin
                 S().create("label" => "cast-1438", "compounds" => ["SOFT", "MEDIUM"], "sectors" => [7, 8])
                 short = PormG.Functions.Cast("compounds", Models.ArrayField(Models.CharField(max_length = 3)))
                 row = only(S().filter("label" => "cast-1438").values(
-                    "short" => PormG.Functions.Cast(short, "text"),
+                    "short" => short,
+                    "short_text" => PormG.Functions.Cast(short, "text"),
                     "narrow" => PormG.Functions.Cast("sectors", Models.ArrayField(Models.IntegerField()))).list())
-                @test row["short"] == "{SOF,MED}"
+                @test row["short"] == ["SOF", "MED"] && row["short"] isa Vector
+                @test row["short_text"] == "{SOF,MED}"
                 @test row["narrow"] == [7, 8]
+            end
+
+            # ─────────────────────────────────────────────────────────────────────
+            # A projected cast to an array reads as the array an ArrayField does (#1439)
+            # Tests: `values("v" => Cast(x, "<T>[]"))` reads back as the `Vector` an `ArrayField` of `T`
+            # reads, with the scalar read's element type, on whichever driver is running. SQL:
+            # `"compounds"::varchar[]`, `'{SOFT,MEDIUM}'::varchar[]`. Why: before #1439 the cast recorded
+            # no read kind, so LibPQ handed `Cast(x, "varchar[]")` back as the `{SOFT,MEDIUM}` literal
+            # while `Cast(x, "integer[]")` came back parsed; Postgres.jl typed both.
+            # ─────────────────────────────────────────────────────────────────────
+            @testset "a projected cast to an array reads as the array (#1439)" begin
+                S().create("label" => "cast-1439", "compounds" => ["SOFT", "MEDIUM"], "laps" => [7, 8],
+                           "targets" => ["1.500"], "days" => [Date(2024, 3, 2)])
+                Cast, Value = PormG.Functions.Cast, PormG.Functions.Value
+                row = only(S().filter("label" => "cast-1439").values(
+                    "text" => Cast("compounds", "varchar[]"),
+                    "literal" => Cast(Value("{SOFT,MEDIUM}"), "varchar[]"),
+                    "wide" => Cast("laps", "bigint[]"),
+                    "targets" => Cast("targets", "numeric(7,3)[]"),
+                    "days" => Cast("days", "date[]")).list())
+                @test row["text"] == ["SOFT", "MEDIUM"] && row["text"] isa Vector
+                @test row["literal"] == ["SOFT", "MEDIUM"] && row["literal"] isa Vector
+                @test row["wide"] == [7, 8] && eltype(row["wide"]) <: Union{Missing, Int64}
+                @test row["targets"] == [Decimals.Decimal(0, 15, -1)] && row["targets"] isa Vector
+                @test row["days"] == [Date(2024, 3, 2)] && row["days"] isa Vector
             end
         finally
             drop()

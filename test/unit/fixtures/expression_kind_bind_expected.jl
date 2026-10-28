@@ -6908,7 +6908,31 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast text nchar(3) | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::nchar(3) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast text ArrayField(CharField(3)) | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar(3)[] > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(\$2::text)::varchar(3)[] > \$3", params = [("\"{SOFT,MEDIUM}\"", "String"), ("\"{SOFT,MEDIUM}\"", "String"), ("10", "Int64")]),
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar(3)[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::varchar(3)[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64"), ("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast text varchar[] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::varchar[] > \$3", params = [("\"{SOFT,MEDIUM}\"", "String"), ("\"{SOFT,MEDIUM}\"", "String"), ("10", "Int64")]),
+  ("Cast text varchar[] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::varchar[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64"), ("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int integer[] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::integer[] > \$3", params = [("\"{7,8}\"", "String"), ("\"{7,8}\"", "String"), ("10", "Int64")]),
+  ("Cast int integer[] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::integer[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{7,8}\"", "String"), ("1", "Int64"), ("\"{7,8}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast decimal numeric(10,2)[] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::numeric(10,2)[] > \$3", params = [("\"{1.5,2}\"", "String"), ("\"{1.5,2}\"", "String"), ("10", "Int64")]),
+  ("Cast decimal numeric(10,2)[] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::numeric(10,2)[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{1.5,2}\"", "String"), ("1", "Int64"), ("\"{1.5,2}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int smallint[] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::smallint[] > \$3", params = [("\"{7,8}\"", "String"), ("\"{7,8}\"", "String"), ("10", "Int64")]),
+  ("Cast int smallint[] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::smallint[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{7,8}\"", "String"), ("1", "Int64"), ("\"{7,8}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast float real[] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::real[] > \$3", params = [("\"{0.5}\"", "String"), ("\"{0.5}\"", "String"), ("10", "Int64")]),
+  ("Cast float real[] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::real[] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{0.5}\"", "String"), ("1", "Int64"), ("\"{0.5}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast int integer[][] | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::text)::integer[][] > \$3", params = [("\"{{7,8}}\"", "String"), ("\"{{7,8}}\"", "String"), ("10", "Int64")]),
+  ("Cast int integer[][] | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::integer[][] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{{7,8}}\"", "String"), ("1", "Int64"), ("\"{{7,8}}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
 )

@@ -292,6 +292,56 @@ const ARR28_BASES = [
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # A projected cast to an array (#1439)
+  # Tests: `values("v" => Cast(x, "<T>[]"))` records `CArray(<T's kind>)` as its read kind, the kind
+  # an `ArrayField` of `T` records, and that kind's parser turns LibPQ's `{…}` literal into the
+  # `Vector`. SQL: `"team"::varchar[]`, unchanged. Why: before #1439 a cast to an array recorded no
+  # read kind, so `Cast(x, "varchar[]")` read back as the unparsed `"{SOFT,MEDIUM}"` on LibPQ, while
+  # an `ArrayField` column of the same type read a `Vector{String}`. An array of an element no
+  # `ArrayField` declares (`smallint[]`), or of two dimensions, still records nothing.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a Cast to an array reads as the array (#1439)" begin
+    read_kind(type) = begin
+      q = _AS.objects
+      q.values("v" => PormG.QueryBuilder.Cast("team", type))
+      res = PormG.QueryBuilder.query(q; show_query = :dict)
+      (get(q.object.projection_kinds, :v, nothing), res[:sql_text])
+    end
+    k, sql = read_kind("varchar[]")
+    @test k == CArray(CVarChar(nothing)) && occursin("::varchar[]", sql)
+    @test PormG.value_parser(k, PG_ARR28)("{SOFT,MEDIUM}") == ["SOFT", "MEDIUM"]
+    @test first(read_kind("integer[]")) == CArray(CInt32())
+    @test PormG.value_parser(CArray(CInt32()), PG_ARR28)("{7,8}") == Int32[7, 8]
+    @test first(read_kind("numeric(7,3)[]")) == CArray(CDecimal(7, 3))
+    # Every element an `ArrayField` declares, by its cast spelling.
+    for (type, kind) in ("text[]" => CText(), "varchar(12)[]" => CVarChar(12), "bigint[]" => CInt64(),
+                         "float[]" => CFloat64(), "double precision[]" => CFloat64(), "boolean[]" => CBool(),
+                         "date[]" => CDate(), "timestamp[]" => CDateTime(false),
+                         "timestamptz[]" => CDateTime(true), "uuid[]" => CUUID())
+      @test (type, first(read_kind(type))) == (type, CArray(kind))
+    end
+    # An `output_field` naming an array declares it as a `Cast` does.
+    q = _AS.objects
+    q.values("v" => PormG.QueryBuilder.Coalesce("tyre_compounds", "tyre_compounds"; output_field = "varchar[]"))
+    PormG.QueryBuilder.query(q; show_query = :dict)
+    @test get(q.object.projection_kinds, :v, nothing) == CArray(CVarChar(nothing))
+    # A function whose value is its operand's reads as the operand's array.
+    q = _AS.objects
+    q.values("v" => PormG.QueryBuilder.Max(PormG.QueryBuilder.Cast("team", "date[]")))
+    PormG.QueryBuilder.query(q; show_query = :dict)
+    @test get(q.object.projection_kinds, :v, nothing) == CArray(CDate())
+    # `real[]` is no array an `ArrayField` declares, and its `Float32` elements would widen (#1258).
+    @test first(read_kind("real[]")) === nothing
+    # A field object renders its sized type (#1438) and records the ArrayField's own kind.
+    k, sql = read_kind(AF.ArrayField(AF.CharField(max_length = 12)))
+    @test k == PormG.field_canonical_kind(_AS.fields["tyre_compounds"]) && occursin("::varchar(12)[]", sql)
+    # No `ArrayField` declares these: they arrive as the driver hands them over.
+    @test first(read_kind("smallint[]")) === nothing
+    @test first(read_kind("integer[][]")) === nothing
+    @test first(read_kind("inet[]")) === nothing
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # DDL and the canonical column IR
   # The column is the element's type followed by `[]`, with no size. The drift guard: what the
   # compiler reads back from that rendered type is `CArray(array_element_kind(base))`, for every base

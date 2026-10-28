@@ -77,7 +77,7 @@ import .Kernel: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_l
 # `Dialect.alter_field` and `Migrations.column_spec` can `import PormG: …` it while a
 # `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.
 import .Kernel: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
-                CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, CVarChar, CDecimal, CDateTime, CUnsupported,
+                CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, _ArrayElementKind, CVarChar, CDecimal, CDateTime, CUnsupported,
                 ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault, GeneratedExpression,
                 CheckKind, NonNegativeCheck, ByteLengthCheck,
                 ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,

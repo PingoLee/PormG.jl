@@ -998,7 +998,12 @@ when it has this shape:
 - optionally followed by a size, `(n)` or `(n, m)`: `"varchar(20)"`, `"numeric(10,2)"`,
   `"timestamp(3) with time zone"`;
 - on PostgreSQL only, optionally followed by array brackets: `"integer[]"`. SQLite and MySQL have no
-  array types and raise `BackendCapabilityError`.
+  array types and raise `BackendCapabilityError`. A one-dimensional array of an element an
+  [`ArrayField`](../postgres.md) can hold (`varchar`, `text`, `integer`, `bigint`, `float`, `numeric`,
+  `boolean`, `date`, `timestamp`, `timestamptz`, `uuid`) reads back as the `Vector` that `ArrayField`
+  reads as, on both PostgreSQL drivers: `Cast("tyre_compounds", "varchar[]")` is
+  `["SOFT", "MEDIUM"]`. Any other array (`smallint[]`, `real[]`, `integer[][]`) arrives as the driver
+  returns it.
 
 On MySQL a name with no MySQL `CAST` target that holds its meaning (`interval`, `bytea`, a type of
 your own) raises `UnsupportedConnectionError` before any SQL ([MySQL Guide](../mysql.md#Reads)).

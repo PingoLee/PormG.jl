@@ -202,8 +202,19 @@ end
   @test dk("double precision") == PormG.CFloat64()
   @test dk("boolean") == PormG.CBool()
   @test dk("date") == PormG.CDate()
-  # A type `_sql_type_field` cannot name has no kind (an array cast, an unknown name).
-  @test dk("integer[]") === nothing
+  # #1439: a one-dimensional array of an element an `ArrayField` declares is that array, so the read
+  # path parses it as the column's; `_sql_type_field` still names no field for it (#852). Any other
+  # array, and a name `_sql_type_field` cannot name, has no kind.
+  @test dk("integer[]") == PormG.CArray(PormG.CInt32())
+  @test dk("varchar(3)[]") == PormG.CArray(PormG.CVarChar(3))
+  @test dk("numeric(10,2) [ ]") == PormG.CArray(PormG.CDecimal(10, 2))
+  @test PormG.QueryBuilder._sql_type_field("integer[]") === nothing
+  @test dk("smallint[]") === nothing
+  @test dk("real[]") === nothing && dk("float4[]") === nothing && dk("float(24)[]") === nothing
+  @test dk("float8[]") == PormG.CArray(PormG.CFloat64())
+  @test dk("integer[][]") === nothing
+  @test dk("integer[3]") == PormG.CArray(PormG.CInt32())
+  @test dk("no_such_type") === nothing
   # On SQLite a uuid or network cast renders `CAST(x AS TEXT)`, so it is text there and a uuid here.
   @test dk("uuid") == PormG.CUUID()
   @test dk("uuid", EkrMockSQLite()) == PormG.CText()

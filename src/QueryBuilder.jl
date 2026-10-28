@@ -68,6 +68,7 @@ import PormG: CInt64   # #882 — a BigIntegerField used as a day count beside a
 import PormG: CDecimal # #881 — a number an interval may be multiplied or divided by
 # #1034 — the kinds `_expression_kind` names that no reader above does: every column and result type.
 import PormG: CInt16, CFloat64, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray
+import PormG: _ArrayElementKind   # #1439 — the elements a `Cast` to an array is read as
 import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
 import PormG.ConnectionPool: _begin_write_sql, _after_begin_sql  # #1129 item 2: how a write transaction opens, per engine

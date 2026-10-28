@@ -101,6 +101,14 @@ struct CArray <: CanonicalType
   element::CanonicalType
 end
 
+# The element kinds an `ArrayField` can declare (`Models.array_element_kind`). Any other element — a
+# `smallint[]`, an `inet[]`, a `jsonb[]` — is an array PormG could not have written: introspection
+# reads it as `CUnsupported` like every other spelling PormG never renders, and a `Cast` to it records
+# no read kind (#1439). Here rather than beside `parse_canonical_type` because the query builder,
+# included before `Migrations`, reads it too.
+const _ArrayElementKind = Union{CVarChar, CText, CInt32, CInt64, CFloat64, CDecimal, CBool, CDate,
+                                CDateTime, CUUID}
+
 struct CUnsupported <: CanonicalType
   raw::String
 end

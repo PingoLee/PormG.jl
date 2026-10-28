@@ -382,7 +382,16 @@ end
   refused(Fn.Coalesce("number", "token"), "Coalesce", number, token)
   refused(Fn.Coalesce("token", "date"), "Coalesce", token, _DATE)
   # An `output_field` does not lift a pair with a number or a UUID side.
-  refused(Fn.Coalesce("number", "date"; output_field = "date"), "Coalesce", number, _DATE; declared = true)
+  refused(Fn.Coalesce("number", "date"; output_field = "text"), "Coalesce", number, _DATE; declared = true)
+  # Declared a date, the number's own cast to one answers first where it departs (#1417, read with
+  # the declared cast, ahead of this mix check); PostgreSQL, which keeps that cast's meaning, still
+  # meets the mix.
+  refused(Fn.Coalesce("number", "date"; output_field = "date"), "Coalesce", number, _DATE; declared = true,
+          engines = (_TMX_PG,))
+  for conn in (_TMX_SL, _TMX_MY)
+    err = _tmx_refusal(Fn.Coalesce("number", "date"; output_field = "date"); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1417)", _tmx_msg(err))
+  end
   refused(Fn.Coalesce("token", "date"; output_field = "text"), "Coalesce", token, _DATE; declared = true)
   # A window `default` of another class than the operand.
   refused(Fn.Lag("number"; default = Date(2021, 1, 1), over = _tmx_over()), "Lag", number,

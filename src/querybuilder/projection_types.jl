@@ -759,9 +759,15 @@ end
 # #1387 — a date, a timestamp, a time and a UUID are not numbers either, under any number function,
 # `Sum` and `Avg` included (their domain holds `:interval`, never these). PostgreSQL raised at the
 # server (`round(date)` does not exist), SQLite computed on the stored text (a date's leading year
-# digits), MySQL on the number a date's digits spell. Refused on every engine, as a duration is. Text
-# and a JSON key lookup keep their own rules (#1061, #1279), and a boolean its own (#1386): neither
-# kind is checked here.
+# digits), MySQL on the number a date's digits spell. Refused on every engine, as a duration is. A
+# JSON key lookup keeps its own rules (#1061, #1279), and a boolean its own (#1386): neither kind is
+# checked here.
+#
+# #1293 — text is no number either. PostgreSQL rejects text that is no number (or computes the number
+# it spells), and SQLite reads it as 0: the query does not say it holds numbers, so it is EXPLICIT
+# INTENT, refused on every engine under every number function, naming the cast that says it. Any
+# operand the walk names text: a `CharField`, `Concat`, `Upper`, `ToChar`, a `__@yyyy_mm` label, a
+# string literal. `Round(x, d ≠ 0)` meets the #1061 refusal first, which also reads a JSON value.
 function _check_operand_domain(p::FObject, instruc::SQLInstruction)
   domain = _operand_domain(p)
   domain === nothing && return nothing
@@ -772,6 +778,8 @@ function _check_operand_domain(p::FObject, instruc::SQLInstruction)
       :interval in domain || throw(_duration_math_refusal(p.function_name, instruc.connection))
     elseif kind isa _NonNumberKind
       throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
+    elseif kind isa Union{CText,CVarChar}
+      throw(_text_math_refusal(p.function_name))
     end
   end
   return nothing
@@ -814,6 +822,16 @@ function _non_number_math_refusal(function_name::AbstractString, kind::Canonical
     push!(spellings, "its seconds since $(kind isa CTime ? "midnight" : "1970") (Extract($(letter), \"epoch\"))")
   return QueryBuildError("$(head) For a number from $(noun) $(letter), write $(join(spellings, ", ", ", or ")), " *
                          "and apply `$(name)` to that.")
+end
+# #1293 — the same reason over text, which the query must say holds numbers (#1061's remedy). Named
+# by its kind, as #1387's is: a path written as a string reaches here resolved, so naming the operand
+# would answer `"seen__@yyyy_mm"` and `F("seen__@yyyy_mm")` differently (#843).
+function _text_math_refusal(function_name::AbstractString)
+  name = uppercasefirst(lowercase(function_name))
+  return QueryBuildError("`$(name)` of text is not supported: text is not a number, and PormG does not " *
+                         "read it as one for you on any engine (#1293). If it holds numbers, say so with " *
+                         "a cast, \e[32mCast(x, FloatField())\e[0m, as the operand, or fetch the value and " *
+                         "compute in Julia.")
 end
 _non_number_noun(::CDate) = "a date"
 _non_number_noun(::CDateTime) = "a timestamp"
@@ -1226,9 +1244,11 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   target = _sql_type_field(declared)
   # #1325: a duration and a time of day have no calendar date, so their cast to one is no value. The
   # operand is read as the number rules below read it; a date or a timestamp has no row, and builds.
+  # #1417: nor has a number, which SQLite reads as a Julian day and MySQL as the digits of a date.
   if target isa Models.sDateField
     for operand in operands
       side = _temporal_number_operand(operand, instruc)
+      side === nothing && (side = _number_operand(operand, instruc))
       side === nothing || (d = departs(side[1], side[2], :date, _concat_flag(operand)); d === nothing || return d)
     end
     return nothing
@@ -1318,6 +1338,22 @@ function _temporal_number_operand(operand, instruc::SQLInstruction)
   label === nothing && return (tag, "a $(tag === :timestamp ? "timestamp" : String(tag)) expression")
   field = tag === :date ? "DateField" : tag === :time ? "TimeField" : "DateTimeField"
   return (tag, "the $(field) `$(label)`")
+end
+# #1417 — an operand the type walk names a number, as `(kind, what)`: `:integer`, `:float` or
+# `:decimal`, the kinds a `:date` departure row lists; `nothing` for anything else, a boolean
+# included. Read under `_MeaningKinds`, so a computed number is what its call means.
+function _number_operand(operand, instruc::SQLInstruction)
+  kind = _infer_kind(operand, instruc, _MeaningKinds())
+  tag = kind isa Union{CInt16,CInt32,CInt64} ? :integer : kind isa CFloat64 ? :float :
+        kind isa CDecimal ? :decimal : nothing
+  tag === nothing && return nothing
+  literal = operand isa SQLText ? operand.field : operand
+  type_name = String(nameof(typeof(literal)))
+  literal isa Number && return (tag, "$(occursin(r"^[AEIOU]", type_name) ? "an" : "a") $(type_name) literal")
+  label = _concat_operand_label(operand)
+  noun = tag === :integer ? "integer" : tag === :float ? "float" : "decimal"
+  label === nothing && return (tag, "$(tag === :integer ? "an" : "a") $(noun) expression")
+  return (tag, "the $(noun) `$(label)`")
 end
 # A literal is named by its type, never its value: it is a bound value, and a refusal never prints
 # one (#971). Every label built over this one inherits it (`arithmetic over a Float64 literal`), so

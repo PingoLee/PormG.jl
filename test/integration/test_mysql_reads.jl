@@ -670,7 +670,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             e = try; M.Race.objects.values("v" => Extract("time", "epoch")).list(); nothing; catch err; err; end
             @test e isa PormG.BackendCapabilityError && occursin("epoch of a time", msg(e))
             e = try; M.Result.objects.values("v" => ToChar("fastestlaptime", "HH:MI:SS")).list(); nothing; catch err; err; end
-            @test e isa PormG.QueryBuildError && occursin("ToChar over an interval", msg(e))
+            @test e isa PormG.QueryBuildError && occursin("(#1416)", msg(e))
             # A time's date would be TODAY's on MySQL: refused; its time keys are the time's own.
             e = try; M.Race.objects.values("v" => Extract(Cast("start_at", "time"), "year")).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("over a time is not supported on MySQL", msg(e))

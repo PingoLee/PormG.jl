@@ -660,6 +660,25 @@ function _check_tochar_date_of_time(v::FObject, instruc::SQLInstruction)
     "(\e[32m\"HH:MI:SS\"\e[0m), or take the date from a date or a timestamp column."))
 end
 
+# #1416: `ToChar` over a duration, whatever its format. A duration has no calendar date (#1388), and its
+# clock has no single meaning either: PostgreSQL's `to_char` formats the interval's own fields, which
+# depend on how it was formed (a 62-hour timestamp difference is `2 days 14:00`, so `HH24` writes 14),
+# SQLite's `strftime` reads the stored text as a time of day (`NULL` past 24 hours; a year of `2000`),
+# and MySQL holds a duration as its count of microseconds. So it is refused on every engine, as
+# `Extract` is under every part but `EPOCH`, a native PostgreSQL template included. The operand is the
+# walk's: a `DurationField` column, interval arithmetic, a timestamp difference, `Sum` of a duration, a
+# time minus a time (#1406). The `"YYYY-MM"` key meets the #1070 row first, over a column.
+function _check_tochar_of_duration(v::FObject, instruc::SQLInstruction)
+  _expression_kind(v.column, instruc) isa CInterval || return nothing
+  format = get(v.kwargs, "format", "")
+  spelling = _duration_seconds_spelling(instruc.connection)
+  seconds = spelling === nothing ? "" : ", or \e[32m$(spelling)\e[0m for its seconds"
+  throw(QueryBuildError(
+    "\e[4m\e[31mToChar(…, \"$(format)\")\e[0m over a duration is not supported: a duration has no calendar " *
+    "date and no single clock time, so a format has no meaning over one on any engine (#1416). Write " *
+    "\e[32mCast(d, \"text\")\e[0m for its text$(seconds)."))
+end
+
 # #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a
 # uuid, a timestamp, an interval or a JSON document, nor one whose fill is any of those, and fails the
 # statement — while SQLite's `pormg_lpad` pads whatever text the value converts to. So a typed operand
@@ -857,6 +876,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   v isa FObject && _check_temporal_operand(v, instruc)
   # #1336: `ToChar` with a date in its format over a time of day, at the same point.
   v isa FObject && v.function_name == "EXTRACT_DATE" && _check_tochar_date_of_time(v, instruc)
+  # #1416: `ToChar` over a duration, under any format, at the same point.
+  v isa FObject && v.function_name == "EXTRACT_DATE" && _check_tochar_of_duration(v, instruc)
   # #1027: a `Concat` operand that is not text — a boolean, a float or a decimal column, a timestamp,
   # or an expression of one — read once the operands render, as the checks around it are. A literal
   # was refused when the `Concat` was built. This is the one site every `Concat` renders through, the
@@ -908,6 +929,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
         why = "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
     end
     if digits isa Integer && digits != 0
+      # #1293: text at `d = 0` is the operand-domain check's (`_check_operand_domain`), as it is under
+      # every number function; this arm also reads a JSON value, which that check lets through.
       # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`. Only its
       # `:text` answer is read here: text is no number to round to tens either (#1167, a negative
       # precision built where the engine has it). It asks at the widest scale, which no number

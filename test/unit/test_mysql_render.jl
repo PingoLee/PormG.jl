@@ -1438,7 +1438,9 @@ end
   e = try; _mr_inspect(RA.objects.values("v" => QB.ToChar("date", "Day"))); nothing; catch err; err; end
   @test e isa PormG.BackendCapabilityError && occursin("ToChar: format \"Day\" is not supported on MySQL", sprint(showerror, e))
   e = try; _mr_inspect(_MR_MY.Result.objects.values("v" => QB.ToChar("fastestlaptime", "HH:MI:SS"))); nothing; catch err; err; end
-  @test e isa PormG.QueryBuildError && occursin("ToChar over an interval is not supported on MySQL", sprint(showerror, e))
+  # Refused when the query is built, on every engine (#1416); the MySQL arm is its backstop.
+  @test e isa PormG.QueryBuildError && occursin("over a duration is not supported", sprint(showerror, e)) &&
+        occursin("(#1416)", sprint(showerror, e))
   # SQLite and PostgreSQL keep theirs.
   @test occursin("strftime('%Y-%m', \"Tb\".\"date\")", _mr_inspect(_MR_SL.Race.objects.values("v" => QB.ToChar("date", "YYYY-MM")))[:sql_text])
   @test occursin("to_char(\"Tb\".\"date\", 'YYYY-MM')", _mr_inspect(_MR_PG.Race.objects.values("v" => QB.ToChar("date", "YYYY-MM")))[:sql_text])

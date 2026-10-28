@@ -553,9 +553,10 @@ function _tlp_outcome(q, conn)
     # as a value PormG cannot type beside a number while holding a date; both spellings must agree.
     # #1327: `Coalesce(<@yyyy_q text>, 0)` is text beside a number, refused on every engine; #1321:
     # `Coalesce(<@date>, 0)` is a date beside one, refused the same way. #1387: `Power(<@date>, 2)` is a
-    # number function over a date, refused on every engine.
+    # number function over a date, refused on every engine; #1293: `Power(<@yyyy_mm>, 2)` over text.
     (e isa PormG.QueryBuildError &&
      (occursin("(#1200)", msg) || occursin("(#1327)", msg) || occursin("(#1321)", msg) || occursin("(#1387)", msg) ||
+      occursin("(#1293)", msg) ||
       occursin("beside a date, a timestamp or an interval", msg))) || rethrow()
     return ("refused", replace(msg, r"`[^`]*`" => "`…`"))
   end
@@ -1521,4 +1522,55 @@ struct TlpMockMySQL <: PormG.PormGMySQL end
   end
   @test occursin("to_char(\"Tb\".\"clock\", 'HH24:MI')", built(TLP.Tlp_clock, Fn.ToChar("clock", "HH:MI"), _TLP_PG))
   @test occursin("to_char(\"Tb\".\"clock\", 'DD Mon YYYY')", built(TLP.Tlp_clock, Fn.ToChar("clock", "DD Mon YYYY"), _TLP_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1416: ToChar over a duration is refused on every engine, under every format
+# EXPLICIT INTENT: a duration has no calendar date (#1388), and its clock has no single meaning:
+# PostgreSQL's `to_char` formats the interval's own fields (a 62-hour difference is `2 days 14:00`, so
+# `HH24` writes 14), SQLite's `strftime` reads the stored text as a time of day (`strftime('%Y',
+# '00:01:27.452')` is `2000`, NULL past 24 hours), and MySQL holds the duration's microseconds. Refused
+# when the query is built, naming no engine, for every key of `date_format_map` and a native PostgreSQL
+# template, over every operand the type walk names a duration: a `DurationField` column, interval
+# arithmetic, `Sum` of one, a time minus a time (#1406) and a timestamp difference. `"YYYY-MM"` meets
+# the #1070 row first over a column and #1388's over an expression, and a time minus a time is refused
+# as time arithmetic on SQLite and MySQL (#1323) before it is formatted. The remedy the message names,
+# `Cast(d, "text")`, builds everywhere, and so does a time's clock.
+# Expected SQL, PostgreSQL (the remedy): ("Tb"."span")::text
+# Why: before #1416 SQLite answered `2000` for `ToChar("span", "YYYY")`, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1416: ToChar over a duration is refused on every engine, under every format" begin
+  Fn = PormG.Functions
+  F = PormG.QueryBuilder.F
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  built(x, conn) = (try _tlp_sql((q = TLP.Tlp_clock.objects; q.values("v" => x); q); conn = conn); catch e; e end)
+  engines = (("PostgreSQL", _TLP_PG), ("SQLite", _TLP_SL), ("MySQL", TlpMockMySQL()))
+  operands = (("column", "span"), ("arithmetic", F("span") * 2), ("Sum", Fn.Sum("span")),
+              ("time - time", F("clock") - F("clock")), ("timestamp difference", F("naive") - F("naive")))
+  for (engine, conn) in engines, key in sort(collect(keys(PormG.date_format_map))), (what, operand) in operands
+    e = built(Fn.ToChar(operand, key), conn)
+    label = (engine, key, what)
+    @test (label, e isa PormG.QueryBuildError) == (label, true)
+    e isa PormG.QueryBuildError || continue
+    # Earlier rows answer first: `"YYYY-MM"` is the #1070 row over a column and #1388's over an
+    # expression, and a time minus a time is arithmetic on a time of day on SQLite and MySQL (#1323).
+    key == "YYYY-MM" && what == "column" && (@test occursin("(#1070)", plain(e)); continue)
+    what == "time - time" && engine != "PostgreSQL" &&
+      (@test (label, occursin("on a time of day", plain(e))) == (label, true); continue)
+    key == "YYYY-MM" && (@test (label, occursin("(#1388)", plain(e))) == (label, true); continue)
+    @test (label, occursin("a duration has no calendar date and no single clock time", plain(e)) &&
+                  occursin("(#1416)", plain(e))) == (label, true)
+    @test !any(n -> occursin(n, plain(e)), ("PostgreSQL", "SQLite", "MySQL"))
+    # The seconds spelling is the engine's: SQLite has none, so it is not named there.
+    @test (label, occursin("Extract(d, \"epoch\")", plain(e))) == (label, engine != "SQLite")
+  end
+  # A native PostgreSQL template is no key, and is refused all the same.
+  e = built(Fn.ToChar("span", "HH24:MI"), _TLP_PG)
+  @test e isa PormG.QueryBuildError && occursin("(#1416)", plain(e))
+  # The remedy builds on every engine, and a time's clock is unchanged.
+  for (engine, conn) in engines
+    @test (engine, built(Fn.Cast("span", "text"), conn) isa AbstractString) == (engine, true)
+    @test (engine, built(Fn.ToChar("clock", "HH:MI:SS"), conn) isa AbstractString) == (engine, true)
+  end
+  @test occursin("(\"Tb\".\"span\")::text", built(Fn.Cast("span", "text"), _TLP_PG))
 end

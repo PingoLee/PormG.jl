@@ -66,6 +66,7 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
     ("#1319", (:number,), (Sl, My), (Pg,)),
     ("#1325", (:date,), (Sl, My), (Pg,)),
     ("#1325", (:date,), (Sl, My), (Pg,)),
+    ("#1417", (:date,), (Sl, My), (Pg,)),
     ("#1040", (:scale,), (Sl,), (Pg, My)),
     ("#1087", (:precision,), (Sl, My), (Pg,)),
     ("#1215", (:single_precision,), (Sl,), (Pg, My)),

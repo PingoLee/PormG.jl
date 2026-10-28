@@ -699,7 +699,9 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
                            (PormG.Functions.Avg, "AVG"))
       q = CR.Cj_child.objects
       q.with("ev" => _parent_cte(), join_field = "id" => "id")
-      q.values("note", "agg" => fn(CTE("ev", "sku")))
+      # `Sum`/`Avg` over the number column: text under them is refused on every engine (#1293).
+      col = sql_name in ("SUM", "AVG") ? "id" : "sku"
+      q.values("note", "agg" => fn(CTE("ev", col)))
       sql = _sql(q)
       @test occursin(sql_name * "(", sql)
       @test occursin("JOIN \"ev\" AS", sql)      # the CTE is joined, not left dangling
@@ -922,10 +924,10 @@ end
       # simply stops being a special case.
       "Sum"           => (s = () -> (q = CR.Cj_child.objects;
                                      q.with("ev" => _full_cte(), join_field = "id" => "id");
-                                     q.values("note", "t" => Sum("ev__sku")); q),
+                                     q.values("note", "t" => Sum("ev__id")); q),
                           h = () -> (q = CR.Cj_child.objects;
                                      q.with("ev" => _full_cte(), join_field = "id" => "id");
-                                     q.values("note", "t" => Sum(CTE("ev", "sku"))); q)),
+                                     q.values("note", "t" => Sum(CTE("ev", "id"))); q)),
       # The memo hazard #492 section 2 names. A miss here does not error — it drops the #352/#373
       # sargable rewrite on one spelling only, so the two produce DIFFERENT plans with no symptom.
       "sargable date" => (s = () -> (q = CR.Cj_child.objects;

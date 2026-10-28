@@ -707,7 +707,8 @@ end
 # where a key's `.SSS` is three, so such a key keeps its output's first `length(key)` characters (a
 # key is as long as its text): the operand renders once, so a bound one stays in step. A duration is a
 # count of microseconds on MySQL, which `DATE_FORMAT` would read as no date at all: refused, naming
-# `Cast(x, "text")`, which reads its `HH:MM:SS` text (phase 2b).
+# `Cast(x, "text")`, which reads its `HH:MM:SS` text (phase 2b). Since #1416 the build refuses `ToChar`
+# over a duration on every engine first; this is its backstop.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   format_str = format["format"]
   get(format, "temporal_kind", nothing) === :interval && throw(QueryBuildError(

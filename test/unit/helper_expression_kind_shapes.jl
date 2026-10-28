@@ -486,6 +486,14 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast int CharField(250)", :Result,              m -> _EKM_FN.Cast("grid", PormG.Models.CharField(max_length = 250))),
   ("Cast text CharField",     :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.CharField())),
   ("Concat output varchar(3)", :Result,             m -> _EKM_FN.Concat(["positiontext", _EKM_FN.Value("x")]; output_field = "varchar(3)")),
+  # #1438: the declarations #1252 did not reach — a `SlugField`/`URLField` (sized, as their columns
+  # are), an `EmailField` (no length), PostgreSQL's `bpchar(n)`/`nchar(n)` spellings and an `ArrayField`
+  ("Cast text SlugField",     :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.SlugField())),
+  ("Cast text URLField(20)",  :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.URLField(max_length = 20))),
+  ("Cast text EmailField",    :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.EmailField())),
+  ("Cast text bpchar(3)",     :Result,              m -> _EKM_FN.Cast("positiontext", "bpchar(3)")),
+  ("Cast text nchar(3)",      :Result,              m -> _EKM_FN.Cast("positiontext", "nchar(3)")),
+  ("Cast text ArrayField(CharField(3))", :Result,   m -> _EKM_FN.Cast("positiontext", PormG.Models.ArrayField(PormG.Models.CharField(max_length = 3)))),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

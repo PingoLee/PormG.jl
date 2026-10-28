@@ -265,6 +265,13 @@ end
         @test Dialect.CAST("x", node.kwargs, _CSL) == Dialect.CAST("x", twin.kwargs, _CSL)
         continue
       end
+      # #1438: a `SlugField` or `URLField` casts to its column's length, as the string `"varchar(n)"` does.
+      if f isa Union{PormG.Models.sSlugField, PormG.Models.sURLField}
+        twin = Cast("points", "varchar($(f.max_length))")
+        @test Dialect.CAST("x", node.kwargs, _CPG) == Dialect.CAST("x", twin.kwargs, _CPG) == "(x)::varchar($(f.max_length))"
+        @test Dialect.CAST("x", node.kwargs, _CSL) == Dialect.CAST("x", twin.kwargs, _CSL)
+        continue
+      end
       @test Dialect.CAST("x", node.kwargs, _CPG) == "(x)::" * PormG.postgres_type_map_reverse[t]
       # The temporal fields are #822's, below: SQLite has no time types to cast to.
       t in ("DATE", "TIMESTAMPTZ", "TIME", "INTERVAL") && continue

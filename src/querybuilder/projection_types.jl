@@ -1022,11 +1022,15 @@ end
 # #1252 — the length a declared text type states: `varchar(3)`, `character varying(3)`, `char(3)` or
 # `character(3)` is 3, and an unsized `char` or `character` is 1, as PostgreSQL reads it (MySQL renders
 # it `CHAR(1)`). Any other type, an unsized `varchar` and an array of a sized type are `nothing`.
-# `CharField(max_length = n)` reaches here as `varchar(n)` (`_field_cast_type`).
+# `CharField(max_length = n)`, `SlugField` and `URLField` reach here as `varchar(n)` (`_field_cast_type`).
+# #1438: PostgreSQL's `bpchar(n)` and `nchar(n)` are `char(n)` too, and an unsized `nchar` is `char(1)`
+# in its grammar; an unsized `bpchar` has no length there. SQLite gives either name TEXT affinity and
+# keeps every character. PormG maps neither to a MySQL CAST target (`_MYSQL_CAST_TARGETS`), so MySQL
+# refuses them before this row is read.
 function _sized_text_length(type_name)::Union{Int,Nothing}
   type_name isa AbstractString || return nothing
-  occursin(r"^(?i:char|character)$", strip(type_name)) && return 1
-  m = match(r"^(?i:varchar|character varying|char|character)\s*\(\s*(\d+)\s*\)$", strip(type_name))
+  occursin(r"^(?i:char|character|nchar)$", strip(type_name)) && return 1
+  m = match(r"^(?i:varchar|character varying|char|character|bpchar|nchar)\s*\(\s*(\d+)\s*\)$", strip(type_name))
   m === nothing && return nothing
   digits = lstrip(m.captures[1], '0')
   # A long digit string is past any length an engine takes, so it is read as a bound, not parsed.

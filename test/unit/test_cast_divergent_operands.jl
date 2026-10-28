@@ -2527,3 +2527,54 @@ end
   @test Models._field_kwarg_sets!(String[], Models.CharField(max_length = 250), Models.CharField()) == ["max_length=250"]
   @test Models._field_kwarg_sets!(String[], Models.CharField(), Models.CharField()) == String[]
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1438: the sized text declarations #1252 did not reach
+# MEANING, as #1252: a `SlugField` or `URLField` declares the length its column has (`varchar(50)`,
+# `varchar(200)`, or its `max_length`), as Django's `Cast` does, so it is that `varchar(n)` and SQLite
+# refuses it. An `EmailField` has no length in PormG (its column is `TEXT`), so it stays unbounded text.
+# PostgreSQL's `bpchar(n)` and `nchar(n)` are `char(n)`, and an unsized `nchar` is `char(1)`, so SQLite,
+# whose `CAST(x AS BPCHAR(3))` keeps every character, refuses them too; an unsized `bpchar` declares no
+# length on PostgreSQL and builds. An `ArrayField` is its element's cast type with `[]`.
+# Expected SQL:
+#   PostgreSQL ("Tb"."surname")::varchar(50)       MySQL CAST(`Tb`.`surname` AS CHAR(50))
+#   PostgreSQL ("Tb"."surname")::varchar(3)[]      SQLite, MySQL: BackendCapabilityError (arrays)
+# Why: before #1438 a `SlugField`/`URLField` cast was unbounded on every engine, `CAST(x AS BPCHAR(3))`
+# built on SQLite and kept every character where PostgreSQL cut it to 3, and an `ArrayField` rendered
+# `::array` on PostgreSQL, which is no type, and `CAST(x AS TEXT)` on SQLite, a text fallback.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1438: Slug/URL, bpchar/nchar and ArrayField casts keep the declared length" begin
+  for (target, n) in ((Models.SlugField(), 50), (Models.URLField(), 200),
+                      (Models.SlugField(max_length = 10), 10), (Models.URLField(max_length = 20), 20),
+                      ("bpchar(3)", 3), ("BPCHAR(3)", 3), ("nchar(3)", 3), ("nchar", 1)),
+      expr in (Fn.Cast("surname", target), Fn.Coalesce("surname", "surname"; output_field = target))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1252", named = "the text cut to $(n) characters")
+    @test occursin("SQLite computes every character of it", _ccd_msg(errs.sqlite))
+  end
+  @test occursin("(\"Tb\".\"surname\")::varchar(50) as \"x\"", _ccd_render(Fn.Cast("surname", Models.SlugField()); conn = _CCD_PG))
+  @test occursin("(\"Tb\".\"surname\")::varchar(200) as \"x\"", _ccd_render(Fn.Cast("surname", Models.URLField()); conn = _CCD_PG))
+  @test occursin("CAST(`Tb`.`surname` AS CHAR(50))", _ccd_render(Fn.Cast("surname", Models.SlugField()); conn = _CCD_MY))
+  @test occursin("CAST(`Tb`.`surname` AS CHAR(20))", _ccd_render(Fn.Cast("surname", Models.URLField(max_length = 20)); conn = _CCD_MY))
+  @test occursin("(\"Tb\".\"surname\")::bpchar(3) as \"x\"", _ccd_render(Fn.Cast("surname", "bpchar(3)"); conn = _CCD_PG))
+  # No declared length: an `EmailField` and an unsized `bpchar` are unbounded text where they build.
+  for expr in (Fn.Cast("surname", Models.EmailField()), Fn.Coalesce("surname", "surname"; output_field = Models.EmailField()),
+               Fn.Cast("surname", "bpchar"))
+    @test _ccd_builds(expr)
+  end
+  @test occursin("(\"Tb\".\"surname\")::varchar as \"x\"", _ccd_render(Fn.Cast("surname", Models.EmailField()); conn = _CCD_PG))
+  @test _ccd_refusal(Fn.Cast("surname", Models.EmailField()); conn = _CCD_MY) === nothing
+  # An array: the element's own cast type, its length or scale included, then `[]`. PostgreSQL only.
+  for (target, sql) in ((Models.ArrayField(Models.CharField(max_length = 3)), "::varchar(3)[]"),
+                        (Models.ArrayField(Models.CharField()), "::varchar[]"),
+                        (Models.ArrayField(Models.SlugField()), "::varchar(50)[]"),
+                        (Models.ArrayField(Models.DecimalField(max_digits = 5, decimal_places = 1)), "::numeric(5,1)[]"),
+                        (Models.ArrayField(Models.IntegerField()), "::integer[]"),
+                        (Models.ArrayField(Models.UUIDField()), "::uuid[]"))
+    @test occursin("(\"Tb\".\"surname\")$(sql) as \"x\"", _ccd_render(Fn.Cast("surname", target); conn = _CCD_PG))
+    for conn in (_CCD_SL, _CCD_MY)
+      err = _ccd_refusal(Fn.Cast("surname", target); conn = conn)
+      @test err isa PormG.BackendCapabilityError
+      @test err !== nothing && occursin("needs array types", _ccd_msg(err)) && occursin("(supported on PostgreSQL)", _ccd_msg(err))
+    end
+  end
+end

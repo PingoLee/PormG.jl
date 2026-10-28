@@ -49,10 +49,17 @@ Include generated model files. The load error names the keyword.
 
 ### Migrate your app
 
+`auto_increment = false` has two valid replacements. They declare the same key; they differ in
+whether the next `makemigrations` changes the table:
+
 ```julia
-# ✗ before: stored, never rendered — PostgreSQL still had an identity column
+# ✗ before: stored, never rendered — the table PormG created has an identity column
 raceid = Models.IDField(auto_increment = false)
-# ✓ after: a key the caller supplies; PostgreSQL renders no identity
+
+# ✓ after, keeping the table as it is: the identity stays, unused while every insert supplies an id
+raceid = Models.IDField()
+
+# ✓ after, declaring a key the caller supplies: the next makemigrations drops the identity
 raceid = Models.IDField(generated = false)
 
 # ✗ before: the default, spelled out
@@ -61,9 +68,20 @@ raceid = Models.IDField(auto_increment = true)
 raceid = Models.IDField()
 ```
 
-Switching to `generated = false` changes the column: the next `makemigrations` plans dropping the
-identity on PostgreSQL (and, since #1393, a rebuild on SQLite and a `MODIFY COLUMN` on MySQL). Every
-explicit id stays. Inserting without an id then fails, where it used to draw from the sequence, and
-`allocate_primary_keys` raises `QueryBuildError` for such a key (#1393), so supply every id yourself.
-A generated models file can be regenerated with `generate_models_from_db`, or the keyword deleted by
-hand.
+Because the keyword never reached the DDL, a table PormG created from such a model is the
+`IDField()` table: an identity column on PostgreSQL, an auto-increment key on SQLite and MySQL.
+`IDField()` describes that table exactly, so `makemigrations` plans nothing, and every insert that
+supplies its id keeps working as before. Choose it when the code supplies every id and you do not
+want a schema change in this upgrade, for example a staging table that is emptied and refilled with
+explicit ids.
+
+`generated = false` describes what the code means, and it changes the column: the next
+`makemigrations` plans dropping the identity on PostgreSQL (and, since #1393, a rebuild on SQLite and
+a `MODIFY COLUMN` on MySQL). Every explicit id stays. Inserting without an id then fails, where it
+used to draw from the sequence, and `allocate_primary_keys` raises `QueryBuildError` for such a key
+(#1393), so supply every id yourself. Choose it when you want the schema to say the key is the
+caller's, and review the planned migration before you apply it.
+
+A models file that `generate_models_from_db` wrote is the other case: it read a table whose key the
+database does not fill, so `generated = false` is the declaration that matches that table, and it is
+what the generator writes now. Regenerate the file, or replace the keyword by hand.

@@ -13,7 +13,8 @@
 #   statement ran), a cancelled statement (1317, 3024) is not re-run by `with_read_retry` (#1277), and
 #   an interrupt a wrapper carries in `.cause` is rethrown bare. The capability
 #   table refuses a server older than 8.4 (#1264) in its own words. A DATETIME(6) value with digits
-#   below the millisecond is refused, never truncated to a `DateTime` (#1270 decides what it reads as).
+#   below the millisecond is refused, never truncated to a `DateTime` (#1270: a `DateTimeField` declares
+#   `DATETIME(3)`, so such a value comes from a column PormG did not create).
 #
 # No live database: parsers and classifiers are exercised directly. The connection, the pool,
 # cancellation and advisory locks run against a live MySQL in
@@ -339,17 +340,19 @@ end
 
 # What: a `Timestamp{Microsecond}` (a DATETIME(6) or TIMESTAMP(6) column) with digits below the
 #   millisecond is refused, with or without a column, by an `InvalidValueError` that names its
-#   precision and #1270, carries the column as `field`, and never the value; one whose
-#   sub-millisecond part is zero reads as a `DateTime`, as does a `Timestamp{Millisecond}`.
+#   precision and the rule (a `DateTimeField` declares `DATETIME(3)`, #1270), carries the column as
+#   `field`, and never the value; one whose sub-millisecond part is zero reads as a `DateTime`, as does
+#   a `Timestamp{Millisecond}`.
 # Why: a `DateTime` holds milliseconds, so `DateTime(v)` dropped the last three digits silently,
-#   and raw `fetch` is a public path. What a `DateTimeField` declares on MySQL is #1270's decision.
+#   and raw `fetch` is a public path. The message states the decided rule, not a pending one (#1423).
 @testset "a DATETIME(6) value finer than a millisecond is refused, not truncated (#1130, #1270)" begin
   fine = MySQL.Timestamp{Dates.Microsecond}(2026, 10, 16, 12, 34, 56, 789, 123)
   e = try _MyExt._read_value(fine, :fastest_lap_at); nothing catch err; err end
   @test e isa PormG.InvalidValueError && e.kind === :range
   @test e.field == "fastest_lap_at" && e.op == "a MySQL read"
   @test occursin("`fastest_lap_at`", e.msg) && occursin("microsecond precision", e.msg)
-  @test occursin("DATETIME(6)", e.msg) && occursin("#1270", e.msg)
+  @test occursin("DATETIME(6)", e.msg) && occursin("a `DateTimeField` declares `DATETIME(3)`", e.msg)
+  @test !occursin("until then", e.msg)
   @test !occursin("2026", e.msg) && !occursin("789", e.msg) && !occursin("123", e.msg)
   # One decision for every caller: the column-less form refuses too, rather than truncating.
   @test_throws PormG.InvalidValueError _MyExt._read_value(fine)

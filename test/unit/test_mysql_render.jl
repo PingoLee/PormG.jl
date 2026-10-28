@@ -777,7 +777,7 @@ end
   for x in ("boolean", "bool", "interval", "bytea", "BLOB", "time with time zone", "mood", "integer(4)", "uuid(3)")
     err = try; t(x); nothing; catch e; e; end
     @test (x, err isa PormG.UnsupportedConnectionError) == (x, true)
-    @test occursin("is not rendered for MySQL yet", sprint(showerror, err))
+    @test occursin("is not rendered for MySQL: MySQL's CAST has no target that holds its meaning", sprint(showerror, err))
   end
   # The rendered cast, through the public `Cast`.
   sel(f) = _mr_inspect(_MR_MY.Result.objects.values("c" => f))[:sql_text]

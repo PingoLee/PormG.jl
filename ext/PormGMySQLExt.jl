@@ -270,8 +270,9 @@ end
 # as owned Julia values. DECIMAL becomes `Decimals.Decimal` through its exact text, as on PostgreSQL. A
 # DATETIME becomes a `DateTime`, which holds milliseconds. A value with 4 to 6 fractional digits (a
 # `DATETIME(6)` column, `NOW(6)`) decodes to a `Timestamp{Microsecond}`; one with digits below the
-# millisecond is refused rather than truncated, until #1270 decides what a `DateTimeField` declares on
-# MySQL. The refusal names its precision and carries the column as `field`, never the value (#971).
+# millisecond is refused rather than truncated. A `DateTimeField` declares `DATETIME(3)` (#1270), so
+# such a value comes from a column PormG did not create, or an expression computed at microseconds.
+# The refusal names its precision and carries the column as `field`, never the value (#971).
 # The column name is query text: an un-aliased expression is named after its own SQL.
 _read_value(v::MySQL.DataString, column = nothing) = String(v)
 _read_value(v::MySQL.DataBytes, column = nothing) = Vector{UInt8}(v)
@@ -283,8 +284,9 @@ function _read_value(v::MySQL.Timestamp{Dates.Microsecond}, column = nothing)
   throw(PormG.InvalidValueError(
     "a MySQL DATETIME or TIMESTAMP value with microsecond precision (4 to 6 fractional digits, such as " *
     "a DATETIME(6) column) has digits below the millisecond, and PormG reads it as a `DateTime`, which " *
-    "holds milliseconds. What PormG reads for such a value is #1270's decision; until then, select it " *
-    "at millisecond precision, e.g. `CAST(col AS DATETIME(3))`, which rounds to the millisecond (#1130).",
+    "holds milliseconds, so it is refused rather than truncated: a `DateTimeField` declares `DATETIME(3)` " *
+    "on MySQL (#1270). Select it at millisecond precision, e.g. `CAST(col AS DATETIME(3))`, which rounds " *
+    "to the millisecond.",
     :range; op = "a MySQL read", field = column))
 end
 

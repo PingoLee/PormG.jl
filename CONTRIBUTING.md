@@ -103,6 +103,20 @@ explicitly every time:
 PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.jl
 ```
 
+**Two PostgreSQL drivers.** `db_2` runs through LibPQ (the default) or Postgres.jl (experimental),
+and both are in use, so the release gate runs the `db_2` suite once per driver (#1433). A
+regression in one driver's extension, or in a path the two handle differently (`Decimal` and
+timestamp decoding, `bulk_insert`, cancellation, a statement's bind-parameter limit), is invisible
+to a run on the other. `PORMG_POSTGRES_DRIVER=Postgres` switches every pool built from the
+configuration that does not name its driver. Run `test/integration/runtests.jl` directly: the unit
+entry point `test/runtests.jl` deletes the variable. The two runs reseed the same fixture, so run
+them one after the other:
+
+```
+julia -t auto --project=test/integration test/integration/runtests.jl
+PORMG_POSTGRES_DRIVER=Postgres julia -t auto --project=test/integration test/integration/runtests.jl
+```
+
 **MySQL.** `db_my` points at a local MySQL 8.4 — a Docker `mysql:8.4` container
 is enough — through its own gitignored `test/integration/db_my/connection.yml` (`adapter: MySQL`;
 see `docs/src/configuration/connection_yml.md`). The full suite runs there as on the other engines, and

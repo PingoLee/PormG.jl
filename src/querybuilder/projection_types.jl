@@ -779,7 +779,7 @@ function _check_operand_domain(p::FObject, instruc::SQLInstruction)
     elseif kind isa _NonNumberKind
       throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
     elseif kind isa Union{CText,CVarChar}
-      throw(_text_math_refusal(p.function_name, _concat_operand_label(x)))
+      throw(_text_math_refusal(p.function_name))
     end
   end
   return nothing
@@ -823,14 +823,15 @@ function _non_number_math_refusal(function_name::AbstractString, kind::Canonical
   return QueryBuildError("$(head) For a number from $(noun) $(letter), write $(join(spellings, ", ", ", or ")), " *
                          "and apply `$(name)` to that.")
 end
-# #1293 — the same reason over text, which the query must say holds numbers (#1061's remedy).
-function _text_math_refusal(function_name::AbstractString, label::Union{String,Nothing})
+# #1293 — the same reason over text, which the query must say holds numbers (#1061's remedy). Named
+# by its kind, as #1387's is: a path written as a string reaches here resolved, so naming the operand
+# would answer `"seen__@yyyy_mm"` and `F("seen__@yyyy_mm")` differently (#843).
+function _text_math_refusal(function_name::AbstractString)
   name = uppercasefirst(lowercase(function_name))
-  what = label === nothing ? "the value" : "`$(label)`"
-  return QueryBuildError("`$(name)` of text is not supported: $(what) is text, and PormG does not read " *
-                         "text as a number for you on any engine (#1293). If it holds numbers, say so " *
-                         "with a cast, \e[32mCast(x, FloatField())\e[0m, as the operand, or fetch the value " *
-                         "and compute in Julia.")
+  return QueryBuildError("`$(name)` of text is not supported: text is not a number, and PormG does not " *
+                         "read it as one for you on any engine (#1293). If it holds numbers, say so with " *
+                         "a cast, \e[32mCast(x, FloatField())\e[0m, as the operand, or fetch the value and " *
+                         "compute in Julia.")
 end
 _non_number_noun(::CDate) = "a date"
 _non_number_noun(::CDateTime) = "a timestamp"

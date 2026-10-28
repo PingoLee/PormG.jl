@@ -266,10 +266,9 @@ end
 # Why: before #1293 `Round("positiontext")` and `Floor("positiontext")` built, and SQLite answered 0.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1293: a number function over text is refused on every engine" begin
-  texts = (("column", "positiontext", "`positiontext`"), ("Concat", Fn.Concat("positiontext", "positiontext"), "the value"),
-           ("Upper", Fn.Upper("positiontext"), "the value"), ("label", "raceid__date__@yyyy_mm", "the value"),
-           ("literal", Fn.Value("12"), "the value"))
-  for (conn, engine) in _MDT_ENGINES, (fn, name) in _MDT_FUNCTIONS, (what, operand, named) in texts
+  texts = (("column", "positiontext"), ("Concat", Fn.Concat("positiontext", "positiontext")),
+           ("Upper", Fn.Upper("positiontext")), ("label", "raceid__date__@yyyy_mm"), ("literal", Fn.Value("12")))
+  for (conn, engine) in _MDT_ENGINES, (fn, name) in _MDT_FUNCTIONS, (what, operand) in texts
     err = _mdt_refusal(MDT.Result, fn(operand); conn = conn)
     label = (engine, name, what)
     @test (label, err isa QueryBuildError) == (label, true)
@@ -279,7 +278,7 @@ end
       @test (label, occursin("(#1061)", msg)) == (label, true)
       continue
     end
-    @test (label, occursin("`$(name)` of text is not supported: $(named) is text", msg) &&
+    @test (label, occursin("`$(name)` of text is not supported: text is not a number", msg) &&
                   occursin("on any engine (#1293)", msg) && occursin("Cast(x, FloatField())", msg)) == (label, true)
     @test !any(n -> occursin(n, msg), ("PostgreSQL", "SQLite", "MySQL"))
   end

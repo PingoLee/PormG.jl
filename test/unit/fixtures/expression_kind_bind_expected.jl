@@ -6671,4 +6671,184 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast int to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\")::date as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Cast text varchar(3) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR(3)) > ?", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR(3)) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar(3) > \$1", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar(3) > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS VARCHAR(3)) > ?", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS VARCHAR(3)) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Cast text varchar(3) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
+  ("Cast text varchar(3) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR(3)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text varchar(3) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR(3)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text varchar(3) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar(3) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text varchar(3) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar(3) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text varchar(3) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS VARCHAR(3)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text varchar(3) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS VARCHAR(3)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField(3) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR) > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar > \$1", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS TEXT) > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS TEXT) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField(3) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField(3) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField(3) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField(3) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField(3) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField(3) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField(3) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast int CharField(250) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`grid` AS CHAR) > ?", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`grid` AS CHAR) > ?", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\")::varchar > \$1", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\")::varchar > \$1", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"grid\" AS TEXT) > ?", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"grid\" AS TEXT) > ?", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Cast int CharField(250) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
+  ("Cast int CharField(250) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`grid` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast int CharField(250) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`grid` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast int CharField(250) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast int CharField(250) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast int CharField(250) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"grid\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast int CharField(250) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"grid\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR) > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(`Tb`.`positiontext` AS CHAR) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar > \$1", params = [("\"10\"", "String")]),
+  ("Cast text CharField | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::varchar > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS TEXT) > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS TEXT) > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Cast text CharField | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Cast text CharField | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
+  ("Cast text CharField | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(`R2`.`positiontext` AS CHAR) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::varchar as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast text CharField | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Cast text CharField | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n`Tb`.`positiontext`,\n?) > ?", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n`Tb`.`positiontext`,\n?) > ?", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\"Tb\".\"positiontext\",\n\$2::text) > \$3", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\"Tb\".\"positiontext\",\n\$2::text) > \$3", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(?, '')) > ?", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(?, '')) > ?", params = [("\"x\"", "String"), ("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"x\"", "String"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"x\"", "String"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n`R2`.`positiontext`,\n?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n`R2`.`positiontext`,\n?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\"R2\".\"positiontext\",\n\$3::text) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\"R2\".\"positiontext\",\n\$3::text) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat output varchar(3) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"positiontext\", '') ||\nCOALESCE(?, '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat output varchar(3) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"positiontext\", '') ||\nCOALESCE(?, '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"x\"", "String"), ("1", "Int64"), ("\"x\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
 )

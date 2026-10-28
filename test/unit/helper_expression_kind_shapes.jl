@@ -470,6 +470,22 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # #1167: a whole number cast to an unscaled `numeric`, then to an integer or a scale
   ("Cast Cast int numeric to integer", :Result,     m -> _EKM_FN.Cast(_EKM_FN.Cast("grid", "numeric"), "integer")),
   ("Cast Cast int numeric to scale 2", :Result,     m -> _EKM_FN.Cast(_EKM_FN.Cast("grid", "numeric"), "numeric(10,2)")),
+  # #1416: `ToChar` over a duration, with a date-writing format and with a clock-only one
+  ("ToChar interval YYYY",    :Result,              m -> _EKM_FN.ToChar("fastestlaptime", "YYYY")),
+  ("ToChar interval HH24:MI", :Result,              m -> _EKM_FN.ToChar("fastestlaptime", "HH24:MI")),
+  # #1293: a number function over text, `Round` at `d = 0` included
+  ("Floor text",              :Result,              m -> _EKM_FN.Floor("positiontext")),
+  ("Round text",              :Result,              m -> _EKM_FN.Round("positiontext")),
+  ("Round text places 0",     :Result,              m -> _EKM_FN.Round("positiontext", 0)),
+  # #1417: a number cast to a date, which SQLite reads as a Julian day and MySQL as a date's digits
+  ("Cast int to date",        :Result,              m -> _EKM_FN.Cast("grid", "date")),
+  # #1252: a cast to text of a declared length, by name and by a `CharField` declaration; an
+  # undeclared `CharField()` length and a `Concat` declaring one, which renders no cast
+  ("Cast text varchar(3)",    :Result,              m -> _EKM_FN.Cast("positiontext", "varchar(3)")),
+  ("Cast text CharField(3)",  :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.CharField(max_length = 3))),
+  ("Cast int CharField(250)", :Result,              m -> _EKM_FN.Cast("grid", PormG.Models.CharField(max_length = 250))),
+  ("Cast text CharField",     :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.CharField())),
+  ("Concat output varchar(3)", :Result,             m -> _EKM_FN.Concat(["positiontext", _EKM_FN.Value("x")]; output_field = "varchar(3)")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

@@ -402,7 +402,7 @@ function _d_field_args(f::Kernel.PormGField)
     slot === :formatter && continue
     slot === :type && continue
     v = getfield(f, slot)
-    default === nothing || v != getfield(default, slot) || continue
+    default === nothing || Models._slot_in_call(f, default, slot) || continue
     push!(args, "$slot=$(_d_value(v))")
   end
   return args

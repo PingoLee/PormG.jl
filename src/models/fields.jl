@@ -1447,6 +1447,10 @@ mutable struct sCharField <: PormGField
   verbose_name::Union{String, Nothing}
   primary_key::Bool
   max_length::Int
+  # #1252: whether `max_length` was passed. The column is `varchar(max_length)` either way; a cast or
+  # an `output_field` declares a length only when one was given, so `CharField()` stays unbounded text
+  # while `CharField(max_length = 250)` casts to `varchar(250)`. No keyword sets it (`_slot_in_call`).
+  max_length_given::Bool
   unique::Bool
   blank::Bool
   null::Bool
@@ -1687,7 +1691,19 @@ function CharField(; kwargs...)
       end
     end
   end
-  return sCharField(verbose_name, primary_key, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices, db_default)
+  return sCharField(verbose_name, primary_key, max_length, haskey(kwargs, :max_length), unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices, db_default)
+end
+
+# Whether `slot` of `f` is part of the constructor call that rebuilds it, against `baseline`, the
+# zero-argument instance of its type: the slots that differ. Read by `Model_to_str` and by `show`
+# (`display.jl`), which both print a field as the call the user would have typed.
+_slot_in_call(f::PormGField, baseline::PormGField, slot::Symbol)::Bool = getfield(f, slot) != getfield(baseline, slot)
+# #1252: `max_length` is part of the call whenever it was given, the default 250 included, since a
+# given length is what a cast declares; `max_length_given` records that and is no keyword of its own.
+function _slot_in_call(f::sCharField, baseline::PormGField, slot::Symbol)::Bool
+  slot === :max_length_given && return false
+  slot === :max_length && return getfield(f, :max_length_given) || getfield(f, :max_length) != getfield(baseline, :max_length)
+  return getfield(f, slot) != getfield(baseline, slot)
 end
 
 

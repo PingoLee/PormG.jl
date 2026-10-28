@@ -764,7 +764,9 @@ SQLite has no time types: a `date` target renders `date(x)` there, and `timestam
 `type` is preferably a field object (`Cast("grid", BigIntegerField())`), which renders in each
 engine's own spelling. A `DecimalField` casts to its own precision and scale (#1221):
 `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, and
-`DecimalField()` is `numeric(10,2)`. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
+`DecimalField()` is `numeric(10,2)`. A `CharField` given a `max_length` casts to that length (#1252):
+`Cast(x, CharField(max_length = 3))` is `Cast(x, "varchar(3)")`, while `CharField()` declares none
+and casts to unbounded text. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
 `"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
 `"character varying"`, `"bit varying"`, `"timestamp with time zone"` (and `without`, and the `time`
 forms), optionally followed by a size `(n)` or `(n, m)` — `"numeric(10,2)"`, `"varchar(20)"` — and,
@@ -792,7 +794,11 @@ different value raises `QueryBuildError` when the query is built, and the others
   unscaled `"numeric"`. A `DecimalField` target is its `numeric(max_digits, decimal_places)`;
 - to a single-precision float (`"real"`, `"float4"`, `"float(p)"` for p ≤ 24), any value means the
   value rounded to a 4-byte float, a `Float32`, and SQLite, which keeps the 8-byte double, refuses
-  it (#1215). Cast to `"float8"` or `FloatField()`, a `Float64` on every engine.
+  it (#1215). Cast to `"float8"` or `FloatField()`, a `Float64` on every engine;
+- to text of a declared length (`"varchar(n)"`, `"char(n)"`, `"char"`, which is `char(1)`,
+  `CharField(max_length = n)`), any value
+  means the text cut to `n` characters, and SQLite, which enforces no length, refuses it (#1252).
+  Cast to `"text"` or `CharField()` and cut the fetched value in Julia.
 
 ```julia
 using PormG.Functions: Cast, Round
@@ -818,6 +824,11 @@ end
 # read the string `"numeric(10,2)"`. `DecimalField()` is `(10, 2)`: an unscaled cast is the string `"numeric"`.
 _field_cast_type(f::PormGField) = f.type
 _field_cast_type(f::Models.sDecimalField) = "numeric($(f.max_digits),$(f.decimal_places))"
+# #1252: a `CharField` given a length is that `varchar(n)`, as Django's `Cast(x, CharField(max_length = n))`
+# is; `CharField()` declares none, so it stays the unbounded text it has always cast to. The sized name
+# meets the same rule as the string `"varchar(n)"`: a length cuts the text, and SQLite, which keeps every
+# character, refuses it (`:sized_text`).
+_field_cast_type(f::Models.sCharField) = f.max_length_given ? "varchar($(f.max_length))" : f.type
 
 """
     Concat(expressions; output_field=nothing)

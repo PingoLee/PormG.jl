@@ -3702,7 +3702,7 @@ function _field_kwarg_sets!(sets, field, baseline; skip = (), pinned::Bool = fal
     # `display.jl` skips it for the same reason.
     sfield === :formatter && continue
     sfield in skip && continue
-    if getfield(field, sfield) != getfield(baseline, sfield)
+    if _slot_in_call(field, baseline, sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
   end

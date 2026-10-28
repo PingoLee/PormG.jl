@@ -1040,8 +1040,8 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 
 #### A cast an engine computes differently
 
-A cast to text, to an integer, to a scaled `numeric(p, s)`, to a single-precision float or to a
-date goes through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
+A cast to text, to text of a declared length, to an integer, to a scaled `numeric(p, s)`, to a
+single-precision float or to a date goes through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
 engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
 others build the query as written. For the scale and integer rows, [Rounding](rounding.md) shows the
 explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite 3.45 and MySQL 8.4:
@@ -1058,6 +1058,7 @@ explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit | builds |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` | **refused**: it clamps it to the largest value the type holds (`9.99`) |
 | to `numeric(p, s)`, of a column or a computed value too large on some rows (`Cast("driverid", "numeric(2,0)")`) | an overflow, on those rows | raises `StatementError` (SQLSTATE `22003`) when the query runs | raises the same `StatementError` as it reads those rows (#1110) | raises the same `StatementError` as it reads those rows (#1110) |
+| to text of a declared length (`varchar(n)`, `char(n)`, an unsized `char`, `CharField(max_length = n)`), of any value | the text cut to `n` characters (1 for an unsized `char`) | builds (`'Hamilton'` → `'Ham'` at 3) | **refused**: it enforces no length and keeps every character | builds: `CHAR(n)` cuts it |
 | to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) | builds |
 | any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds | **refused**: a sum of integers is a `DECIMAL` (`7.5`) |
 
@@ -1072,8 +1073,15 @@ intended trade: the engine that cannot give the meaning says so, rather than ans
 
 What each row covers:
 
-- **text**: `CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, and the `output_field` of
+- **text**: `CharField()`, `TextField()`, `"text"`, `"varchar"`, and the `output_field` of
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
+- **a length**: `"varchar(n)"`, `"character varying(n)"`, `"char(n)"`, `"character(n)"`, an unsized
+  `"char"` or `"character"`, which is one character (`'H'`), and `CharField(max_length = n)`, and the
+  same `output_field` (#1252). Every operand is refused on
+  SQLite, which enforces no declared length, so the text would come back whole where PostgreSQL and
+  MySQL cut it. For the text on every engine, cast to text of no declared length (`"text"` or
+  `CharField()`) and cut the fetched value in Julia (`first(s, n)`). A `Concat`'s `output_field`
+  renders no cast, so a length there cuts nothing and builds everywhere;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on every engine, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
   `Mod` of whole numbers, `+`, `-`, `*` of them, an integer cast to a `numeric`) has nothing to round;
@@ -1165,6 +1173,11 @@ A `DecimalField` object declares its precision and scale with its type, as its c
 `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, the same
 SQL on each engine and the same refusal, and `DecimalField()` is `numeric(10,2)`. The same holds for
 an `output_field`. So the unscaled cast is the string `"numeric"`, not `DecimalField()`.
+
+A `CharField` object given a `max_length` declares that length too (#1252), as Django's does:
+`Cast(x, CharField(max_length = 3))` is `Cast(x, "varchar(3)")`, an explicit `max_length = 250`
+included. `CharField()` declares no length, so it stays the unbounded text it casts to on every
+engine, although its column is `varchar(250)`.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"float8"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.

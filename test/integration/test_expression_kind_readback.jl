@@ -455,3 +455,29 @@ end
   @test err isa PormG.InvalidValueError
   @test occursin("projection alias (date)", sprint(showerror, err))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A sized text cast cuts the text where it builds, and is refused on SQLite (#1252)
+# On the driver `hamilton`: `Cast("surname", "varchar(3)")` and `Cast("surname", CharField(max_length = 3))`
+# render `("Tb"."surname")::varchar(3)` on PostgreSQL and `CAST(… AS CHAR(3))` on MySQL, and read back
+# `"Ham"`, and an unsized `char` is one character, `"H"`; SQLite enforces no length, so it refuses
+# each. `char(10)` reads back `"Hamilton"` unpadded. `CharField()` declares none and reads back
+# the whole `"Hamilton"` on every engine. Why: the unit tests see the SQL, not that the engine cuts it,
+# which is the meaning the SQLite refusal stands on.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A sized text cast cuts the text where it builds, and is refused on SQLite (#1252)" begin
+  surname(target) = (q = M.Driver.objects; q.filter("driverref" => "hamilton");
+                     q.values("s" => PormG.Functions.Cast("surname", target)); q)
+  for (target, cut) in ("varchar(3)" => "Ham", PormG.Models.CharField(max_length = 3) => "Ham",
+                        "char(3)" => "Ham", "char" => "H", "char(10)" => "Hamilton")
+    # Each engine's expectation, stated: a backend added later gets a missing-row error (#1179).
+    if by_engine(postgres = false, sqlite = true, mysql = false)
+      err = try surname(target).list(); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("(#1252)", sprint(showerror, err))
+    else
+      @test only(surname(target).list())[:s] == cut
+    end
+  end
+  @test only(surname(PormG.Models.CharField()).list())[:s] == "Hamilton"
+end

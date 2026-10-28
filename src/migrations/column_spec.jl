@@ -69,6 +69,8 @@ Field attributes no DDL path expresses, so a difference in one can never be a co
   * `size` — `ArrayField`'s element bound (#28). PostgreSQL neither enforces a declared array size nor
     keeps it (`format_type` prints `integer[3]` as `integer[]`), so PormG checks it on write and the
     catalog can never report it back.
+  * `max_length_given` — `CharField` only (#1252): whether `max_length` was passed. The column is
+    `varchar(max_length)` either way; only a cast or an `output_field` reads it.
 
 `on_update`, `deferrable` and `initially_deferred` were on this list from #507 until **#516** removed
 the three keywords outright. There is no slot left to classify — they are gone from `sForeignKey` and
@@ -77,7 +79,7 @@ the three keywords outright. There is no slot left to classify — they are gone
 const NON_DB_ATTRS = (:blank, :choices, :db_index, :editable, :verbose_name, :related_name,
                       :how, :formatter, :protocol, :unpack_ipv4,
                       :auto_now, :auto_now_add, :auto_add, :auto_hash,
-                      :through, :db_table, :source_field, :target_field, :size)
+                      :through, :db_table, :source_field, :target_field, :size, :max_length_given)
 
 """
     SCHEMA_ATTRS

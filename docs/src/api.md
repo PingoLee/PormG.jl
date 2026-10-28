@@ -503,7 +503,7 @@ df = M.Result.objects.cjoin(
 | :--- | :--- | :--- |
 | `main_join` | `Pair{String,String}` | `"field" => "TargetModel"` — the join path. |
 | `filters` | `Vector` | ON-clause predicates. Supports `Pair`, `Q()`, `Qor()`, F expressions. |
-| `join_type` | `String` | `"LEFT"` (default), `"INNER"`, `"RIGHT"`, or `"FULL"`. Anything else — `"CROSS"` included — raises `QueryBuildError`. |
+| `join_type` | `String` | `"LEFT"` (default), `"INNER"`, `"RIGHT"`, or `"FULL"`. Anything else — `"CROSS"` included — raises `QueryBuildError`. `"RIGHT"` and `"FULL"` are the `right_joins` / `full_joins` rows of the [capability table](backends.md): MySQL has no `FULL JOIN`, and SQLite has neither before 3.39.0. |
 | `field` | `PormGField` | Optional custom field definition for non-FK joins. |
 | `warn` | `Bool` | Suppress auto-discovery warnings (default: `true`). |
 

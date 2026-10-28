@@ -69,6 +69,10 @@ const _BACKEND_FEATURES = (
   # and ignores it, as every timeout. MySQL bounds no DDL statement's run time.
   :statement_timeouts     => "`migrate`'s `statement_timeout`, a bound on how long one plan statement may run (accepted and ignored on SQLite)",
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
+  # #1422 (#1271): an outer join that keeps the rows of the joined table. SQLite has both from 3.39.0;
+  # MySQL has `RIGHT JOIN` and no `FULL JOIN`.
+  :right_joins            => "a `RIGHT OUTER JOIN` (`join_type = \"RIGHT\"`)",
+  :full_joins             => "a `FULL OUTER JOIN` (`join_type = \"FULL\"`)",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
   :migration_plans        => "the DDL a migration plan holds (identity columns, `INCLUDE` index columns)",
@@ -103,7 +107,8 @@ for f in _FEATURE_NAMES
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
           :supported_server, :deferred_foreign_keys, :upsert_conflict_target, :preallocated_keys,
-          :transactional_ddl, :partial_indexes, :unbounded_text_indexes, :statement_timeouts)
+          :transactional_ddl, :partial_indexes, :unbounded_text_indexes, :statement_timeouts,
+          :right_joins, :full_joins)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130) gained each row in the phase that delivered it. Phase 1 delivered the
@@ -111,9 +116,10 @@ end
 # takes a negative precision (`ROUND(125, -1)` is 130, measured on 8.4). Phase 2c-3b: window functions
 # (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.
 # Phase 4a: migrations on a schema created from nothing — reading the schema from `information_schema`
-# and a migration plan's DDL, both from the 8.4 floor, with no version row of their own.
+# and a migration plan's DDL, both from the 8.4 floor, with no version row of their own. `RIGHT JOIN`
+# (#1422): MySQL has it and has no `FULL JOIN`, so `join_type = "FULL"` is refused there.
 for f in (:supported_server, :advisory_locks, :negative_round_precision, :window_functions,
-          :schema_introspection, :migration_plans)
+          :schema_introspection, :migration_plans, :right_joins)
   @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 
@@ -126,6 +132,8 @@ _feature_since(::Type{<:PormGBackend}, ::Val)::Union{Int, Nothing} = nothing
 _feature_since(::Type{<:PormGSQLite}, ::Val{:window_functions}) = 3_025_000        # SQLite 3.25.0
 _feature_since(::Type{<:PormGSQLite}, ::Val{:nulls_order}) = 3_030_000             # 3.30.0 (#75)
 _feature_since(::Type{<:PormGSQLite}, ::Val{:table_list}) = 3_037_000              # 3.37.0 (#730)
+_feature_since(::Type{<:PormGSQLite}, ::Val{:right_joins}) = 3_039_000             # 3.39.0 (#1422)
+_feature_since(::Type{<:PormGSQLite}, ::Val{:full_joins}) = 3_039_000              # 3.39.0 (#1422)
 _feature_since(::Type{<:PormGPostgres}, ::Val{:schema_introspection}) = 90_600     # 9.6 (#1162)
 _feature_since(::Type{<:PormGPostgres}, ::Val{:migration_plans}) = 110_000         # 11 (#1162)
 _feature_since(::Type{<:PormGPostgres}, ::Val{:identity_columns}) = 100_000        # 10

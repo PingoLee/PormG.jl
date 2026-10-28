@@ -177,6 +177,7 @@ PormG.backend_mysql_version(c::_CtMyAt) = c.v
   Sl, Pg, My = PormG.PormGSQLite, PormG.PormGPostgres, PormG.PormGMySQL
   @test Dict((T, f) => since for (T, f, since) in rows) == Dict(
     (Sl, :window_functions) => 3_025_000, (Sl, :nulls_order) => 3_030_000, (Sl, :table_list) => 3_037_000,
+    (Sl, :right_joins) => 3_039_000, (Sl, :full_joins) => 3_039_000,
     (Pg, :schema_introspection) => 90_600, (Pg, :migration_plans) => 110_000,
     (Pg, :identity_columns) => 100_000, (Pg, :declarative_partitions) => 100_000,
     (Pg, :include_columns) => 110_000, (Pg, :generated_columns) => 120_000,

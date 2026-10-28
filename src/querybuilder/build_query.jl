@@ -76,6 +76,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
         continue
       end
+      _require_outer_join(instruc.connection, value.how)
 
       # #985: under the row's join scope, so every column the conditions render is checked against the
       # rows this ON clause may name (`_record_join_column`).
@@ -110,6 +111,18 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     end
   end
   return nothing
+end
+
+# #1422: a RIGHT or FULL join is a capability row, refused before any SQL on a backend that lacks it
+# (MySQL has no `FULL JOIN`; SQLite has neither before 3.39.0). This is the one place every join row
+# with a join type is emitted (`on()`, `cjoin_on`, a CTE's `join_type`, a path join), so one check
+# covers them all. A mutation that carries the join rewrites it for its EXISTS fence, but its key
+# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does.
+function _require_outer_join(conn, how::AbstractString)::Nothing
+  feature = how == "RIGHT" ? :right_joins : how == "FULL" ? :full_joins : nothing
+  feature === nothing && return nothing
+  _supports(conn, feature) && return nothing
+  throw(_capability_error(conn, feature, "join_type = \"$(how)\""))
 end
 
 # One row's ON conditions, rendered in vector order — the order their markers appear in. `instruc.alias`

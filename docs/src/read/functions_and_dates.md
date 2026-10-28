@@ -253,7 +253,7 @@ checked against that key's field: on `M.Result`, `"raceid__@year"` raises `Query
 because `raceid` holds the race's integer id. Read the race's date through the relation instead,
 with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked by this row only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
 `to_char` also formats numbers on PostgreSQL; any portable format that writes a date is refused over a
-time (#1336, see [`ToChar`](#ToChar-—-Format-as-String)).
+time (#1336), and every format over a duration (#1416; see [`ToChar`](#ToChar-—-Format-as-String)).
 
 A date part's value has a range: `@month` and `MONTH` `1`–`12`, `@day` and `DAY` `1`–`31`, the
 clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and `DOY` `1`–`366`. An
@@ -1317,9 +1317,15 @@ query.values(
 `ToChar` renders `to_char(x, …)` on PostgreSQL, `strftime(…)` on SQLite and `DATE_FORMAT(x, …)` on
 MySQL, and every format in the table below produces the **same text on every engine** for a given
 instant. PormG spells the format for each engine itself: `HH` is the 24-hour clock on each, and the
-`T` separator and the `.SSS` milliseconds render as written. On MySQL `ToChar` over a `DurationField`
-raises `QueryBuildError`, since a duration is its microseconds there: `Cast(x, "text")` gives its
-`HH:MM:SS` text.
+`T` separator and the `.SSS` milliseconds render as written.
+
+A duration has no calendar date and no single clock time, so `ToChar` over one raises
+`QueryBuildError` on every engine, whatever the format (#1416). That covers a `DurationField`
+column, interval arithmetic (`F("fastestlaptime") * 2`), a timestamp difference and `Sum` of a
+duration. SQLite would read the duration's text as a time of day (`2000` for `"YYYY"`, `NULL` past
+24 hours), PostgreSQL would format the interval's own fields, which depend on how it was formed, and
+MySQL holds a duration as its microseconds. `Cast(x, "text")` gives a duration's text on every
+engine, and `Extract(x, "epoch")` gives its seconds on PostgreSQL and MySQL.
 
 A time of day has no date, so over a `TimeField` (or `Max` of one) a format that writes a year, a
 month or a day raises `QueryBuildError` on every engine (#1336). SQLite would write `2000-01-01`,

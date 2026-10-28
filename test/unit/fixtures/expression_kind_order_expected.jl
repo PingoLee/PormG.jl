@@ -4707,4 +4707,12 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast int to date | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast int to date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast int to date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast int to date | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
 )

@@ -6590,6 +6590,114 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast int numeric to scale 2 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("ToChar interval YYYY | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval YYYY | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY\") over a duration is not supported: a duration has no calendar date and no single clock time, so a forma"),
+  ("ToChar interval HH24:MI | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("ToChar interval HH24:MI | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"HH24:MI\") over a duration is not supported: a duration has no calendar date and no single clock time, so a fo"),
+  ("Floor text | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Floor text | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Floor` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Round text places 0 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of text is not supported: text is not a number, and PormG does not read it as one for you on any engine (#1293)."),
+  ("Cast int to date | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast int to date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; SQLite computes the Julian da"),
+  ("Cast int to date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; MySQL computes the date its d"),
+  ("Cast int to date | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Cast int to date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; SQLite computes the Julian da"),
+  ("Cast int to date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; MySQL computes the date its d"),
+  ("Cast int to date | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast int to date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; SQLite computes the Julian da"),
+  ("Cast int to date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the integer `grid` means an error, since a number has no calendar date; MySQL computes the date its d"),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

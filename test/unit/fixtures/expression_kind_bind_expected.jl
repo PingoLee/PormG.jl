@@ -6659,4 +6659,16 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast int to date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast int to date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\")::date > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast int to date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Cast int to date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast int to date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast int to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\")::date as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
 )

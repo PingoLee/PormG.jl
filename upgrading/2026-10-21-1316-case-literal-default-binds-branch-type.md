@@ -1,6 +1,6 @@
 ## PostgreSQL: a declared `Case` over literals binds its default as their type (#1316)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1316 ; `src/querybuilder/field_resolution.jl` (`_case_default_bind_type`)
 - **Recorded**: 2026-10-21
 - **Severity**: behavior change, PostgreSQL only. A `Case` with an `output_field` whose branches are all literals runs where the statement failed when it ran (`CASE types text and bigint cannot be matched`). A `Case` over duration literals cast to text returns PostgreSQL's interval text where it returned the literal's own text, and one mixing a duration literal with a text literal fails when it runs where it ran. SQLite is unchanged.

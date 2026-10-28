@@ -1,6 +1,6 @@
 ## A filter on a projection alias over a JSON key lookup compares as the key lookup does (#1382)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1382 ; `src/querybuilder/projection_types.jl` (`_having_alias_formatter`, `_alias_projects_json_key`)
 - **Recorded**: 2026-10-26
 - **Severity**: bug fix that changes a value. A filter on an alias over a JSON key lookup (`values("wins" => F("metadata__wins"))`, then `filter("wins" => …)`) now matches the rows `filter("metadata__wins" => …)` matches. A string compared with it no longer raises. A number compared with it matched no row on SQLite, and an ordering compared text on PostgreSQL and SQLite. MySQL is unreleased.

@@ -1,6 +1,6 @@
 ## `set_models` / `@import_models` — a models folder with no loaded configuration is refused; the implicit load is a REPL's (#1226, #1248)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1226, #1248, #1227 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`, `_rebind_from_record`), `src/Configuration.jl` (`_is_interactive`), `src/Utils.jl` (the injected `__init__`s)
 - **Recorded**: 2026-10-14
 - **Severity**: breaking. Registering models against a folder that no `Configuration.load` has

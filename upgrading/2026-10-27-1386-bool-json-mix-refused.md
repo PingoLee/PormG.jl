@@ -1,6 +1,6 @@
 ## A boolean or a JSON document beside another type in a conditional is refused on every engine (#1386)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1386 ; `src/querybuilder/projection_types.jl` (`_temporal_mix_class`, `_temporal_mix`), `src/querybuilder/functions.jl` (`_temporal_mix_refusal`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. `Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case`, or a `Lag`/`Lead`

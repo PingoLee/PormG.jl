@@ -1,6 +1,6 @@
 ## A `Sum` PormG cannot type, divided and then cast or concatenated, is refused on PostgreSQL whatever it holds (#1034, #1111)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1034 (phase 3, step 2a), #1111, amended by #1305 ; `src/querybuilder/projection_types.jl` (`_whole_numeric_operand`, `_division_first`), `src/querybuilder/engine_facts.jl` (`_untyped_sum_departs`)
 - **Recorded**: 2026-10-14
 - **Severity**: behavior change. Some expressions that built on PostgreSQL now raise `QueryBuildError` when the query is built. The #1111 refusal's message changes for the ones it already refused, and one false refusal of a temporal sum is lifted. On SQLite, a cast or `Concat` of such a quotient combined with an interval, a float or a decimal now raises as the interval or fraction it is (#1305, below).

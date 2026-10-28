@@ -1,6 +1,6 @@
 ## `Configuration.load` — loading a folder already loaded with the same environment is a no-op (#1225)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1225 ; `src/Configuration.jl` (`load`, `load_many`, `_already_loaded`)
 - **Recorded**: 2026-10-14
 - **Severity**: behavior change. A second `load` of a folder that is already loaded with the same

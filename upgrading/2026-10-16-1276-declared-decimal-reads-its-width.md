@@ -1,6 +1,6 @@
 ## A declared decimal over decimal columns is compared at the width it declares (#1276)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1276 ; `src/querybuilder/expression_kind.jl` (`_declared_stored_decimal`)
 - **Recorded**: 2026-10-16
 - **Severity**: behavior change, SQLite only. A `Coalesce`, `Greatest` or `Least` over `DecimalField` columns, declared with a decimal `output_field`, can read back through a different parser. PostgreSQL is unchanged: its driver hands back the `numeric` it computed.

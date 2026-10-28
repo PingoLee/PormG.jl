@@ -1,6 +1,6 @@
 ## A duration or a time cast to a date is refused on SQLite, which read it as a time on 2000-01-01 (#1325)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1325 ; `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. Expressions that built on SQLite now raise `QueryBuildError` when the query is built. PostgreSQL is unchanged.

@@ -1,6 +1,6 @@
 ## `Configuration.load` — a configuration whose driver package is not loaded fails at `load`, not at the first query (#1232)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1232 ; `src/Configuration.jl` (`load`, `_peek_driver`, `_require_driver_extension`), `src/Backend.jl` (`_DRIVER_EXTENSIONS`, `_driver_hint`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. `load` raises `MissingConfigurationError` where it used to succeed;

@@ -1,6 +1,6 @@
 ## A number function over a duration is refused on every engine (#1324)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1324 ; `src/querybuilder/functions.jl` (`_operand_domain`), `src/querybuilder/projection_types.jl` (`_check_operand_domain`, `_duration_math_refusal`), `src/querybuilder/engine_facts.jl` (`_duration_seconds_spelling`), `src/querybuilder/select_nodes.jl`, `src/Dialect.jl` (`_mysql_part_of_interval_refusal`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change. On SQLite, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power` and `Mod` over a `DurationField`, or over an expression that is a duration, used to build and return a number computed on the duration's `HH:MM:SS` text. They now raise `QueryBuildError` when the query is built. On PostgreSQL the same query used to fail at the server and now fails at build time. `Abs` over a duration was already refused on SQLite; it is now refused on PostgreSQL too, with a new message.

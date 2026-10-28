@@ -1,6 +1,6 @@
 ## Ordering or aggregating a duration CTE column uses its length on SQLite, not its text (#1285)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1285 ; `src/querybuilder/expression_render.jl` (`_is_bare_column`, `_interval_ms_candidate`), `src/querybuilder/build_select.jl` (`_orders_as_sqlite_interval`)
 - **Recorded**: 2026-10-16
 - **Severity**: behavior change, SQLite. Ordering by a CTE column that holds a duration can return the rows in another order, an aggregate over one can return another value, and a filter on such an aggregate's alias can return other rows. PostgreSQL renders the same SQL; one read type changes there (below).

@@ -1,6 +1,6 @@
 ## `ToChar` with a date in its format over a time is refused on every engine (#1336)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1336 ; `src/querybuilder/select_nodes.jl` (`_check_tochar_date_of_time`), `src/Dialect.jl` (`_tochar_reads_date`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. Expressions that built on PostgreSQL and SQLite now raise `QueryBuildError` when the query is built.

@@ -1,6 +1,6 @@
 ## A calendar or time-of-day part over a duration expression is refused on every engine (#1388)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1388 ; `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`, `_check_temporal_expression`, `_duration_part_refusal`), `src/Dialect.jl` (`_duration_calendar_refusal`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On PostgreSQL and SQLite, `Extract` with any part except `EPOCH` (a calendar part such as `year`, `month`, `quarter`, `dow`; a time-of-day part, `hour`, `minute`, `second`, `milliseconds`, `microseconds`; a `TIMEZONE` part), or `ToChar(…, "YYYY-MM")`, over a duration expression used to build. On SQLite a calendar part returned a value read from the duration as if it were a date, and a time-of-day part `NULL` for a duration over 24 hours or a negative one. On PostgreSQL a calendar part returned the interval's own fields (`0` for a year, `1` for a quarter, `"0000-00"`) or failed at the server, and a time-of-day part a component that depends on how the interval was formed. It now raises `QueryBuildError` when the query is built.

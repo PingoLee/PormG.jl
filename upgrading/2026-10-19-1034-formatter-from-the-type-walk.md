@@ -1,6 +1,6 @@
 ## A filter on an untyped `Case`, a window value or a condition checks its value as that type (#1034)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1034 (phase 3, step 4) ; `src/querybuilder/projection_types.jl` (`_expression_formatter`), `src/querybuilder/expression_kind.jl` (`_kind_formatter`)
 - **Recorded**: 2026-10-19
 - **Severity**: behavior change, both engines. A filter on such an alias can raise `InvalidValueError` where it built. `Sum`/`Avg` of a condition, an untyped number `Case` or a number window function used as a `When` condition, and `LPad`/`RPad` over one of them raise `QueryBuildError`. PostgreSQL binds the value as the column's text. `Max`/`Min` of a condition runs on PostgreSQL now, and reads back as a `Bool` on SQLite.

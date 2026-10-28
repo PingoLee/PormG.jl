@@ -1,6 +1,6 @@
 ## Julia 1.13 is the minimum: `julia = "1.12"` → `julia = "1.13"`
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: `Project.toml` (`[compat] julia`), `.github/workflows/CI.yml`
 - **Recorded**: 2026-10-20
 - **Severity**: breaking, for an environment on Julia 1.12 only. No call returns a different value.

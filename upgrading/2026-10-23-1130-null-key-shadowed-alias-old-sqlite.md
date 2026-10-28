@@ -1,6 +1,6 @@
 ## SQLite before 3.30: an alias a column also names places its NULLs by the projection (#1130)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1130 ; `src/querybuilder/build_select.jl` (`get_order_query`), `src/querybuilder/select_nodes.jl` (`_projection_null_key`)
 - **Recorded**: 2026-10-23
 - **Severity**: behavior change, SQLite before 3.30.0 only. An `order_by` on a projected name that is also a column of a table the query reads returns its NULLs where the placement says (last ascending, first descending), where it placed them by that column, with no error. One such ordering now raises `QueryBuildError` instead (below). PostgreSQL and SQLite 3.30.0 or later are unchanged.

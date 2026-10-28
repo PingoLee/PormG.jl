@@ -1,6 +1,6 @@
 ## `Configuration.register_connection` — outside a REPL the environment is `env=` or `PORMG_ENV`, and a resolver's refusal is raised (#1256)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1256 ; `src/Configuration.jl` (`register_connection`, `_registered_env`, `_resolve_lazily!`, `register_offline`)
 - **Recorded**: 2026-10-15
 - **Severity**: breaking. A `register_connection` with no `env=` and no `PORMG_ENV`, outside an

@@ -1,6 +1,6 @@
 ## A `Qor` arm or `__@isnull => true` across a reverse or ManyToMany relation joins `LEFT`, so it matches the parent with no child (#1367)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1367 ; `src/querybuilder/build_joins.jl` (`_promote_outer_joins!`), `src/querybuilder/build_filter.jl`, `src/querybuilder/filter_nodes.jl`
 - **Recorded**: 2026-10-26
 - **Severity**: bug fix that changes a value. Two filter shapes across a reverse relation over a `NOT NULL` foreign key, or across any ManyToMany relation, now return the parents that have no row across it, where they silently returned none. `delete()`, `update()` and `exists()` with those filters reach the same parents. A `select_for_update()` without `of` beside them now raises (see below).

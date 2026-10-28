@@ -1,6 +1,6 @@
 ## A duration literal compares and reads back as an interval (#1316)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1316 ; `src/querybuilder/field_resolution.jl` (`_infer_parameter_sql_type`), `src/querybuilder/expression_render.jl` (`_projected_interval_source`)
 - **Recorded**: 2026-10-21
 - **Severity**: behavior change, both engines. An ordering filter on a `Value(<duration>)` alias keeps the rows the durations' order keeps, where it kept the rows their text's order kept, with no error; on SQLite its equality compares the durations, not their text. On PostgreSQL a projected `Value(<duration>)`, and a `Case` whose branches are duration literals, read back as a `Dates.CompoundPeriod` where they read back as a `String`. On SQLite such a filter on a literal with a fraction of a millisecond raises `QueryBuildError` where it built.

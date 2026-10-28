@@ -1,6 +1,6 @@
 ## A many-to-many `add` that fails links none of its targets on PostgreSQL and MySQL (#1399)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1399 ; `src/querybuilder/many_to_many.jl` (`_m2m_add!`, `_m2m_in_one_transaction`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On PostgreSQL and MySQL, an `add` of several targets outside a transaction used to write each link in its own statement, committed on its own, so a target that failed raised and left the links before it written. It now raises and leaves none of them.

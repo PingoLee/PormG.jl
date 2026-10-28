@@ -1,6 +1,6 @@
 ## A conditional over text and a number is refused on every engine (#1327)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1327 ; `src/querybuilder/projection_types.jl` (`_temporal_mix`, `_temporal_mix_class`, `_declaration_lifts`), `src/querybuilder/functions.jl` (`_temporal_mix_refusal`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change. On SQLite, a `Coalesce`, `Greatest`, `Least`, `NullIf`, `Case`, or a `Lag`/`Lead` with a `default`, whose values include both text and a number used to build and return a value that depended on the engine. It now raises `QueryBuildError` when the query is built. On PostgreSQL the same query used to fail at the server and now fails at build time.

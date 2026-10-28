@@ -1,6 +1,6 @@
 ## A number function over a date, a time or a UUID is refused on every engine (#1387)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1387 ; `src/querybuilder/projection_types.jl` (`_check_operand_domain`, `_non_number_math_refusal`), `src/querybuilder/engine_facts.jl` (`_extracts_epoch_of`), `src/querybuilder/select_nodes.jl`
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On SQLite, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`, `Abs`, `Sum` and `Avg` over a `DateField`, a `DateTimeField`, a `TimeField` or a `UUIDField`, or over an expression that is one of those, used to build and return a number computed on the stored text, or `NULL`. They now raise `QueryBuildError` when the query is built. On PostgreSQL the same query used to fail at the server and now fails at build time.

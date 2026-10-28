@@ -1,6 +1,6 @@
 ## `Cast(x, "real")` and a `"real"` `output_field` are refused on SQLite, which has no single-precision float (#1215)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1215 ; `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_single_precision_cast`, `_cast_divergent_operand`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change. Expressions that built on SQLite now raise `QueryBuildError` when the query is built. PostgreSQL is unchanged.

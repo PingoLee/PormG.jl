@@ -1,6 +1,6 @@
 ## A duration `Subquery`, or a duration CTE column on the right, compares its length on SQLite, not its text (#1287)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1287 ; `src/querybuilder/expression_render.jl` (`_render_interval_operand`, `_render_interval_left`), `src/querybuilder/filter_nodes.jl`, `src/Dialect.jl` (`_sqlite_interval_text_ms`)
 - **Recorded**: 2026-10-19
 - **Severity**: behavior change, SQLite only. Comparing a `DurationField` with a `Subquery` or a CTE column that holds a duration, ordering by a duration `Subquery` alias, a filter on that alias, and `Greatest`/`Least`/`Coalesce` over a duration `Subquery` can return other rows, in another order, or another value, and bind milliseconds instead of text. A timestamp difference ordered against one builds where it was refused. PostgreSQL is unchanged.

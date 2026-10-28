@@ -1,6 +1,6 @@
 ## A value PormG cannot type, beside a date or a duration, is refused on SQLite and MySQL (#1310)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1310 ; `src/querybuilder/expression_render.jl` (`_checking_unnamed_temporal`), `src/querybuilder/expression_kind.jl` (`_unnamed_temporal_side`), `src/querybuilder/engine_facts.jl` (`_types_temporal_operands`), `src/querybuilder/filter_nodes.jl`, `src/querybuilder/projection_types.jl`
 - **Recorded**: 2026-10-21
 - **Severity**: behavior change, SQLite and MySQL. Arithmetic (`+`, `-`, `*`, `/`) or an ordering (`<`, `>`, `<=`, `>=`, `@range`) that built and returned a number computed on a date's or a duration's text, or rows chosen by comparing that text, now raises `QueryBuildError` when the query is built. PostgreSQL is unchanged.

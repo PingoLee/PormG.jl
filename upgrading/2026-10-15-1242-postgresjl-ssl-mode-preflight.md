@@ -1,6 +1,6 @@
 ## Postgres.jl driver: an unsupported `sslmode` or `gssencmode` is refused before connecting (#1242)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1242 ; `ext/PormGPostgresExt.jl` (`_checked_params`)
 - **Recorded**: 2026-10-15
 - **Severity**: behavior change, on the Postgres.jl driver only (`postgres_driver: Postgres`). The

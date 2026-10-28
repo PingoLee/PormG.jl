@@ -1,6 +1,6 @@
 ## A `When` condition on a projection alias checks and binds its value as a filter on the alias does (#1381)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1381 ; `src/querybuilder/filter_nodes.jl` (`_render_filter_oper`), `src/querybuilder/projection_types.jl` (`_bind_alias_value`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change, PostgreSQL and SQLite. A `When` condition on a projection alias with a value the alias's type refuses now raises `InvalidValueError` when the query is built, as `filter`/`Q` on the alias does; it was sent to the database. A valid value is bound as the alias's filter binds it, which changes the bound value in a few cases (below). MySQL is unreleased.

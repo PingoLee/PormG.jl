@@ -1,6 +1,6 @@
 ## A `Case` whose value is a date is the date side of date arithmetic (#1307)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1307 ; `src/querybuilder/expression_kind.jl` (`_render_side_kind`)
 - **Recorded**: 2026-10-20
 - **Severity**: behavior change, both engines. On SQLite a `Case` over dates shifted by a number returns the shifted date where it returned a number from the date's text, with no error. On SQLite the same `Case` plus a float, a text column or a `Sum` raises `QueryBuildError` where it returned a number. On PostgreSQL the same expression runs where the statement failed (`date + bigint`), and a `Case` over dates minus a date, or plus an interval, is typed. A filter on such an alias checks its value as a date or timestamp and raises `InvalidValueError` for one that is not, where it built.

@@ -1,6 +1,6 @@
 ## A cast to a time, timestamp, interval or binary type is typed as that type; SQLite refuses `bytea` (#1194)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1194 ; `src/querybuilder/projection_types.jl` (`_sql_type_field`), `src/Dialect.jl` (`sqlite_cast_sql`), `src/querybuilder/ctes.jl` (`_declared_type`)
 - **Recorded**: 2026-10-20
 - **Severity**: behavior change. On PostgreSQL, a pattern lookup or a `Concat` over such a cast raises where it built (and failed when the query ran), an equality value on its alias is checked as the type and can raise `InvalidValueError`, a CTE column declared one of these types builds where it raised, a timestamp cast plus a whole number is shifted by days where it failed when the query ran, and the value reads back through the type's parser (an interval as a `Dates.CompoundPeriod`, where the Postgres.jl driver gave a bare `Period` for a one-part interval). On SQLite, a cast to `bytea` raises `BackendCapabilityError` where it returned an integer, and a filter on a `blob` cast binds bytes where it bound text that never matched.

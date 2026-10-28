@@ -1,6 +1,6 @@
 ## `IDField(generated = false)` is a key no engine fills: SQLite and MySQL DDL change, and the write paths refuse to generate it (#1393)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1393 ; `src/models/fields.jl` (`_database_generates`), `src/Dialect.jl` (`field_to_column`), `src/migrations/column_spec.jl` (`_column_identity`, `_inspectdb_id_pk`), `src/migrations/introspection.jl` (`_sqlite_rowid_alias`), `src/querybuilder/execution_bulk.jl` (`allocate_primary_keys`)
 - **Recorded**: 2026-10-27
 - **Severity**: breaking. A model with an `IDField(generated = false)` key gets a planned migration on SQLite and MySQL, and some calls on it now raise.

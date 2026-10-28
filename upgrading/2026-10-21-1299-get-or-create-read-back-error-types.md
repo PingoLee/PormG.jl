@@ -1,6 +1,6 @@
 ## `get_or_create` raises `OperationalError` or `StatementError` when its row cannot be read back (#1299)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1299 ; `src/querybuilder/execution_write.jl` (`get_or_create`, the two read-back checks after the insert)
 - **Recorded**: 2026-10-21
 - **Severity**: behavior. The two read-back failures of `get_or_create` raised `QueryBuildError`, a `UsageError`. They now raise a `DatabaseError` subtype: `OperationalError` on PostgreSQL and `StatementError` on SQLite. A `catch QueryBuildError` or `catch UsageError` around `get_or_create` no longer matches them.

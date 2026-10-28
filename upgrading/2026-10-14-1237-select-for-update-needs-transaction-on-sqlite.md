@@ -1,6 +1,6 @@
 ## `select_for_update()` must run inside a transaction on SQLite too (#1237)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1237 ; `src/querybuilder/execution_read.jl` (`query`)
 - **Recorded**: 2026-10-14
 - **Severity**: behavior change. On SQLite, a locked read under autocommit now raises `QueryBuildError` where it ran. PostgreSQL is unchanged except for the message wording.

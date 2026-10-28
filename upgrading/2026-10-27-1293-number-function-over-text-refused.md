@@ -1,6 +1,6 @@
 ## A number function over text is refused on every engine (#1293)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1293 ; `src/querybuilder/projection_types.jl` (`_check_operand_domain`, `_text_math_refusal`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. On SQLite, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`, `Abs`, `Sum` and `Avg` over text used to build and compute on the text read as a number (`0` for text that is no number). They now raise `QueryBuildError` when the query is built. On PostgreSQL and MySQL the same query used to fail at the server, or compute the number the text spells, and now fails at build time.

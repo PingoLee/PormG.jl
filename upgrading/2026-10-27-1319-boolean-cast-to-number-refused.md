@@ -1,6 +1,6 @@
 ## A boolean cast to a float or a `numeric` is refused on SQLite, which cast the integer it stores (#1319)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1319 ; `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`)
 - **Recorded**: 2026-10-27
 - **Severity**: behavior change. Expressions that built on SQLite now raise `QueryBuildError` when the query is built. PostgreSQL is unchanged.

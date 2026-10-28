@@ -1,6 +1,6 @@
 ## A conditional over a number and a date, a time, an interval or a UUID is refused on every engine (#1321)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1321 ; `src/querybuilder/projection_types.jl` (`_temporal_mix_class`, `_is_mix`, `_declaration_lifts`), `src/querybuilder/functions.jl` (`_temporal_mix_refusal`)
 - **Recorded**: 2026-10-26
 - **Severity**: behavior change. On SQLite, a `Coalesce`, `Greatest`, `Least`, `NullIf`, `Case`, or a `Lag`/`Lead` with a `default`, whose values include both a number and a date, a timestamp, a time, an interval or a UUID used to build. So did one whose values include a UUID and a date, a timestamp, a time or an interval. Each now raises `QueryBuildError` when the query is built, in a projection, a filter or an `update`. On PostgreSQL the same query used to fail at the server and now fails at build time.

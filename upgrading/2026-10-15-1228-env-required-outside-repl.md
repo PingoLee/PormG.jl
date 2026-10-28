@@ -1,6 +1,6 @@
 ## `Configuration.load` / `load_many` — outside a REPL the environment is `env=` or `PORMG_ENV`; a blank `PORMG_ENV` is unset (#1228)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1228 ; `src/Configuration.jl` (`_effective_env`, `_pormg_env`, `load`, `Settings`, `register_connection`)
 - **Recorded**: 2026-10-15
 - **Severity**: breaking. A `load` with no `env=` and no `PORMG_ENV`, outside an interactive

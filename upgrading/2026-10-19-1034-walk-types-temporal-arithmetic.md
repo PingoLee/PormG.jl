@@ -1,6 +1,6 @@
 ## Date and duration arithmetic has a type outside its own render: filters, `Coalesce` and division checks see it (#1034)
 
-- **Version**: Unreleased
+- **Version**: 0.9.0
 - **PormG ref**: #1034 (phase 3, steps 5a and 5c) ; `src/querybuilder/expression_kind.jl` (`_temporal_arith_kind`), `src/querybuilder/projection_types.jl` (`_textless_temporal`)
 - **Recorded**: 2026-10-19
 - **Severity**: behavior change, both engines. A filter on an alias of date or duration arithmetic checks its value and can raise `InvalidValueError` where it built. A `Coalesce`/`Greatest`/`Least` that mixes shifted timestamps with dates raises `QueryBuildError` where it built. A pattern lookup on a duration alias raises `FilterError`. A `Concat` over a `Case`, `Lag`, `NullIf` or `Min` of such arithmetic raises `QueryBuildError` where it built, and on SQLite so does a cast to a number of a duration from arithmetic, or of `Mod` over one. A `Sum` of day counts, divided, builds where PostgreSQL refused it. Some values read back as a `Date` or `DateTime` instead of text on SQLite, and an `Avg` of day counts as a `Float64` instead of a `Decimal` on PostgreSQL.

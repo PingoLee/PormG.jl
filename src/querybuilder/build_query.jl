@@ -76,6 +76,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
         continue
       end
+      _require_outer_join(instruc.connection, value.how)
 
       # #985: under the row's join scope, so every column the conditions render is checked against the
       # rows this ON clause may name (`_record_join_column`).
@@ -109,6 +110,21 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       push!(instruc.join, """ $(value.how) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
     end
   end
+  return nothing
+end
+
+# #1422: a RIGHT or FULL join is a capability row, refused before any SQL on a backend that lacks it
+# (MySQL has no `FULL JOIN`; SQLite has neither before 3.39.0). This is the one place every join row
+# with a join type is emitted (`on()`, `cjoin`, `cjoin_on`, a CTE's `join_type`, a `ForeignKey(how =
+# …)` path join), so one check covers them all; it names the join type, which is what every one of
+# them was given. A mutation that carries the join rewrites it for its EXISTS fence, but its key
+# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does.
+# Two update shapes never printed the join type and so used to run on a backend without it: a keyless
+# model's constant-SET update (the fence alone, INNER/LEFT) and an update whose SET reads a joined
+# column (`UPDATE … FROM`, an inner join). They are refused here too (upgrading/, #1422).
+function _require_outer_join(conn, how::AbstractString)::Nothing
+  how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
+  how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")
   return nothing
 end
 

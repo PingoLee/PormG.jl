@@ -3664,8 +3664,9 @@ function _run_locked_lifecycle(connection::PormGSQLite, settings::PormGSettings,
 end
 
 # MySQL serializes on `GET_LOCK`, the advisory lock `with_advisory_lock` takes there (#1269), under the
-# same key: a MySQL named lock is server-wide, so two databases on one server share it, which only
-# serializes migrations that could have run side by side.
+# same key. A MySQL named lock is server-wide, so the lock name hashes the database in with the key
+# (`AdvisoryLock.MYSQL_LOCK_NAME_EXPR`): two databases on one server migrate independently, as on
+# PostgreSQL, whose advisory lock is per database.
 function _run_locked_lifecycle(connection::PormGMySQL, settings::PormGSettings,
                                ordered_statements, all_sql, version, name, checksum, has_destructive;
                                timeouts::_MigrationTimeouts = _migration_timeouts(),

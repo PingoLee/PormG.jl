@@ -1375,37 +1375,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast text to bytea | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
   ("Cast text to bytea | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
   ("Cast text to bytea | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to bytea | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
   ("Cast text to bytea | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
   ("Cast text to bytea | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to bytea | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
   ("Cast text to bytea | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
   ("Cast text to blob | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type name"),
   ("Cast text to blob | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type name"),
   ("Cast text to blob | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type name"),
   ("Coalesce declared timestamp | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | alone", :sqlite) =>

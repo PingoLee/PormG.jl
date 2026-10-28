@@ -995,7 +995,9 @@ end
 # A network type is a feature MySQL lacks (`:network_types`), and an array too (`:arrays`). Every other
 # name — a boolean (MySQL casts to none), an interval (a duration is a BIGINT of microseconds there,
 # which no cast target names), `bytea` (MySQL's `BINARY` cast reads back as text), a zoned time, a
-# user-defined type — is not rendered yet, refused before any SQL rather than passed through to the server.
+# user-defined type — has no CAST target that holds its meaning, so it is refused before any SQL rather
+# than passed through to the server; the bytea refusal is permanent (#1423). Any other unmapped name
+# (`double`, `year`, `tsvector`, …) gets the same refusal: PormG passes no type name through unmapped.
 const _MYSQL_CAST_TARGETS = Dict{String,String}(
   "text" => "CHAR", "varchar" => "CHAR", "character varying" => "CHAR", "char" => "CHAR", "character" => "CHAR",
   "smallint" => "SIGNED", "int2" => "SIGNED", "integer" => "SIGNED", "int" => "SIGNED", "int4" => "SIGNED",
@@ -1026,8 +1028,8 @@ function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::Abstract
   target == "DOUBLE" && key == "float" && !isempty(size) && (target = "FLOAT")
   if target === nothing || (!isempty(size) && !(target in _MYSQL_SIZED_CAST_TARGETS))
     throw(UnsupportedConnectionError(
-      "$(context): a cast to $(repr(name * suffix)) is not rendered for MySQL yet: MySQL's CAST has no " *
-      "target that holds its meaning, and PormG passes no type name through unmapped (#1130)."))
+      "$(context): a cast to $(repr(name * suffix)) is not rendered for MySQL: PormG maps it to none of " *
+      "MySQL's CAST targets, and passes no type name through unmapped (#1130)."))
   end
   # #1110: a sized `numeric(p, s)` is computed at `DECIMAL(65, s)`, MySQL's widest, and the read path
   # applies `p` (`_unapplied_decimal_width`, `_parse_mysql_declared_decimal`): `DECIMAL(p, s)` would round

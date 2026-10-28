@@ -62,8 +62,7 @@
 # cannot see. It is a measurement only, and not a defect count: a `drops` entry (an answer in one
 # context, none in another) includes absences that are by design. The read-back covers the flagged set.
 # `test/integration/test_expression_kind_readback.jl` projects every disagreeing cell on the seeded
-# F1 fixture and records what it actually reads back as, on PostgreSQL and SQLite. The MySQL column
-# (#1130 phase 2b) has no read-back until phase 4 can seed the F1 fixture there.
+# F1 fixture and records what it actually reads back as, on PostgreSQL, SQLite and MySQL (#1130).
 #
 # Regenerating: `PORMG_EKM_RECORD=1 julia --project=test/integration test/unit/test_expression_kind_matrix.jl`
 # rewrites both fixtures from the current code. Only do that for a change you intend, and read the diff:

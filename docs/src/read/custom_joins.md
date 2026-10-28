@@ -752,7 +752,7 @@ query.cjoin(main_join; filters=[], field=nothing, join_type="LEFT")
 | `main_join` | `Pair{String, String}` | Field name => Target model name (e.g., `"result" => "Result"`) |
 | `filters` | `Vector` | Optional conditions for the ON clause. Supports `Pair`, `Q()`, `Qor()`, operator suffixes, or F expressions. Plain field names in filters are automatically prefixed with the join path. |
 | `field` | `PormGField` | Optional custom field definition |
-| `join_type` | `String` | Join type: `"LEFT"`, `"INNER"`, `"RIGHT"`, `"FULL"` (default: `"LEFT"`). `"CROSS"` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above |
+| `join_type` | `String` | Join type: `"LEFT"`, `"INNER"`, `"RIGHT"`, `"FULL"` (default: `"LEFT"`). `"CROSS"` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above. `"RIGHT"` and `"FULL"` are capability rows (`right_joins`, `full_joins`): MySQL has no `FULL JOIN`, and SQLite has neither before 3.39.0 ([Backends](../backends.md)) |
 
 ### Filter Types in `.cjoin()`
 

@@ -374,6 +374,78 @@ end
   @test PormG._supports(MrMockPostgres(), :no_key_locks) && !PormG._supports(MrMockMySQL(), :no_key_locks)
 end
 
+# A SQLite library older than 3.39.0, the release that added RIGHT and FULL joins.
+struct MrMockSQLite338 <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::MrMockSQLite338) = 3038000
+PormG.config["mr_sl338"] = PormG.Configuration.Settings(connections = MrMockSQLite338(), change_data = true,
+                                                        db_def_folder = "mr_sl338")
+module MrSL338Models
+import PormG
+import PormG.Models
+Race = Models.Model(raceid = Models.IDField(), year = Models.IntegerField())
+Result = Models.Model(resultid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))
+PormG.Models.set_models(@__MODULE__, "mr_sl338")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL joins: FULL refused, RIGHT rendered (#1422)
+# MySQL has no FULL JOIN (#1271), so `join_type = "FULL"` raises BackendCapabilityError (`:full_joins`)
+# before any SQL, from every place a join type is written: `on()`, `cjoin_on` and a CTE's
+# `join_type`. MySQL has RIGHT JOIN. SQLite has both from 3.39.0 (version rows). Expected: the
+# refusal naming the call, the feature and MySQL; `RIGHT JOIN` rendered on MySQL; both refused on a
+# SQLite 3.38 library and rendered on 3.45. Before the fix MySQL rendered ` FULL JOIN ` and the server
+# rejected it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL joins: FULL refused, RIGHT rendered (#1422)" begin
+  on_join(M, how) = begin
+    q = M.Result.objects
+    q.on("raceid", join_type = how)
+    q.values("resultid", "raceid__year")
+    q
+  end
+  cjoin(M, how) = begin
+    q = M.Result.objects
+    q.cjoin_on("Race", alias = "r", join_type = how, on = [Joined("r", "raceid") == F("raceid")])
+    q.values("resultid", Joined("r", "year"))
+    q
+  end
+  cjoin_link(M, how) = begin
+    q = M.Result.objects
+    q.cjoin("raceid" => "Race", warn = false, join_type = how, filters = ["year" => 1990])
+    q.values("resultid")
+    q
+  end
+  cte(M, how) = begin
+    q = M.Result.objects
+    q.with("best" => M.Result.objects.values("raceid", "top" => Max("resultid")),
+           join_field = "raceid" => "raceid", join_type = how)
+    q.values("resultid", CTE("best", "top"))
+    q
+  end
+  err_of(f) = try; f(); nothing; catch e; e; end
+  for (label, shape) in (("on()", on_join), ("cjoin_on", cjoin), ("cjoin", cjoin_link), ("with(...)", cte))
+    err = err_of(() -> _mr_inspect(shape(_MR_MY, "FULL")))
+    @test err isa PormG.BackendCapabilityError
+    msg = err isa Exception ? sprint(showerror, err) : ""
+    @test occursin("join_type = \"FULL\" needs a `FULL OUTER JOIN`, which", msg)
+    @test occursin("which MySQL does not support (supported on PostgreSQL, SQLite)", msg)
+    @test occursin(" RIGHT JOIN `", _mr_inspect(shape(_MR_MY, "RIGHT"))[:sql_text])
+    # The other engines render both.
+    @test occursin(" FULL JOIN \"", _mr_inspect(shape(_MR_PG, "FULL"))[:sql_text])
+    @test occursin(" FULL JOIN \"", _mr_inspect(shape(_MR_SL, "FULL"))[:sql_text])
+  end
+  # SQLite before 3.39.0 has neither: the version row names the release and the library at hand.
+  for how in ("RIGHT", "FULL")
+    err = err_of(() -> _mr_inspect(on_join(MrSL338Models, how)))
+    @test err isa PormG.BackendCapabilityError
+    @test occursin("join_type = \"$(how)\" needs SQLite 3.39.0 or newer", sprint(showerror, err)) &&
+          occursin("the SQLite library PormG loads is 3.38.0", sprint(showerror, err))
+  end
+  @test PormG._supports(MrMockMySQL(), :right_joins) && !PormG._supports(MrMockMySQL(), :full_joins)
+  @test PormG._supports(MrMockSQLite(), :full_joins) && !PormG._supports(MrMockSQLite338(), :right_joins)
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MySQL aggregates: a sum of integers is turned back into the integer it means
 # MySQL's SUM over an integer column is a DECIMAL (`SUM(INT)` and `SUM(BIGINT)` alike); the sum of
@@ -711,7 +783,7 @@ end
   for x in ("boolean", "bool", "interval", "bytea", "BLOB", "time with time zone", "mood", "integer(4)", "uuid(3)")
     err = try; t(x); nothing; catch e; e; end
     @test (x, err isa PormG.UnsupportedConnectionError) == (x, true)
-    @test occursin("is not rendered for MySQL yet", sprint(showerror, err))
+    @test occursin("is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets", sprint(showerror, err))
   end
   # The rendered cast, through the public `Cast`.
   sel(f) = _mr_inspect(_MR_MY.Result.objects.values("c" => f))[:sql_text]

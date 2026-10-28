@@ -76,8 +76,9 @@ const _UOuterRef = PormG.QueryBuilder.OuterRef
 
 # The statement `update` builds for `pairs`, on `conn`, filtered by `filters`; `joined` adds the
 # `cjoin_on` copy of the driver as "d".
-function _use_update(pairs::Pair...; conn, joined::Bool = false, filters = ("resultid" => 1,))
+function _use_update(pairs::Pair...; conn, joined::Bool = false, filters = ("resultid" => 1,), inner = nothing)
   q = USE.Use_result.objects
+  inner === nothing || q.on(inner, join_type = "INNER")   # a nullable path a joined SET reads (#1430)
   q.filter(filters...)
   joined && q.cjoin_on("Use_driver", alias = "d", on = [_UJoined("d", "driverid") == _UF("driverid")])
   for (k, v) in pairs
@@ -439,6 +440,8 @@ end
   # key-selection shape and leave "Tb_1" out of scope; the reads are recorded on the instruction a
   # column resolves on, which for an `OuterRef` is the outer one. The second filter set joins "Tb_1" in
   # the WHERE first, so the `OuterRef` adds no join and only that record can say the SET reads it.
+  # `driverid` is nullable, so its path is declared INNER: UPDATE … FROM refuses a LEFT join (#1430).
+  # That declares the join before the SET too, so the `OuterRef` reuses it in both filter sets.
   for (conn, engine) in _USE_ENGINES, filters in (("resultid" => 1,), ("resultid" => 1, "driverid__code" => "HAM"))
     @testset "$engine $(length(filters)) filter(s)" begin
       Q(s) = _use_q(conn, s)
@@ -446,7 +449,7 @@ end
       s.filter("code" => _UOuterRef("driverid__code"))
       s.values("number")
       s.limit(1)
-      sql, params = _use_update("grid" => _USubquery(s); conn = conn, filters = filters)
+      sql, params = _use_update("grid" => _USubquery(s); conn = conn, filters = filters, inner = "driverid")
       @test occursin("WHERE $(Q("R1")).$(Q("code")) = $(Q("Tb_1")).$(Q("code"))", sql)
       @test occursin(conn === _USE_MY ? "UPDATE `use_result` AS `Tb`, `use_driver` AS `Tb_1` SET" :
                                         "FROM \"use_driver\" AS \"Tb_1\" WHERE", sql)
@@ -462,11 +465,12 @@ end
   # UPDATE), its CASE reading `"Tb_1"."code"`. Why: the WHERE memoized that path's column, and a reused
   # memo returns its text without rendering the column again, so its join would go unrecorded and the
   # key-selection shape would leave "Tb_1" out of scope. SET renders it afresh, as an ON clause does (#985).
+  # `driverid` is nullable, so its path is declared INNER: UPDATE … FROM refuses a LEFT join (#1430).
   for (conn, engine) in _USE_ENGINES
     @testset "$engine" begin
       Q(s) = _use_q(conn, s)
       sql, params = _use_update("grid" => _UCase([_UWhen("driverid__code" => "HAM", then = 1)], default = 0);
-                                conn = conn, filters = ("driverid__code" => "HAM",))
+                                conn = conn, filters = ("driverid__code" => "HAM",), inner = "driverid")
       @test occursin("CASE WHEN $(Q("Tb_1")).$(Q("code")) = ", sql)
       @test occursin(conn === _USE_MY ? "UPDATE `use_result` AS `Tb`, `use_driver` AS `Tb_1` SET" :
                                         "FROM \"use_driver\" AS \"Tb_1\" WHERE", sql)

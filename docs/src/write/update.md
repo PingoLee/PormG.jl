@@ -363,6 +363,37 @@ from or one a filter added
 `Exists(...)` filter instead. An `update()` that sets literal values is not affected: it selects its
 rows through the primary key, where a repeated row cannot change which rows are updated.
 
+#### Every join in it is `INNER`
+
+`UPDATE … FROM` joins in its `WHERE` clause, so every join in the statement acts as an `INNER` join. A
+`LEFT`, `RIGHT` or `FULL` join would skip the rows it was declared to keep. So an `update()` that sets a
+column from a joined table raises `QueryBuildError` when any path join in it is not `INNER`, whether
+`SET` reads that join or a filter added it
+([#1430](https://github.com/PingoLee/PormG.jl/issues/1430)). A path through a nullable `ForeignKey`
+is joined `LEFT`, so this covers the common case. Before, such an `update()` ran and skipped every row
+whose key matched nothing, on every engine.
+
+Say which rows you mean. Suppose a driver's `teamid` is a nullable key, and each result copies its
+driver's team name:
+
+```julia
+# ✗ raises QueryBuildError: the path through the nullable `teamid` is a LEFT join
+M.Result.objects.filter("raceid" => 18).update("code" => F("driverid__teamid__name"))
+
+# ✓ update only the results whose driver has a team: declare the path INNER
+q = M.Result.objects
+q.on("driverid__teamid", join_type = "INNER")
+q.filter("raceid" => 18)
+q.update("code" => F("driverid__teamid__name"))
+
+# ✓ update every result, writing NULL where the driver has no team: a correlated Subquery
+team_name = Subquery(M.Driver.objects.filter("driverid" => OuterRef("driverid")).values("teamid__name"))
+M.Result.objects.filter("raceid" => 18).update("code" => team_name)
+```
+
+The `Subquery` spelling is Django's (`update()` there refuses joined references outright). It reads
+one row per updated row, so it is meant for a to-one path.
+
 ### Setting a column from a `cjoin_on` copy
 
 A [`cjoin_on`](../read/custom_joins.md) join can supply the new value too: pass `Joined(alias, column)`
@@ -391,10 +422,9 @@ The statement joins in its `WHERE` clause, which only means what the `cjoin_on` 
 conditions. PormG checks both, for **every** `cjoin_on` in the query, and raises `QueryBuildError`
 when either fails:
 
-- **The join is `INNER`** (the default), and so is every relation join in the statement. A `LEFT`,
-  `RIGHT` or `FULL` join would act as an inner one and skip the rows it was declared to keep. A
-  nullable foreign key is joined `LEFT`, so a path through one, named in the `ON` clause or anywhere
-  else in the query, is refused too.
+- **The join is `INNER`** (the default), and so is every relation join in the statement, as for any
+  `UPDATE … FROM` ([above](#Every-join-in-it-is-INNER)). A `LEFT`, `RIGHT` or `FULL` join would act
+  as an inner one and skip the rows it was declared to keep.
 - **The join is to-one**: its `ON` clause pins the target's primary key or a unique column to one value
   per row (the rule is in [Custom Joins](../read/custom_joins.md), under *When PormG treats a
   `cjoin_on` join as to-many*).

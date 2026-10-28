@@ -986,18 +986,23 @@ end
 # and the caller prints all of it before `_where` — SET, ON, WHERE: `_BUCKET_ORDER`'s order (#174).
 function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
                                   rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
-  has_cjoin_on = any(r -> r isa AnchorlessJoin, row_join)
   for row in row_join
-    # #174: a LEFT path join turns inner here too — its anchor lands in WHERE — and a `cjoin_on` ON
-    # clause may lean on its NULL row (`Qor(…, "fk__col__@isnull" => true)`), which then matches
-    # nothing: fewer rows updated, silently. With a `cjoin_on` in the statement, refused. (The same
-    # flattening without one predates #174 and stays as it was.)
-    if has_cjoin_on && row isa ModelJoin && row.how != "INNER"
+    # #1430: a path join's anchor lands in WHERE, so a LEFT, RIGHT or FULL join acts as an INNER one on
+    # every engine: a row with no match is not updated, where the join it was declared as keeps it
+    # with the joined column read as NULL. A path through a nullable ForeignKey is LEFT by default
+    # (`_determine_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
+    # is NULL, silently. A filter's join is flattened the same way (`"fk__col__@isnull" => true` then
+    # matches nothing), so the rule covers every path join in the statement, as #174 did beside a
+    # `cjoin_on`. Refused rather than rendered: the caller names which of the two meanings they want.
+    if row isa ModelJoin && row.how != "INNER"
       throw(QueryBuildError(
         "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into a correlated " *
-        "UPDATE ... FROM beside a cjoin_on: that statement joins in its WHERE clause, so it would act as an " *
-        "INNER join and drop the rows it was declared to keep, which a cjoin_on ON clause may match on. " *
-        "Scope the mutation with a filter instead (#174)."))
+        "UPDATE ... FROM (setting a column from a joined table): that statement joins in its WHERE clause, " *
+        "so it would act as an INNER join and skip the rows with no match instead of keeping them. " *
+        (row.how == "LEFT" ? "A path through a nullable ForeignKey is joined LEFT. " : "") *
+        "To update only the rows with a match, declare the " *
+        "path with on(\"<path>\", join_type = \"INNER\"); to write NULL where there is none, set the column " *
+        "from Subquery(<Model>.objects.filter(\"<pk>\" => OuterRef(\"<fk>\")).values(\"<column>\")) (#1430, #174)."))
     end
     # #1002: the same rule for a path join. A reverse, ManyToMany or non-unique-link join in the FROM
     # list matches several rows per updated row, so SET reads an arbitrary one — `build()` lets it

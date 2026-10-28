@@ -2052,6 +2052,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Alignment Verification - UPDATE joined SET keeps FROM path" begin
     q = M.Just_a_test_deletion.objects
+    q.on("test_result", join_type = "INNER")   # `test_result` is nullable: a LEFT join is refused here (#1430)
     q.filter("id" => 1)
 
     insp = q.update("name" => F("test_result__driverid__forename"), show_query=:inspection)

@@ -981,8 +981,11 @@ M.Result.objects.filter(
 ).update("points" => F("points") + 10)
 ```
 
-!!! warning
-    You can **filter** by joined fields during an update, but you generally cannot **set** a column using a value from a joined table (e.g., `update("col" => F("joined__col"))`). Stick to expressions involving columns from the table being updated for maximum cross-database compatibility.
+!!! note
+    An update can also **set** a column from a joined table (`update("col" => F("fk__col"))`). It renders
+    `UPDATE … FROM`, which joins as an `INNER` join, so a path through a nullable key raises
+    `QueryBuildError` until you say whether the rows with no match are skipped or written `NULL` — see
+    [Updating Records](../write/update.md#Every-join-in-it-is-INNER).
 
 ---
 

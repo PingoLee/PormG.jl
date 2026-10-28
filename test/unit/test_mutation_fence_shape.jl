@@ -489,6 +489,7 @@ end
 @testset "an update whose SET reads a join keeps UPDATE … FROM (#765 control)" begin
   for (backend, conn, kind) in _MF_BACKENDS
     q = MF.Mf_task.objects
+    q.on("run", join_type = "INNER")   # `run` is nullable: a LEFT join is refused here (#1430)
     q.filter("id" => 3)
     insp = _mf_update(q, "name" => F("run__status"); conn = conn)
     @test occursin("FROM \"mf_run\" AS \"Tb_1\"", insp[:sql_text])

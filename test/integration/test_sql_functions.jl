@@ -2308,6 +2308,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cast a number to a date: refused on SQLite and MySQL, rejected by PostgreSQL (#1417)
+# A number has no calendar date, so PostgreSQL rejects the cast when the query runs. SQLite's `date()`
+# read the number as a Julian day (`date(5)` is `-4713-11-29`) and MySQL reads its digits as a date,
+# silent different answers, so both refuse the cast when the query is built. The remedy the message
+# names, days added to a date, builds on every engine. Expected SQL, PostgreSQL: ("Tb"."grid")::date,
+# which the server rejects with `cannot cast type integer to date`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1417: a number cast to a date is refused on SQLite and MySQL and rejected by PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false, mysql = true)
+    refusal(f) = try f(); nothing catch e; e end
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "x" => expr); q |> DataFrame)
+    for (expr, pg_type) in ((Cast("grid", "date"), "integer"), (Cast("points", PormG.Models.DateField()), "double precision"))
+        e = refusal(proj(expr))
+        if departs[engine]
+            @test e isa PormG.QueryBuildError && occursin("#1417", sprint(showerror, e))
+        else
+            # Built, and the server's own error when it runs: the meaning, not a PormG refusal.
+            @test e !== nothing && !(e isa PormG.QueryBuildError)
+            @test occursin("cannot cast type $(pg_type) to date", sprint(showerror, e))
+        end
+    end
+    # The remedy: race 2 is 2009-04-05 in the F1 fixture, so a day later is the 6th.
+    df = (q = M.Race.objects; q.filter("raceid" => 2); q.values("x" => F("date") + Day(1)); q |> DataFrame)
+    @test startswith(string(only(df.x)), "2009-04-06")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A declared Case's literal default beside a typed branch (#1222)
 # The `output_field` casts the CASE; the default used to bind as that type too, so PostgreSQL saw
 # `THEN boolean ELSE $2::text` and rejected the query when it ran. It binds as the branches' type

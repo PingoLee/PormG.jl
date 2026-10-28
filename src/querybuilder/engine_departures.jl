@@ -26,7 +26,7 @@
 # decision nobody made; `test/unit/test_meaning_departures.jl` fails on it, so a new backend (#1130)
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
-# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
+# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325, #1417), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
@@ -98,6 +98,17 @@ const _MEANING_DEPARTURES = (
    computes = (PormGSQLite => _ -> "`2000-01-01`, the date it gives a time of day",
                PormGMySQL => _ -> "today's date, which changes every day"),
    fix = (_, _) -> "Take the date from a date or a timestamp column, or project the time itself."),
+  # #1417: a number has no date either, so its cast to one is an error: PostgreSQL has no
+  # `integer::date`, `float8::date` or `numeric::date`. SQLite's `date()` reads a number as a Julian
+  # day (measured on 3.54.0: `date(5)` is `-4713-11-29`, `date(5.5)` `-4713-11-30`, `date(2455000)`
+  # `2009-06-17`, `date(20090329)` NULL). MySQL reads the digits as a date, `YYYYMMDD` or `YYMMDD`,
+  # and NULL where they spell none: its documented number-to-date rule, not measured here (no 8.4
+  # server reachable when this row was written). Each answers silently, so both depart.
+  (targets = (:date,), kinds = (:integer, :float, :decimal), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1417",
+   meaning = _ -> "an error, since a number has no calendar date",
+   computes = (PormGSQLite => _ -> "the Julian day it counts (`5` is `-4713-11-29`)",
+               PormGMySQL => _ -> "the date its digits spell (`20090329` is `2009-03-29`), or NULL"),
+   fix = (_, _) -> "A number places a date only from another one: add days to a date, \e[32mF(\"date\") + Day(1)\e[0m, or build the Date in Julia and bind it."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite. MySQL's
   # `DECIMAL(p, s)` rounds a decimal, a double and text alike (measured: `1.235` → `1.24`).

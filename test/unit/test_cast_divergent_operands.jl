@@ -1044,6 +1044,46 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1417: a number cast to a date is refused on SQLite and MySQL
+# MEANING: a number has no calendar date, so the cast is an error: PostgreSQL has no `integer::date`,
+# `float8::date` or `numeric::date`, and rejects the query when it runs. SQLite's `date()` reads the
+# number as a Julian day (`date(5)` is `-4713-11-29`, measured on 3.54.0); MySQL reads its digits as a
+# date (`20090329` is `2009-03-29`). An integer, a float and a decimal column, a zero-scale decimal,
+# a literal of each, a number function, an aggregate and arithmetic, and the `output_field` sites. A
+# date cast to a date and a number cast to text build on every engine.
+# Expected SQL, PostgreSQL: ("Tb"."number")::date
+# Why: before #1417 SQLite answered a day in 4713 BC for a car number, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1417: a number cast to a date is refused on SQLite and MySQL" begin
+  meaning = "a number has no calendar date"
+  for expr in (Fn.Cast("number", "date"), Fn.Cast("number", Models.DateField()), Fn.Cast("points", "date"),
+               Fn.Cast("price", "date"), Fn.Cast("grid", "date"), Fn.Cast(Fn.Value(5), "date"),
+               Fn.Cast(Fn.Value(5.5), "date"), Fn.Cast(Fn.Floor("points"), "date"), Fn.Cast(Fn.Sum("number"), "date"),
+               Fn.Cast(_CF("number") + 1, "date"), Fn.Greatest("number", "number"; output_field = "date"),
+               Fn.Case(Fn.When("number" => 1, then = _CF("points")), output_field = "date"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1417", named = meaning)
+    my = _ccd_refusal(expr; conn = _CCD_MY)
+    msg = my === nothing ? "" : _ccd_msg(my)
+    @test my isa QueryBuildError
+    @test occursin("so PormG refuses it on MySQL (#1417)", msg) && occursin(meaning, msg)
+    @test !occursin("SQLite", msg) && !occursin("PostgreSQL", msg)
+  end
+  @test occursin("(\"Tb\".\"number\")::date as \"x\"", _ccd_render(Fn.Cast("number", "date"); conn = _CCD_PG))
+  # What each engine computes instead, named for the engine at hand; a literal is named by its type.
+  sl = _ccd_msg(_ccd_refusal(Fn.Cast("number", "date"); conn = _CCD_SL))
+  @test occursin("SQLite computes the Julian day it counts", sl) && occursin("the integer `number`", sl)
+  @test occursin("MySQL computes the date its digits spell", _ccd_msg(_ccd_refusal(Fn.Cast("number", "date"); conn = _CCD_MY)))
+  @test occursin("an Int64 literal", _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Value(5), "date"); conn = _CCD_SL)))
+  @test occursin("F(\"date\") + Day(1)", sl)
+  # A date has a date and a number has a text: both build on every engine, as does a number cast
+  # to a number.
+  for expr in (Fn.Cast("born", "date"), Fn.Cast("number", "text"), Fn.Cast("points", "text"), Fn.Cast("number", "float8"))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1167 §2.3: a whole number cast to a numeric stays whole under a further cast
 # MEANING: `Cast(x, "numeric")`, scaled or not, keeps a whole number whole on every engine (`3::numeric`
 # is `3`, `CAST(3 AS NUMERIC(10,2))` too), so a further cast to an integer or a scale has nothing to

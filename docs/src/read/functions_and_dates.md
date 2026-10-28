@@ -1089,8 +1089,12 @@ What each row covers:
 - **a date**: `DateField()` and `"date"`, and the same `output_field`. A duration (a `DurationField`,
   its `Sum`, interval arithmetic, a duration literal) and a time of day (a `TimeField`, `Max` of one, a
   `Time` literal) have no calendar date, so their cast is refused on SQLite and MySQL (#1325). A
-  duration places a date only from another one: `F("date") + F("fastestlaptime")`. A date and a
-  timestamp cast to a date build on every engine;
+  duration places a date only from another one: `F("date") + F("fastestlaptime")`. Nor has a number
+  (an integer, a float or a decimal: a column, a literal, `Floor`, `Sum`, arithmetic): its cast is
+  refused on SQLite, which reads it as a Julian day (`date(5)` is `-4713-11-29`), and on MySQL,
+  which reads its digits as a date (#1417). PostgreSQL has no such cast. A number of days places a
+  date from another one: `F("date") + Day(1)`. A date and a timestamp cast to a date build on every
+  engine;
 - **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as

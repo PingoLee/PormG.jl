@@ -33,8 +33,8 @@ The refusal says why on every engine and names the number you may mean, applied 
 - the seconds, `Extract(d, "epoch")`, only where the engine's `EPOCH` reads that kind: a date or a
   timestamp on PostgreSQL and MySQL, a time on PostgreSQL. SQLite has no `EPOCH` part.
 
-A UUID holds no number, and the message says so. Text and a JSON key lookup keep their own rules
-(#1061, #1279), and so does a boolean (#1386). An operand PormG cannot type is let through, as before.
+A UUID holds no number, and the message says so. Text is refused by its own rule under every number
+function (#1293), a JSON key lookup keeps its own (#1061, #1279), and so does a boolean (#1386). An operand PormG cannot type is let through, as before.
 MySQL (unreleased) refuses the same shapes.
 
 ### Who this affects

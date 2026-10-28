@@ -2495,6 +2495,14 @@ end
     is_1061(e) = e isa PormG.QueryBuildError && occursin("#1061", sprint(showerror, e))
     proj(m, expr) = () -> (q = m.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
     @test is_1061(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Round("driverref", 2)); q |> DataFrame)))
+    # #1293: text under any number function, `Round(x)` included, is refused before the query runs;
+    # SQLite read `'hamilton'` as 0. A cast that says it holds numbers builds and reads them.
+    for expr in (Round("driverref"), Floor("driverref"), Sum("driverref"))
+        err = refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => expr); q |> DataFrame))
+        @test err isa PormG.QueryBuildError && occursin("(#1293)", sprint(showerror, err))
+    end
+    df = (q = M.Result.objects; q.filter("resultid" => 1); q.values("x" => Floor(Cast("positiontext", PormG.Models.FloatField()))); q |> DataFrame)
+    @test only(df.x) == 1
     tens() = (q = M.Driver.objects; q.filter("number__@isnull" => false); q.values("number", "x" => Round("number", -1)); q |> DataFrame)
     if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite's ROUND has no negative precision
         err = refusal(tens)

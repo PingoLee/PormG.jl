@@ -759,9 +759,15 @@ end
 # #1387 — a date, a timestamp, a time and a UUID are not numbers either, under any number function,
 # `Sum` and `Avg` included (their domain holds `:interval`, never these). PostgreSQL raised at the
 # server (`round(date)` does not exist), SQLite computed on the stored text (a date's leading year
-# digits), MySQL on the number a date's digits spell. Refused on every engine, as a duration is. Text
-# and a JSON key lookup keep their own rules (#1061, #1279), and a boolean its own (#1386): neither
-# kind is checked here.
+# digits), MySQL on the number a date's digits spell. Refused on every engine, as a duration is. A
+# JSON key lookup keeps its own rules (#1061, #1279), and a boolean its own (#1386): neither kind is
+# checked here.
+#
+# #1293 — text is no number either. PostgreSQL rejects text that is no number (or computes the number
+# it spells), and SQLite reads it as 0: the query does not say it holds numbers, so it is EXPLICIT
+# INTENT, refused on every engine under every number function, naming the cast that says it. Any
+# operand the walk names text: a `CharField`, `Concat`, `Upper`, `ToChar`, a `__@yyyy_mm` label, a
+# string literal. `Round(x, d ≠ 0)` meets the #1061 refusal first, which also reads a JSON value.
 function _check_operand_domain(p::FObject, instruc::SQLInstruction)
   domain = _operand_domain(p)
   domain === nothing && return nothing
@@ -772,6 +778,8 @@ function _check_operand_domain(p::FObject, instruc::SQLInstruction)
       :interval in domain || throw(_duration_math_refusal(p.function_name, instruc.connection))
     elseif kind isa _NonNumberKind
       throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
+    elseif kind isa Union{CText,CVarChar}
+      throw(_text_math_refusal(p.function_name, _concat_operand_label(x)))
     end
   end
   return nothing
@@ -814,6 +822,15 @@ function _non_number_math_refusal(function_name::AbstractString, kind::Canonical
     push!(spellings, "its seconds since $(kind isa CTime ? "midnight" : "1970") (Extract($(letter), \"epoch\"))")
   return QueryBuildError("$(head) For a number from $(noun) $(letter), write $(join(spellings, ", ", ", or ")), " *
                          "and apply `$(name)` to that.")
+end
+# #1293 — the same reason over text, which the query must say holds numbers (#1061's remedy).
+function _text_math_refusal(function_name::AbstractString, label::Union{String,Nothing})
+  name = uppercasefirst(lowercase(function_name))
+  what = label === nothing ? "the value" : "`$(label)`"
+  return QueryBuildError("`$(name)` of text is not supported: $(what) is text, and PormG does not read " *
+                         "text as a number for you on any engine (#1293). If it holds numbers, say so " *
+                         "with a cast, \e[32mCast(x, FloatField())\e[0m, as the operand, or fetch the value " *
+                         "and compute in Julia.")
 end
 _non_number_noun(::CDate) = "a date"
 _non_number_noun(::CDateTime) = "a timestamp"

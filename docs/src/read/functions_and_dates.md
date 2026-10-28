@@ -714,8 +714,14 @@ date's digits spell. Name the number you mean, and apply the function to that:
 - the seconds, `Extract(x, "epoch")`: since 1970 for a date or a timestamp on PostgreSQL and MySQL,
   since midnight for a time on PostgreSQL. SQLite has no `EPOCH` part, and MySQL none for a time.
 
-A UUID holds no number, so nothing is named for one. Text and a JSON key lookup keep their own rules
-(below), and so does a boolean.
+A UUID holds no number, so nothing is named for one. A JSON key lookup keeps its own rules (below),
+and so does a boolean.
+
+**Text** under any of these functions, `Sum` and `Avg` included, raises `QueryBuildError` on every
+engine when the query is built (#1293): a `CharField` column, a `Concat`, an `Upper`, a
+`"date__@yyyy_mm"` label or a string literal. PostgreSQL rejects text that is no number, or computes
+the number the text spells, and SQLite reads it as `0`. If the text holds numbers, say so with a
+cast and apply the function to that: `Floor(Cast("positiontext", FloatField()))` on `Result`.
 
 ### Rounding to decimal places
 
@@ -751,8 +757,9 @@ refuses where an engine would not honor a declared scale.
 
 Two cases raise when the query is built:
 
-- **Text** (a text column, a string, a JSON value) raises `QueryBuildError` on every engine: text is
-  not a number, so say it holds one. Cast it first: `Round(Cast(x, FloatField()), n)`.
+- **Text** (a text column, a string, and a JSON value when `n` is not 0) raises `QueryBuildError` on
+  every engine, `Round(x)` included (#1293): text is not a number, so say it holds one. Cast it
+  first: `Round(Cast(x, FloatField()), n)`.
 - **A negative `n`** rounds to tens, hundreds, … on PostgreSQL and MySQL (`Round(125, -1)` is `130`). SQLite's
   `ROUND` has no negative precision (it reads one as 0), so on SQLite it raises
   `BackendCapabilityError` (see [Backend Capabilities](@ref)).

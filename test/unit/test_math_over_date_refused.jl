@@ -233,10 +233,10 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1387: what stays out of the check
-# Text reads as a number by its own rules (#1061, #1279) and a boolean has its own (#1386, #953):
-# neither is refused here, so each keeps the outcome it had. A JSON key lookup is a value the walk
-# cannot type, which is let through: `Round("payload__lap")` builds, as before. Expected: no #1387
-# message; the JSON key and `Round`/`Abs` over a boolean build, and `Sum` of a boolean keeps #953.
+# Text has its own refusal (#1293, below) and a boolean its own (#1386, #953): neither meets the #1387
+# message. A JSON key lookup is a value the walk cannot type, which is let through:
+# `Round("payload__lap")` builds, as before. Expected: no #1387 message; the JSON key and
+# `Round`/`Abs` over a boolean build, and `Sum` of a boolean keeps #953.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1387: text, booleans and untyped operands are not this check's" begin
   for (conn, _) in _MDT_ENGINES
@@ -253,6 +253,50 @@ end
     err = _mdt_refusal(MDT.New_join_position, Fn.Sum("boolean_field"); conn = conn)
     @test err isa QueryBuildError && occursin("(#953)", _mdt_msg(err)) && !occursin("#1387", _mdt_msg(err))
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1293: every number function over text is refused on every engine
+# EXPLICIT INTENT: PostgreSQL rejects text that is no number (or computes the number it spells), and
+# SQLite reads it as 0, so the query must say the text holds numbers. Every number function in
+# `_MDT_FUNCTIONS` over a `CharField` column, a `Concat`, an `Upper`, a `__@yyyy_mm` label and a string
+# literal, the text as either operand of `Power`. `Round(x, 2)` meets the #1061 refusal first. A cast
+# around the text says it holds numbers and builds; a JSON key lookup is untyped and builds, as before.
+# Expected SQL (the remedy, PostgreSQL): FLOOR((("Tb"."positiontext")::float)::numeric)
+# Why: before #1293 `Round("positiontext")` and `Floor("positiontext")` built, and SQLite answered 0.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1293: a number function over text is refused on every engine" begin
+  texts = (("column", "positiontext", "`positiontext`"), ("Concat", Fn.Concat("positiontext", "positiontext"), "the value"),
+           ("Upper", Fn.Upper("positiontext"), "the value"), ("label", "raceid__date__@yyyy_mm", "the value"),
+           ("literal", Fn.Value("12"), "the value"))
+  for (conn, engine) in _MDT_ENGINES, (fn, name) in _MDT_FUNCTIONS, (what, operand, named) in texts
+    err = _mdt_refusal(MDT.Result, fn(operand); conn = conn)
+    label = (engine, name, what)
+    @test (label, err isa QueryBuildError) == (label, true)
+    err isa QueryBuildError || continue
+    msg = _mdt_msg(err)
+    if occursin("Round(…, 2)", msg)
+      @test (label, occursin("(#1061)", msg)) == (label, true)
+      continue
+    end
+    @test (label, occursin("`$(name)` of text is not supported: $(named) is text", msg) &&
+                  occursin("on any engine (#1293)", msg) && occursin("Cast(x, FloatField())", msg)) == (label, true)
+    @test !any(n -> occursin(n, msg), ("PostgreSQL", "SQLite", "MySQL"))
+  end
+  for (conn, engine) in _MDT_ENGINES
+    # Wherever the function is nested: a cast over it is refused too.
+    err = _mdt_refusal(MDT.Result, Fn.Cast(Fn.Floor("positiontext"), "integer"); conn = conn)
+    @test (engine, err isa QueryBuildError && occursin("(#1293)", _mdt_msg(err))) == (engine, true)
+    # The remedy builds, and a JSON key lookup is untyped and builds as before.
+    for expr in (Fn.Floor(Fn.Cast("positiontext", Models.FloatField())), Fn.Round(Fn.Cast("positiontext", Models.FloatField())))
+      @test (engine, _mdt_refusal(MDT.Result, expr; conn = conn)) == (engine, nothing)
+    end
+    for expr in (Fn.Round("payload__lap"), Fn.Floor("payload__lap"), Fn.Mod("payload__lap", 2))
+      @test (engine, _mdt_refusal(MDT.Field_validation_scratch, expr; conn = conn)) == (engine, nothing)
+    end
+  end
+  @test occursin("FLOOR(((\"Tb\".\"positiontext\")::float)::numeric)",
+                 _mdt_render(MDT.Result, Fn.Floor(Fn.Cast("positiontext", Models.FloatField())); conn = _MDT_PG))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

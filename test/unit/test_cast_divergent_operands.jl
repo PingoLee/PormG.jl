@@ -1419,9 +1419,13 @@ end
   @test _ccd_builds(Fn.Cast(Fn.Round(_CF("grid") / 2), Models.IntegerField()))
   # Over an operand PormG cannot type, `Floor` is not refused: a float under it is a REAL on SQLite
   # too, and the engines agree. Only a type that is known is answered (review of #1111).
-  for expr in (Fn.Cast(Fn.Floor(Fn.Case(Fn.When("active" => true, then = "points"), default = "points")) / 2, Models.IntegerField()),
-               Fn.Cast(Fn.Floor("payload__points") / 2, Models.IntegerField()))
-    @test _ccd_builds(expr)
+  @test _ccd_builds(Fn.Cast(Fn.Floor("payload__points") / 2, Models.IntegerField()))
+  # A `Case` whose branches are bare strings binds the text `'points'`, not the column: text under
+  # `Floor` is refused on every engine (#1293), where it used to build as an untyped operand.
+  text_case = Fn.Cast(Fn.Floor(Fn.Case(Fn.When("active" => true, then = "points"), default = "points")) / 2, Models.IntegerField())
+  for conn in _CCD_ENGINES
+    err = _ccd_refusal(text_case; conn = conn)
+    @test err isa QueryBuildError && occursin("(#1293)", _ccd_msg(err))
   end
   # Unchanged: `+`, `-`, `*`, a bare cast, the documented escape, and the aggregates both engines
   # keep integer.
@@ -1873,15 +1877,17 @@ end
         Fn.Cast(Fn.Abs(Fn.Extract("born", "year")) / 2, Models.IntegerField()),
         Fn.Cast(Fn.Floor(Fn.Extract("born", "dow")) / 2, "numeric(10,1)"),
         Fn.Concat("surname", Fn.Floor("born__@year") / 2),
-        # Unchanged: a text transform is not a whole number, a date part is whole undivided or under
-        # `*`, and divided directly or summed it divides as an integer on both engines.
-        Fn.Cast(Fn.Floor("born__@yyyy_mm"), Models.CharField()),
+        # Unchanged: a date part is whole undivided or under `*`, and divided directly or summed it
+        # divides as an integer on both engines.
         Fn.Cast(Fn.Floor("born__@year"), Models.IntegerField()),
         Fn.Cast(Fn.Floor("born__@day") * 2, Models.IntegerField()),
         Fn.Cast(_CF("born__@year") / 2, Models.IntegerField()),
         Fn.Cast(Fn.Sum("born__@year") / 2, Models.IntegerField()))
       @test _ccd_refusal(expr; conn = conn) === nothing
     end
+    # A text transform is no number at all: `Floor` over it is refused on every engine (#1293).
+    err = _ccd_refusal(Fn.Cast(Fn.Floor("born__@yyyy_mm"), Models.CharField()); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1293)", _ccd_msg(err))
   end
   @test occursin("((FLOOR((EXTRACT(YEAR FROM \"Tb\".\"born\")::integer)::numeric)::integer / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Floor("born__@year") / 2, Models.IntegerField()); conn = _CCD_PG))

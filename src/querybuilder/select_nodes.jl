@@ -929,6 +929,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
         why = "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
     end
     if digits isa Integer && digits != 0
+      # #1293: text at `d = 0` is the operand-domain check's (`_check_operand_domain`), as it is under
+      # every number function; this arm also reads a JSON value, which that check lets through.
       # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`. Only its
       # `:text` answer is read here: text is no number to round to tens either (#1167, a negative
       # precision built where the engine has it). It asks at the widest scale, which no number

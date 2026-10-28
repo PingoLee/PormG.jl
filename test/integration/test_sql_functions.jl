@@ -2151,6 +2151,8 @@ end
 # the range guard (`Dialect.integer_cast_guard_sql`) and raises 22003 on the row, in a projection, under a
 # CTE, in a `Subquery` and in a filter. A `bigint` past 64 bits raises on PostgreSQL and MySQL; SQLite
 # saturates it to the largest integer, which no guard can tell from a real one (documented in backends.md).
+# #1405: `Coalesce`, `Greatest`, `Least` and `Case` with the same integer `output_field` render the same guard over
+# the whole function and raise the same, in the same places; before, MySQL and SQLite returned the number.
 # Expected SQL, PostgreSQL: (("Tb"."driverid" * $1::bigint))::integer; MySQL:
 # CAST(IF(CAST((`Tb`.`driverid` * ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, …) AS SIGNED);
 # SQLite: CASE WHEN CAST(("Tb"."driverid" * ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN … END.
@@ -2179,17 +2181,26 @@ end
             q
         end
     end
+    # #1405: a declared `output_field` names the same type and means the same thing, so it raises the same.
+    casts(type, factor) = (
+        "Cast"     => () -> Cast(F("driverid") * factor, type),
+        "Coalesce" => () -> Coalesce(F("driverid") * factor, 0; output_field = type),
+        "Greatest" => () -> Greatest(F("driverid") * factor, 1; output_field = type),
+        "Least"    => () -> Least(F("driverid") * factor, F("driverid") * factor; output_field = type),
+        "Case"     => () -> Case([When("driverid__@gte" => 1, then = F("driverid") * factor)], default = 0,
+                                 output_field = type))
     for (type, factor, last_fit) in (("integer", 100000000, 21), ("smallint", 1000, 32))
-        cast() = Cast(F("driverid") * factor, type)
-        for (ctx, build) in (("alone", alone), ("cte", cte), ("subquery", sub))
-            @testset "$(type), $(ctx)" begin
-                @test overflow(() -> build(cast, "driverid__@gt" => last_fit)().list())
-                df = build(cast, "driverid__@lte" => last_fit)() |> DataFrame
-                @test nrow(df) == last_fit && all(r -> r.x == r.driverid * factor, eachrow(df))
+        for (fname, cast) in casts(type, factor)
+            for (ctx, build) in (("alone", alone), ("cte", cte), ("subquery", sub))
+                @testset "$(fname), $(type), $(ctx)" begin
+                    @test overflow(() -> build(cast, "driverid__@gt" => last_fit)().list())
+                    df = build(cast, "driverid__@lte" => last_fit)() |> DataFrame
+                    @test nrow(df) == last_fit && all(r -> r.x == r.driverid * factor, eachrow(df))
+                end
             end
+            # In a filter, never read back: raises on the row all the same.
+            @test overflow(() -> (q = M.Driver.objects; q.filter(cast() > 0); q.values("driverid"); q.list()))
         end
-        # In a filter, never read back: raises on the row all the same.
-        @test overflow(() -> (q = M.Driver.objects; q.filter(cast() > 0); q.values("driverid"); q.list()))
     end
     # bigint. In range, the largest integer reads back as itself on every engine.
     big(lookup, expr) = (q = M.Driver.objects; q.filter(lookup); q.values("x" => Cast(expr, "bigint")); q.list())

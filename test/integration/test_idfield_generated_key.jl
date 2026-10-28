@@ -145,13 +145,11 @@ _ig1393_auto() = Models.Model(IG1393.auto;
             # The foreign key still holds after the rebuild / MODIFY.
             @test _ig1393_err(() -> exec("""INSERT INTO "$(IG1393.lap)" ("lapid", "circuitid") VALUES (2, 999)""")) !== nothing
 
-            # Measured: an INSERT without the key is refused, where SQLite and MySQL used to fill it.
-            # Each engine's own classification: PostgreSQL's 23502 and SQLite's NOT NULL constraint are
-            # integrity errors (measured); MySQL reports error 1364, which its classifier does not list
-            # with the integrity errors (`_INTEGRITY_ERRNOS`), so only the umbrella is pinned there.
-            refused = by_engine(pool; postgres = IntegrityError, sqlite = IntegrityError, mysql = PormGError)
+            # Measured: an INSERT without the key is refused, where SQLite and MySQL used to fill it, with
+            # an IntegrityError on every engine: PostgreSQL's 23502, SQLite's NOT NULL constraint and
+            # MySQL's error 1364 (#1411; it was a StatementError there, while an explicit NULL, 1048, was not).
             e = _ig1393_err(() -> exec("""INSERT INTO "$(IG1393.circuit)" ("name") VALUES ('Suzuka')"""))
-            @test e isa refused
+            @test e isa IntegrityError
             @test only(q("""SELECT COUNT(*) AS c FROM "$(IG1393.circuit)" """).c) == 2
 
             # Converged.
@@ -180,11 +178,10 @@ _ig1393_auto() = Models.Model(IG1393.auto;
                 e = _ig1393_err(() -> bulk_insert(supplied.objects, DataFrame(circuitid = blank, name = ["Suzuka", "Imola"])))
                 @test (repr(blank), typeof(e)) == (repr(blank), InvalidValueError)
             end
-            refused = by_engine(pool; postgres = IntegrityError, sqlite = IntegrityError, mysql = PormGError)
             e = _ig1393_err(() -> bulk_insert(supplied.objects, DataFrame(name = ["Suzuka"])))
-            @test e isa refused
+            @test e isa IntegrityError
             e = _ig1393_err(() -> supplied.objects.create("name" => "Suzuka"))
-            @test e isa PormGError
+            @test e isa IntegrityError
             @test supplied.objects.count() == before
 
             @test bulk_insert(supplied.objects, DataFrame(circuitid = [22, 21], name = ["Suzuka", "Imola"])).count == 2

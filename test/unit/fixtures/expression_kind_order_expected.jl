@@ -3384,19 +3384,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Case decimal output scale 1 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64")]),
   ("Case float literal output integer | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64")]),
   ("Case float literal output integer | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
   ("Case float literal output integer | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
   ("Case bool output text | alone", :postgres, "v") =>
@@ -3416,19 +3416,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Case bool output text default false | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64")]),
   ("Case int output integer default float | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64")]),
   ("Case int output integer default float | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64")]),
   ("Case int output integer default float | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64")]),
   ("Case date output date default text | alone", :mysql, "v") =>
@@ -3576,29 +3576,29 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Case decimal output scale 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64")]),
   ("Case Floor output integer | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :sqlite, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | cte", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Case Floor output integer | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
   ("Case Floor output integer | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
   ("Case Floor output integer | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Case output scale 1 to scale 2 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64")]),
   ("Cast Case output scale 1 to scale 2 | alone", :postgres, "v") =>

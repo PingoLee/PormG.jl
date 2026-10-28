@@ -2873,7 +2873,7 @@ _begin_write_sql(::PormGSQLite) = "BEGIN IMMEDIATE TRANSACTION;"
 _after_begin_sql(::PormGPostgres) = String[]
 _after_begin_sql(::PormGSQLite) = ["PRAGMA defer_foreign_keys = ON;"]
 # MySQL (#1130): `START TRANSACTION` is the standard spelling. InnoDB has no deferrable foreign keys,
-# so nothing follows it: a foreign key is checked at each statement there, and `delete()` orders its
+# so nothing follows it: a foreign key is checked as each row is written there, and `delete()` orders its
 # statements children first instead (#1272; the `deferred_foreign_keys` row of `docs/src/backends.md`).
 _begin_write_sql(::PormGMySQL) = "START TRANSACTION;"
 _after_begin_sql(::PormGMySQL) = String[]

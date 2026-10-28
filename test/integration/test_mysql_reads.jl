@@ -403,7 +403,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test e isa PormG.QueryBuildError && occursin("so PormG refuses it on MySQL", msg(e))
             # A type with no faithful MySQL target is refused before any SQL, never passed through.
             e = try; M.Result.objects.values("b" => Cast("grid", "bytea")).list(); nothing; catch err; err; end
-            @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL: MySQL's CAST has no", msg(e))
+            @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL: PormG maps it to none of", msg(e))
             # A boolean has no CAST target there either; over an integer it is `((x) <> 0)`, as PostgreSQL's
             # `integer::boolean` reads it (#1130 phase 2c-1).
             flags = M.Result.objects.values("resultid", "grid", "b" => Cast(F("grid") - 1, "boolean")).order_by("resultid").list()

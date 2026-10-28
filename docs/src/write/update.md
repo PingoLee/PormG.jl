@@ -400,6 +400,13 @@ when either fails:
   `cjoin_on` join as to-many*).
   Otherwise the database would set each row from an arbitrary one of its matches.
 
+Both conditions belong to `UPDATE … FROM`, so they apply only when the `SET` clause reads a joined
+table: a `Joined(alias, column)` or a related `F` path, directly, inside a function, or through an
+`OuterRef` path inside a subquery. A `cjoin_on` that the `SET` clause does not read only scopes the
+rows. Such an `update()` selects its rows through the primary key, with the join in that selection, so
+a `LEFT` copy builds there. The names a subquery gives its own tables do not count as reading the
+copy, even when a `cjoin_on` alias has the same name (#1414).
+
 The joined column can go into a field of any type, a number field included. The type checks an `F`
 expression gets apply to it too: a date, a UUID or another non-number column into a number field
 raises `QueryBuildError` (#1297), and on SQLite so does a `DecimalField` with more decimal places than

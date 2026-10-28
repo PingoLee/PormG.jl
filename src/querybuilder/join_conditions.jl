@@ -550,7 +550,11 @@ end
 # loud refusal with a plainer message instead of a wrong row.
 
 # A model column as SQL text: `"alias"."col"`. `column_sql` is already quoted.
+# #1414: while `update()`'s SET renders, the alias is also recorded for its statement-shape choice,
+# here for #985's reason: every column that renders passes, so no node type has to be listed.
 function _column_sql(instruc::SQLInstruction, alias::AbstractString, column_sql::AbstractString)::String
+  reads = instruc.scope.set_reads
+  reads === nothing || push!(reads, String(alias))
   _record_join_column(instruc, alias, column_sql)
   return string(quote_identifier(alias, instruc.connection), ".", column_sql)
 end

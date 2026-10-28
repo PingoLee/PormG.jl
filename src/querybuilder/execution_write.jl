@@ -1082,14 +1082,17 @@ function _build_join_conditions(row_join::Vector{JoinRow}, connection::_SQLEngin
   return _get_join_condition_list(row_join, connection; rendered_on = rendered_on)
 end
 
-function _set_clause_uses_join_aliases(set_clause::String,
-  row_join::Vector{JoinRow},
-  connection::_SQLEngine)::Bool
-  for row in row_join
-    alias_b = quote_identifier(row.alias_b, connection)
-    occursin("$alias_b.", set_clause) && return true
-  end
-  return false
+# Whether `update()`'s SET reads one of the statement's joins: a join the SET itself added, or one whose
+# alias a SET column named (`set_reads`, recorded where each column renders). #1414: this used to search
+# the rendered SET text for `"<alias>".`, which cannot tell scopes apart — a `Subquery`'s own `"R1"`
+# matched a `cjoin_on` alias of that name, so a LEFT copy was refused (#174) and an INNER one switched
+# the statement to UPDATE … FROM. The row count is a backstop: every join a path adds ends in a column
+# `_column_sql` records, so no known shape reaches it, but a join SET added and did not read would leave
+# `instruction.join` stale, which key selection prints (#404).
+function _set_clause_uses_join_aliases(set_reads::Set{String}, row_join::Vector{JoinRow},
+                                       rows_before_set::Int)::Bool
+  length(row_join) > rows_before_set && return true
+  return any(row -> row.alias_b in set_reads, row_join)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1516,62 +1519,68 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   set_context!(parameters, :update)
   set_clause_parts = String[]
   set_fields = String[]   # #1130: the field each SET item writes, item for item
-  for field in keys(objct.insert)
-    # #1320: `Value(x)` wraps a literal (`Value`'s own refusal of a column says so, #444), so `update`
-    # writes `x`: the same checks, formatter and bind as `update(field => x)`. Rendered as SQL instead,
-    # a text, float or boolean literal would reach a number column past every check. A `Value` around
-    # an expression is refused rather than unwrapped: `update` would write it as SQL, which no other
-    # `Value` position does, and `_update!`'s path walk does not reach inside one.
-    # The field's own checks (an unknown name, a primary key) come first, as for any other value.
-    value = objct.insert[field]
-    if value isa SQLText
-      _validate_field_name(model, field, "update"; allow_primary_key = false)
-      value.field isa Union{SQLType,SQLObject} && _validation_error("update", model, field,
-        "Value(…) wraps a literal, and this one wraps an expression ($(nameof(typeof(value.field))))";
-        suggestion = "drop the Value(…): update(\"$(field)\" => expression), or Subquery(query) for a query",
-        kind = :type)
-      value = value.field
-    end
-    # Validation checks
-    validate_field_data(model, field, value, "update"; allow_primary_key = false)
-    Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
+  # #1414: which of this statement's aliases the SET reads decides its shape below, so each column it
+  # renders records its alias (`RenderScope.set_reads`); a subquery's own columns are not this statement's.
+  set_reads = Set{String}()
+  rows_before_set = length(instruction.row_join)
+  with_scope(instruction; set_reads = set_reads) do
+    for field in keys(objct.insert)
+      # #1320: `Value(x)` wraps a literal (`Value`'s own refusal of a column says so, #444), so `update`
+      # writes `x`: the same checks, formatter and bind as `update(field => x)`. Rendered as SQL instead,
+      # a text, float or boolean literal would reach a number column past every check. A `Value` around
+      # an expression is refused rather than unwrapped: `update` would write it as SQL, which no other
+      # `Value` position does, and `_update!`'s path walk does not reach inside one.
+      # The field's own checks (an unknown name, a primary key) come first, as for any other value.
+      value = objct.insert[field]
+      if value isa SQLText
+        _validate_field_name(model, field, "update"; allow_primary_key = false)
+        value.field isa Union{SQLType,SQLObject} && _validation_error("update", model, field,
+          "Value(…) wraps a literal, and this one wraps an expression ($(nameof(typeof(value.field))))";
+          suggestion = "drop the Value(…): update(\"$(field)\" => expression), or Subquery(query) for a query",
+          kind = :type)
+        value = value.field
+      end
+      # Validation checks
+      validate_field_data(model, field, value, "update"; allow_primary_key = false)
+      Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
     
-    quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
+      quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
-    # #444: a `CTE(...)` handle joins this branch rather than the value branch below. It is
-    # unambiguously a COLUMN reference — never a literal — so binding it as a value was never right;
-    # it reached `field.formatter` and died with a bare `MethodError` (outside the #231 taxonomy).
-    # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
-    # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
-    # `F("<cte>__col")` spelling produced.
-    # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
-    # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
-    # not a value" refusal every other value position keeps. Into any other column it is refused, as
-    # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
-    if _is_fts_operand(value)
-      (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
-        throw(QueryBuildError(
-          "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
-          "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
-          "operand (#1021)."))
-      _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
-      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
-    # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
-    # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
-    # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
-    # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
-    elseif value isa _SetExpression
-      marks = (parameter_mark(instruction), nested_parameter_mark(instruction))
-      f_value = _set_update_query(value, instruction)
-      _refuse_update_non_number(model.fields[field], field, value, instruction)
-      _refuse_update_scale_departure(model.fields[field], field, value, instruction)
-      # #1330: on an engine that does not check a decimal's width on assignment, the value checks itself.
-      f_value = _decimal_assignment_guard(model.fields[field], field, f_value, marks, instruction)
-      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
-    else
-      formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
-      placeholder = add_parameter!(parameters, formatted_value)
-      push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
+      # #444: a `CTE(...)` handle joins this branch rather than the value branch below. It is
+      # unambiguously a COLUMN reference — never a literal — so binding it as a value was never right;
+      # it reached `field.formatter` and died with a bare `MethodError` (outside the #231 taxonomy).
+      # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
+      # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
+      # `F("<cte>__col")` spelling produced.
+      # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
+      # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
+      # not a value" refusal every other value position keeps. Into any other column it is refused, as
+      # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
+      if _is_fts_operand(value)
+        (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
+          throw(QueryBuildError(
+            "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
+            "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
+            "operand (#1021)."))
+        _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
+        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+      # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
+      # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
+      # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
+      # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
+      elseif value isa _SetExpression
+        marks = (parameter_mark(instruction), nested_parameter_mark(instruction))
+        f_value = _set_update_query(value, instruction)
+        _refuse_update_non_number(model.fields[field], field, value, instruction)
+        _refuse_update_scale_departure(model.fields[field], field, value, instruction)
+        # #1330: on an engine that does not check a decimal's width on assignment, the value checks itself.
+        f_value = _decimal_assignment_guard(model.fields[field], field, f_value, marks, instruction)
+        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
+      else
+        formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
+        placeholder = add_parameter!(parameters, formatted_value)
+        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
+      end
     end
   end
    
@@ -1591,12 +1600,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
       # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
       # `_target_predicate`, which prints it into the EXISTS. This check is what excludes it — a
-      # SET-discovered join necessarily puts its alias in set_clause, so the check returns true and
-      # the UPDATE … FROM branch below rebuilds FROM/ON from instruction.row_join instead. Do NOT
-      # drop this guard on the theory that the UPDATE path ignores instruction.join — it does not.
-      # (#404's own trigger cannot reach here regardless: update() refuses a query carrying
-      # order_by() in `_reject_unsafe_mutation_shape`.)
-      set_uses_join_aliases = _set_clause_uses_join_aliases(set_clause, instruction.row_join, connection)
+      # SET-discovered join returns true, so the UPDATE … FROM branch below rebuilds FROM/ON from
+      # instruction.row_join instead. Do NOT drop this guard on the theory that the UPDATE path
+      # ignores instruction.join — it does not. (#404's own trigger cannot reach here regardless:
+      # update() refuses a query carrying order_by() in `_reject_unsafe_mutation_shape`.)
+      set_uses_join_aliases = _set_clause_uses_join_aliases(set_reads, instruction.row_join, rows_before_set)
 
       if !set_uses_join_aliases && isempty(real_obj.ctes)
         # #765: `"Tb"."pk" IN (SELECT DISTINCT …) AND EXISTS (<fence>)`. The IN alone was the

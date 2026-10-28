@@ -118,8 +118,10 @@ end
 # with a join type is emitted (`on()`, `cjoin`, `cjoin_on`, a CTE's `join_type`, a `ForeignKey(how =
 # …)` path join), so one check covers them all; it names the join type, which is what every one of
 # them was given. A mutation that carries the join rewrites it for its EXISTS fence, but its key
-# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does —
-# except a keyless model's write, which takes the fence alone and used to run there as INNER/LEFT.
+# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does.
+# Two update shapes never printed the join type and so used to run on a backend without it: a keyless
+# model's constant-SET update (the fence alone, INNER/LEFT) and an update whose SET reads a joined
+# column (`UPDATE … FROM`, an inner join). They are refused here too (upgrading/, #1422).
 function _require_outer_join(conn, how::AbstractString)::Nothing
   how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
   how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")

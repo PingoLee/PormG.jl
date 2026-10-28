@@ -14,17 +14,24 @@ A join type the backend lacks is refused before any SQL, from every place a join
 `with(…; join_type)` and a `ForeignKey(how = …)` path join. The `BackendCapabilityError` names the
 join type, the release that added it and the library at hand.
 
-Before, the join was rendered as written. On a SQLite library older than 3.39.0 a read raised at the
-server, as a syntax error. So did a write on a model with a primary key, because its key selection
-prints the joins as they are. A write (`update`, `delete`) on a model **without a primary key**
-rewrote the join for its row predicate (`RIGHT` to `INNER`, `FULL` to `LEFT`) and ran. That write is
-now refused like the rest.
+Before, the join was rendered as written, and a SQLite library older than 3.39.0 refused it at the
+server. That held for a read, a `delete`, and an `update` whose `SET` values are constants on a model
+with a primary key, because that update's key selection prints the joins as they are. Two `update`
+shapes did not print the join type, so they ran there:
+
+- an `update` whose `SET` reads a joined column (`update("points" => F("raceid__year"))`), on any
+  model, renders `UPDATE … FROM`, which joins as an inner join;
+- an `update` with constant `SET` values on a model **without a primary key** rewrote the join for
+  its row predicate (`RIGHT` to `INNER`, `FULL` to `LEFT`).
+
+Those two are now refused like the rest.
 
 | a `"FULL"` join type | before | now |
 |---|---|---|
-| PostgreSQL, SQLite 3.39.0 or newer | `FULL JOIN` | unchanged |
-| SQLite older than 3.39.0, a read or a write on a model with a primary key | the server's syntax error | `BackendCapabilityError` |
-| SQLite older than 3.39.0, a write on a model without a primary key | ran as a `LEFT JOIN` | `BackendCapabilityError` |
+| PostgreSQL, SQLite 3.39.0 or newer | unchanged | unchanged |
+| SQLite older than 3.39.0: a read, a `delete`, or a constant-`SET` `update` on a model with a primary key | an error from the server | `BackendCapabilityError` |
+| SQLite older than 3.39.0: an `update` whose `SET` reads a joined column | ran as an inner join | `BackendCapabilityError` |
+| SQLite older than 3.39.0: a constant-`SET` `update` on a model without a primary key | ran as a `LEFT JOIN` | `BackendCapabilityError` |
 
 ### How to find the calls to migrate
 
@@ -34,9 +41,9 @@ unaffected, and the library SQLite.jl installs today is newer than that.
 
 ### Migrate your app
 
-Load a SQLite library of 3.39.0 or newer. On an older one, write the join type the statement ran as.
-For a write on a model without a primary key, that is `"LEFT"` for `"FULL"` and `"INNER"` for
-`"RIGHT"`:
+Load a SQLite library of 3.39.0 or newer. On an older one, write the join type the statement ran as:
+`"INNER"` for an `update` whose `SET` reads a joined column, and, for a constant-`SET` `update` on a
+model without a primary key, `"LEFT"` for `"FULL"` and `"INNER"` for `"RIGHT"`:
 
 ```julia
 # ✗ before: on SQLite < 3.39.0, a keyless model's update ran this join as a LEFT JOIN

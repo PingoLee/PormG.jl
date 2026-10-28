@@ -1182,12 +1182,11 @@ end
       err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = "none")); nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("(#1327)", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
-      # The CTE column's own mixed-types arm, reached by a pair #1327 does not classify (a number
-      # beside a boolean, #1147's question): it names both fields and `output_field`.
+      # #1386: a number beside a boolean is refused the same way, before the CTE column is typed. (It
+      # reached the CTE column's own mixed-types arm while the rule did not classify a boolean.)
       err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = true)); nothing catch e; e end
       msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
-      @test err isa PormG.QueryBuildError && occursin("CTE column top", msg) && occursin("output_field", msg)
-      @test occursin("(IntegerField and BooleanField)", msg)
+      @test err isa PormG.QueryBuildError && occursin("(#1386)", msg)
     end
   end
 
@@ -1199,6 +1198,12 @@ end
   to_constructor = PormG.Models.ForeignKey("Constructor", pk_field = "constructorid")
   @test unify(PormG.PormGField[to_driver, to_constructor], "who") isa PormG.Models.sIntegerField
   @test unify(PormG.PormGField[to_driver, PormG.Models.ForeignKey("Driver", pk_field = "driverid")], "who") === to_driver
+  # The unifier's own mixed-types arm: fields of no common type name both and `output_field`. Since
+  # #1386 the mixed-operand rule refuses a number beside a boolean first, so it is driven directly.
+  err = try unify(PormG.PormGField[PormG.Models.IntegerField(), PormG.Models.BooleanField()], "top"); nothing catch e; e end
+  msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+  @test err isa PormG.QueryBuildError && occursin("CTE column top", msg) && occursin("output_field", msg)
+  @test occursin("(IntegerField and BooleanField)", msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

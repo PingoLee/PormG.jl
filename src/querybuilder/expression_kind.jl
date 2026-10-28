@@ -213,6 +213,10 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
     return nothing
   end
   left isa CInterval && return _interval_left_kind(p, right, instruc)
+  # #1406: a time of day minus a time of day is an interval where the engine computes it.
+  if left isa CTime
+    return op == "-" && right isa CTime && _subtracts_times(instruc.connection) ? CInterval() : nothing
+  end
   # #814: a day count on the left, a date on the right, is the date shifted (`count - date` is refused).
   count = op in ("+", "-") ? _day_count_column_kind(p.field_name, left, instruc) : left
   if count isa Union{CInt32,CInt64} && op in ("+", "-")

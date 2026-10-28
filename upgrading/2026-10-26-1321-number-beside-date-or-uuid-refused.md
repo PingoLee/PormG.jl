@@ -41,8 +41,8 @@ These keep building:
 - an integer beside a float or a decimal;
 - a UUID beside text: SQLite and MySQL hold a UUID as its text (a cast to `uuid` is text there), and
   PostgreSQL raises at the server for a text column beside a UUID, as before;
-- a boolean or a JSON value beside another type, which this rule does not classify;
-- an operand PormG cannot type (raw SQL, a JSON key lookup) beside anything;
+- an operand PormG cannot type (raw SQL, a JSON key lookup) beside anything (a boolean or a whole
+  JSON document beside another type is refused since #1386, in its own entry);
 - a `NULL` operand;
 - a date beside a timestamp under an `output_field`, as since #1200.
 

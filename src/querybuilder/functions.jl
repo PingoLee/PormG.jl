@@ -948,11 +948,16 @@ end
 # meant, so both are named. An `output_field` is refused with the pair (`_declaration_lifts`), and the
 # message says why when one was declared. #1321 — a number beside a date, a time, an interval or a
 # UUID, and a UUID beside a date, a time or an interval: no common type, as for a time beside a date.
+# #1386 — a boolean or a JSON document beside another type. A boolean beside anything is said with a
+# `Case` that writes the value the flag means in the other operand's type, which builds on every
+# engine; a cast of a boolean is never offered, since its text is a meaning question on SQLite
+# (`_MEANING_DEPARTURES`), which refuses it there (#1028).
 const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
   :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text",
-  :number => "a number", :uuid => "a UUID")
+  :number => "a number", :uuid => "a UUID", :bool => "a boolean", :json => "a JSON document")
 const _TEMPORAL_MIX_TYPE = Dict(:date => "date", :timestamp => "timestamp", :timestamptz => "timestamptz",
-  :time => "time", :interval => "interval", :text => "text", :number => "numeric", :uuid => "uuid")
+  :time => "time", :interval => "interval", :text => "text", :number => "numeric", :uuid => "uuid",
+  :bool => "boolean", :json => "json")
 const _TEMPORAL_MIX_NAME = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
   "NULLIF" => "NullIf", "CASE" => "Case", "LAG" => "Lag", "LEAD" => "Lead")
 const _TEMPORAL_MIX_TIMESTAMPS = (:date, :timestamp, :timestamptz)
@@ -962,10 +967,17 @@ function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,St
   types = "\"$(_TEMPORAL_MIX_TYPE[a[1]])\" or \"$(_TEMPORAL_MIX_TYPE[b[1]])\""
   timestamps = a[1] in _TEMPORAL_MIX_TIMESTAMPS && b[1] in _TEMPORAL_MIX_TIMESTAMPS
   number = :number in (a[1], b[1])
-  issue = number && :text in (a[1], b[1]) ? "#1327" : number || :uuid in (a[1], b[1]) ? "#1321" : "#1200"
+  flag = :bool in (a[1], b[1])
+  issue = flag || :json in (a[1], b[1]) ? "#1386" :
+          number && :text in (a[1], b[1]) ? "#1327" : number || :uuid in (a[1], b[1]) ? "#1321" : "#1200"
+  other = a[1] === :bool ? b[1] : a[1]
   # `"text"` as the output_field works on both engines for a timestamp pair (PostgreSQL unifies the
   # two inside, then casts), where SQLite cannot cast to a timestamp type (#822).
-  declare = if timestamps
+  declare = if flag
+    then, otherwise = other === :number ? ("1", "0") : other === :text ? ("\"yes\"", "\"no\"") : ("…", "…")
+    "write the value the flag means as $(_TEMPORAL_MIX_NOUN[other]) with a Case, " *
+      "\e[32mCase(When(\"<flag>\" => true, then = $(then)), default = $(otherwise))\e[0m"
+  elseif timestamps
     name in ("NullIf", "Lag", "Lead") ? "cast one operand to the other's type, \e[32mCast(x, $(types))\e[0m" :
       "pass \e[32moutput_field = \"$(_TEMPORAL_MIX_TYPE[a[1]])\", \"$(_TEMPORAL_MIX_TYPE[b[1]])\" or \"text\"\e[0m"
   elseif number && :text in (a[1], b[1])
@@ -1094,10 +1106,10 @@ the query is built, on both engines (#1070). It raises `QueryBuildError` otherwi
 - every other part reads a `DateField` or a `DateTimeField`.
 
 The `"col__@hour"` transforms are this function, so they follow the same rule. An operand PormG
-cannot name a field for — an expression, a subquery, an untyped CTE column — is checked by its type
-for the calendar parts only (every part but the time-of-day, `TIMEZONE` and `EPOCH` ones): a duration
-expression (a timestamp difference, interval arithmetic, a `Sum` or `Avg` of a duration) has no
-calendar date, and raises `QueryBuildError` on every engine (#1388). Anything else passes unchecked.
+cannot name a field for — an expression, a subquery, an untyped CTE column — is checked by its type:
+a duration expression (a timestamp difference, interval arithmetic, a `Sum` or `Avg` of a duration, a
+time minus a time on PostgreSQL) reads only `EPOCH`, as a `DurationField` does, and raises
+`QueryBuildError` under any other part on every engine (#1388). Anything else passes unchecked.
 
 A filter on the result is held to the part's range: `HOUR` 0–23, `MINUTE` and `SECOND` 0–59,
 `MONTH` 1–12, `DAY` 1–31, `QUARTER` 1–4, `WEEK` 1–53, `ISODOW` 1–7, `DOW` 0–6, `DOY` 1–366. A

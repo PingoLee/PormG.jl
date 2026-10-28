@@ -617,15 +617,30 @@ function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
     "\e[31m$(label)\e[0m $(declared_as) (#1070)."))
 end
 
-# #1388: an operand with no field is checked by its kind from the type walk, for a calendar part only.
-# A duration EXPRESSION — a timestamp difference, interval arithmetic, a `Sum` of a duration — has no
-# calendar date on any engine, as a `DurationField` column has none (#1070). A clock part over one is
-# not refused here: PostgreSQL reads the interval's components, and whether SQLite agrees is measured on
-# #1388. MySQL refuses the clock parts on itself (`Dialect._mysql_part_of_interval_refusal`, #1324).
+# #1388: an operand with no field is checked by its kind from the type walk, by the same rows as a
+# `DurationField` column (#1070): a duration EXPRESSION — a timestamp difference, interval arithmetic, a
+# `Sum` of a duration, a time minus a time (#1406) — is refused under every part but `EPOCH`, the one
+# row that reads an interval. A calendar part has no meaning over a duration on any engine. A clock
+# part has no single one: PostgreSQL reads a component that depends on how the interval was formed (a
+# 62-hour timestamp difference reads hour 14, a 208-hour sum reads 208), and SQLite reads `NULL` above 24 h
+# and for a negative duration (measured on #1388).
 function _check_temporal_expression(v::FObject, row::_TemporalRow, part::String, instruc::SQLInstruction)
-  row.reads == _CALENDAR_READS.reads || return nothing
+  :interval in row.reads && return nothing
   _expression_kind(v.column, instruc) isa CInterval || return nothing
-  throw(Dialect._duration_calendar_refusal("The \e[31m$(part)\e[0m part"))
+  label = "The \e[31m$(part)\e[0m part"
+  row.reads == _CALENDAR_READS.reads && throw(Dialect._duration_calendar_refusal(label))
+  throw(_duration_part_refusal(label, row.what, instruc.connection))
+end
+# The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
+# A clock part has a reading on some engine, just not one meaning; a `TIMEZONE` part has none.
+function _duration_part_refusal(label::String, what::String, conn)
+  spelling = _duration_seconds_spelling(conn)
+  remedy = spelling === nothing ? "$(_backend_name(conn)) has no spelling for a duration's seconds." :
+    "For a duration's seconds, write $(spelling)."
+  meaning = what == _CLOCK_READS.what ? "no single meaning" : "no meaning"
+  return QueryBuildError("$(label) over a duration is not supported: the part reads $(what), and a " *
+                         "duration has none, so the part has $(meaning) over one on any engine " *
+                         "(#1388). $(remedy)")
 end
 
 # #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a

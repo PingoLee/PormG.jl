@@ -5439,41 +5439,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round F interval * 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Extract hour F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F datetime - datetime | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract minute F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_minute_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract minute F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"minute\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract epoch F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Extract epoch F interval * 2 | alone", :sqlite) =>
@@ -5709,41 +5709,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("ToChar YYYY-MM F interval * 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The yyyy_mm part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract hour F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract hour F interval * 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"hour\") over a duration expression is not supported on MySQL, which holds a duration as its count of microsec"),
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
   ("Extract second Sum interval | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract second Sum interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Extract(…, \"second\") over a duration expression is not supported on MySQL, which holds a duration as its count of micros"),
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract year F hop date + interval | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year F hop date + interval | alone", :sqlite) =>
@@ -5762,6 +5762,294 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year F hop date + interval | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract second F interval * 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract second F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The second part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract hour Sum interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract minute F datetime - date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("Extract minute F datetime - date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
+  ("F time - time | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CTime()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("F time - time | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Max F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Max F time - time | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Max F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
+  ("Extract year F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
+  ("Extract year F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract year F time - time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The year part over a duration is not supported: a duration has no calendar date on any engine, so the part has no meanin"),
+  ("Extract year F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract year F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract hour F time - time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The hour part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has n"),
+  ("Extract hour F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract hour F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract epoch F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Extract epoch F time - time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Extract epoch F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Extract epoch F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F time - time | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F time - time | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Round F time - time | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
+  ("Round F time - time | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Round F time - time | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes an interval (an expression) and a number (`year`), and does not say which type its value has (#1321). Say"),
+  ("Coalesce F time - time int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes an interval (an expression) and a number (`year`), and does not say which type its value has (#1321). Say"),
+  ("Coalesce F time - time int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce F time - time int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes an interval (an expression) and a number (`year`), and does not say which type its value has (#1321). Say"),
+  ("Coalesce F time - time int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
+  ("Coalesce F time - time int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Coalesce bool int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (`result`), and does not say which type its value has (#1386). S"),
+  ("Coalesce bool int literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Coalesce bool int literal | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and a number (an Int64 literal), and does not say which type its value has (#"),
+  ("Greatest int bool | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Greatest int bool | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a number (`result`) and a boolean (`boolean_field`), and does not say which type its value has (#1386). S"),
+  ("Case then true default 0 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Case then true default 0 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a boolean (a Bool literal) and a number (an Int64 literal), and does not say which type its value has (#1386)"),
+  ("Coalesce bool text | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool text | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a boolean (`boolean_field`) and text (`description`), and does not say which type its value has (#1386). "),
+  ("Coalesce bool comparison | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool comparison | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool comparison | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Round date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a date is not supported: a date is not a number, so `Round` has no meaning over one on any engine (#1387). Fo"),
   ("Round date | alone", :sqlite) =>

@@ -1509,10 +1509,10 @@ _refuse_date_of_time(format::Dict{String,Any}, label::String) =
   get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
 # #1324 — a clock part of a duration EXPRESSION (a timestamp difference, interval arithmetic, a `Sum`
 # of a duration), which MySQL holds as its count of microseconds: `EXTRACT(HOUR FROM <a BIGINT>)` reads
-# the count as a time, a NULL or a value with no meaning, where PostgreSQL reads the interval's hours
-# component. MySQL departs, so it refuses on itself; only `EPOCH` reads the count (its seconds). A
-# `DurationField` column is refused earlier, on every engine, by its field (#1070); this is an
-# expression.
+# the count as a time, a NULL or a value with no meaning. Only `EPOCH` reads the count (its seconds).
+# Since #1388 the build refuses a clock part of a duration on every engine first
+# (`_check_temporal_expression`), as #1070 refuses one over a `DurationField` column; this arm is the
+# second line, for an operand the build reaches only here.
 _mysql_part_of_interval_refusal(label::String) = QueryBuildError(
   "$(label) over a duration expression is not supported on MySQL, which holds a duration as its count " *
   "of microseconds there: the part would read that count as a time. For a duration's seconds, " *

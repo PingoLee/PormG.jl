@@ -28,6 +28,11 @@ interval or a UUID, and a UUID beside anything else, are refused the same way. N
 common type, so the message names none, and `output_field` does not lift a pair with a number or a
 UUID side.
 
+#1386 classes a boolean and a whole JSON document too. A boolean beside a number is explicit intent:
+SQLite and MySQL answered the flag's `0`/`1`, PostgreSQL failed at the server, and the query does not
+say whether it means the flag or a count, so the message names the `Case` that says it. A JSON key
+lookup stays unclassified: its type is the data's.
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia --project=test/integration test/unit/test_temporal_mix_refusal.jl
@@ -73,6 +78,8 @@ Tmx_race = Models.Model("tmx_race",
   local_at = Models.DateTimeField(type = "TIMESTAMP", null = true),   # naive
   laptime  = Models.DurationField(null = true),
   token    = Models.UUIDField(null = true),                           # #1321
+  flag     = Models.BooleanField(null = true),                        # #1386
+  payload  = Models.JSONField(null = true),                           # #1386
   circuit  = Models.ForeignKey(Tmx_circuit, on_delete = "CASCADE"),
 )
 
@@ -387,7 +394,7 @@ end
 # Two UUIDs, a number beside the year of a date (an integer), a date cast to text beside text, and the
 # #1200 date/timestamp pair under an `output_field`, which it still lifts. A UUID beside text is not a
 # mix: SQLite and MySQL type a cast to `uuid` as text, so refusing it would refuse the explicit
-# spelling there only. A boolean beside a number is no class this rule reads (#1147's question).
+# spelling there only. (A boolean beside a number is a mix since #1386, below.)
 # Expected SQL on PostgreSQL: COALESCE("Tb"."token", ("Tb"."name")::uuid).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1321: one class, and the spellings that state one, build" begin
@@ -396,10 +403,81 @@ end
                Fn.Coalesce(Fn.Cast("date", "text"), "name"),
                Fn.Coalesce("date", "start_at"; output_field = "date"),
                Fn.Coalesce("token", Fn.Cast("name", "uuid")),
-               Fn.Coalesce("token", "name"),
-               Fn.Case(Fn.When("number" => 1, then = 1), default = true))
+               Fn.Coalesce("token", "name"))
     @test _tmx_builds_all(expr)
   end
   @test occursin("COALESCE(\"Tb\".\"token\", (\"Tb\".\"name\")::uuid) as \"x\"",
                  _tmx_render(Fn.Coalesce("token", Fn.Cast("name", "uuid")); conn = _TMX_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1386: a boolean or a JSON document beside another class is refused on every engine
+# Before, a boolean and a JSON value had no class, so each of these built everywhere: SQLite answered
+# the row's own value (the flag's `0`/`1`, the document's text), and PostgreSQL has no common type for
+# the pair. A boolean beside a number is explicit intent (does the query mean the flag or a count?),
+# and the message names the `Case` that says it; beside text, the `Case` that writes the text. Every
+# other pair has no common type. An `output_field` does not lift any of them. Expected SQL: none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1386: a boolean or a JSON document beside another class is refused on every engine" begin
+  function refused(expr, fname, a, b; fix = _TMX_NONE, declared::Bool = false)
+    for conn in _TMX_ALL
+      err = _tmx_refusal(expr; conn = conn)
+      @test err isa QueryBuildError
+      err isa QueryBuildError || continue
+      msg = _tmx_msg(err)
+      @test occursin("$(fname) mixes $(a) and $(b), and does not say which type its value has (#1386)", msg)
+      @test occursin(fix, msg)
+      @test !occursin("output_field = ", msg)
+      @test occursin(_TMX_NOT_DECLARED, msg) == declared
+      @test _tmx_names_no_engine(msg) && !occursin("MySQL", msg)
+    end
+  end
+  flag, number, doc = "a boolean (`flag`)", "a number (`number`)", "a JSON document (`payload`)"
+  count_case = "Case(When(\"<flag>\" => true, then = 1), default = 0)"
+  text_case = "Case(When(\"<flag>\" => true, then = \"yes\"), default = \"no\")"
+  # Never a cast of the boolean: SQLite and MySQL refuse `Cast(flag, "text")` (#1028).
+  any_case(noun) = "write the value the flag means as $(noun) with a Case, " *
+                   "Case(When(\"<flag>\" => true, then = …), default = …)"
+  # The issue's table: a boolean beside a number, in each function.
+  refused(Fn.Coalesce("flag", "number"), "Coalesce", flag, number; fix = count_case)
+  refused(Fn.Greatest("number", "flag"), "Greatest", number, flag; fix = count_case)
+  refused(Fn.Least("flag", 0), "Least", flag, "a number (an Int64 literal)"; fix = count_case)
+  refused(Fn.NullIf("number", "flag"), "NullIf", number, flag; fix = count_case)
+  refused(Fn.Case(Fn.When("number" => 1, then = true), default = 0), "Case", "a boolean (a Bool literal)",
+          "a number (an Int64 literal)"; fix = count_case)
+  refused(Fn.Lag("number"; default = true, over = _tmx_over()), "Lag", number, "a boolean (a Bool literal)";
+          fix = count_case)
+  # A comparison is a boolean too.
+  refused(Fn.Coalesce(F("number") > 1, "number"), "Coalesce", "a boolean (an expression)", number; fix = count_case)
+  # Beside text, the `Case` writes the text; beside a date or a UUID there is no common type.
+  refused(Fn.Coalesce("flag", "name"), "Coalesce", flag, "text (`name`)"; fix = text_case)
+  refused(Fn.Coalesce("flag", "date"), "Coalesce", flag, _DATE; fix = any_case("a date"))
+  refused(Fn.Coalesce("flag", "token"), "Coalesce", flag, "a UUID (`token`)"; fix = any_case("a UUID"))
+  # A whole JSON document beside a number, text or a boolean.
+  refused(Fn.Coalesce("payload", "number"), "Coalesce", doc, number)
+  refused(Fn.Coalesce("payload", "name"), "Coalesce", doc, "text (`name`)"; fix = _TMX_TEXT)
+  refused(Fn.Coalesce("flag", "payload"), "Coalesce", flag, doc; fix = any_case("a JSON document"))
+  # An `output_field` does not lift it.
+  refused(Fn.Coalesce("flag", "number"; output_field = "integer"), "Coalesce", flag, number;
+          fix = count_case, declared = true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1386: one class, a NULL, and a JSON key lookup build on every engine
+# A boolean beside a boolean (a literal, a comparison, a `Case` of flags, one with a NULL default), a
+# document beside a document, the `Case` the refusal names, and a key lookup (`"payload__driver"`), whose type is the
+# data's and so has no class, beside a number. Expected SQL on PostgreSQL for the count:
+# `CASE WHEN "Tb"."flag" = $1 THEN $2 ELSE $3 END`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1386: one class, a NULL and a JSON key lookup build" begin
+  for expr in (Fn.Coalesce("flag", false),
+               Fn.Coalesce("flag", F("number") > 1),
+               Fn.Case(Fn.When("number" => 1, then = true), default = false),
+               Fn.Case(Fn.When("number" => 1, then = true)),
+               Fn.Greatest("flag", false),
+               Fn.Coalesce("payload", "payload"),
+               Fn.Case(Fn.When("flag" => true, then = 1), default = 0),
+               Fn.Coalesce("payload__driver", "number"))
+    @test _tmx_builds_all(expr)
+  end
 end

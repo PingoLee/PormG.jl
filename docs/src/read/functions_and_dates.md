@@ -231,17 +231,20 @@ M.Race.objects.values("h" => Extract("date", "hour"))  # the same QueryBuildErro
 ```
 
 The check covers columns PormG can name a field for: a model field, or one reached through a
-join (`"raceid__date__@week"`). An expression or a subquery has no field. For one of them, only the
-calendar parts (the last row of the table) are checked, against the expression's type. A duration
-expression has no calendar date, as a `DurationField` has none: a timestamp difference, interval
-arithmetic, or a `Sum` or `Avg` of a duration raises `QueryBuildError` on every engine. Any other
-expression is passed through as written, and so is a time-of-day part over a duration expression
-(except on MySQL, which refuses it: see
-[Subtracting two dates](field_expressions.md#Subtracting-two-dates)).
+join (`"raceid__date__@week"`). An expression or a subquery has no field. For one of them, the
+part is checked against the duration the type walk names, by the same rows as a column. A duration
+expression reads only `EPOCH`, as a `DurationField` does: under any other part, a timestamp
+difference, interval arithmetic, a `Sum` or `Avg` of a duration, or a time minus a time on PostgreSQL
+raises `QueryBuildError` on every engine. A calendar part has no meaning over a duration, and a
+time-of-day part has no single one (see
+[Subtracting two dates](field_expressions.md#Subtracting-two-dates)). Any other expression is passed
+through as written.
 
 ```julia
 M.Result.objects.values("y" => Extract(F("fastestlaptime") * 2, "year"))   # QueryBuildError: a duration has no calendar date
 M.Race.objects.values("q" => Extract(F("start_at") - F("date"), "quarter"))  # the same QueryBuildError
+M.Race.objects.values("h" => Extract(F("start_at") - F("date"), "hour"))     # QueryBuildError: a duration has no time of day
+M.Race.objects.values("s" => Extract(F("start_at") - F("date"), "epoch"))    # its seconds: builds on PostgreSQL and MySQL
 M.Result.objects.values("y" => Extract(F("raceid__date") + F("fastestlaptime"), "year"))  # a timestamp: builds
 ```
 
@@ -941,10 +944,26 @@ operand is not `NULL`: `update("grid" => Coalesce("grid", "racedate"))` stored t
 integer column on the rows where `grid` was `NULL`. Say which value you mean, for example the date's
 year, `Coalesce("grid", Extract("racedate", "year"))`. An `output_field` does not lift this one either.
 
-Two pairs are not checked. A UUID beside text builds: SQLite and MySQL hold a UUID as its text, so
+**A boolean or a JSON document beside another type** is refused the same way (#1386). A boolean
+beside a number does not say whether it means the flag or a count: SQLite and MySQL store the flag as
+`0`/`1` and answered a number, and PostgreSQL fails at the server. Write the number the flag means
+with a `Case`, which builds on every engine. Beside text, write the text the same way:
+
+```julia
+using PormG.Functions: Case, When
+
+# ✗ a boolean and a number: refused
+M.New_join_position.objects.values("v" => Coalesce("boolean_field", "result"))
+# ✓ the count the flag means
+M.New_join_position.objects.values("v" => Case(When("boolean_field" => true, then = 1), default = 0))
+```
+
+A whole JSON document (a `JSONField` column) beside a number, text, a boolean or a date has no common
+type either. A JSON key lookup (`"payload__driver"`) is not checked: its type is the data's.
+
+One pair is not checked. A UUID beside text builds: SQLite and MySQL hold a UUID as its text, so
 `Coalesce("token", Cast("name", "uuid"))` is that text there, and PostgreSQL raises at the server for
-a text column beside a UUID. A boolean or a JSON value beside another type builds as written: a
-boolean is not classed as a number here, and a JSON key's type is the data's.
+a text column beside a UUID.
 
 ### `Cast` — Type Conversion
 

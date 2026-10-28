@@ -814,18 +814,22 @@ end
     ("NullIf over a boolean", () -> NullIf("finished", false)),
   )
   # Controls: no boolean value, so no kind. The integer `Case` is the `Sum(Case(When(…, then = 1),
-  # default = 0))` count, which must stay summable; a mixed `Case` is not a boolean on PostgreSQL either.
+  # default = 0))` count, which must stay summable.
   untyped = (
     ("a Case of integers", () -> Case([When("lap" => 1, then = 1)], default = 0)),
-    ("a Case mixing a Bool and an integer", () -> Case([When("lap" => 1, then = true)], default = 0)),
     ("a Case of strings (a string then is no column path)", () -> Case([When("lap" => 1, then = "finished")], default = "x")),
     ("a Case of NULLs alone", () -> Case([When("lap" => 1, then = missing)])),
     ("Lag over an integer", () -> Lag("lap", over = w)),
     ("Sum of an integer Case", () -> Sum(Case([When("lap" => 1, then = 1)], default = 0))),
     ("arithmetic", () -> F("lap") + 1),
     ("an integer column", () -> "lap"),
-    # Every operand must be a boolean, not only the first one that names a type: on SQLite the value
-    # would be a boolean on some rows and an integer on others (review of #965).
+  )
+  # Every operand must be a boolean, not only the first one that names a type: on SQLite the value
+  # would be a boolean on some rows and an integer on others (review of #965). These were controls
+  # that kept no kind; since #1386 a boolean beside a number is refused on every engine, which closes
+  # the same hazard before any kind is read.
+  mixed = (
+    ("a Case mixing a Bool and an integer", () -> Case([When("lap" => 1, then = true)], default = 0)),
     ("Coalesce of a boolean and an integer column", () -> Coalesce("finished", "points")),
     ("Coalesce of a boolean and an integer literal", () -> Coalesce("finished", 5)),
     ("Greatest of a boolean and an integer column", () -> Greatest("finished", "points")),
@@ -840,6 +844,10 @@ end
     end
     @testset "$backend: $label keeps no kind" for (label, value) in untyped
       @test kind_of(Model_, value) === nothing
+    end
+    @testset "$backend: $label is refused (#1386)" for (label, value) in mixed
+      err = try kind_of(Model_, value); nothing catch e; e end
+      @test err isa PormG.QueryBuildError && occursin("(#1386)", sprint(showerror, err))
     end
 
     # A plain boolean column reads as a `Bool` too, however it is read: by name, across a join, in a

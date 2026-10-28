@@ -1,16 +1,17 @@
-## A calendar part over a duration expression is refused on every engine (#1388)
+## A calendar or time-of-day part over a duration expression is refused on every engine (#1388)
 
 - **Version**: Unreleased
-- **PormG ref**: #1388 ; `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`, `_check_temporal_expression`), `src/Dialect.jl` (`_duration_calendar_refusal`)
+- **PormG ref**: #1388 ; `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`, `_check_temporal_expression`, `_duration_part_refusal`), `src/Dialect.jl` (`_duration_calendar_refusal`)
 - **Recorded**: 2026-10-27
-- **Severity**: behavior change. On PostgreSQL and SQLite, `Extract` with a calendar part (`year`, `month`, `quarter`, `dow`, `week`, `doy` and every other part except the time-of-day, `TIMEZONE` and `EPOCH` ones), or `ToChar(…, "YYYY-MM")`, over a duration expression used to build. On SQLite it returned a value read from the duration as if it were a date, and on PostgreSQL it returned the interval's own fields (`0` for a year, `1` for a quarter, `"0000-00"`) or failed at the server. It now raises `QueryBuildError` when the query is built.
+- **Severity**: behavior change. On PostgreSQL and SQLite, `Extract` with any part except `EPOCH` (a calendar part such as `year`, `month`, `quarter`, `dow`; a time-of-day part, `hour`, `minute`, `second`, `milliseconds`, `microseconds`; a `TIMEZONE` part), or `ToChar(…, "YYYY-MM")`, over a duration expression used to build. On SQLite a calendar part returned a value read from the duration as if it were a date, and a time-of-day part `NULL` for a duration over 24 hours or a negative one. On PostgreSQL a calendar part returned the interval's own fields (`0` for a year, `1` for a quarter, `"0000-00"`) or failed at the server, and a time-of-day part a component that depends on how the interval was formed. It now raises `QueryBuildError` when the query is built.
 
 ### What changed
 
 #1070 refused every part except `EPOCH` over a `DurationField` column, because a duration has no
-calendar date. It read the column's field, so an expression that is a duration got through: a
-timestamp difference, interval arithmetic, or a `Sum` or `Avg` of a duration. The check now asks the
-expression's type for the calendar parts, and refuses a duration on every engine.
+calendar date and no time of day. It read the column's field, so an expression that is a duration got
+through: a timestamp difference, interval arithmetic, or a `Sum` or `Avg` of a duration. The check now
+asks the expression's type, and refuses a duration under the same parts as the column, on every
+engine.
 
 Measured on the F1 fixture before the change, for the 8252 results with a fastest lap:
 
@@ -22,20 +23,31 @@ Measured on the F1 fixture before the change, for the 8252 results with a fastes
 | `values("v" => Extract(F("fastestlaptime") * 2, "dow"))` | `6` | fails at the server | `QueryBuildError` |
 | `values("v" => ToChar(F("fastestlaptime") * 2, "YYYY-MM"))` | `"2000-01"` | `"0000-00"` | `QueryBuildError` |
 | the same parts over `Sum("fastestlaptime")` or `F("start_at") - F("date")` on `Race` | as above, or `NULL` above 24 hours | as above | `QueryBuildError` |
-| `Extract(F("fastestlaptime") * 2, "hour")`, `"minute"`, `"second"` | built | built | builds, unchanged |
+| `Extract(F("fastestlaptime") * 2, "hour")`, `"minute"`, `"second"` | built | built | `QueryBuildError` |
 | `Extract(F("fastestlaptime") * 2, "epoch")` | refused (no `EPOCH`) | built | unchanged |
 | `Extract(F("raceid__date") + F("fastestlaptime"), "year")`, a timestamp | built | built | builds, unchanged |
 
-The clock parts (`hour`, `minute`, `second`, `milliseconds`, `microseconds`) of a duration expression
-are not changed here. Whether they keep building is still open on #1388.
+The time-of-day parts were measured on the same fixture, SQLite against PostgreSQL, before the change:
 
-On MySQL (unreleased), these shapes were already refused (#1324). The message now says a duration has
-no calendar date, instead of naming `Extract(d, "epoch")`.
+| expression | SQLite before | PostgreSQL before |
+|---|---|---|
+| `Extract(F("fastestlaptime") * 2, "hour")` on `Result`, every row | equal to PostgreSQL | the interval's hours |
+| `Extract(Sum("fastestlaptime"), "hour")` over every lap, `208:11:49.316` | `NULL` | `208` |
+| `Extract(F("start_at") - F("fp1_date"), "hour")` on `Race`, 62 hours | `NULL` | `14` (`2 days 14:00:00`) |
+| `Extract(F("fastestlaptime") * -1, "hour")` | `NULL` | `0` |
+
+SQLite answered only below 24 hours, and PostgreSQL's hour depends on whether the interval was split
+into days, so a time-of-day part has no single meaning over a duration.
+
+On MySQL (unreleased), these shapes were already refused (#1324). A calendar part's message now says a
+duration has no calendar date, and a time-of-day part's says it has no time of day and names
+`Extract(d, "epoch")` for its seconds.
 
 ### Who this affects
 
-Code that applies a calendar part to a duration expression:
-- `Extract(<expr>, "year" | "month" | "quarter" | "dow" | …)` or `ToChar(<expr>, "YYYY-MM")`;
+Code that applies a calendar or time-of-day part to a duration expression:
+- `Extract(<expr>, "year" | "month" | "quarter" | "dow" | "hour" | "minute" | "second" | …)` or
+  `ToChar(<expr>, "YYYY-MM")`;
 - where the expression is a difference of two timestamps, arithmetic on a `DurationField`, or a `Sum`
   or `Avg` of one.
 
@@ -68,4 +80,16 @@ q.values("driverid__surname", "y" => Extract(F("raceid__date") + F("fastestlapti
 ```
 
 To read the duration itself, project it (`values("fastestlaptime")`) or read its seconds with
-`Extract(d, "epoch")` on PostgreSQL and MySQL.
+`Extract(d, "epoch")` on PostgreSQL and MySQL. For its hours, divide those seconds:
+
+```julia
+# ✗ before — SQLite read NULL for a duration over 24 hours
+q = M.Result.objects
+q.filter("raceid__year" => 2009)
+q.values("driverid__surname", "h" => Extract(F("fastestlaptime") * 2, "hour"))
+
+# ✓ after (PostgreSQL, MySQL) — the duration's seconds, converted in Julia
+q = M.Result.objects
+q.filter("raceid__year" => 2009)
+q.values("driverid__surname", "s" => Extract(F("fastestlaptime") * 2, "epoch"))
+```

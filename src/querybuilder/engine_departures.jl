@@ -27,7 +27,7 @@
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
 # (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325, #1417), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
-# hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
+# hold), `:single_precision` (`real`, #1215), `:sized_text` (a text type of a declared length, #1252) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
 # text`), since two engines can depart from one meaning with different values; `_computes` picks the
@@ -136,6 +136,13 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "the value rounded to single precision, a `Float32`",
    computes = (PormGSQLite => _ -> "the 8-byte double, every digit of it",),
    fix = (_, _) -> "Cast to a double, which is a `Float64` on every engine: \e[32mCast(x, \"float8\")\e[0m or \e[32mCast(x, FloatField())\e[0m."),
+  # #1252: a declared length (`varchar(n)`, `char(n)`, a `CharField(max_length = n)`) is the text cut
+  # to n characters. PostgreSQL's cast cuts it and so does MySQL's `CHAR(n)`; SQLite enforces no length,
+  # so its cast keeps every character. The operand does not decide it, so the one kind is `:value`.
+  (targets = (:sized_text,), kinds = (:value,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1252",
+   meaning = declared -> "the text cut to $(something(_sized_text_length(declared), 0)) characters",
+   computes = (PormGSQLite => _ -> "every character of it, since it enforces no length",),
+   fix = (_, _) -> "Cast to text of no declared length, \e[32mCast(x, \"text\")\e[0m or \e[32mCast(x, CharField())\e[0m, and cut the fetched value in Julia (\e[32mfirst(s, n)\e[0m)."),
 )
 
 # #1260 — the spelling of a temporal part for the operand a refusal names: a path takes the transform

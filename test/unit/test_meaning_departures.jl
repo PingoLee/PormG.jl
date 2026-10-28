@@ -55,7 +55,8 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
   # measured on 8.4.11 with literal casts (#1130 phase 2b): it departs where it reads a boolean as
   # `1`, a temporal value as the number its digits spell (`20090329`) and an overflow as the largest
   # value the type holds (`99.99`); it keeps a rounding cast to an integer, a cast to a scale and
-  # single precision (`CAST(… AS FLOAT)` reads back as a `Float32`).
+  # single precision (`CAST(… AS FLOAT)` reads back as a `Float32`), and a declared text length, which
+  # its `CHAR(n)` cuts (#1252).
   Pg, Sl, My = PormG.PormGPostgres, PormG.PormGSQLite, PormG.PormGMySQL
   @test [(row.issue, row.targets, row.departs, row.keeps) for row in rows] == [
     ("#1028", (:text,), (Sl, My), (Pg,)),
@@ -70,6 +71,7 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
     ("#1040", (:scale,), (Sl,), (Pg, My)),
     ("#1087", (:precision,), (Sl, My), (Pg,)),
     ("#1215", (:single_precision,), (Sl,), (Pg, My)),
+    ("#1252", (:sized_text,), (Sl,), (Pg, My)),
   ]
 end
 

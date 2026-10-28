@@ -182,7 +182,8 @@ const _PG_ONLY = (postgres = true, sqlite = false)
 @testset "#1028, #1147: Cast to text over a float, decimal, timestamp, interval or JSON builds on both engines (representation)" begin
   operands = ["points", "price", "team__rating", "start_at", "laptime", "payload",
               _CF("start_at") - _CF("start_at"), Fn.Avg("number"), Fn.Max("start_at"), _CF("points") * 2]
-  for operand in operands, target in (Models.CharField(), Models.TextField(), "text", "varchar(20)")
+  # An unsized `varchar`: a declared length cuts the text, which SQLite refuses (#1252, below).
+  for operand in operands, target in (Models.CharField(), Models.TextField(), "text", "varchar")
     @test _ccd_builds(Fn.Cast(operand, target))
   end
   @test occursin("(\"Tb\".\"points\")::varchar as \"x\"", _ccd_render(Fn.Cast("points", Models.CharField()); conn = _CCD_PG))
@@ -197,7 +198,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: Cast of a boolean to text is refused on SQLite only (meaning)" begin
   for (operand, named) in ("active" => "the BooleanField `active`", Fn.Value(true) => "a Bool literal"),
-      target in (Models.CharField(), Models.TextField(), "text", "varchar(20)")
+      target in (Models.CharField(), Models.TextField(), "text", "varchar")
     errs = _ccd_expect(Fn.Cast(operand, target); departs = _SL_ONLY, issue = "#1028", named = named)
     @test occursin("Write the text you mean: Case(When(", _ccd_msg(errs.sqlite))
   end
@@ -563,7 +564,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028, #1147: Greatest/Least to text over timestamps or intervals build on both engines; F key lookup in a CTE" begin
   for expr in (Fn.Greatest(_CF("start_at") + Day(1), _CF("start_at") + Day(2); output_field = "text"),
-               Fn.Least(_CF("start_at") + Day(1), _CF("start_at") - Day(1); output_field = "varchar(40)"),
+               Fn.Least(_CF("start_at") + Day(1), _CF("start_at") - Day(1); output_field = "varchar"),
                Fn.Greatest(_CF("laptime") + _CF("laptime"), _CF("laptime") * 2; output_field = "text"),
                Fn.Greatest("laptime", _CF("laptime") * 2; output_field = "text"))   # a typed DurationField column too
     @test _ccd_builds(expr)
@@ -2464,4 +2465,65 @@ end
     @test err isa QueryBuildError && occursin("of a duration is not supported", _ccd_msg(err)) &&
           occursin("(#1324)", _ccd_msg(err))
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1252: a cast to text of a declared length is refused on SQLite, which keeps every character
+# MEANING: `varchar(n)` (`character varying(n)`, `char(n)`, `character(n)`) is the text cut to n
+# characters. PostgreSQL's cast cuts it, and so does MySQL's `CHAR(n)`; SQLite enforces no length, so
+# `CAST(x AS TEXT)` keeps every character. The operand does not decide it, so every operand is refused
+# on SQLite, on `Cast` and on each `output_field` that renders a cast. A `CharField` given a length is
+# that `varchar(n)`, as Django's is, an explicit 250 included; `CharField()` declares no length and stays
+# the unbounded text it has always cast to. `Concat` renders no cast, so its `output_field` cuts nothing.
+# Expected SQL:
+#   PostgreSQL ("Tb"."surname")::varchar(3)        MySQL CAST(`Tb`.`surname` AS CHAR(3))
+# Why: before #1252 `Cast(x, CharField(max_length = 3))` rendered an unbounded `::varchar` on PostgreSQL,
+# and `Cast(x, "varchar(3)")` built on SQLite and returned every character where PostgreSQL cut it to 3.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1252: a sized text cast keeps its length, and is refused on SQLite only" begin
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = "x", output_field = output_field)
+  for (target, n) in (("varchar(3)", 3), ("VARCHAR(3)", 3), ("character varying(3)", 3), ("char(3)", 3),
+                      ("char", 1), ("character", 1),
+                      (Models.CharField(max_length = 3), 3), (Models.CharField(max_length = 250), 250)),
+      expr in (Fn.Cast("surname", target), Fn.Cast("number", target), Fn.Cast(Fn.Value("Senna"), target))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1252", named = "the text cut to $(n) characters")
+    msg = _ccd_msg(errs.sqlite)
+    @test occursin("SQLite computes every character of it", msg)
+    @test occursin("Cast(x, \"text\")", msg) && occursin("Cast(x, CharField())", msg)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+  for expr in (Fn.Coalesce("surname", "surname"; output_field = "varchar(3)"),
+               Fn.Greatest("surname", "surname"; output_field = Models.CharField(max_length = 3)),
+               Fn.Least("surname", "surname"; output_field = "char(3)"),
+               case("surname"; output_field = "varchar(3)"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1252", named = "output_field = \"")
+  end
+  # The length is in the cast each engine renders (#1221's `numeric(p, s)` shape).
+  sized = Fn.Cast("surname", Models.CharField(max_length = 3))
+  @test occursin("(\"Tb\".\"surname\")::varchar(3) as \"x\"", _ccd_render(sized; conn = _CCD_PG))
+  @test occursin("CAST(`Tb`.`surname` AS CHAR(3))", _ccd_render(sized; conn = _CCD_MY))
+  @test occursin("::varchar(250) as", _ccd_render(Fn.Cast("surname", Models.CharField(max_length = 250)); conn = _CCD_PG))
+  # No declared length: unbounded text on every engine, as before, and so is a `Concat`'s declaration.
+  for expr in (Fn.Cast("surname", Models.CharField()), Fn.Cast("surname", "varchar"), Fn.Cast("surname", "text"),
+               Fn.Coalesce("surname", "surname"; output_field = Models.CharField()),
+               Fn.Concat(["surname", Fn.Value("x")]; output_field = "varchar(3)"),
+               Fn.Concat(["surname", Fn.Value("x")]; output_field = Models.CharField(max_length = 3)))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+  @test occursin("(\"Tb\".\"surname\")::varchar as \"x\"", _ccd_render(Fn.Cast("surname", Models.CharField()); conn = _CCD_PG))
+  # On an engine that keeps the length, the operand is still read as for any cast to text: a boolean
+  # is the #1028 departure on MySQL, which writes `1`, and builds on PostgreSQL; SQLite meets #1252 first.
+  bool_sized = Fn.Cast("active", "varchar(3)")
+  @test _ccd_refusal(bool_sized; conn = _CCD_PG) === nothing
+  @test occursin("(#1252)", _ccd_msg(_ccd_refusal(bool_sized; conn = _CCD_SL)))
+  my = _ccd_refusal(bool_sized; conn = _CCD_MY)
+  @test my isa QueryBuildError && occursin("so PormG refuses it on MySQL (#1028)", _ccd_msg(my))
+  # The field records that its length was given, and prints as the call that gave it.
+  @test Models.CharField().max_length_given === false
+  @test Models.CharField(max_length = 250).max_length_given === true
+  @test sprint(show, Models.CharField(max_length = 250)) == "CharField(max_length=250)"
+  @test sprint(show, Models.CharField()) == "CharField()"
+  @test Models._field_kwarg_sets!(String[], Models.CharField(max_length = 250), Models.CharField()) == ["max_length=250"]
+  @test Models._field_kwarg_sets!(String[], Models.CharField(), Models.CharField()) == String[]
 end

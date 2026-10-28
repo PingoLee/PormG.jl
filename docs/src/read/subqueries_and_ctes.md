@@ -749,7 +749,9 @@ refused there, and it refuses the cast to a time, timestamp, interval or `bytea`
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A single-precision float (`real`, `float4`) is refused on SQLite, which has no
-4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). MySQL casts `uuid` to
+4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)), and so is text
+of a declared length (`varchar(n)`, `char(n)`, `CharField(max_length = n)`), which SQLite does not
+cut (#1252). MySQL casts `uuid` to
 `CHAR(36)` text, so a CTE column declared as one is refused there too; it refuses `inet` and `cidr`
 with `BackendCapabilityError` and the cast to an `interval`, `bytea` or `blob` type itself, while a
 time or timestamp type casts to `TIME(6)` or `DATETIME(3)` ([MySQL Guide](../mysql.md#Reads)). A declared type is also what the SQL casts the value to, on every engine (a boolean is `((x) <> 0)` on MySQL): a `date` on

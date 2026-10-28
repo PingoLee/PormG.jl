@@ -6701,57 +6701,57 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast text varchar(3) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text varchar(3) | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text varchar(3) | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text varchar(3) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text varchar(3) | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(3)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text varchar(3) | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text varchar(3) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text varchar(3) | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text varchar(3) | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text CharField(3) | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text CharField(3) | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast text CharField(3) | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(3)\") of any value means the text cut to 3 characters; SQLite computes every character of it, since it e"),
   ("Cast text CharField(3) | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(3)", whole_numeric = nothing),
   ("Cast int CharField(250) | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast int CharField(250) | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(250)\") of any value means the text cut to 250 characters; SQLite computes every character of it, since "),
   ("Cast int CharField(250) | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast int CharField(250) | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast int CharField(250) | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(250)\") of any value means the text cut to 250 characters; SQLite computes every character of it, since "),
   ("Cast int CharField(250) | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast int CharField(250) | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast int CharField(250) | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"varchar(250)\") of any value means the text cut to 250 characters; SQLite computes every character of it, since "),
   ("Cast int CharField(250) | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("Cast text CharField | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
   ("Cast text CharField | alone", :sqlite) =>

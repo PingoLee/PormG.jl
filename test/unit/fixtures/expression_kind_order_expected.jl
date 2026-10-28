@@ -4876,7 +4876,31 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Cast text nchar(3) | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text ArrayField(CharField(3)) | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{SOFT,MEDIUM}\"", "String")]),
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64")]),
+  ("Cast text varchar[] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{SOFT,MEDIUM}\"", "String")]),
+  ("Cast text varchar[] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{SOFT,MEDIUM}\"", "String"), ("1", "Int64")]),
+  ("Cast int integer[] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{7,8}\"", "String")]),
+  ("Cast int integer[] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{7,8}\"", "String"), ("1", "Int64")]),
+  ("Cast decimal numeric(10,2)[] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{1.5,2}\"", "String")]),
+  ("Cast decimal numeric(10,2)[] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{1.5,2}\"", "String"), ("1", "Int64")]),
+  ("Cast int smallint[] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{7,8}\"", "String")]),
+  ("Cast int smallint[] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{7,8}\"", "String"), ("1", "Int64")]),
+  ("Cast float real[] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{0.5}\"", "String")]),
+  ("Cast float real[] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{0.5}\"", "String"), ("1", "Int64")]),
+  ("Cast int integer[][] | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{{7,8}}\"", "String")]),
+  ("Cast int integer[][] | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{{7,8}}\"", "String"), ("1", "Int64")]),
 )

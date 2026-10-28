@@ -493,7 +493,17 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast text EmailField",    :Result,              m -> _EKM_FN.Cast("positiontext", PormG.Models.EmailField())),
   ("Cast text bpchar(3)",     :Result,              m -> _EKM_FN.Cast("positiontext", "bpchar(3)")),
   ("Cast text nchar(3)",      :Result,              m -> _EKM_FN.Cast("positiontext", "nchar(3)")),
-  ("Cast text ArrayField(CharField(3))", :Result,   m -> _EKM_FN.Cast("positiontext", PormG.Models.ArrayField(PormG.Models.CharField(max_length = 3)))),
+  # #1439: a cast to an array reads back as the `Vector` an `ArrayField` of its element does; an array
+  # of an element `ArrayField` cannot declare (`smallint`), or of more than one dimension, names nothing.
+  # Each casts an array literal, so the read-back (`test_expression_kind_readback.jl`) can run it on
+  # PostgreSQL: a scalar column has no cast to an array there.
+  ("Cast text ArrayField(CharField(3))", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Value("{SOFT,MEDIUM}"), PormG.Models.ArrayField(PormG.Models.CharField(max_length = 3)))),
+  ("Cast text varchar[]",     :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{SOFT,MEDIUM}"), "varchar[]")),
+  ("Cast int integer[]",      :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{7,8}"), "integer[]")),
+  ("Cast decimal numeric(10,2)[]", :Result,         m -> _EKM_FN.Cast(_EKM_FN.Value("{1.5,2}"), "numeric(10,2)[]")),
+  ("Cast int smallint[]",     :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{7,8}"), "smallint[]")),
+  ("Cast float real[]",       :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{0.5}"), "real[]")),
+  ("Cast int integer[][]",    :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{{7,8}}"), "integer[][]")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

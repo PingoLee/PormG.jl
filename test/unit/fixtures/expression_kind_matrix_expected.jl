@@ -6896,6 +6896,114 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar(3)[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported o"),
   ("Cast text ArrayField(CharField(3)) | subquery", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar(3)[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on"),
+  ("Cast text varchar[] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text varchar[] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast text varchar[] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast text varchar[] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type varchar[] on CAST(…). Name a text, integer, bigint, float, numeric, boole"),
+  ("Cast text varchar[] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast text varchar[] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast text varchar[] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text varchar[] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast text varchar[] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"varchar[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast int integer[] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int integer[] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast int integer[] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast int integer[] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type integer[] on CAST(…). Name a text, integer, bigint, float, numeric, boole"),
+  ("Cast int integer[] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast int integer[] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast int integer[] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int integer[] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on P"),
+  ("Cast int integer[] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Po"),
+  ("Cast decimal numeric(10,2)[] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast decimal numeric(10,2)[] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supporte"),
+  ("Cast decimal numeric(10,2)[] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported"),
+  ("Cast decimal numeric(10,2)[] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type numeric(10,2)[] on CAST(…). Name a text, integer, bigint, float, numeric,"),
+  ("Cast decimal numeric(10,2)[] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supporte"),
+  ("Cast decimal numeric(10,2)[] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported"),
+  ("Cast decimal numeric(10,2)[] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast decimal numeric(10,2)[] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supporte"),
+  ("Cast decimal numeric(10,2)[] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"numeric(10,2)[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported"),
+  ("Cast int smallint[] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int smallint[] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on "),
+  ("Cast int smallint[] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on P"),
+  ("Cast int smallint[] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type smallint[] on CAST(…). Name a text, integer, bigint, float, numeric, bool"),
+  ("Cast int smallint[] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on "),
+  ("Cast int smallint[] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on P"),
+  ("Cast int smallint[] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int smallint[] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on "),
+  ("Cast int smallint[] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"smallint[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on P"),
+  ("Cast float real[] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast float real[] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on Post"),
+  ("Cast float real[] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Postg"),
+  ("Cast float real[] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type real[] on CAST(…). Name a text, integer, bigint, float, numeric, boolean,"),
+  ("Cast float real[] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on Post"),
+  ("Cast float real[] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Postg"),
+  ("Cast float real[] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast float real[] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on Post"),
+  ("Cast float real[] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"real[]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on Postg"),
+  ("Cast int integer[][] | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int integer[][] | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on"),
+  ("Cast int integer[][] | alone", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on "),
+  ("Cast int integer[][] | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type integer[][] on CAST(…). Name a text, integer, bigint, float, numeric, boo"),
+  ("Cast int integer[][] | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on"),
+  ("Cast int integer[][] | cte", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on "),
+  ("Cast int integer[][] | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast int integer[][] | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on"),
+  ("Cast int integer[][] | subquery", :mysql) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on "),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

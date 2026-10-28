@@ -44,8 +44,8 @@ These work in both `filter()` and `values()`.
 Exact match, `@contains`, `@startswith` and `@endswith` compare case-sensitively on every engine.
 PostgreSQL's default collation is deterministic. On SQLite, `=` uses the default `BINARY`
 collation, and `LIKE` is case-sensitive because PormG sets `PRAGMA case_sensitive_like = ON` on every
-connection. On MySQL, the tables PormG creates and each connection use the `utf8mb4_0900_bin`
-collation, which compares code points; a table PormG did not create compares by its own collation
+connection. On MySQL, every text column PormG creates or adds and each connection use the `utf8mb4_0900_bin`
+collation, which compares code points; a column PormG did not create compares by its own collation
 ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature),
 [MySQL Guide](../mysql.md#Reads)).
 

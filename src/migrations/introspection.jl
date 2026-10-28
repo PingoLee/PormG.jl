@@ -2167,7 +2167,8 @@ end
 
 # What `MODIFY COLUMN` would reset on one column unless restated (measured on 8.4), as the catalog holds it
 # before the plan runs: its COMMENT, `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP`, a collation other than
-# the table's, and an expression default (as MySQL prints it, one level of escaping undone) — and whether
+# the table's (and whether it holds text at all, so a retype into text declares PormG's, #1434), and an
+# expression default (as MySQL prints it, one level of escaping undone) — and whether
 # it is a generated column, which a MODIFY makes a plain one (`STORED`) or fails on (`VIRTUAL`, 3106).
 # Bound by value; `nothing` for a column the catalog does not hold.
 function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column::AbstractString)
@@ -2191,6 +2192,7 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
           invisible = occursin("invisible", extra),
           on_update = occursin("on update current_timestamp", extra),
           collation = keep_coll ? coll : nothing,
+          text = coll !== nothing,
           generated = generated,
           # A generation expression made by hand, restated by a MODIFY (as MySQL printed it, unescaped), and
           # its kind: a MODIFY that leaves it out ends a STORED column's generation and fails on a VIRTUAL

@@ -62,25 +62,28 @@ _mm_err(f) = try; f(); nothing; catch e; e; end
 @testset "#1268: a model renders MySQL DDL" begin
   @test _MD.create_table(_mm_my, _MmDriver) == "CREATE TABLE IF NOT EXISTS `driver` (\n  " * join([
     "`driverid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY",
-    "`forename` VARCHAR(100) NOT NULL",
+    "`forename` VARCHAR(100) NOT NULL COLLATE utf8mb4_0900_bin",
     "`dob` DATE NULL",
     "`active` TINYINT(1) NOT NULL DEFAULT TRUE",
     "`created` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)",
     "`number` SMALLINT NULL CHECK (`number` >= 0)",
     "`rating` DECIMAL(6,3) NULL",
-    "`code` VARCHAR(8) NOT NULL DEFAULT 'a\\\\b''c'"], ",\n  ") *
+    "`code` VARCHAR(8) NOT NULL DEFAULT 'a\\\\b''c' COLLATE utf8mb4_0900_bin"], ",\n  ") *
     "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;"
   ddl = _MD.create_table(_mm_my, _MmResult)
+  # Each column whole, so a text column's `COLLATE` (#1434) and its absence on the others are both checked.
+  lines = [rstrip(strip(l), ',') for l in split(ddl, '\n')]
   for col in ("`resultid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY", "`driverid` BIGINT NOT NULL",
-              "`circuitid` BIGINT NULL", "`laptime` TIME(6) NULL", "`fastest` BIGINT NULL", "`uid` CHAR(36) NULL",
-              "`meta` JSON NULL", "`blob` LONGBLOB NULL", "`notes` LONGTEXT NOT NULL DEFAULT ('it''s')",
+              "`circuitid` BIGINT NULL", "`laptime` TIME(6) NULL", "`fastest` BIGINT NULL",
+              "`uid` CHAR(36) NULL COLLATE utf8mb4_0900_bin", "`meta` JSON NULL", "`blob` LONGBLOB NULL",
+              "`notes` LONGTEXT NOT NULL DEFAULT ('it''s') COLLATE utf8mb4_0900_bin",
               "`points` DOUBLE NOT NULL DEFAULT 0.0", "`laps` BIGINT NOT NULL DEFAULT 0",
               "`grid` INT NOT NULL DEFAULT 0 CHECK (`grid` >= 0)", "`today` DATE NOT NULL DEFAULT (CURRENT_DATE)")
-    @test (col, occursin(col, ddl)) == (col, true)
+    @test (col, col in lines) == (col, true)
   end
   # No foreign key in the table: the planner adds each once every table exists, as on PostgreSQL.
   @test !occursin("REFERENCES", ddl) && !occursin('"', ddl)
-  @test occursin("`url` VARCHAR(200) NOT NULL UNIQUE", _MD.create_table(_mm_my, _MmCircuit))
+  @test occursin("`url` VARCHAR(200) NOT NULL COLLATE utf8mb4_0900_bin UNIQUE", _MD.create_table(_mm_my, _MmCircuit))
   # InnoDB has no deferrable key (#1272); SET_NULL is MySQL's own action.
   @test _MD.add_foreign_key(_mm_my, "result", "`result_circuitid_fk`", "`circuitid`", "`circuit`", "`circuitid`";
                             on_delete = "SET NULL") ==
@@ -318,8 +321,13 @@ _MM.get_constraints_byte_length_checks(::MmMockMySQL, table::String, column::Str
 _MM.get_constraints_index(::MmMockMySQL, table::Symbol, column::String) = "$(table)_$(column)_idx"
 _MM.get_constraints_fk(::MmMockMySQL, table::Symbol, column::String) = "$(table)_$(column)_fk"
 _MM._foreign_key_leaves_index(::MmMockMySQL, table, name::AbstractString) = true
-# A column with nothing beyond what the model states.
-PormG._column_attributes(::MmMockMySQL, table::AbstractString, column::AbstractString) = nothing
+# A column of a table PormG created: the table's collation, and nothing beyond what the model states. (A
+# column the catalog does not hold, `nothing`, is one the plan writes whole, its collation included, #1434.)
+# It answers as a text column whatever the type, so a retype from a non-text type into text is
+# `MmMockMySQLHeld{false}`'s case, not this mock's.
+PormG._column_attributes(::MmMockMySQL, table::AbstractString, column::AbstractString) =
+  (comment = "", invisible = false, on_update = false, collation = nothing, text = true, default_expression = nothing,
+   generated = false, generation = nothing, column_type = nothing)
 # The other indexes a key column leads, as each test sets them; those the plan drops do not count.
 const _MM_OTHER_INDEXES = Ref(String[])
 _MM._leads_another_index(::MmMockMySQL, table::AbstractString, column::AbstractString, except::Vector{String}) =
@@ -423,7 +431,7 @@ _mm_driver(extra = "", tail = "") =
   cases = ["a removed field" => (base, "Driver = Models.Model(\"driver\", driverid = Models.IDField(), forename = Models.CharField(max_length = 100, db_index = true))",
                                  "Remove field: code" => "ALTER TABLE `driver` DROP COLUMN `code`;"),
            "an added field" => (base, _mm_driver(", nick = Models.CharField(max_length = 8, null = true)"),
-                                "Add field: nick" => "ALTER TABLE `driver` ADD COLUMN `nick` VARCHAR(8) NULL;"),
+                                "Add field: nick" => "ALTER TABLE `driver` ADD COLUMN `nick` VARCHAR(8) NULL COLLATE utf8mb4_0900_bin;"),
            "a retyped field" => (base, replace(base, "max_length = 8" => "max_length = 9"),
                                  "Alter field: code" => "ALTER TABLE `driver` MODIFY COLUMN `code` VARCHAR(9) NOT NULL;"),
            "a dropped db_index" => (base, replace(base, ", db_index = true" => ""),
@@ -839,19 +847,21 @@ end
 # an expression default. Its CHECK lookups answer as `MmMockMySQL`'s do.
 struct MmMockMySQLAttr <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLAttr, table::AbstractString, column::AbstractString) =
-  (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", default_expression = "uuid()",
-   generated = false, generation = nothing, column_type = nothing)
+  (comment = "it's", invisible = true, on_update = true, collation = "utf8mb4_0900_ai_ci", text = true,
+   default_expression = "uuid()", generated = false, generation = nothing, column_type = nothing)
 # A generated column made by hand, which the reader takes for a plain one.
 struct MmMockMySQLGen <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLGen, table::AbstractString, column::AbstractString) =
-  (comment = "", invisible = false, on_update = false, collation = nothing, default_expression = nothing, generated = true,
+  (comment = "", invisible = false, on_update = false, collation = nothing, text = false, default_expression = nothing,
+   generated = true,
    generation = (expr = "(`a` * 2)", stored = false), column_type = nothing)
 # A column PormG did not write, of a type that holds a field's values in another spelling: `T` is its
 # `COLUMN_TYPE`; a `datetime(6)` also updates itself (`ON UPDATE`), and a `text` has its own collation.
 struct MmMockMySQLLive{T} <: PormG.PormGMySQL end
 PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::AbstractString) where {T} =
   (comment = "", invisible = false, on_update = T === Symbol("datetime(6)"),
-   collation = T === :text ? "utf8mb4_0900_ai_ci" : nothing, default_expression = nothing, generated = false,
+   collation = T === :text ? "utf8mb4_0900_ai_ci" : nothing, text = T === :text, default_expression = nothing,
+   generated = false,
    generation = nothing, column_type = String(T))
 
 # What: a MODIFY on MySQL restates what the column holds that the model does not state.
@@ -923,6 +933,51 @@ PormG._column_attributes(::MmMockMySQLLive{T}, table::AbstractString, column::Ab
   # PormG's own spelling is restated as PormG writes it.
   @test live(Symbol("datetime(3)"), Models.DateTimeField(), Models.DateTimeField(null = true)) ==
         "ALTER TABLE `driver` MODIFY COLUMN `c` DATETIME(3) NOT NULL;"
+end
+
+# A text column of the table's collation (`T` true), or a column that holds no text (`T` false), with
+# nothing else the model does not state.
+struct MmMockMySQLHeld{T} <: PormG.PormGMySQL end
+PormG._column_attributes(::MmMockMySQLHeld{T}, table::AbstractString, column::AbstractString) where {T} =
+  (comment = "", invisible = false, on_update = false, collation = nothing, text = T, default_expression = nothing,
+   generated = false, generation = nothing, column_type = nothing)
+
+# What: the collation of a text column PormG writes on MySQL, declared on the column itself.
+# SQL: `ALTER TABLE `driver` ADD COLUMN `code` VARCHAR(3) NOT NULL COLLATE utf8mb4_0900_bin UNIQUE;`, the same
+#      `COLLATE` on a `LONGTEXT` and a UUID's `CHAR(36)`, none on a number, JSON or binary column; a MODIFY of a
+#      column of the table's collation writes none, and one that retypes a non-text column into text writes it.
+# Why: the table default alone gives an added column the collation of a table PormG did not create, usually
+# `utf8mb4_0900_ai_ci`, where `filter("code" => "ham")` matches `HAM` and a UNIQUE index refuses `HAM` beside
+# `ham`: a different row set from the other engines on a column PormG wrote. A column PormG did not write
+# keeps its own collation through a retype, as #1265 documented.
+@testset "#1434: a text column PormG writes on MySQL declares utf8mb4_0900_bin" begin
+  add(name, f) = _MD.add_field(_mm_my, "driver", name, f)
+  @test add("code", Models.CharField(max_length = 3, unique = true)) ==
+        "ALTER TABLE `driver` ADD COLUMN `code` VARCHAR(3) NOT NULL COLLATE utf8mb4_0900_bin UNIQUE;"
+  @test add("notes", Models.TextField(null = true)) ==
+        "ALTER TABLE `driver` ADD COLUMN `notes` LONGTEXT NULL COLLATE utf8mb4_0900_bin;"
+  @test add("uid", Models.UUIDField(null = true)) ==
+        "ALTER TABLE `driver` ADD COLUMN `uid` CHAR(36) NULL COLLATE utf8mb4_0900_bin;"
+  for (name, f) in (("laps", Models.IntegerField(default = 0)), ("meta", Models.JSONField(null = true)),
+                    ("blob", Models.BinaryField(null = true)), ("dob", Models.DateField(null = true)))
+    @test (name, occursin("COLLATE", add(name, f))) == (name, false)
+  end
+  # The stamp after an added column restates it with its collation, or its MODIFY would undo it.
+  stamped = add("tag", Models.CharField(max_length = 20, db_default = (mysql = "lower('X')",)))
+  @test occursin("MODIFY COLUMN `tag` VARCHAR(20) NOT NULL DEFAULT (lower(''X'')) COLLATE utf8mb4_0900_bin COMMENT ', QUOTE(",
+                 stamped)
+  # A MODIFY keeps the column's own collation: the table's is inherited, so none is written.
+  held = MmMockMySQLHeld{true}()
+  modify(conn, new, old) = _MD.alter_field(conn, _MmDriver, "c", new,
+                                           _MM.column_delta(new, _MM.column_spec(old, conn; name = "c"), conn; name = "c"))
+  @test modify(held, Models.CharField(max_length = 12), Models.CharField(max_length = 8)) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(12) NOT NULL;"
+  # A column that held no text takes PormG's, as an added one does; one that stays a number takes none.
+  bare = MmMockMySQLHeld{false}()
+  @test modify(bare, Models.CharField(max_length = 10), Models.IntegerField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` VARCHAR(10) NOT NULL COLLATE utf8mb4_0900_bin;"
+  @test modify(bare, Models.BigIntegerField(), Models.IntegerField()) ==
+        "ALTER TABLE `driver` MODIFY COLUMN `c` BIGINT NOT NULL;"
 end
 
 # What: a CHECK dropped in the plan that also renames the table.
@@ -1040,7 +1095,7 @@ end
 # would go unseen. The body sits inside a string literal, so its quotes and backslashes are escaped.
 @testset "#1130: a per-engine db_default on MySQL carries PormG's stamped marker" begin
   f = Models.CharField(max_length = 20, db_default = (postgres = "lower('X')", mysql = "lower('X')"))
-  body = "`tag` VARCHAR(20) NOT NULL DEFAULT (lower('X'))"
+  body = "`tag` VARCHAR(20) NOT NULL DEFAULT (lower('X')) COLLATE utf8mb4_0900_bin"
   @test _MD.field_to_column("tag", f, _mm_my) == body
   h1 = PormG.db_default_hash("lower('X')")
   stamp(t, b) = "SET @pormg_stamp = (SELECT CONCAT('ALTER TABLE `$(t)` MODIFY COLUMN $(replace(replace(b, "\\" => "\\\\"), "'" => "''")) COMMENT ', " *

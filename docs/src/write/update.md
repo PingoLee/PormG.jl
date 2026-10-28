@@ -232,7 +232,11 @@ so the planner can use its index. The correlated `EXISTS` puts the same filters 
 updated, so they are re-checked if the row changes while the `UPDATE` waits on its lock — see
 [Filters are a fence on PostgreSQL](delete.md#Filters-are-a-fence-on-PostgreSQL), which applies to
 `update()` the same way. The joins are the ones a read of the filter renders (a nullable foreign key
-stays a `LEFT JOIN`). A model without a primary key gets the `EXISTS` alone.
+stays a `LEFT JOIN`). A model without a primary key gets the `EXISTS` alone. The `EXISTS` turns a
+`RIGHT` join into `INNER` and a `FULL` join into `LEFT`, which select the same rows there, so that
+update builds even on a backend without `RIGHT` or `FULL JOIN` (SQLite before 3.39.0, MySQL's `FULL`;
+[Backends](../backends.md)). The `IN (…)` prints the joins as written, so a model with a primary key
+needs the feature.
 
 ```julia
 # Update with complex relationship traversal

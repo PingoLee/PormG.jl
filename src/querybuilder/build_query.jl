@@ -76,7 +76,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
         continue
       end
-      _require_outer_join(instruc.connection, value.how)
+      instruc.defer_outer_join_check || _require_outer_join(instruc.connection, value.how)
 
       # #985: under the row's join scope, so every column the conditions render is checked against the
       # rows this ON clause may name (`_record_join_column`).
@@ -117,14 +117,27 @@ end
 # (MySQL has no `FULL JOIN`; SQLite has neither before 3.39.0). This is the one place every join row
 # with a join type is emitted (`on()`, `cjoin`, `cjoin_on`, a CTE's `join_type`, a `ForeignKey(how =
 # …)` path join), so one check covers them all; it names the join type, which is what every one of
-# them was given. A mutation that carries the join rewrites it for its EXISTS fence, but its key
-# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does.
-# Two update shapes never printed the join type and so used to run on a backend without it: a keyless
-# model's constant-SET update (the fence alone, INNER/LEFT) and an update whose SET reads a joined
-# column (`UPDATE … FROM`, an inner join). They are refused here too (upgrading/, #1422).
+# them was given. A read and a `delete` print it verbatim (a delete's key selection,
+# `_key_selection`), so they are checked here.
+#
+# `update()` is not (#1431): which statement it prints is decided only after SET renders, and only one
+# of its three shapes prints the join type. A keyed update's key selection does, so it checks there
+# (`_require_outer_joins`). A keyless model's constant-SET update takes the EXISTS fence alone, which
+# rewrites RIGHT to INNER and FULL to LEFT (`_target_predicate`) and so never asks the engine for an
+# outer join: refusing it refused a feature the statement does not use. An update whose SET reads a
+# joined column takes UPDATE … FROM, which refuses every non-INNER join on every engine (#1430).
 function _require_outer_join(conn, how::AbstractString)::Nothing
   how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
   how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")
+  return nothing
+end
+
+# Every join row of a build whose check was deferred, for a statement that prints them verbatim.
+function _require_outer_joins(instruc::SQLInstruction)::Nothing
+  for row in instruc.row_join
+    row isa CrossJoin && continue
+    _require_outer_join(instruc.connection, row.how)
+  end
   return nothing
 end
 
@@ -162,7 +175,10 @@ function build(object::SQLObject;
   # #1130: the statement is an UPDATE or DELETE of `object`'s table (the predicate a mutation scopes
   # its rows by), so a membership subquery on an engine that cannot read the table it writes is read
   # through a derived table (`_materializes_target_key_set`).
-  mutation::Bool=false)
+  mutation::Bool=false,
+  # #1431: the caller checks the RIGHT/FULL capability rows against the statement it prints, which is
+  # not always this build's join text (`update()`; see `_require_outer_join`).
+  defer_outer_join_check::Bool=false)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
   ensure_transaction_scope(object.model, connection)
@@ -183,6 +199,7 @@ function build(object::SQLObject;
     parameters=parameters,
     outer=outer,
     mutation=mutation,
+    defer_outer_join_check=defer_outer_join_check,
   )
 
   # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is

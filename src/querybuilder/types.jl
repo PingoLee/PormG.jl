@@ -564,6 +564,9 @@ end
   alias_null_keys::Vector{String} = String[]
   # #1130: this build is the predicate of an UPDATE or DELETE (`build(…; mutation = true)`).
   mutation::Bool = false
+  # #1431: the caller checks the RIGHT/FULL capability rows itself, against the statement it prints
+  # (`update()`), so `build_row_join_sql_text` leaves them to it (`build(…; defer_outer_join_check = true)`).
+  defer_outer_join_check::Bool = false
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query

@@ -1500,7 +1500,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
   # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
   # itself (`_get_join_condition_list`).
-  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true)
+  # #1431: the RIGHT/FULL capability rows are checked below, once the shape is known, against the
+  # statement that prints the join type (`_require_outer_join`).
+  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true,
+                      defer_outer_join_check=true)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
@@ -1622,13 +1625,17 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         # FROM, which flattened its LEFT JOINs to inner and dropped `.on()` conditions).
         selection = _target_pk_selection(instruction)
         predicate = if selection === nothing
+          # #1431: the fence alone rewrites RIGHT to INNER and FULL to LEFT, so this statement never
+          # prints an outer join a backend may lack: nothing to check.
           _target_predicate(instruction)
         else
+          # #1431: the key selection prints the joins verbatim, so their types are checked here.
+          _require_outer_joins(instruction)
           fence_work = deepcopy(real_obj)
           empty!(fence_work.values)
           mark = nested_parameter_mark(parameters)
           fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
-                        mutation=true)
+                        mutation=true, defer_outer_join_check=true)
           fence_run = detach_nested_run!(parameters, mark)
           set_context!(parameters, :where)
           reattach_parameters!(parameters, fence_run)
@@ -1641,7 +1648,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         """
       else
         # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
-        # (`_update_from_sql`).
+        # (`_update_from_sql`). No capability check (#1431): `_get_join_condition_list` refuses every
+        # non-INNER join here, on every engine (#1430), which is what an old SQLite must hear too.
         from_clause = _build_from_tables(instruction.row_join, connection)
         join_conditions = _build_join_conditions(instruction.row_join, connection;
                                                  rendered_on = instruction.cjoin_on_rendered)

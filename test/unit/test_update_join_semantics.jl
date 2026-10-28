@@ -9,6 +9,9 @@
 #   or FULL path join there would skip the rows it was declared to keep, so it is refused on every
 #   engine (#1430): explicit intent, the caller names whether a row with no match is skipped (an INNER
 #   join) or written NULL (a `Subquery`).
+#   A RIGHT or FULL join is a capability row (#1422), refused where the statement prints the join type.
+#   `update()` prints it only in a keyed model's key selection: a keyless model's fence rewrites it to
+#   INNER/LEFT, so that update builds on a backend without the feature (#1431).
 #
 # DB-free: mock connections, SQL read through `show_query = :sql`.
 #
@@ -23,15 +26,20 @@ import PormG.QueryBuilder: F, Subquery, OuterRef
 struct UjMockPostgres <: PormG.PormGPostgres end
 struct UjMockSQLite <: PormG.PormGSQLite end
 struct UjMockMySQL <: PormG.PormGMySQL end
+struct UjMockSQLite338 <: PormG.PormGSQLite end
 PormG.backend_sqlite_version(::UjMockSQLite) = 3045000   # the capability table's version rows ask for it
+PormG.backend_sqlite_version(::UjMockSQLite338) = 3038000   # before RIGHT and FULL JOIN (3.39.0)
 
-for (key, conn) in (("uj_pg", UjMockPostgres()), ("uj_sl", UjMockSQLite()), ("uj_my", UjMockMySQL()))
+for (key, conn) in (("uj_pg", UjMockPostgres()), ("uj_sl", UjMockSQLite()), ("uj_my", UjMockMySQL()),
+                    ("uj_sl338", UjMockSQLite338()))
   PormG.config[key] = PormG.Configuration.Settings(connections = conn, change_data = true, db_def_folder = key)
 end
 
 # One model set per engine, identical: an F1 subset. `Driver.teamid` is a nullable ForeignKey, so a
-# path through it joins LEFT by default; `Result.driverid` is not, so it joins INNER.
-for (modname, key) in ((:UjPGModels, "uj_pg"), (:UjSLModels, "uj_sl"), (:UjMYModels, "uj_my"))
+# path through it joins LEFT by default; `Result.driverid` is not, so it joins INNER. `Pit_stop` has no
+# primary key, so a joined update of it takes the EXISTS fence alone.
+for (modname, key) in ((:UjPGModels, "uj_pg"), (:UjSLModels, "uj_sl"), (:UjMYModels, "uj_my"),
+                       (:UjSL338Models, "uj_sl338"))
   @eval module $modname
   import PormG
   import PormG.Models
@@ -50,6 +58,10 @@ for (modname, key) in ((:UjPGModels, "uj_pg"), (:UjSLModels, "uj_sl"), (:UjMYMod
     code = Models.CharField(),
     number = Models.IntegerField(),
     driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
+  )
+  Pit_stop = Models.Model("pit_stop",
+    driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "pit_stops"),
+    milliseconds = Models.IntegerField(),
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end
@@ -139,5 +151,71 @@ end
 
     sql = M.Result.objects.filter("resultid" => 1).update("number" => F("driverid__number"), show_query = :sql)
     @test occursin("driver", sql) && !occursin("EXISTS", sql)
+  end
+end
+
+# The backends without a feature, and which of the two join types each lacks.
+const _UJ_LACKING = (("SQLite 3.38", UjSL338Models, ("RIGHT", "FULL")), ("MySQL", UjMYModels, ("FULL",)))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# update(): a keyless model's fence never prints RIGHT or FULL, so it builds without them (#1431)
+# A keyless model's constant-SET update takes `EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor" …)`,
+# which rewrites RIGHT to INNER and FULL to LEFT, so the engine is never asked for an outer join.
+# #1422 refused it on SQLite < 3.39.0 and MySQL anyway. Expected: it builds there, its SQL carrying the
+# rewritten join and not the declared one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update(): a keyless model's fence never prints RIGHT or FULL, so it builds without them (#1431)" begin
+  for (engine, M, lacking) in _UJ_LACKING, how in lacking
+    q = M.Pit_stop.objects
+    q.on("driverid", join_type = how)
+    q.filter("driverid__code" => "HAM")
+    sql = q.update("milliseconds" => 0, show_query = :sql)
+    @test occursin("__pormg_anchor", sql)
+    @test occursin(how == "RIGHT" ? "INNER JOIN" : "LEFT JOIN", sql)
+    @test !occursin("$(how) JOIN", sql)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# update(): a keyed model's key selection prints the join type, so it is still refused (#1431)
+# `"Tb"."resultid" IN (SELECT DISTINCT … <how> JOIN …)` prints the join as declared, so the backend
+# must have it: `BackendCapabilityError` on SQLite < 3.39.0 and MySQL, before any SQL. The same holds
+# for a `delete()`, whose key selection prints it too. MySQL has RIGHT JOIN, so there it builds.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update(): a keyed model's key selection prints the join type, so it is still refused (#1431)" begin
+  for (engine, M, lacking) in _UJ_LACKING, how in lacking
+    q = M.Result.objects
+    q.on("driverid", join_type = how)
+    q.filter("driverid__code" => "HAM")
+    err = _uj_err(() -> q.update("number" => 0, show_query = :sql))
+    @test err isa PormG.BackendCapabilityError
+    @test occursin("join_type = \"$(how)\"", _uj_msg(err))
+
+    q = M.Result.objects
+    q.on("driverid", join_type = how)
+    q.filter("driverid__code" => "HAM")
+    @test _uj_err(() -> q.delete(show_query = :sql)) isa PormG.BackendCapabilityError
+  end
+  q = UjMYModels.Result.objects
+  q.on("driverid", join_type = "RIGHT")
+  q.filter("driverid__code" => "HAM")
+  @test occursin("RIGHT JOIN", q.update("number" => 0, show_query = :sql))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# update(): a joined SET over RIGHT or FULL hears the meaning refusal, not the capability one (#1431)
+# UPDATE … FROM refuses every non-INNER join on every engine (#1430), so on a backend without RIGHT or
+# FULL the caller learns that, not that a newer library would help: upgrading would only move the
+# error. Expected: `QueryBuildError` that is not a `BackendCapabilityError`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update(): a joined SET over RIGHT or FULL hears the meaning refusal, not the capability one (#1431)" begin
+  for (engine, M, lacking) in _UJ_LACKING, how in lacking
+    q = M.Result.objects
+    q.on("driverid", join_type = how)
+    q.filter("resultid" => 1)
+    err = _uj_err(() -> q.update("number" => F("driverid__number"), show_query = :sql))
+    @test err isa PormG.QueryBuildError
+    @test !(err isa PormG.BackendCapabilityError)
+    @test occursin("The $(how) join to \"driver\"", _uj_msg(err))
   end
 end

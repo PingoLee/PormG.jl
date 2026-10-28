@@ -176,7 +176,8 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             @test W.Driver.objects.filter("team__name" => "Ferrari").update("points" => 4.0) == 1
             points = Dict(r[:surname] => r[:points] for r in W.Driver.objects.values("surname", "points").list())
             @test points == Dict("Senna" => 6.0, "Prost" => 6.0, "Alesi" => 4.0)
-            @test W.Driver.objects.filter("id" => alesi.id).update("surname" => F("team__name")) == 1
+            # `team` is nullable, so the joined SET declares it INNER: a LEFT join is refused (#1430).
+            @test W.Driver.objects.on("team", join_type = "INNER").filter("id" => alesi.id).update("surname" => F("team__name")) == 1
             @test only(W.Driver.objects.filter("id" => alesi.id).values("surname").list())[:surname] == "Ferrari"
             W.Driver.objects.filter("id" => alesi.id).update("surname" => "Alesi")
             # A SET that reads a column the same update writes would read its new value on MySQL: refused.

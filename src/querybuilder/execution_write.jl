@@ -986,20 +986,8 @@ end
 # and the caller prints all of it before `_where` — SET, ON, WHERE: `_BUCKET_ORDER`'s order (#174).
 function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
                                   rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
-  has_cjoin_on = any(r -> r isa AnchorlessJoin, row_join)
   for row in row_join
-    # #174: a LEFT path join turns inner here too — its anchor lands in WHERE — and a `cjoin_on` ON
-    # clause may lean on its NULL row (`Qor(…, "fk__col__@isnull" => true)`), which then matches
-    # nothing: fewer rows updated, silently. With a `cjoin_on` in the statement, refused. (The same
-    # flattening without one predates #174 and stays as it was.)
-    if has_cjoin_on && row isa ModelJoin && row.how != "INNER"
-      throw(QueryBuildError(
-        "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into a correlated " *
-        "UPDATE ... FROM beside a cjoin_on: that statement joins in its WHERE clause, so it would act as an " *
-        "INNER join and drop the rows it was declared to keep, which a cjoin_on ON clause may match on. " *
-        "Scope the mutation with a filter instead (#174)."))
-    end
-    # #1002: the same rule for a path join. A reverse, ManyToMany or non-unique-link join in the FROM
+    # #1002: a path join must be to-one, as a `cjoin_on` must below (#174). A reverse, ManyToMany or non-unique-link join in the FROM
     # list matches several rows per updated row, so SET reads an arbitrary one — `build()` lets it
     # through because `update()` builds as a semi-join, which holds only for the `pk IN (…)` form.
     if row isa ModelJoin && row.to_many
@@ -1053,6 +1041,28 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
                     "UPDATE ... FROM (setting a column from a joined table): that statement joins in its WHERE " *
                     "clause on the key columns only, so the condition would be dropped. Scope the mutation " *
                     "with a filter instead (#977)."))
+    end
+    # #1430: a path join's anchor lands in WHERE, so a LEFT or FULL join acts as an INNER one on every
+    # engine: a row with no match is not updated, where the join it was declared as keeps it with the
+    # joined column read as NULL. A path through a nullable ForeignKey is LEFT by default
+    # (`_determine_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
+    # is NULL, silently. A filter's join is flattened the same way (`"fk__col__@isnull" => true` then
+    # matches nothing), so the rule covers every path join in the statement, as #174 did beside a
+    # `cjoin_on`. Refused rather than rendered: the caller names which of the two meanings they want.
+    # RIGHT is not refused: the chain is left-deep and rooted at the target, so a RIGHT hop null-extends
+    # only the target side, rows an UPDATE cannot write. Flattened, it updates exactly the rows INNER
+    # does, the equivalence `_target_predicate` rewrites by. Checked after the refusals no join type
+    # fixes (a to-many hop, a CTE, an `on()` condition), so on one row its advice is not a step into one
+    # of them; a later row is checked only once this one passes.
+    if row isa ModelJoin && (row.how == "LEFT" || row.how == "FULL")
+      throw(QueryBuildError(
+        "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into this update's " *
+        "correlated UPDATE ... FROM, which joins in its WHERE clause: it would act as an INNER join and skip " *
+        "the rows with no match instead of keeping them. " *
+        (row.how == "LEFT" ? "A path through a nullable ForeignKey is joined LEFT. " : "") *
+        "To update only the rows with a match, declare the path with on(\"<path>\", join_type = \"INNER\"); " *
+        "to write NULL where there is none, set the column from " *
+        "Subquery(<Model>.objects.filter(\"<pk>\" => OuterRef(\"<fk>\")).values(\"<column>\")) (#1430, #174)."))
     end
   end
   conditions = String[]
@@ -1495,7 +1505,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
   # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
   # itself (`_get_join_condition_list`).
-  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true)
+  # #1431: the RIGHT/FULL capability rows are checked below, once the shape is known, against the
+  # statement that prints the join type (`_require_outer_join`).
+  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true,
+                      defer_outer_join_check=true)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
@@ -1617,13 +1630,17 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         # FROM, which flattened its LEFT JOINs to inner and dropped `.on()` conditions).
         selection = _target_pk_selection(instruction)
         predicate = if selection === nothing
+          # #1431: the fence alone rewrites RIGHT to INNER and FULL to LEFT, so this statement never
+          # prints an outer join a backend may lack: nothing to check.
           _target_predicate(instruction)
         else
+          # #1431: the key selection prints the joins verbatim, so their types are checked here.
+          _require_outer_joins(instruction)
           fence_work = deepcopy(real_obj)
           empty!(fence_work.values)
           mark = nested_parameter_mark(parameters)
           fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
-                        mutation=true)
+                        mutation=true, defer_outer_join_check=true)
           fence_run = detach_nested_run!(parameters, mark)
           set_context!(parameters, :where)
           reattach_parameters!(parameters, fence_run)
@@ -1636,7 +1653,9 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         """
       else
         # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
-        # (`_update_from_sql`).
+        # (`_update_from_sql`). No capability check (#1431): the FROM list prints no join type, and
+        # `_get_join_condition_list` refuses a LEFT or FULL join on every engine (#1430), which is what an
+        # old SQLite must hear too; a RIGHT one updates exactly the rows INNER does.
         from_clause = _build_from_tables(instruction.row_join, connection)
         join_conditions = _build_join_conditions(instruction.row_join, connection;
                                                  rendered_on = instruction.cjoin_on_rendered)

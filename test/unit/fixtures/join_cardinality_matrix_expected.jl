@@ -466,9 +466,9 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("update()/ManyToMany", :sqlite) =>
     (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = ? WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = ?) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver_sponsors\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_3\" ON \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" WHERE \"Tb_3\".\"name\" = ?)"),
   ("update() SET from a join/forward nullable", :postgres) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"team\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = \$1"),
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
   ("update() SET from a join/forward nullable", :sqlite) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"team\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = ?"),
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
   ("update() SET from a join/reverse", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The join to \"result\" (alias \"Tb_2\") may match more than one row per updated row (a reverse or ManyToMany relation, or a "),
   ("update() SET from a join/reverse", :sqlite) =>
@@ -480,6 +480,22 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("update() SET from a join/ManyToMany", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
   ("update() SET from a join/ManyToMany", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
+  ("update() SET reads the relation/forward nullable", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
+  ("update() SET reads the relation/forward nullable", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
+  ("update() SET reads the relation/reverse", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The join to \"result\" (alias \"Tb_2\") may match more than one row per updated row (a reverse or ManyToMany relation, or a "),
+  ("update() SET reads the relation/reverse", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The join to \"result\" (alias \"Tb_2\") may match more than one row per updated row (a reverse or ManyToMany relation, or a "),
+  ("update() SET reads the relation/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = \"Tb_2\".\"bio\" FROM \"driver\" AS \"Tb_1\", \"profile\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb\".\"resultid\" = \$1"),
+  ("update() SET reads the relation/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = \"Tb_2\".\"bio\" FROM \"driver\" AS \"Tb_1\", \"profile\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb\".\"resultid\" = ?"),
+  ("update() SET reads the relation/ManyToMany", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
+  ("update() SET reads the relation/ManyToMany", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
   ("delete()/forward nullable", :postgres) =>
     (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = \$1) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = \$2)"),
@@ -681,4 +697,20 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"nationality\" = \$1"),
   ("cjoin link non-unique/cjoin_on condition", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"nationality\" = ?"),
+  ("update() SET from a join, filter @isnull true through a nullable path", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
+  ("update() SET from a join, filter @isnull true through a nullable path", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The LEFT join to \"team\" (alias \"Tb_2\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in i"),
+  ("update() SET reads a nullable path, on() join_type INNER", :postgres) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = \"Tb_2\".\"name\" FROM \"driver\" AS \"Tb_1\", \"team\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb\".\"resultid\" = \$1"),
+  ("update() SET reads a nullable path, on() join_type INNER", :sqlite) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = \"Tb_2\".\"name\" FROM \"driver\" AS \"Tb_1\", \"team\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb\".\"resultid\" = ?"),
+  ("update() SET from a join, on() join_type FULL", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The FULL join to \"driver\" (alias \"Tb_1\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in"),
+  ("update() SET from a join, on() join_type FULL", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The FULL join to \"driver\" (alias \"Tb_1\") cannot be carried into this update's correlated UPDATE ... FROM, which joins in"),
+  ("update() SET from a Subquery over a nullable path", :postgres) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = (SELECT \"R1_1\".\"name\" as \"teamid__name\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"driverid\" = \"Tb\".\"driverid\" ) WHERE \"Tb\".\"resultid\" = \$1"),
+  ("update() SET from a Subquery over a nullable path", :sqlite) =>
+    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"code\" = (SELECT \"R1_1\".\"name\" as \"teamid__name\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"driverid\" = \"Tb\".\"driverid\" ) WHERE \"Tb\".\"resultid\" = ?"),
 )

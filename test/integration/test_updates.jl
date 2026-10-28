@@ -140,13 +140,15 @@ end
 
         # Joined F expressions are a supported cross-table UPDATE path: the SET
         # clause may read from joined aliases while the WHERE still scopes the base row.
-        M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").update(
+        # `test_result` is nullable, so its path joins LEFT, which UPDATE … FROM refuses: the
+        # update declares it INNER, the rows with a result (#1430).
+        M.Just_a_test_deletion.objects.on("test_result", join_type = "INNER").filter("name" => "joined-fexpr").update(
             "test_result2" => F("test_result__statusid")
         )
         row_after_status = M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").list() |> first
         @test row_after_status[:test_result2] == source_result[:statusid]
 
-        M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").update(
+        M.Just_a_test_deletion.objects.on("test_result", join_type = "INNER").filter("name" => "joined-fexpr").update(
             "test_result2" => F("test_result__driverid__number")
         )
         row_after_driver_number = M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").list() |> first
@@ -157,16 +159,64 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# update(): a SET read through a nullable key is refused, and each spelling updates what it says (#1430)
+# `test_result` is nullable, so `F("test_result__raceid")` joins `result` LEFT. UPDATE … FROM joined it
+# in WHERE, so the row with no result was silently not updated. Expected: QueryBuildError and no row
+# changed; `on("test_result", join_type = "INNER")` updates the one row with a result (`SET … FROM`);
+# a correlated `Subquery` updates both rows and writes NULL where there is no result.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update(): a SET read through a nullable key is refused, and each spelling updates what it says (#1430)" begin
+    J = M.Just_a_test_deletion
+    J.objects.exists() && J.objects.delete(allow_delete_all = true)
+    try
+        race = (M.Result.objects.filter("resultid" => 1).values("raceid").list() |> first)[:raceid]
+        J.objects.create("name" => "uj-match", "test_result" => 1, "test_result2" => 2, "test_result_set_default" => nothing)
+        J.objects.create("name" => "uj-none", "test_result" => nothing, "test_result2" => 2, "test_result_set_default" => nothing)
+        rows() = Dict(r[:name] => r[:test_result2] for r in J.objects.values("name", "test_result2").list())
+
+        # The LEFT join is refused before any SQL runs: nothing is written.
+        err = try
+            J.objects.filter("id__@gt" => 0).update("test_result2" => F("test_result__raceid")); nothing
+        catch e
+            e
+        end
+        @test err isa PormG.QueryBuildError
+        @test rows() == Dict("uj-match" => 2, "uj-none" => 2)
+
+        # INNER: only the row with a result is matched and updated.
+        q = J.objects
+        q.on("test_result", join_type = "INNER")
+        q.filter("id__@gt" => 0)
+        @test q.update("test_result2" => F("test_result__raceid")) == 1
+        @test rows() == Dict("uj-match" => race, "uj-none" => 2)
+
+        # Subquery: every row is updated, NULL where there is no result — what the LEFT join meant.
+        sub = Subquery(M.Result.objects.filter("resultid" => OuterRef("test_result")).values("raceid"))
+        @test J.objects.filter("id__@gt" => 0).update("test_result2" => sub) == 2
+        after = rows()
+        @test after["uj-match"] == race
+        @test after["uj-none"] === missing || after["uj-none"] === nothing
+    finally
+        J.objects.exists() && J.objects.delete(allow_delete_all = true)
+    end
+end
+
 @testset "Complex Join Updates and Date Arithmetic" begin
   # 1. Update using a value from a joined table (Cross-table update)
   query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
   query.create("name" => "temp", "test_result" => 1, "test_result_set_default" => nothing) # Result 1 driver is Lewis Hamilton
   
-  # Join from Just_a_test_deletion -> Result -> Driver
+  # Join from Just_a_test_deletion -> Result -> Driver. `test_result` is nullable, so the path is
+  # declared INNER: UPDATE … FROM refuses a LEFT join (#1430). On a handler of its own, so the read
+  # below stays join-free.
+  joined = M.Just_a_test_deletion.objects
+  joined.on("test_result", join_type = "INNER")
+  joined.filter("id__@gt" => 0)
+  joined.update("name" => F("test_result__driverid__forename"))
   query.filter("id__@gt" => 0)
-  query.update("name" => F("test_result__driverid__forename"))
-  
+
     updated_row = query.list() |> first
   @test updated_row[:name] == "Lewis"
 
@@ -551,8 +601,9 @@ end
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         M.Just_a_test_deletion.objects.create("name" => "temp", "test_result" => 1, "test_result_set_default" => nothing) # Result 1 = Lewis Hamilton, British, Australian GP, Australia
         
-        # We use a value from 3 levels deep: Result -> Race -> Circuit -> Name
-        M.Just_a_test_deletion.objects.filter(
+        # We use a value from 3 levels deep: Result -> Race -> Circuit -> Name. `test_result` is
+        # nullable, so its path is declared INNER: UPDATE … FROM refuses a LEFT join (#1430).
+        M.Just_a_test_deletion.objects.on("test_result", join_type = "INNER").filter(
             "test_result__raceid__circuitid__country" => "Australia",
             "test_result__driverid__nationality" => "British"
         ).update("name" => F("test_result__raceid__circuitid__name"))

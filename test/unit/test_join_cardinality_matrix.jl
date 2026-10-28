@@ -148,6 +148,9 @@ const _JCARD_INTRODUCERS = (
   ("update()", (p, v) -> (mod -> mod.Result.objects.filter("driverid__$(p)" => v), q -> q.update("number" => 1, show_query = :sql))),
   ("update() SET from a join", (p, v) -> (mod -> mod.Result.objects.filter("driverid__$(p)" => v),
                                           q -> q.update("number" => F("driverid__number"), show_query = :sql))),
+  # #1430: the SET itself reads across the relation, so its join is one the statement flattens.
+  ("update() SET reads the relation", (p, v) -> (mod -> mod.Result.objects.filter("resultid" => 1),
+                                                 q -> q.update("code" => F("driverid__$(p)"), show_query = :sql))),
   ("delete()", (p, v) -> (mod -> mod.Result.objects.filter("driverid__$(p)" => v), q -> q.delete(show_query = :sql))),
   ("delete() Qor", (p, v) -> (mod -> mod.Result.objects.filter(Qor("driverid__$(p)" => v, "number" => 7)), q -> q.delete(show_query = :sql))),
 )
@@ -262,6 +265,23 @@ const _JCARD_SINGLE_CELLS = (
   ("cjoin link non-unique/cjoin_on condition",
    (mod -> mod.Result.objects.cjoin("grid" => "Driver", field = _jcard_link(mod, "number"), warn = false).
       cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), "grid__nationality" => "X"]).values("resultid"), _jcard_read)),
+  # #1430: an UPDATE … FROM joins in its WHERE, so a LEFT join a filter reads acts as an inner one —
+  # the `__@isnull => true` anti-join then matches nothing. The INNER `on()` spelling, the explicit FULL
+  # one, and the `Subquery` spelling (NULL where nothing matches) are the controls.
+  ("update() SET from a join, filter @isnull true through a nullable path",
+   (mod -> mod.Result.objects.filter("driverid__teamid__name__@isnull" => true),
+    q -> q.update("number" => F("driverid__number"), show_query = :sql))),
+  ("update() SET reads a nullable path, on() join_type INNER",
+   (mod -> mod.Result.objects.on("driverid__teamid", join_type = "INNER").filter("resultid" => 1),
+    q -> q.update("code" => F("driverid__teamid__name"), show_query = :sql))),
+  ("update() SET from a join, on() join_type FULL",
+   (mod -> mod.Result.objects.on("driverid", join_type = "FULL").filter("resultid" => 1),
+    q -> q.update("number" => F("driverid__number"), show_query = :sql))),
+  ("update() SET from a Subquery over a nullable path",
+   # `run` sees only what `setup` returns, so the subquery is built there, beside the handler.
+   (mod -> (mod.Result.objects.filter("resultid" => 1),
+            Subquery(mod.Driver.objects.filter("driverid" => OuterRef("driverid")).values("teamid__name"))),
+    ((q, sub),) -> q.update("code" => sub, show_query = :sql))),
 )
 
 # Every cell, flattened: (id, (setup, run)).

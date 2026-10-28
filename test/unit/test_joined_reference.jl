@@ -766,6 +766,7 @@ end
 # filter's text while both values stayed bound (#174).
 @testset "a repeated filter keeps both markers in an UPDATE … FROM — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
   q = JN.Jn_result.objects
+  q.on("driver", join_type = "INNER")   # `driver` is nullable: a LEFT join is refused here (#1430)
   q.filter("points" => 3)
   q.filter("points" => 3)
   res = _jn_update(q, "note" => F("driver__surname"); conn = conn)

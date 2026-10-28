@@ -72,8 +72,9 @@ const _UdwFn = PormG.Functions
 const _UF = PormG.QueryBuilder.F
 
 # The statement `update` builds for one pair on `conn`, whitespace collapsed, and its parameters.
-function _udw_update(field, value; conn, model = UDW.Udw_result)
+function _udw_update(field, value; conn, model = UDW.Udw_result, inner = nothing)
   q = model.objects
+  inner === nothing || q.on(inner, join_type = "INNER")   # a nullable path read by SET (#1430)
   q.filter("resultid" => 1)
   q.object.insert[field] = value
   res = PormG.QueryBuilder.update(q.object; connection = conn, show_query = :dict)
@@ -122,7 +123,7 @@ end
   # `Subquery` names its SELECT three times, its values bound once per occurrence, all ahead of the WHERE's
   # 1. Why: those are the other two SET shapes that reach this arm, and the Subquery's values come from a
   # nested run the guard must bind again whole.
-  sql, params = _udw_update("narrow", _UF("constructorid__wins"); conn = _UDW_SL)
+  sql, params = _udw_update("narrow", _UF("constructorid__wins"); conn = _UDW_SL, inner = "constructorid")
   @test count("abs(CAST(replace(printf('%.14e', ", sql) == 1 && count("\"wins\"", sql) == 3
   @test params == Any[1]
   s = UDW.Udw_constructor.objects

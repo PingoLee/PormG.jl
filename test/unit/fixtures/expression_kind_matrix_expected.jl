@@ -6788,6 +6788,114 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat output varchar(3) | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast text SlugField | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text SlugField | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text URLField(20) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text EmailField | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(nothing)", whole_numeric = nothing),
+  ("Cast text bpchar(3) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text bpchar(3) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text bpchar(3) | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bpchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type"),
+  ("Cast text bpchar(3) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type bpchar(3) on CAST(…). Name a text, integer, bigint, float, numeric, boole"),
+  ("Cast text bpchar(3) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type bpchar(3) on CAST(…). Name a text, integer, bigint, float, numeric, boole"),
+  ("Cast text bpchar(3) | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bpchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type"),
+  ("Cast text bpchar(3) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text bpchar(3) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text bpchar(3) | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bpchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type"),
+  ("Cast text nchar(3) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text nchar(3) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text nchar(3) | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"nchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type "),
+  ("Cast text nchar(3) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type nchar(3) on CAST(…). Name a text, integer, bigint, float, numeric, boolea"),
+  ("Cast text nchar(3) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type nchar(3) on CAST(…). Name a text, integer, bigint, float, numeric, boolea"),
+  ("Cast text nchar(3) | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"nchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type "),
+  ("Cast text nchar(3) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text nchar(3) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text nchar(3) | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"nchar(3)\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type "),
+  ("Cast text ArrayField(CharField(3)) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text ArrayField(CharField(3)) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text ArrayField(CharField(3)) | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"ARRAY\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
+  ("Cast text ArrayField(CharField(3)) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type ARRAY on CAST(…). Name a text, integer, bigint, float, numeric, boolean, "),
+  ("Cast text ArrayField(CharField(3)) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type ARRAY on CAST(…). Name a text, integer, bigint, float, numeric, boolean, "),
+  ("Cast text ArrayField(CharField(3)) | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"ARRAY\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
+  ("Cast text ArrayField(CharField(3)) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text ArrayField(CharField(3)) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text ArrayField(CharField(3)) | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"ARRAY\" is not rendered for MySQL: PormG maps it to none of MySQL's CAST targets, and passes no type nam"),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

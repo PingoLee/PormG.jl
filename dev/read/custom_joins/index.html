@@ -503,7 +503,7 @@ Find results for drivers of a specific nationality with specific names:
 | `main_join` | `Pair{String, String}` | Field name =&gt; Target model name (e.g., `&quot;result&quot; =&gt; &quot;Result&quot;`) |
 | `filters` | `Vector` | Optional conditions for the ON clause. Supports `Pair`, `Q()`, `Qor()`, operator suffixes, or F expressions. Plain field names in filters are automatically prefixed with the join path. |
 | `field` | `PormGField` | Optional custom field definition |
-| `join_type` | `String` | Join type: `&quot;LEFT&quot;`, `&quot;INNER&quot;`, `&quot;RIGHT&quot;`, `&quot;FULL&quot;` (default: `&quot;LEFT&quot;`). `&quot;CROSS&quot;` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above |
+| `join_type` | `String` | Join type: `&quot;LEFT&quot;`, `&quot;INNER&quot;`, `&quot;RIGHT&quot;`, `&quot;FULL&quot;` (default: `&quot;LEFT&quot;`). `&quot;CROSS&quot;` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above. `&quot;RIGHT&quot;` and `&quot;FULL&quot;` are capability rows (`right_joins`, `full_joins`): MySQL has no `FULL JOIN`, and SQLite has neither before 3.39.0 ([Backends](../backends.md)) |
 
 ### Filter Types in `.cjoin()`
 

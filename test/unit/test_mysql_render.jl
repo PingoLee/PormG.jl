@@ -754,8 +754,9 @@ end
 # MySQL's CAST takes a closed set of targets, so a PormG type name is mapped, never passed through.
 # Expected: text → CHAR, integers → SIGNED, a bare numeric → DECIMAL(65,30) (MySQL's bare DECIMAL is
 # DECIMAL(10,0)), a sized one kept, real → FLOAT (single precision), the doubles → DOUBLE, timestamps
-# → DATETIME(3), time → TIME(6), uuid → CHAR(36); arrays and network types refused through the
-# capability table, and a name with no faithful target (boolean, interval, bytea, a user type)
+# → DATETIME(3), time → TIME(6), uuid → CHAR(36); arrays, network types and full-text search
+# (`tsvector`, `tsquery`, #1425) refused through the capability table, naming PostgreSQL, and a name
+# with no faithful target (boolean, interval, bytea, a user type)
 # refused before any SQL. Why: an unmapped name reaching the server is either a syntax error or a
 # cast to some other type than the one written.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -779,6 +780,23 @@ end
   # A feature MySQL lacks is the capability table's refusal.
   @test_throws PormG.BackendCapabilityError t("integer[]")
   @test_throws PormG.BackendCapabilityError t("inet")
+  # #1425: through `Cast` and a declared `output_field` alike; PostgreSQL still renders the cast.
+  for x in ("tsvector", "tsquery", "TSVECTOR")
+    err = try; t(x); nothing; catch e; e; end
+    @test (x, err isa PormG.BackendCapabilityError) == (x, true)
+    msg = sprint(showerror, err)
+    @test occursin("full-text search", msg) && occursin("PostgreSQL", msg)
+  end
+  fts_out = try
+    _mr_inspect(_MR_MY.Result.objects.values("c" => _MR_QB.Coalesce("driverid__surname", "driverid__forename"; output_field = "tsquery")))
+    nothing
+  catch e; e; end
+  @test fts_out isa PormG.BackendCapabilityError
+  @test occursin("output_field: a cast to \"tsquery\"", sprint(showerror, fts_out))
+  # A sized name and the field-object spelling reach the same check.
+  @test_throws PormG.BackendCapabilityError t("tsvector(3)")
+  @test_throws PormG.BackendCapabilityError t(PormG.Models.SearchVectorField().type)
+  @test PormG.Dialect.cast_type_sql("tsvector", MrMockPostgres()) == "tsvector"
   # No faithful target: refused before any SQL, never passed through.
   for x in ("boolean", "bool", "interval", "bytea", "BLOB", "time with time zone", "mood", "integer(4)", "uuid(3)")
     err = try; t(x); nothing; catch e; e; end

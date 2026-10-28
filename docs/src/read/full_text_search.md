@@ -19,9 +19,10 @@ functions in `PormG.Functions`:
 !!! warning "PostgreSQL only"
     SQLite has no `tsvector` or `tsquery`. Its FTS5 extension is a separate index table with its
     own query syntax and ranking. PormG does not emulate it, because an emulation would answer a
-    different question. MySQL has no `tsvector` or `tsquery` either. On SQLite and MySQL the lookup
-    and each function raise `BackendCapabilityError` when the query is built, so a test suite on
-    either fails where production would diverge. See the
+    different question. MySQL has no `tsvector` or `tsquery` either. On SQLite and MySQL the lookup,
+    each function and a cast to either type (`Cast(x, "tsvector")`, `output_field = "tsquery"`) raise
+    `BackendCapabilityError` when the query is built, so a test suite on either fails where
+    production would diverge. See the
     [PostgreSQL Guide](../postgres.md).
 
 ```julia

@@ -353,8 +353,10 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # (`_alias_lhs(…; fresh = true)`), and a path or handle falls through to the render below, which
   # resolves the same row — so the same text — and is checked on the way. It writes no memo entry
   # (`cached` is set), so the first render stays the one every reader memoized against (#404).
+  # #1414: nor while `update()`'s SET renders, for the same reason — a `When("driverid__code" => …)`
+  # whose path the WHERE memoized must reach `_column_sql`, or its join goes unrecorded.
   reuse = cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
-  if reuse && instruc.scope.join_hop !== nothing
+  if reuse && (instruc.scope.join_hop !== nothing || instruc.scope.set_reads !== nothing)
     fresh = _alias_lhs(key, cached, instruc; fresh = true)
     fresh === nothing || return fresh
     reuse = false

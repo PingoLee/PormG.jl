@@ -459,6 +459,9 @@ growing (`Coalesce(Subquery)`, `F(...) == Subquery`, a `When` condition, …), a
   render on, and a comparison nested inside a right side stays right (#975). Every column reaches
   `_column_sql`, which checks it — so a node type the build-time walkers do not know is caught here
   instead of naming the wrong row in valid SQL.
+- `set_reads` (#1414) — the same place answers a third question: which of this statement's aliases
+  did `update()`'s SET clause read? A subquery's columns render on its own instruction, so the answer
+  follows SQL's scoping rather than an alias name the rendered text cannot place.
 
 Prior art: PostgreSQL's parser tracks the same thing (`ParseState.p_expr_kind`), and its
 `check_ungrouped_columns` does not descend into same-level aggregate arguments.
@@ -502,6 +505,12 @@ hand it the inner query's.
   # resets `phase` to `:row`; so neither field tells a HAVING render from a WHERE one, and this does.
   # HAVING filters groups, never the rows a join drops, so it promotes nothing (`_in_where_filter`).
   having::Bool = false
+  # #1414 — set while `update()`'s SET clause renders: every alias a column of THIS statement named
+  # (`_column_sql` adds it). A `Subquery` in SET builds on its own instruction, so its aliases are not
+  # here, while an `OuterRef` resolves on this one, so the outer join its path reads is. `update()`
+  # picks UPDATE … FROM when a join's alias is in it. A shared set, not a value: nested scopes copy the
+  # reference and collect into it.
+  set_reads::Union{Nothing,Set{String}} = nothing
 end
 
 _with_scope(s::RenderScope; kw...) =

@@ -369,3 +369,109 @@ end
     end
   end
 end
+
+# ── #1414: the statement shape follows the aliases SET reads, not an alias name in its text ──────────
+const _UCase = PormG.QueryBuilder.Case
+const _UWhen = PormG.QueryBuilder.When
+
+# The `_use_update` statement with the driver's `cjoin_on` copy under `alias`, joined `join_type`.
+function _use_update_aliased(pairs::Pair...; conn, alias::String, join_type::String = "LEFT")
+  q = USE.Use_result.objects
+  q.filter("resultid" => 1)
+  q.cjoin_on("Use_driver", alias = alias, on = [_UJoined(alias, "driverid") == _UF("driverid")], join_type = join_type)
+  for (k, v) in pairs
+    q.object.insert[k] = v
+  end
+  res = PormG.QueryBuilder.update(q.object; connection = conn, show_query = :dict)
+  return replace(res[:sql_text], r"\s+" => " ") |> strip, res[:parameters]
+end
+
+@testset "update: a cjoin_on alias named like a Subquery's own alias keeps the key-selection shape (#1414)" begin
+  # What: a `cjoin_on` copy aliased "R1" — the name the SET `Subquery`'s own table renders under — beside
+  # `update("grid" => Subquery(<driver number>))` builds exactly the statement alias "d" builds, with
+  # "d" spelled "R1": `… WHERE "Tb"."resultid" IN (SELECT DISTINCT … JOIN "use_driver" AS "R1" …) AND
+  # EXISTS (…)`, the same values, LEFT and INNER alike, on every engine. Why: the shape was chosen by
+  # searching the SET text for `"R1".`, which the subquery's own columns matched. A LEFT copy was refused
+  # (#174: UPDATE … FROM cannot carry a LEFT join), and an INNER one switched the statement to UPDATE …
+  # FROM (MySQL: the multi-table UPDATE), decided by a name chosen for an unrelated reason. The wrapped
+  # form `Coalesce(Subquery(…), 0)` is the one that reached it before #1320 admitted a bare Subquery.
+  for (conn, engine) in _USE_ENGINES, join_type in ("LEFT", "INNER"), wrapped in (false, true)
+    @testset "$engine $join_type$(wrapped ? " Coalesce" : "")" begin
+      sub = wrapped ? _UseFn.Coalesce(_use_subquery("number"), 0) : _use_subquery("number")
+      d_sql, d_params = _use_update_aliased("grid" => sub; conn = conn, alias = "d", join_type = join_type)
+      r1_sql, r1_params = _use_update_aliased("grid" => sub; conn = conn, alias = "R1", join_type = join_type)
+      @test occursin("IN (SELECT", d_sql)
+      @test r1_sql == replace(d_sql, _use_q(conn, "d") => _use_q(conn, "R1"))
+      @test r1_params == d_params
+    end
+  end
+end
+
+@testset "update: a Joined column of the aliased copy still takes UPDATE … FROM (#1414)" begin
+  # What: `update("grid" => Joined("R1", "number"))` on an INNER copy aliased "R1" builds
+  # `UPDATE "use_result" AS "Tb" SET "grid" = "R1"."number" FROM "use_driver" AS "R1" WHERE (…)` (MySQL:
+  # `UPDATE … AS `Tb`, `use_driver` AS `R1``), and on a LEFT copy it is still #174's refusal. Why: the
+  # SET does read that join here, so the statement must carry it; deciding from what SET reads must not
+  # lose the case the text search got right.
+  for (conn, engine) in _USE_ENGINES
+    @testset "$engine" begin
+      sql, params = _use_update_aliased("grid" => _UJoined("R1", "number"); conn = conn, alias = "R1", join_type = "INNER")
+      if conn === _USE_MY
+        @test sql == "UPDATE `use_result` AS `Tb`, `use_driver` AS `R1` SET `Tb`.`grid` = `R1`.`number` " *
+                     "WHERE (`R1`.`driverid` = `Tb`.`driverid`) AND `Tb`.`resultid` = ?"
+      else
+        @test sql == "UPDATE \"use_result\" AS \"Tb\" SET \"grid\" = \"R1\".\"number\" FROM \"use_driver\" AS \"R1\" " *
+                     "WHERE (\"R1\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb\".\"resultid\" = $(_use_p(conn, 1))"
+      end
+      @test params == [1]
+      err = _use_refusal(() -> _use_update_aliased("grid" => _UJoined("R1", "number"); conn = conn, alias = "R1"))
+      @test err isa QueryBuildError
+      err === nothing || @test occursin("cjoin_on alias \"R1\" is a LEFT join", _use_msg(err))
+    end
+  end
+end
+
+@testset "update: an OuterRef path inside a SET Subquery reads the outer join, so UPDATE … FROM (#1414)" begin
+  # What: `update("grid" => Subquery(Driver.filter("code" => OuterRef("driverid__code"))…))` builds
+  # UPDATE … FROM "use_driver" AS "Tb_1" (MySQL: the multi-table UPDATE), the subquery comparing
+  # `"R1"."code" = "Tb_1"."code"`. Why: an `OuterRef` path joins the OUTER statement, so this SET reads a
+  # join of the statement from inside the subquery. Skipping a subquery's contents would build the
+  # key-selection shape and leave "Tb_1" out of scope; the reads are recorded on the instruction a
+  # column resolves on, which for an `OuterRef` is the outer one. The second filter set joins "Tb_1" in
+  # the WHERE first, so the `OuterRef` adds no join and only that record can say the SET reads it.
+  for (conn, engine) in _USE_ENGINES, filters in (("resultid" => 1,), ("resultid" => 1, "driverid__code" => "HAM"))
+    @testset "$engine $(length(filters)) filter(s)" begin
+      Q(s) = _use_q(conn, s)
+      s = USE.Use_driver.objects
+      s.filter("code" => _UOuterRef("driverid__code"))
+      s.values("number")
+      s.limit(1)
+      sql, params = _use_update("grid" => _USubquery(s); conn = conn, filters = filters)
+      @test occursin("WHERE $(Q("R1")).$(Q("code")) = $(Q("Tb_1")).$(Q("code"))", sql)
+      @test occursin(conn === _USE_MY ? "UPDATE `use_result` AS `Tb`, `use_driver` AS `Tb_1` SET" :
+                                        "FROM \"use_driver\" AS \"Tb_1\" WHERE", sql)
+      @test !occursin("IN (SELECT", sql)
+      @test length(params) == length(filters) + 1
+    end
+  end
+end
+
+@testset "update: a When condition on a path the WHERE already rendered still reads its join (#1414)" begin
+  # What: `filter("driverid__code" => "HAM").update("grid" => Case([When("driverid__code" => "HAM",
+  # then = 1)], default = 0))` builds UPDATE … FROM "use_driver" AS "Tb_1" (MySQL: the multi-table
+  # UPDATE), its CASE reading `"Tb_1"."code"`. Why: the WHERE memoized that path's column, and a reused
+  # memo returns its text without rendering the column again, so its join would go unrecorded and the
+  # key-selection shape would leave "Tb_1" out of scope. SET renders it afresh, as an ON clause does (#985).
+  for (conn, engine) in _USE_ENGINES
+    @testset "$engine" begin
+      Q(s) = _use_q(conn, s)
+      sql, params = _use_update("grid" => _UCase([_UWhen("driverid__code" => "HAM", then = 1)], default = 0);
+                                conn = conn, filters = ("driverid__code" => "HAM",))
+      @test occursin("CASE WHEN $(Q("Tb_1")).$(Q("code")) = ", sql)
+      @test occursin(conn === _USE_MY ? "UPDATE `use_result` AS `Tb`, `use_driver` AS `Tb_1` SET" :
+                                        "FROM \"use_driver\" AS \"Tb_1\" WHERE", sql)
+      @test !occursin("IN (SELECT", sql)
+      @test count(==("HAM"), params) == 2
+    end
+  end
+end

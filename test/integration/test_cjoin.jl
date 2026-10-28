@@ -289,6 +289,49 @@ struct _Rollback174 <: Exception end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A LEFT cjoin_on alias named like a SET Subquery's own alias executes on a live engine (#1414)
+# `update()` chose its statement by searching the SET text for `"<alias>".`, and the Subquery's own
+# table renders as "R1", so a LEFT copy aliased "R1" was refused as if the SET read it (#174). The SET
+# never reads the copy: the statement takes the key-selection shape, the copy's LEFT JOIN scoping the
+# rows, and writes the subquery's value. Rolled back like #174's testset above.
+# ─────────────────────────────────────────────────────────────────────────────
+struct _Rollback1414 <: Exception end
+
+@testset "update(): a LEFT cjoin_on alias \"R1\" beside a SET Subquery writes the subquery's value (#1414)" begin
+    raceid = 18
+    ham = M.Result.objects.filter("raceid" => raceid, "driverid__code" => "HAM").values("resultid") |> DataFrame
+    @test nrow(ham) == 1   # Hamilton in this race, or the write below proves nothing
+    before = only(M.Result.objects.filter("resultid" => ham.resultid[1]).values("positiontext") |> DataFrame).positiontext
+    @test !isequal(before, "HAM")   # or writing "HAM" proves nothing either
+
+    code = M.Driver.objects
+    code.filter("driverid" => OuterRef("driverid"))
+    code.values("code")
+    code.limit(1)
+
+    seen = Dict{Symbol,Any}()
+    err = try
+        PormG.run_in_transaction(PORMG_DB_FOLDER) do
+            q = M.Result.objects
+            q.filter("resultid" => ham.resultid[1])
+            q.cjoin_on("Driver", alias = "R1", join_type = "LEFT", on = [Joined("R1", "driverid") == F("driverid")])
+            seen[:n] = q.update("positiontext" => Subquery(code))
+            seen[:text] = only(M.Result.objects.filter("resultid" => ham.resultid[1]).values("positiontext") |> DataFrame).positiontext
+            throw(_Rollback1414())
+        end
+        nothing
+    catch e
+        e
+    end
+    @test err isa _Rollback1414
+    @test seen[:n] == 1
+    @test seen[:text] == "HAM"
+    # Rolled back: Hamilton's row reads what it read before.
+    after = only(M.Result.objects.filter("resultid" => ham.resultid[1]).values("positiontext") |> DataFrame).positiontext
+    @test isequal(after, before)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A cjoin_on alias equal to a ForeignKey field name executes on a live engine (#484)
 # Top-level rather than inside "cjoin error paths" above: this executes a query, it does not assert
 # a refusal. (The sibling `cjoin_on self-join` testset sits in that block for historical reasons and

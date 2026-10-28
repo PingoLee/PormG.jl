@@ -36,8 +36,8 @@ updates exactly the rows it describes.
 | `on(…; join_type = "LEFT" / "FULL")`, `ForeignKey(how = "LEFT" / "FULL")` | ran as an inner join | `QueryBuildError` (#1430) |
 | only `INNER` and `RIGHT` joins (non-null keys, or `on(…; join_type = "INNER")`) | ran | runs, unchanged |
 
-An `update()` on a query that declares a CTE (`with(…)`) renders `UPDATE … FROM` whatever its `SET`
-holds, so the rule applies to it too. Any other `update()` that sets literal values, or reads only the
+A joined `update()` on a query that declares a CTE (`with(…)`) renders `UPDATE … FROM` whatever its
+`SET` holds, so the rule applies to it too. Any other `update()` that sets literal values, or reads only the
 target's own columns, is not affected: it selects its rows through the primary key, with the joins as
 written.
 

@@ -1052,7 +1052,8 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
     # RIGHT is not refused: the chain is left-deep and rooted at the target, so a RIGHT hop null-extends
     # only the target side, rows an UPDATE cannot write. Flattened, it updates exactly the rows INNER
     # does, the equivalence `_target_predicate` rewrites by. Checked after the refusals no join type
-    # fixes (a to-many hop, a CTE, an `on()` condition), so its advice is not a step into one of them.
+    # fixes (a to-many hop, a CTE, an `on()` condition), so on one row its advice is not a step into one
+    # of them; a later row is checked only once this one passes.
     if row isa ModelJoin && (row.how == "LEFT" || row.how == "FULL")
       throw(QueryBuildError(
         "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into this update's " *

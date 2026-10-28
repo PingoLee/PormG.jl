@@ -24,14 +24,15 @@ Two `update` shapes never print the join type, and a capability does not decide 
 - an `update` with constant `SET` values on a model **without a primary key** rewrites the join for
   its row predicate (`RIGHT` to `INNER`, `FULL` to `LEFT`), which every backend runs. It runs as
   before.
-- an `update` whose `SET` reads a joined column renders `UPDATE … FROM`, which joins as an inner join.
+- an `update` whose `SET` reads a joined column renders `UPDATE … FROM`, which joins as an inner join,
+  and so does a joined `update` on a query that declares a CTE (`with(…)`), whatever it sets.
   A `RIGHT` join there updates exactly the rows it describes, so it runs as before, on every backend.
   A `FULL` join is refused on every engine with `QueryBuildError`, for its meaning rather than a
   capability: see the #1430 entry.
 
 | a `"FULL"` join type on SQLite older than 3.39.0 | before | now |
 |---|---|---|
-| a read, a `delete`, or a constant-`SET` `update` on a model with a primary key | an error from the server | `BackendCapabilityError` |
+| a read, a `delete`, or a constant-`SET` `update` on a model with a primary key and no CTE | an error from the server | `BackendCapabilityError` |
 | a constant-`SET` `update` on a model without a primary key | ran as a `LEFT JOIN` | runs, unchanged |
 | an `update` whose `SET` reads a joined column | ran as an inner join | `QueryBuildError` (#1430) |
 

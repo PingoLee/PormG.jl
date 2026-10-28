@@ -236,7 +236,8 @@ stays a `LEFT JOIN`). A model without a primary key gets the `EXISTS` alone. The
 `RIGHT` join into `INNER` and a `FULL` join into `LEFT`, which select the same rows there, so that
 update builds even on a backend without `RIGHT` or `FULL JOIN` (SQLite before 3.39.0, MySQL's `FULL`;
 [Backends](../backends.md)). The `IN (…)` prints the joins as written, so a model with a primary key
-needs the feature.
+needs the feature. An `UPDATE … FROM` ([below](#Every-join-in-it-is-INNER)) prints no join type, so it
+needs neither.
 
 ```julia
 # Update with complex relationship traversal
@@ -376,8 +377,8 @@ from a joined table raises `QueryBuildError` when any path join in it is `LEFT` 
 ([#1430](https://github.com/PingoLee/PormG.jl/issues/1430)). A path through a nullable `ForeignKey`
 is joined `LEFT`, so this covers the common case. Before, such an `update()` ran and skipped every row
 whose key matched nothing, on every engine. A `RIGHT` join runs: the joins start at the target table,
-so it only adds rows where the target is NULL, which no `UPDATE` writes. An `update()` on a query that
-declares a CTE (`with(…)`) renders `UPDATE … FROM` whatever it sets, so the rule applies to it too.
+so it only adds rows where the target is NULL, which no `UPDATE` writes. A joined `update()` on a query
+that declares a CTE (`with(…)`) renders `UPDATE … FROM` whatever it sets, so the rule applies to it too.
 
 The rule is conservative: a filter that compares a value through a nullable path drops the NULL rows
 itself, so its `LEFT` join was exact, and it is refused all the same. Declare that path `INNER`, as
@@ -432,9 +433,11 @@ The statement joins in its `WHERE` clause, which only means what the `cjoin_on` 
 conditions. PormG checks both, for **every** `cjoin_on` in the query, and raises `QueryBuildError`
 when either fails:
 
-- **The join is `INNER`** (the default). A `LEFT`, `RIGHT` or `FULL` copy would act as an inner one,
-  its `ON` clause moved into `WHERE`. The relation joins in the statement follow the rule for any
-  `UPDATE … FROM` ([above](#Every-join-in-it-is-INNER)): no `LEFT` or `FULL` join.
+- **The join is `INNER`** (the default). A `LEFT` or `FULL` copy would act as an inner one, its `ON`
+  clause moved into `WHERE`, and skip the rows it was declared to keep. A `RIGHT` copy is refused too,
+  conservatively: it would update the same rows as an `INNER` one. The relation joins in the statement
+  follow the rule for any `UPDATE … FROM` ([above](#Every-join-in-it-is-INNER)): no `LEFT` or `FULL`
+  join.
 - **The join is to-one**: its `ON` clause pins the target's primary key or a unique column to one value
   per row (the rule is in [Custom Joins](../read/custom_joins.md), under *When PormG treats a
   `cjoin_on` join as to-many*).

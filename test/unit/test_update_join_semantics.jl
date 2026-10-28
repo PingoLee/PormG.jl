@@ -5,10 +5,11 @@
 #
 # CONTRACT being tested:
 #   An `update()` whose SET reads a joined column renders a correlated `UPDATE … FROM` (MySQL: the
-#   multi-table `UPDATE`), which joins in its WHERE clause and so acts as an INNER join. A LEFT, RIGHT
-#   or FULL path join there would skip the rows it was declared to keep, so it is refused on every
-#   engine (#1430): explicit intent, the caller names whether a row with no match is skipped (an INNER
-#   join) or written NULL (a `Subquery`).
+#   multi-table `UPDATE`), which joins in its WHERE clause and so acts as an INNER join. A LEFT or FULL
+#   path join there would skip the rows it was declared to keep, so it is refused on every engine
+#   (#1430): explicit intent, the caller names whether a row with no match is skipped (an INNER join)
+#   or written NULL (a `Subquery`). A RIGHT join keeps only rows the target is NULL in, which no UPDATE
+#   writes, so it runs as the INNER join it means here.
 #   A RIGHT or FULL join is a capability row (#1422), refused where the statement prints the join type.
 #   `update()` prints it only in a keyed model's key selection: a keyless model's fence rewrites it to
 #   INNER/LEFT, so that update builds on a backend without the feature (#1431).

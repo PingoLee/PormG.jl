@@ -692,6 +692,13 @@ function PormG.backend_execute_async(pool::_Pool, conn::Postgres.Connection, sql
   return Threads.@spawn _run(conn, sql, bound)
 end
 
+# #1447: the most parameters Postgres.jl binds in one statement. It writes the Bind message's parameter
+# count as a signed `Int16` (`Int16(length(params))`, 2.2.2 through 2.4.0), so 32768 raises an
+# `InexactError` before anything is sent, where the protocol and libpq allow 65535. Upstream:
+# JuliaDatabases/Postgres.jl#34. A statement PormG splits under the limit (a many-to-many `remove`, a bulk
+# write given no positive `chunk_size`) sizes to this.
+PormG.backend_postgres_parameter_limit(::_Pool)::Int = Int(typemax(Int16))
+
 PormG.backend_num_rows(pool::_Pool, result) = length(result)
 
 # Postgres.jl reports `nothing` for a command tag without a count (CREATE, SET, …); core needs an Int.

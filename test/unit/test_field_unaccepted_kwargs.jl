@@ -168,12 +168,12 @@ end
   text_key = FUK_M.CharField(primary_key = true, max_length = 10)
   @test _fuk_ddl(text_key, FukPg()) == "\"circuitid\" varchar(10) PRIMARY KEY NOT NULL"
   @test _fuk_ddl(text_key, FukSl()) == "\"circuitid\" TEXT(10) PRIMARY KEY NOT NULL"
-  @test _fuk_ddl(text_key, FukMy()) == "`circuitid` VARCHAR(10) NOT NULL PRIMARY KEY"
+  @test _fuk_ddl(text_key, FukMy()) == "`circuitid` VARCHAR(10) NOT NULL COLLATE utf8mb4_0900_bin PRIMARY KEY"
 
   uuid_key = FUK_M.UUIDField(primary_key = true)
   @test _fuk_ddl(uuid_key, FukPg()) == "\"circuitid\" uuid PRIMARY KEY NOT NULL"
   @test _fuk_ddl(uuid_key, FukSl()) == "\"circuitid\" TEXT PRIMARY KEY NOT NULL"
-  @test _fuk_ddl(uuid_key, FukMy()) == "`circuitid` CHAR(36) NOT NULL PRIMARY KEY"
+  @test _fuk_ddl(uuid_key, FukMy()) == "`circuitid` CHAR(36) NOT NULL COLLATE utf8mb4_0900_bin PRIMARY KEY"
 
   # And the plain integer column the old warning left behind, for contrast: no PRIMARY KEY.
   @test _fuk_ddl(FUK_M.BigIntegerField(), FukPg()) == "\"circuitid\" bigint NOT NULL"

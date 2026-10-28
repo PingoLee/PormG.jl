@@ -4898,10 +4898,19 @@ _ddl_ident(::Union{PormGPostgres, PormGSQLite}, name::Union{AbstractString, Symb
   "\"$(_quote_table_ddl(name))\""
 _ddl_ident(::PormGMySQL, name::Union{AbstractString, Symbol})::String = "`$(replace(String(name), "`" => "``"))`"
 
-# The table options every MySQL `CREATE TABLE` carries: InnoDB (foreign keys, transactions) and the
-# binary utf8mb4 collation the connection pins, so a text comparison means what it means elsewhere
-# (#1265).
-const MYSQL_TABLE_OPTIONS = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"
+# The collation of every text column PormG writes, and the one the connection pins: code points, no
+# padding, so a text comparison means what it means elsewhere (#1265).
+const MYSQL_TEXT_COLLATION = "utf8mb4_0900_bin"
+
+# The table options every MySQL `CREATE TABLE` carries: InnoDB (foreign keys, transactions) and that
+# collation as the table's default, for a column added by hand. A column PormG writes declares it
+# itself (`_mysql_column_body`), so one it adds to a table it did not create compares the same (#1434).
+const MYSQL_TABLE_OPTIONS = "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=$(MYSQL_TEXT_COLLATION)"
+
+# Whether a column type takes a collation: the character types, as PormG writes them or the catalog
+# prints them.
+_mysql_text_type(column_type::AbstractString)::Bool =
+  occursin(r"^(VARCHAR|CHAR|LONGTEXT|MEDIUMTEXT|TEXT|TINYTEXT)\b"i, column_type)
 
 # MySQL takes an expression default only in parentheses (`DEFAULT (uuid())`), and re-prints it
 # (`lower('X')` as `lower(_utf8mb4\'X\')`), so PormG stamps its ownership marker after it, as on
@@ -4969,8 +4978,8 @@ function _mysql_default_clause(field::PormGField, col_name::AbstractString, base
   return _mysql_expression_only(base_type) ? "DEFAULT ($(literal))" : "DEFAULT $(literal)"
 end
 
-# A column's definition without its keys and CHECKs: the name, the type, `NULL`/`NOT NULL`, the default
-# and `AUTO_INCREMENT` — exactly what `ALTER TABLE … MODIFY COLUMN` replaces. MODIFY drops whatever it
+# A column's definition without its keys and CHECKs: the name, the type, `NULL`/`NOT NULL`, the default,
+# `AUTO_INCREMENT` and the collation — exactly what `ALTER TABLE … MODIFY COLUMN` replaces. MODIFY drops whatever it
 # does not restate (measured on 8.4: the default, `AUTO_INCREMENT`, `NOT NULL`, a COMMENT), and keeps the
 # column's indexes and CHECKs, so restating `UNIQUE` there would add a second unique index (`c_2`).
 #
@@ -4979,6 +4988,13 @@ end
 # `INVISIBLE`, `ON UPDATE CURRENT_TIMESTAMP` on a column still a timestamp, a collation other than the
 # table's on a column still text, and — with `keep_default` — an expression default the model does not
 # declare (the planner reports one a retype drops, `:drop_default`).
+#
+# The collation (#1434): a text column the catalog does not hold (`live === nothing`: `CREATE TABLE`,
+# `ADD COLUMN`, and the statements after them in the same plan) is one PormG writes whole, and declares
+# `MYSQL_TEXT_COLLATION`, which the table's default alone does not give it on a table PormG did not
+# create (`utf8mb4_0900_ai_ci`, where `'ham' = 'HAM'`). A MODIFY of a column the catalog holds keeps the
+# column's own: one other than the table's is restated, one equal to it is inherited, and a column that
+# held no text before takes `MYSQL_TEXT_COLLATION`, since PormG then writes its text definition first.
 function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::PormGMySQL;
                             temporary_default::Any = nothing, live = nothing, keep_default::Bool = false)::String
   _refuse_unsupported_type(conn, col_name, field)     # inet, cidr, an array, a tsvector (#28, #1129)
@@ -5012,11 +5028,11 @@ function _mysql_column_body(col_name::AbstractString, field::PormGField, conn::P
     live.invisible && push!(parts, "INVISIBLE")
   end
   _mysql_auto_increments(field) && push!(parts, "AUTO_INCREMENT")
-  if live !== nothing
-    isempty(live.comment) || push!(parts, "COMMENT " * _format_default_sql_value(live.comment, conn))
-    live.collation !== nothing && occursin(r"^(VARCHAR|CHAR|LONGTEXT|MEDIUMTEXT|TEXT|TINYTEXT)\b"i, base_type) &&
-      push!(parts, "COLLATE " * live.collation)
-  end
+  live === nothing || isempty(live.comment) || push!(parts, "COMMENT " * _format_default_sql_value(live.comment, conn))
+  collation = live === nothing ? MYSQL_TEXT_COLLATION :
+              live.collation !== nothing ? live.collation :
+              live.text ? nothing : MYSQL_TEXT_COLLATION
+  collation !== nothing && _mysql_text_type(base_type) && push!(parts, "COLLATE " * collation)
   return join(parts, " ")
 end
 

@@ -609,6 +609,44 @@ if only_on(:mysql, "alters through the MySQL DDL (phase 4b)")
             exec("DROP TABLE `m4b_legacy`")
         end
 
+        # What: a column PormG adds to a table it did not create, whose default collation is
+        # `utf8mb4_0900_ai_ci`, then a retype of it, of the table's own text column and of an `INT` into text.
+        # SQL: `ALTER TABLE `m4b_adopted` ADD COLUMN `code` VARCHAR(3) NOT NULL COLLATE utf8mb4_0900_bin UNIQUE;`;
+        #      then `MODIFY COLUMN `code` VARCHAR(5) NOT NULL COLLATE utf8mb4_0900_bin` (restated, not the table's),
+        #      `MODIFY COLUMN `name` VARCHAR(40) NOT NULL` (the table's, inherited) and
+        #      `MODIFY COLUMN `n` VARCHAR(10) NULL COLLATE utf8mb4_0900_bin` (no text before).
+        # Why: the table's default alone made the added column `_ai_ci`, where `code = 'ham'` matched `HAM` and its
+        # UNIQUE index refused `HAM` beside `ham` (error 1062): another row set than on the other engines, on a
+        # column PormG wrote (#1434). The declared collation must not plan a change on the next run (the reader
+        # reads none), and a column PormG did not write keeps its own collation through a retype (#1265).
+        @testset "a column PormG adds to a table it did not create compares code points (#1434)" begin
+            exec("CREATE TABLE `m4b_adopted` (`adoptedid` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, " *
+                 "`name` VARCHAR(20) NOT NULL, `n` INT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci")
+            adopted(fields) = "Adopted = Models.Model(\"m4b_adopted\", adoptedid = Models.IDField(), $(fields))"
+            collation(col) = column_row("m4b_adopted", col).k
+            write_models(adopted("name = Models.CharField(max_length = 20), n = Models.IntegerField(null = true)"))
+            @test converged()
+            plan = apply!(adopted("name = Models.CharField(max_length = 20), n = Models.IntegerField(null = true), " *
+                                  "code = Models.CharField(max_length = 3, unique = true)"))
+            @test occursin("ADD COLUMN `code` VARCHAR(3) NOT NULL COLLATE utf8mb4_0900_bin UNIQUE", plan)
+            @test (collation("code"), collation("name")) == ("utf8mb4_0900_bin", "utf8mb4_0900_ai_ci")
+            @test converged()
+            # The UNIQUE index and `=` respect case on the added column; the table's own column keeps ignoring it.
+            exec("INSERT INTO `m4b_adopted` (`name`, `n`, `code`) VALUES ('Lewis', 44, 'ham'), ('Lewis', 1, 'HAM')")
+            @test Int(raw("SELECT COUNT(*) AS c FROM `m4b_adopted` WHERE `code` = 'ham'")[1, :c]) == 1
+            @test Int(raw("SELECT COUNT(*) AS c FROM `m4b_adopted` WHERE `name` = 'LEWIS'")[1, :c]) == 2
+            plan = apply!(adopted("name = Models.CharField(max_length = 40), n = Models.CharField(max_length = 10, null = true), " *
+                                  "code = Models.CharField(max_length = 5, unique = true)"))
+            @test occursin("MODIFY COLUMN `code` VARCHAR(5) NOT NULL COLLATE utf8mb4_0900_bin", plan) &&
+                  occursin(r"MODIFY COLUMN `name` VARCHAR\(40\) NOT NULL(?! COLLATE)", plan) &&
+                  occursin("MODIFY COLUMN `n` VARCHAR(10) NULL COLLATE utf8mb4_0900_bin", plan)
+            @test (collation("code"), collation("name"), collation("n")) ==
+                  ("utf8mb4_0900_bin", "utf8mb4_0900_ai_ci", "utf8mb4_0900_bin")
+            @test converged()
+            @test Int(raw("SELECT COUNT(*) AS c FROM `m4b_adopted` WHERE `code` = 'HAM'")[1, :c]) == 1
+            exec("DROP TABLE `m4b_adopted`")
+        end
+
         # What: a data step (`run_once`) on MySQL, transactional and not, and `ensure_table!`.
         # SQL: `GET_LOCK('pormg::migrations', …)`, the step's writes and its `pormg_migrations_data` row in one
         #      transaction; `ensure_table!`'s CREATE TABLE and key.

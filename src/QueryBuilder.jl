@@ -39,7 +39,7 @@ import PormG: PormGError, UsageError, FieldAccessError, UnknownFieldError, Ambig
   OperationalError, StatementError
 # Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
 import PormG: with_location
-import PormG: _supports, _capability_error, _backend_name  # #1129: the backend capability table (Kernel)
+import PormG: _supports, _capability_error, _require_feature, _backend_name  # #1129: the backend capability table (Kernel)
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
               run_in_transaction,
               NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS,  # #904

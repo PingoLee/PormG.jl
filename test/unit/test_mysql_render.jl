@@ -410,6 +410,12 @@ end
     q.values("resultid", Joined("r", "year"))
     q
   end
+  cjoin_link(M, how) = begin
+    q = M.Result.objects
+    q.cjoin("raceid" => "Race", warn = false, join_type = how, filters = ["year" => 1990])
+    q.values("resultid")
+    q
+  end
   cte(M, how) = begin
     q = M.Result.objects
     q.with("best" => M.Result.objects.values("raceid", "top" => Max("resultid")),
@@ -418,11 +424,11 @@ end
     q
   end
   err_of(f) = try; f(); nothing; catch e; e; end
-  for (label, shape) in (("on()", on_join), ("cjoin_on", cjoin), ("with(...)", cte))
+  for (label, shape) in (("on()", on_join), ("cjoin_on", cjoin), ("cjoin", cjoin_link), ("with(...)", cte))
     err = err_of(() -> _mr_inspect(shape(_MR_MY, "FULL")))
     @test err isa PormG.BackendCapabilityError
     msg = err isa Exception ? sprint(showerror, err) : ""
-    @test occursin("join_type = \"FULL\" needs a `FULL OUTER JOIN`", msg)
+    @test occursin("join_type = \"FULL\" needs a `FULL OUTER JOIN`, which", msg)
     @test occursin("which MySQL does not support (supported on PostgreSQL, SQLite)", msg)
     @test occursin(" RIGHT JOIN `", _mr_inspect(shape(_MR_MY, "RIGHT"))[:sql_text])
     # The other engines render both.

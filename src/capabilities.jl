@@ -71,8 +71,8 @@ const _BACKEND_FEATURES = (
   :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
   # #1422 (#1271): an outer join that keeps the rows of the joined table. SQLite has both from 3.39.0;
   # MySQL has `RIGHT JOIN` and no `FULL JOIN`.
-  :right_joins            => "a `RIGHT OUTER JOIN` (`join_type = \"RIGHT\"`)",
-  :full_joins             => "a `FULL OUTER JOIN` (`join_type = \"FULL\"`)",
+  :right_joins            => "a `RIGHT OUTER JOIN`",
+  :full_joins             => "a `FULL OUTER JOIN`",
   :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
   :schema_introspection   => "reading the schema from the system catalog",
   :migration_plans        => "the DDL a migration plan holds (identity columns, `INCLUDE` index columns)",

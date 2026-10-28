@@ -115,14 +115,15 @@ end
 
 # #1422: a RIGHT or FULL join is a capability row, refused before any SQL on a backend that lacks it
 # (MySQL has no `FULL JOIN`; SQLite has neither before 3.39.0). This is the one place every join row
-# with a join type is emitted (`on()`, `cjoin_on`, a CTE's `join_type`, a path join), so one check
-# covers them all. A mutation that carries the join rewrites it for its EXISTS fence, but its key
-# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does.
+# with a join type is emitted (`on()`, `cjoin`, `cjoin_on`, a CTE's `join_type`, a `ForeignKey(how =
+# …)` path join), so one check covers them all; it names the join type, which is what every one of
+# them was given. A mutation that carries the join rewrites it for its EXISTS fence, but its key
+# selection prints it verbatim (`_key_selection`), so a write reaches this the same way a read does —
+# except a keyless model's write, which takes the fence alone and used to run there as INNER/LEFT.
 function _require_outer_join(conn, how::AbstractString)::Nothing
-  feature = how == "RIGHT" ? :right_joins : how == "FULL" ? :full_joins : nothing
-  feature === nothing && return nothing
-  _supports(conn, feature) && return nothing
-  throw(_capability_error(conn, feature, "join_type = \"$(how)\""))
+  how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
+  how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")
+  return nothing
 end
 
 # One row's ON conditions, rendered in vector order — the order their markers appear in. `instruc.alias`

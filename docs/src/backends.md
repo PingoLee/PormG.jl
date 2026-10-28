@@ -43,8 +43,8 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `unbounded_text_indexes` | a primary key, `unique`, `db_index`, `Index` or `UniqueConstraint` over a field MySQL writes as `LONGTEXT`, `LONGBLOB` or `JSON` (such as a `TextField`, `EmailField`, `ImageField`, `FileField`, `PasswordField`, `BinaryField` or `JSONField`), which MySQL indexes only by a prefix: refused by `makemigrations`; declare a `CharField` with a `max_length` | yes | yes | no |
 | `statement_timeouts` | `migrate(…; statement_timeout)`: a bound on how long one plan statement may run. SQLite accepts it and ignores it; MySQL bounds no DDL statement's run time, so there it is refused (use `lock_timeout`, which becomes `lock_wait_timeout`) | yes | yes | no |
 | `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 | no |
-| `right_joins` | `join_type = "RIGHT"` on `on()`, `cjoin_on` or a CTE (`with(…; join_type)`), refused below the version | yes | from 3.39.0 | yes |
-| `full_joins` | `join_type = "FULL"` on `on()`, `cjoin_on` or a CTE (`with(…; join_type)`), refused below the version | yes | from 3.39.0 | no |
+| `right_joins` | a `"RIGHT"` join type — `on()`, `cjoin`, `cjoin_on`, a CTE (`with(…; join_type)`) or a `ForeignKey(how = …)` — refused below the version, writes included | yes | from 3.39.0 | yes |
+| `full_joins` | a `"FULL"` join type — `on()`, `cjoin`, `cjoin_on`, a CTE (`with(…; join_type)`) or a `ForeignKey(how = …)` — refused below the version, writes included | yes | from 3.39.0 | no |
 | `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 | no |
 | `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it. On MySQL, `inspectdb` is `import_models_from_mysql` | from 9.6 | yes | yes |
 | `migration_plans` | `makemigrations`, `migrate`, `check(kinds = [:schema_drift])` (refused below the version) | from 11 | yes | yes |

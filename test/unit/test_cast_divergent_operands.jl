@@ -607,7 +607,9 @@ _is_1040(e) = e isa QueryBuildError && occursin("(#1040)", _ccd_msg(e))
     _CF("points") * 2     => "arithmetic over the FloatField `points`",
     Fn.Avg("number")      => "`AVG(…)`",
     Fn.Cast("points", "numeric") => "a value cast to numeric",
-    Fn.Cast(Fn.Round("price", 0), "numeric(10,3)") => "a value cast to numeric(10,3)",
+    # A nested declaration wider than the target, over a value with places. (Over a whole number, as
+    # `Round("price", 0)` is, the cast has nothing to round: #1167.)
+    Fn.Cast("price", "numeric(10,3)") => "a value cast to numeric(10,3)",
     "surname"             => "text column `surname`",        # PostgreSQL parses '1.555' and rounds it
     Fn.Value("1.555")     => "a string literal",
     Fn.Lower("surname")   => "a text expression",
@@ -941,6 +943,139 @@ end
                Fn.Cast("born", "text"), Fn.Cast("clock", Models.CharField()))
     @test _ccd_builds(expr)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1319: a boolean cast to a float or a `numeric` is refused on SQLite and MySQL
+# MEANING: a boolean is a number only as the integer `1` / `0`, which every engine casts alike
+# (PostgreSQL's `boolean::integer`). PostgreSQL has no cast from a boolean to a float or a `numeric`
+# and rejects the query when it runs: the meaning, by the #1259 tie-breaker. SQLite casts the integer
+# it stores (`1.0`), MySQL its `TINYINT(1)` (`1`): a number the query never stated. A column, an
+# extremum over one, and the `output_field` sites, to a float, an unscaled and a scaled `numeric`.
+# The integer cast, and the two spellings the message names, build on every engine.
+# Expected SQL, PostgreSQL: ("Tb"."active")::float8
+# Why: before #1319 SQLite and MySQL answered `1.0` / `1` where PostgreSQL raised.
+# ─────────────────────────────────────────────────────────────────────────────
+struct CcdMockMySQL <: PormG.PormGMySQL end
+const _CCD_MY = CcdMockMySQL()
+@testset "#1319: a boolean cast to a float or a numeric is refused on SQLite and MySQL" begin
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), output_field = output_field)
+  for (expr, named) in (
+      (Fn.Cast("active", "float8"), "the BooleanField `active`"),
+      (Fn.Cast("active", Models.FloatField()), "the BooleanField `active`"),
+      (Fn.Cast("active", "numeric"), "the BooleanField `active`"),
+      (Fn.Cast("active", "numeric(10,2)"), "the BooleanField `active`"),
+      (Fn.Cast("active", Models.DecimalField()), "the BooleanField `active`"),
+      (Fn.Cast(Fn.Max("active"), "float8"), "`MAX(…)` over the BooleanField `active`"),
+      (Fn.Coalesce("active", false; output_field = "float8"), "the BooleanField `active`"),
+      (case(_CF("active"); output_field = "numeric"), nothing))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1319", named = named)
+    @test occursin("a boolean is a number only as the integer `1` or `0`", _ccd_msg(errs.sqlite))
+    @test occursin("Cast it to the integer first", _ccd_msg(errs.sqlite))
+    my = _ccd_refusal(expr; conn = _CCD_MY)
+    msg = my === nothing ? "" : _ccd_msg(my)
+    @test my isa QueryBuildError
+    @test occursin("MySQL computes `1` or `0`, the integer it stores, so PormG refuses it on MySQL (#1319)", msg)
+    @test !occursin("SQLite", msg) && !occursin("PostgreSQL", msg)
+  end
+  @test occursin("(\"Tb\".\"active\")::float8 as \"x\"", _ccd_render(Fn.Cast("active", "float8"); conn = _CCD_PG))
+  # The integer spelling keeps the type the cast asked for (review of #1319).
+  @test occursin("Cast(Cast(\"active\", IntegerField()), \"numeric(10,2)\")",
+                 _ccd_msg(_ccd_refusal(Fn.Cast("active", "numeric(10,2)"); conn = _CCD_SL)))
+  # A single-precision target: SQLite answers #1215 first (it rounds no value to a `Float32`); MySQL
+  # keeps single precision, so it reads the operand and refuses the boolean.
+  @test occursin("(#1215)", _ccd_msg(_ccd_refusal(Fn.Cast("active", "real"); conn = _CCD_SL)))
+  @test occursin("(#1319)", _ccd_msg(_ccd_refusal(Fn.Cast("active", "real"); conn = _CCD_MY)))
+  # The integer, and the spellings the message offers, build on every engine.
+  for expr in (Fn.Cast("active", Models.IntegerField()), Fn.Cast("active", "integer"),
+               Fn.Cast(Fn.Cast("active", Models.IntegerField()), "float8"),
+               Fn.Case([Fn.When("active" => true, then = Fn.Value(1.0)), Fn.When("active" => false, then = Fn.Value(0.0))]))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1325: a duration or a time cast to a date is refused on SQLite and MySQL
+# MEANING: neither has a calendar date, so the cast is an error: PostgreSQL has no `interval::date`
+# and no `time::date`, and rejects the query when it runs. SQLite's `date()` reads the stored
+# `HH:MM:SS` text as a time on 2000-01-01 (`date('01:23:45')` is `2000-01-01`; past 24 hours, NULL);
+# MySQL reads a duration's count of microseconds as a date and gives a time today's date. A column,
+# an aggregate, interval arithmetic, a literal and the `output_field` sites. A date and a timestamp
+# cast to a date, and a duration or a time cast to text, build on every engine.
+# Expected SQL, PostgreSQL: ("Tb"."laptime")::date
+# Why: before #1325 SQLite answered January 1st, 2000 for a lap time, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1325: a duration or a time cast to a date is refused on SQLite and MySQL" begin
+  case(then) = Fn.Case(Fn.When("number" => 1, then = then), output_field = "date")
+  for (expr, meaning) in (
+      (Fn.Cast("laptime", "date"), "a duration has no calendar date"),
+      (Fn.Cast("laptime", Models.DateField()), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Sum("laptime"), "date"), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Avg("laptime"), "date"), "a duration has no calendar date"),
+      (Fn.Greatest("laptime", "laptime"; output_field = "date"), "a duration has no calendar date"),
+      (Fn.Least("clock", "clock"; output_field = "date"), "a time of day has no date"),
+      (Fn.Cast(_CF("start_at") - _CF("start_at"), "date"), "a duration has no calendar date"),
+      (Fn.Cast(Fn.Value(Minute(1)), "date"), "a duration has no calendar date"),
+      (Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "date"), "a duration has no calendar date"),
+      (case(_CF("laptime")), "a duration has no calendar date"),
+      (Fn.Cast("clock", "date"), "a time of day has no date"),
+      (Fn.Cast(Fn.Max("clock"), "date"), "a time of day has no date"),
+      (Fn.Cast(Fn.Value(Time(6)), "date"), "a time of day has no date"),
+      (case(_CF("clock")), "a time of day has no date"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1325", named = meaning)
+    my = _ccd_refusal(expr; conn = _CCD_MY)
+    msg = my === nothing ? "" : _ccd_msg(my)
+    @test my isa QueryBuildError
+    @test occursin("so PormG refuses it on MySQL (#1325)", msg) && occursin(meaning, msg)
+    @test !occursin("SQLite", msg) && !occursin("PostgreSQL", msg)
+  end
+  @test occursin("(\"Tb\".\"laptime\")::date as \"x\"", _ccd_render(Fn.Cast("laptime", "date"); conn = _CCD_PG))
+  # What each engine computes instead, named for the engine at hand.
+  @test occursin("SQLite computes a day in January 2000", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
+  @test occursin("MySQL computes today's date", _ccd_msg(_ccd_refusal(Fn.Cast("clock", "date"); conn = _CCD_MY)))
+  @test occursin("F(\"date\") + F(\"laptime\")", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
+  # A date and a timestamp have a date; a duration and a time have a text. All build on every engine.
+  for expr in (Fn.Cast("start_at", "date"), Fn.Cast("born", "date"), Fn.Cast(Fn.Value(Date(2009, 3, 29)), "date"),
+               Fn.Cast("laptime", "text"), Fn.Cast("clock", "text"))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1167 §2.3: a whole number cast to a numeric stays whole under a further cast
+# MEANING: `Cast(x, "numeric")`, scaled or not, keeps a whole number whole on every engine (`3::numeric`
+# is `3`, `CAST(3 AS NUMERIC(10,2))` too), so a further cast to an integer or a scale has nothing to
+# round. It read as a decimal of unknown places, and SQLite refused it under #1028 and #1040 although
+# every engine gives the same value. Whole is an integer column, a zero-scale `DecimalField`, or a
+# whole function (`Floor`). A decimal with places, a float and text still have a fraction to round,
+# and are still refused on SQLite: `'1.5'` cast to a `numeric` and then to an integer is `2` on
+# PostgreSQL and `1` on SQLite. Expected SQL, SQLite: CAST(CAST("Tb"."number" AS NUMERIC) AS INTEGER)
+# Why: an over-refusal of a value every engine computes alike.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1167: a whole number cast to a numeric stays whole under a further cast" begin
+  for expr in (Fn.Cast(Fn.Cast("grid", "numeric"), Models.IntegerField()),
+               Fn.Cast(Fn.Cast("grid", "numeric"), "numeric(10,2)"),
+               Fn.Cast(Fn.Cast("number", "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("number", "decimal"), "numeric(10,0)"),
+               Fn.Cast(Fn.Cast("number", "numeric(10,2)"), "integer"),
+               Fn.Cast(Fn.Cast(Fn.Floor("points"), "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("number", "numeric") * 2, "integer"),
+               Fn.Cast(Fn.Cast(_CF("number") * 2, "numeric"), "integer"))
+    @test _ccd_builds(expr)
+    @test _ccd_refusal(expr; conn = _CCD_MY) === nothing
+  end
+  @test occursin("CAST(CAST(\"Tb\".\"number\" AS NUMERIC) AS INTEGER)",
+                 _ccd_render(Fn.Cast(Fn.Cast("number", "numeric"), "integer"); conn = _CCD_SL))
+  # A fraction is still one through the inner cast: refused on SQLite only, as before.
+  # Text through arithmetic is still text: no integer the walk names (review of #1167).
+  for expr in (Fn.Cast(Fn.Cast("price", "numeric"), "integer"), Fn.Cast(Fn.Cast("points", "numeric"), "integer"),
+               Fn.Cast(Fn.Cast("surname", "numeric"), "integer"), Fn.Cast(Fn.Cast(_CF("surname") * 1, "numeric"), "integer"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1028")
+  end
+  _ccd_expect(Fn.Cast(Fn.Cast("price", "numeric"), "numeric(10,1)"); departs = _SL_ONLY, issue = "#1040")
+  _ccd_expect(Fn.Cast(Fn.Cast("surname", "numeric"), "numeric(10,1)"); departs = _SL_ONLY, issue = "#1040")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

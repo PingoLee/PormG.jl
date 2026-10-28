@@ -6410,6 +6410,186 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Extract hour time | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Cast bool float8 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast bool float8 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool float8 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool float8 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast bool float8 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool float8 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool float8 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast bool float8 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool float8 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `1"),
+  ("Cast bool numeric | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast bool numeric | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool numeric | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool numeric | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast bool numeric | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool numeric | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool numeric | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast bool numeric | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool numeric | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the integer `"),
+  ("Cast bool to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast bool to scale 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast bool to scale 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast bool to scale 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the BooleanField `boolean_field` means an error, since a boolean is a number only as the int"),
+  ("Cast bool to integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast bool to integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast interval to date | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast interval to date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
+  ("Cast interval to date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
+  ("Cast interval to date | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Cast interval to date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
+  ("Cast interval to date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
+  ("Cast interval to date | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast interval to date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; SQLite comp"),
+  ("Cast interval to date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the DurationField `fastestlaptime` means an error, since a duration has no calendar date; MySQL compu"),
+  ("Cast time to date | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast time to date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
+  ("Cast time to date | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
+  ("Cast time to date | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Cast time to date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
+  ("Cast time to date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
+  ("Cast time to date | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast time to date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; SQLite computes `2000-01-01`, t"),
+  ("Cast time to date | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"date\") of the TimeField `time` means an error, since a time of day has no date; MySQL computes today's date, wh"),
+  ("ToChar time YYYY-MM-DD | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time YYYY-MM-DD | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "ToChar(…, \"YYYY-MM-DD\") over a time is not supported: a time of day has no date, so the year, month or day in the format"),
+  ("ToChar time HH:MI | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar time HH:MI | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar time HH:MI | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar time HH:MI | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar time HH:MI | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar time HH:MI | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar time HH:MI | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar time HH:MI | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar time HH:MI | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast int numeric to scale 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

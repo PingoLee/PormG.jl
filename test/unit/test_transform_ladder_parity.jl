@@ -1478,3 +1478,47 @@ end
   # PostgreSQL only — SQLite has no `TIMEZONE` part — a zoned timestamp reads its zone.
   @test occursin("TIMEZONE", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Extract("ts", "TIMEZONE")); q); conn = _TLP_PG))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1336: ToChar with a date in its format over a time is refused on every engine
+# EXPLICIT INTENT: a time of day has no date, so a format that writes a year, a month or a day has no
+# value over one on any engine. SQLite's `strftime('%Y-%m-%d', '06:00:00')` reads `2000-01-01`,
+# PostgreSQL's `to_char` reads the time as an interval, and MySQL's `DATE_FORMAT` gives it today's date.
+# Refused when the query is built, naming no engine, for every key of `date_format_map` that writes a
+# date, over a `TimeField` column and an extremum over one. `YYYY-MM` over a column meets the #1070 row
+# first. The clock keys build over a time, and every key builds over a date or a timestamp. A native
+# PostgreSQL template is no key, so it is not read (fails open, as #1070 does).
+# Expected SQL, PostgreSQL: to_char("Tb"."clock", 'HH24:MI')
+# Why: before #1336 SQLite answered `2000-01-01` for every row, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+struct TlpMockMySQL <: PormG.PormGMySQL end
+@testset "#1336: ToChar with a date in its format over a time is refused on every engine" begin
+  Fn = PormG.Functions
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  built(model, x, conn) = (try _tlp_sql((q = model.objects; q.values("v" => x); q); conn = conn); catch e; e end)
+  engines = (("PostgreSQL", _TLP_PG), ("SQLite", _TLP_SL), ("MySQL", TlpMockMySQL()))
+  date_keys = sort([k for k in keys(PormG.date_format_map) if PormG.Dialect._tochar_reads_date(k)])
+  clock_keys = sort([k for k in keys(PormG.date_format_map) if !PormG.Dialect._tochar_reads_date(k)])
+  # The two lists are what the format table holds: the guard of the guard.
+  @test "YYYY-MM-DD" in date_keys && "DD/MM/YYYY" in date_keys && "YYYY-MM-DD HH:MI:SS" in date_keys
+  @test clock_keys == ["HH", "HH:MI", "HH:MI:SS", "HH:MI:SS.SSS", "MI", "SS"]
+  for (engine, conn) in engines, key in date_keys, operand in ("clock", Fn.Max("clock"))
+    e = built(TLP.Tlp_clock, Fn.ToChar(operand, key), conn)
+    label = (engine, key, operand isa String ? operand : "Max")
+    @test (label, e isa PormG.QueryBuildError) == (label, true)
+    e isa PormG.QueryBuildError || continue
+    key == "YYYY-MM" && operand isa String && (@test occursin("(#1070)", plain(e)); continue)
+    @test (label, occursin("a time of day has no date", plain(e)) && occursin("(#1336)", plain(e))) == (label, true)
+    @test !any(n -> occursin(n, plain(e)), ("PostgreSQL", "SQLite", "MySQL"))
+  end
+  for (engine, conn) in engines
+    for key in clock_keys
+      @test (engine, key, built(TLP.Tlp_clock, Fn.ToChar("clock", key), conn) isa AbstractString) == (engine, key, true)
+    end
+    for key in date_keys
+      @test (engine, key, built(TLP.Tlp_row, Fn.ToChar("ts", key), conn) isa AbstractString) == (engine, key, true)
+    end
+  end
+  @test occursin("to_char(\"Tb\".\"clock\", 'HH24:MI')", built(TLP.Tlp_clock, Fn.ToChar("clock", "HH:MI"), _TLP_PG))
+  @test occursin("to_char(\"Tb\".\"clock\", 'DD Mon YYYY')", built(TLP.Tlp_clock, Fn.ToChar("clock", "DD Mon YYYY"), _TLP_PG))
+end

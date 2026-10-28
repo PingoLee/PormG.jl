@@ -949,11 +949,14 @@ end
   # Every target MySQL holds as text, and JSON (which then fails at the server, as PostgreSQL's does).
   @test occursin("`_pormg_us`) AS `_pormg_d`) AS CHAR(36)) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "uuid")))[1])
   @test occursin("`_pormg_us`) AS `_pormg_d`) AS JSON) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "json")))[1])
-  # A date, a time or a timestamp cast would read the count's digits: refused on MySQL.
-  for t in ("date", "time", "timestamp", "timestamptz")
+  # A date, a time or a timestamp cast would read the count's digits: refused on MySQL. A date is the
+  # #1325 departure row's (a duration has no calendar date on any engine), met before this arm.
+  for t in ("time", "timestamp", "timestamptz")
     e = try; _mr_inspect(R.objects.values("v" => cast("fastestlaptime", t))); nothing; catch err; err; end
     @test (t, e isa PormG.QueryBuildError && occursin("of an interval is not supported on MySQL", sprint(showerror, e))) == (t, true)
   end
+  e = try; _mr_inspect(R.objects.values("v" => cast("fastestlaptime", "date"))); nothing; catch err; err; end
+  @test e isa PormG.QueryBuildError && occursin("so PormG refuses it on MySQL (#1325)", sprint(showerror, e))
   # The per-engine edges: MySQL's are the identity; SQLite's are its own Dialect helpers, unchanged.
   @test _MR_QB._interval_text_as_ms("`c`", MrMockMySQL()) == "`c`"
   @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"
@@ -1050,7 +1053,7 @@ end
                  sql(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "interval")))[1])
   @test occursin("SELECT `Tb`.`fastestlaptime` as `v`", sql(() -> R.objects.values("v" => QB.Cast("fastestlaptime", "interval")))[1])
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "date")),
-                "of an interval is not supported on MySQL")
+                "so PormG refuses it on MySQL (#1325)")
   # #1321: a duration beside a number is refused on every engine, before this MySQL arm, declared or not.
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0; output_field = "text")),
                 "mixes an interval (`fastestlaptime`) and a number (an Int64 literal)")
@@ -1310,10 +1313,13 @@ end
                        "@date" => QB.DATE)
     @test (name, date_of_time(() -> RA.objects.values("v" => node(tm())))) == (name, true)
   end
-  @test date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), "YYYY-MM-DD")))
-  # A key with a date component — a year, a month, a day — is refused; a minute (`MI`, `%i`) is not.
-  for key in ("DD/MM/YYYY", "MM", "DD", "YYYY")
-    @test (key, date_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), key)))) == (key, true)
+  # `ToChar` with a date component — a year, a month, a day — is refused on every engine (#1336), before
+  # this MySQL arm, which stays its backstop; a minute (`MI`, `%i`) is not.
+  tochar_of_time(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                           e isa PormG.QueryBuildError && occursin("a time of day has no date", sprint(showerror, e)) &&
+                           occursin("(#1336)", sprint(showerror, e)))
+  for key in ("YYYY-MM-DD", "DD/MM/YYYY", "MM", "DD", "YYYY")
+    @test (key, tochar_of_time(() -> RA.objects.values("v" => QB.ToChar(tm(), key)))) == (key, true)
   end
   @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%i')"
   @test proj(() -> RA.objects.values("v" => QB.ToChar(tm(), "HH:MI"))) == "DATE_FORMAT(CAST(`Tb`.`date` AS TIME(6)), '%H:%i')"

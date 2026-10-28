@@ -251,8 +251,9 @@ M.Result.objects.values("y" => Extract(F("raceid__date") + F("fastestlaptime"), 
 A foreign key's value is the related row's key, so a part over it is
 checked against that key's field: on `M.Result`, `"raceid__@year"` raises `QueryBuildError`,
 because `raceid` holds the race's integer id. Read the race's date through the relation instead,
-with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
-`to_char` also formats numbers on PostgreSQL.
+with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked by this row only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
+`to_char` also formats numbers on PostgreSQL; any portable format that writes a date is refused over a
+time (#1336, see [`ToChar`](#ToChar-—-Format-as-String)).
 
 A date part's value has a range: `@month` and `MONTH` `1`–`12`, `@day` and `DAY` `1`–`31`, the
 clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and `DOY` `1`–`366`. An
@@ -1032,8 +1033,8 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 
 #### A cast an engine computes differently
 
-A cast to text, to an integer, to a scaled `numeric(p, s)` or to a single-precision float goes
-through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
+A cast to text, to an integer, to a scaled `numeric(p, s)`, to a single-precision float or to a
+date goes through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
 engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
 others build the query as written. For the scale and integer rows, [Rounding](rounding.md) shows the
 explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite 3.45 and MySQL 8.4:
@@ -1045,6 +1046,8 @@ explicit spelling that builds on every engine. Measured on PostgreSQL 16, SQLite
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) | builds |
 | to a number (an integer, a float, a `numeric`, scaled or not), of an interval | an error, since an interval has no numeric value | builds, and raises when the query runs | **refused**: it casts the stored `HH:MM:SS` text and reads its hours (`00:01:23.456` → `0`) | **refused**: a duration is its count of microseconds there, and the cast reads the count |
 | to a number, of a date, a timestamp or a time | an error, since none has a numeric value | builds, and raises when the query runs | **refused**: it casts the stored text and reads its leading digits, the year (`2009-03-29` → `2009`) or a time's hour (`06:00:00` → `6`) | **refused**: its cast reads the digits as one number (`2009-03-29` → `20090329`) |
+| to a float or a `numeric` (scaled or not), of a boolean | an error, since a boolean is a number only as the integer `1` or `0` | builds, and raises when the query runs | **refused**: it casts the integer it stores (`1.0` as a float, `1` as a `numeric`) | **refused**: it casts its `TINYINT(1)` (`1`) |
+| to a date, of a duration or a time | an error, since neither has a calendar date | builds, and raises when the query runs | **refused**: `date()` reads the stored `HH:MM:SS` text as a time on `2000-01-01` (NULL past 24 hours) | **refused**: it reads a duration's count of microseconds as a date, and gives a time today's date |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit | builds |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` | **refused**: it clamps it to the largest value the type holds (`9.99`) |
 | to `numeric(p, s)`, of a column or a computed value too large on some rows (`Cast("driverid", "numeric(2,0)")`) | an overflow, on those rows | raises `StatementError` (SQLSTATE `22003`) when the query runs | raises the same `StatementError` as it reads those rows (#1110) | raises the same `StatementError` as it reads those rows (#1110) |
@@ -1066,13 +1069,21 @@ What each row covers:
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on every engine, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
-  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine.
+  `Mod` of whole numbers, `+`, `-`, `*` of them, an integer cast to a `numeric`) has nothing to round;
+  both pass on every engine (#1167).
   An interval (a `DurationField`, its `Sum` or `Avg`, a duration literal, temporal arithmetic) is refused on
   SQLite and MySQL, here and under any other number type (#1259). For a number from a duration, fetch it and
   take the number in Julia. So is a date, a timestamp or a time (a column, `Max` of one, a cast to
   `date`, date arithmetic, a literal), whose number is a part: `"date__@year"` or
   `Extract("date", "year")`, `"time__@hour"` (#1260). A part and a day count
-  (`F("date") - F("date")`) are numbers and pass;
+  (`F("date") - F("date")`) are numbers and pass. A boolean is a number only as an integer: its
+  cast to a float or a `numeric` is refused on SQLite and MySQL (#1319). Cast it to the integer
+  first, `Cast(Cast(x, IntegerField()), "float8")`, or state the values with a `Case`;
+- **a date**: `DateField()` and `"date"`, and the same `output_field`. A duration (a `DurationField`,
+  its `Sum`, interval arithmetic, a duration literal) and a time of day (a `TimeField`, `Max` of one, a
+  `Time` literal) have no calendar date, so their cast is refused on SQLite and MySQL (#1325). A
+  duration places a date only from another one: `F("date") + F("fastestlaptime")`. A date and a
+  timestamp cast to a date build on every engine;
 - **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as
@@ -1309,6 +1320,12 @@ instant. PormG spells the format for each engine itself: `HH` is the 24-hour clo
 `T` separator and the `.SSS` milliseconds render as written. On MySQL `ToChar` over a `DurationField`
 raises `QueryBuildError`, since a duration is its microseconds there: `Cast(x, "text")` gives its
 `HH:MM:SS` text.
+
+A time of day has no date, so over a `TimeField` (or `Max` of one) a format that writes a year, a
+month or a day raises `QueryBuildError` on every engine (#1336). SQLite would write `2000-01-01`,
+PostgreSQL would read the time as an interval, and MySQL would give it today's date. The clock formats
+(`"HH"`, `"MI"`, `"SS"`, `"HH:MI"`, `"HH:MI:SS"`, `"HH:MI:SS.SSS"`) format a time on every engine:
+`ToChar("time", "HH:MI")` on `M.Race`.
 
 | `format` | renders as |
 |---|---|

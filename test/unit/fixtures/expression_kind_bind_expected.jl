@@ -6503,4 +6503,160 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(EXTRACT(HOUR FROM \"R2\".\"time\")::integer) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sum Extract hour time | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(CAST(strftime('%H', \"R2\".\"time\") AS INTEGER)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool float8 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::float8 > \$1", params = [("10", "Int64")]),
+  ("Cast bool float8 | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::float8 > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool float8 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast bool float8 | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool float8 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::float8 as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool float8 | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::float8 as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast bool numeric | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::decimal > \$1", params = [("10", "Int64")]),
+  ("Cast bool numeric | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::decimal > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool numeric | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast bool numeric | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool numeric | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::decimal as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool numeric | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::decimal as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast bool to scale 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::numeric(10,2) > \$1", params = [("10", "Int64")]),
+  ("Cast bool to scale 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::numeric(10,2) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool to scale 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast bool to scale 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast bool to scale 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::numeric(10,2) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool to scale 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::numeric(10,2) as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast bool to integer | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(`Tb`.`boolean_field` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`Tb`.`boolean_field` AS SIGNED), ~0 + ABS(CAST(`Tb`.`boolean_field` AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
+  ("Cast bool to integer | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"boolean_field\")::integer > \$1", params = [("10", "Int64")]),
+  ("Cast bool to integer | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(\"Tb\".\"boolean_field\" AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(\"Tb\".\"boolean_field\" AS INTEGER) ELSE abs(CAST(\"Tb\".\"boolean_field\" AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
+  ("Cast bool to integer | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast bool to integer | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast bool to integer | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast bool to integer | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(`R2`.`boolean_field` AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(`R2`.`boolean_field` AS SIGNED), ~0 + ABS(CAST(`R2`.`boolean_field` AS SIGNED))) AS SIGNED) as `t`\nFROM `new_join_position` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool to integer | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"boolean_field\")::integer as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast bool to integer | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(\"R2\".\"boolean_field\" AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(\"R2\".\"boolean_field\" AS INTEGER) ELSE abs(CAST(\"R2\".\"boolean_field\" AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"new_join_position\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast interval to date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast interval to date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\")::date > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast interval to date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Cast interval to date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast interval to date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast interval to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\")::date as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Cast time to date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast time to date | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\")::date > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast time to date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Cast time to date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Cast time to date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Cast time to date | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\")::date as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("ToChar time HH:MI | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "DATE_FORMAT(`Tb`.`time`, '%H:%i') > ?", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "DATE_FORMAT(`Tb`.`time`, '%H:%i') > ?", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "to_char(\"Tb\".\"time\", 'HH24:MI') > \$1", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "to_char(\"Tb\".\"time\", 'HH24:MI') > \$1", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "strftime('%H:%M', \"Tb\".\"time\") > ?", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "strftime('%H:%M', \"Tb\".\"time\") > ?", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    DATE_FORMAT(`R2`.`time`, '%H:%i') as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("ToChar time HH:MI | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    DATE_FORMAT(`R2`.`time`, '%H:%i') as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("ToChar time HH:MI | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    to_char(\"R2\".\"time\", 'HH24:MI') as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("ToChar time HH:MI | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    to_char(\"R2\".\"time\", 'HH24:MI') as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("ToChar time HH:MI | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%H:%M', \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("ToChar time HH:MI | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%H:%M', \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast Cast int numeric to integer | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED), ~0 + ABS(CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::integer > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) ELSE abs(CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to integer | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED), ~0 + ABS(CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to integer | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to integer | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) ELSE abs(CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(`Tb`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) > ?", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::numeric(10,2) > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::decimal)::numeric(10,2) > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(CAST(\"Tb\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) > ?", params = [("10.5", "Decimal")]),
+  ("Cast Cast int numeric to scale 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(`R2`.`grid` AS DECIMAL(65,30)) AS DECIMAL(65,2)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::numeric(10,2) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::decimal)::numeric(10,2) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast int numeric to scale 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CAST(\"R2\".\"grid\" AS NUMERIC) AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
 )

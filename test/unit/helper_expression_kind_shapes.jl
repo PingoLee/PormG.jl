@@ -456,6 +456,20 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # `Abs F date - date`, above).
   ("Round Extract year",      :Race,                m -> _EKM_FN.Round(_EKM_FN.Extract("date", "year"))),
   ("Sum Extract hour time",   :Race,                m -> _EKM_FN.Sum(_EKM_FN.Extract("time", "hour"))),
+  # #1319: a boolean cast to a number other than an integer; the integer cast is `1` / `0` everywhere
+  ("Cast bool float8",        :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "float8")),
+  ("Cast bool numeric",       :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "numeric")),
+  ("Cast bool to scale 2",    :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "numeric(10,2)")),
+  ("Cast bool to integer",    :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "integer")),
+  # #1325: a cast to a date of a duration or of a time, which have no date
+  ("Cast interval to date",   :Result,              m -> _EKM_FN.Cast("fastestlaptime", "date")),
+  ("Cast time to date",       :Race,                m -> _EKM_FN.Cast("time", "date")),
+  # #1336: `ToChar` over a time, with a date in its format and with a time-only one
+  ("ToChar time YYYY-MM-DD",  :Race,                m -> _EKM_FN.ToChar("time", "YYYY-MM-DD")),
+  ("ToChar time HH:MI",       :Race,                m -> _EKM_FN.ToChar("time", "HH:MI")),
+  # #1167: a whole number cast to an unscaled `numeric`, then to an integer or a scale
+  ("Cast Cast int numeric to integer", :Result,     m -> _EKM_FN.Cast(_EKM_FN.Cast("grid", "numeric"), "integer")),
+  ("Cast Cast int numeric to scale 2", :Result,     m -> _EKM_FN.Cast(_EKM_FN.Cast("grid", "numeric"), "numeric(10,2)")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

@@ -1303,6 +1303,9 @@ milliseconds render as written). The full list:
 | `"YYYY-MM-DD HH:MI:SS"`, `"YYYY-MM-DD HH:MI:SS.SSS"` | `2009-03-29 06:00:00`, `2009-03-29 06:00:00.000` |
 | `"YYYY-MM-DDTHH:MI:SS"`, `"YYYY-MM-DDTHH:MI:SS.SSS"` | `2009-03-29T06:00:00`, `2009-03-29T06:00:00.000` |
 
+A time of day has no date: over a `TimeField`, a format that writes a year, a month or a day raises
+`QueryBuildError` on every engine (#1336). The clock formats (`"HH:MI"`, …) format a time everywhere.
+
 !!! warning "Any other format is PostgreSQL-only"
     A format outside that table is passed to `to_char` as written (so a native template such as
     `"HH12:MI AM"` works on PostgreSQL), and raises `BackendCapabilityError` on SQLite and MySQL,

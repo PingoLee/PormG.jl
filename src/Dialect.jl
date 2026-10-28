@@ -697,6 +697,12 @@ function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLit
 end
 _tochar_format_refusal(engine::String, format_str) = BackendCapabilityError("ToChar: format \"$(format_str)\" is not " *
   "supported on $(engine). Supported formats: $(join(sort(collect(keys(date_format_map))), ", "))")
+# #1336: whether a `ToChar` key writes a year, a month or a day, read from the one spelling every key
+# has (MySQL's `%Y`/`%m`/`%d`). A native PostgreSQL template is no key, so it answers `false`.
+function _tochar_reads_date(format_str::AbstractString)::Bool
+  entry = get(date_format_map, format_str, nothing)
+  return entry !== nothing && any(c -> occursin(c, entry.mysql), ("%Y", "%m", "%d"))
+end
 # MySQL (#1130 phase 2c-3a): only a key renders, through `DATE_FORMAT`, as on SQLite. `%f` is six digits
 # where a key's `.SSS` is three, so such a key keeps its output's first `length(key)` characters (a
 # key is as long as its text): the operand renders once, so a bound one stays in step. A duration is a
@@ -710,8 +716,8 @@ function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL
   entry = get(date_format_map, format_str, nothing)
   entry === nothing && throw(_tochar_format_refusal("MySQL", format_str))
   # A date key over a time reads today's date there (`DATE_FORMAT(TIME '10:00', '%Y')`); its time keys
-  # are the time's own.
-  any(c -> occursin(c, entry.mysql), ("%Y", "%m", "%d")) && _refuse_date_of_time(format, "ToChar(…, \"$(format_str)\")")
+  # are the time's own. The build refuses it on every engine first (#1336); this is its backstop.
+  _tochar_reads_date(format_str) && _refuse_date_of_time(format, "ToChar(…, \"$(format_str)\")")
   sql = "DATE_FORMAT($(column), '$(entry.mysql)')"
   return Base.endswith(format_str, ".SSS") ? "LEFT($(sql), $(length(format_str)))" : sql
 end

@@ -940,6 +940,19 @@ function _integral_valued(p, instruc::SQLInstruction)
       return precision isa Integer && precision == 0 && _divided_whole_operand(p, instruc) === nothing
     end
     p.function_name == "MOD" && p.column isa AbstractVector && return all(x -> _whole_number(x, instruc), p.column)
+    # #1167: a cast to a `numeric` keeps a whole number whole, scaled or not (`grid::numeric` is `1`,
+    # `CAST(1 AS NUMERIC(10,2))` too), so it is whole when its operand is. It read as a decimal of
+    # unknown places, and `Cast(Cast("grid", "numeric"), IntegerField())` was refused on SQLite. Whole
+    # here is a whole function, or what the type walk names an integer or a zero-scale decimal, not
+    # `_whole_number`'s "no fractional kind": text has none, and `'1.5'` cast to a `numeric` is a
+    # fraction, also through arithmetic (`F("surname") * 1`), which `_integral_valued` reads by that
+    # rule; the walk types integer arithmetic itself. A literal too large for the precision is #1087's.
+    if p.function_name == "CAST" && !(p.column isa AbstractVector)
+      declared = get(p.kwargs, "type", nothing)
+      declared isa AbstractString && _sql_type_field(declared) isa Models.sDecimalField &&
+        return (p.column isa FObject && _integral_valued(p.column, instruc)) ||
+               _whole_kind(_expression_kind(p.column, instruc))
+    end
     return false
   end
   p isa SQLField && return _integral_valued(p.field, instruc)
@@ -948,6 +961,10 @@ function _integral_valued(p, instruc::SQLInstruction)
   return false
 end
 _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _concat_textless_operand(x, instruc) === nothing
+# #1167: a kind whose every value is whole: an integer, or a decimal declared with no places.
+_whole_kind(::Union{CInt16,CInt32,CInt64}) = true
+_whole_kind(k::CDecimal) = k.scale == 0
+_whole_kind(::Any) = false
 
 # #1040 — the scale a declared numeric type rounds to, or `nothing` for a type with none. PostgreSQL
 # rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
@@ -1167,6 +1184,10 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #   is `1`). A boolean is `1`/`0` on both, and passes;
 # - `:integer` and `:number` (#1259): an interval is no number, so its cast to any number type is an
 #   error, and SQLite reads its stored text's hours;
+# - `:number` over a boolean (#1319): a boolean is a number only as the integer `1` / `0`, so its cast
+#   to a float or a `numeric` is an error, which SQLite and MySQL compute from the integer they store;
+# - `:date` (#1325): a duration or a time of day has no date, so its cast to one is an error, and
+#   SQLite reads the stored `HH:MM:SS` text as a time on 2000-01-01;
 # - `:scale` (#1040): a `numeric(p, s)` cast over an operand with more than `s` fractional digits
 #   (`_scale_divergent_operand`) means the value rounded to `s`; SQLite keeps every digit;
 # - `:precision` (#1087): a literal `Cast` operand too large for `p` (`_precision_overflow_operand`)
@@ -1203,6 +1224,15 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   end
   size = _numeric_cast_size(declared)
   target = _sql_type_field(declared)
+  # #1325: a duration and a time of day have no calendar date, so their cast to one is no value. The
+  # operand is read as the number rules below read it; a date or a timestamp has no row, and builds.
+  if target isa Models.sDateField
+    for operand in operands
+      side = _temporal_number_operand(operand, instruc)
+      side === nothing || (d = departs(side[1], side[2], :date, _concat_flag(operand)); d === nothing || return d)
+    end
+    return nothing
+  end
   # #1259: an interval is no number, whatever number the target is: an integer, a float, a `numeric`,
   # scaled or not; nor is a date, a time or a timestamp (#1260). Checked ahead of the number rules,
   # which read a fraction, not a duration or a date.
@@ -1211,6 +1241,12 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
     for operand in operands
       side = _temporal_number_operand(operand, instruc)
       side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
+      # #1319: a boolean is a number only as an integer; its cast to a float or a `numeric` is no value.
+      numeric_target === :number || continue
+      side = _concat_textless_operand(operand, instruc)
+      (side !== nothing && side[1] === :bool) || continue
+      d = departs(:bool, side[2], :number, _concat_flag(operand))
+      d === nothing || return d
     end
   end
   # #1040: a scaled numeric target rounds on PostgreSQL only.
@@ -1367,7 +1403,8 @@ end
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
 # #1196 — the functions that keep an integer operand that integer on every engine (`integer_kind`,
 # `_integer_operand_kind`): the three above, and `Round`, whose places add nothing to an integer (a
-# negative precision is refused when the expression is built, #1044). `Round` is not one of the three:
+# negative precision rounds it to tens, still an integer, on a backend with the capability; SQLite
+# refuses it when the expression is built, #1044, #1167). `Round` is not one of the three:
 # over any other operand it is a `numeric` function's value, not its operand's, so it carries no
 # operand's division answer (`_whole_numeric_operand`).
 const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")

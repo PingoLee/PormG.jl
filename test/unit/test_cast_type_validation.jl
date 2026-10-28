@@ -405,7 +405,8 @@ end
   ctors = ((Coalesce, "COALESCE("), (Greatest, "MAX("), (Least, "MIN("))
 
   @testset "a date is date(…) on SQLite, ::date on PostgreSQL" for (ctor, sl_fn) in ctors
-    q = _c696_q(); q.values("c" => ctor("positionorder", Value(0); output_field = DateField()))
+    # Date text, which a date cast reads; a number has no date and is refused on SQLite (#1417).
+    q = _c696_q(); q.values("c" => ctor(Value("2020-03-29"), Value("2020-03-30"); output_field = DateField()))
     @test occursin("date($(sl_fn)", _c696_sql(q, _CSL))
     @test !occursin("AS DATE", _c696_sql(q, _CSL))
     @test occursin(")::date", _c696_sql(q, _CPG))

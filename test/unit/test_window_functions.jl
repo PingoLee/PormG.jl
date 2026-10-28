@@ -1142,13 +1142,15 @@ end
     @testset "$backend — a declared date type is a date on both engines" begin
       # #812 refused this on SQLite, whose `CAST(… AS DATE)` turned '2020-03-29' into 2020. SQLite
       # renders the cast `date(…)` since #822, which is the text a DateField binds.
-      for expr in (PormG.Functions.Cast("points", "date"),
-                   Case([When("raceid" => 1, then = F("points"))], default = 0, output_field = "date"))
+      # The operands are date text, which a date cast reads: a number has no date, and its cast to
+      # one is refused on SQLite (#1417).
+      for expr in (PormG.Functions.Cast("surname", "date"),
+                   Case([When("raceid" => 1, then = F("surname"))], default = PormG.Functions.Value("2020-03-29"), output_field = "date"))
         @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
       end
       # `Coalesce` too, on both engines since #852: it renders `date(COALESCE(…))` on SQLite. This
       # cell asserted a `QueryBuildError` there while `Coalesce` rendered no cast.
-      @test _cte_case_field(Model_, Coalesce("raceid", 0, output_field = "date")) isa PormG.Models.sDateField
+      @test _cte_case_field(Model_, Coalesce("surname", PormG.Functions.Value("2020-03-29"), output_field = "date")) isa PormG.Models.sDateField
     end
 
     @testset "$backend — review edges: Value(missing), a non-When branch" begin
@@ -1482,11 +1484,13 @@ end
   F_ = PormG.Functions
   for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result)),
       (fname, ctor) in (("Coalesce", F_.Coalesce), ("Greatest", F_.Greatest), ("Least", F_.Least)),
-      (t, field_type, values_) in (("integer", PormG.Models.sIntegerField, (7, "abc")),
-                                   ("text", PormG.Models.sTextField, ("abc", 7)),
-                                   ("date", PormG.Models.sDateField, (PormG.QueryBuilder.Dates.Date(2020, 3, 29), "2020-03-29")))
+      (t, field_type, values_, operands) in (("integer", PormG.Models.sIntegerField, (7, "abc"), ("raceid", F_.Value(0))),
+                                   ("text", PormG.Models.sTextField, ("abc", 7), ("raceid", F_.Value(0))),
+                                   # Date text: a number cast to a date is refused on SQLite (#1417).
+                                   ("date", PormG.Models.sDateField, (PormG.QueryBuilder.Dates.Date(2020, 3, 29), "2020-03-29"),
+                                    ("surname", F_.Value("2020-03-29"))))
     @testset "$backend — $fname(…; output_field = $(repr(t)))" begin
-      expr = ctor("raceid", F_.Value(0); output_field = t)
+      expr = ctor(operands...; output_field = t)
       # The CTE column is the declared type…
       @test _cte_case_field(Model_, expr) isa field_type
       # …and the alias filter agrees with it on every value, accepted or refused.

@@ -902,7 +902,8 @@ end
         # A disagreeing operand: a decimal beside an integer literal. (A date beside text was the
         # example until #1200, which refuses it.)
         "cn"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("amount"))), 0),
-        "cd"  => F_.Cast(PormG.Subquery(sub(F_.Max("amount"))), "date")); connection = conn)
+        # Text the cast reads as a date; a number cast to one is refused on SQLite (#1417).
+        "cd"  => F_.Cast(PormG.Subquery(sub(F_.Max("note"))), "date")); connection = conn)
       @test kinds[:d] == PormG.CDate()
       @test kinds[:ts] == PormG.CDateTime(true)
       @test kinds[:dur] == PormG.CInterval()

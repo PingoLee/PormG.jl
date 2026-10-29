@@ -576,6 +576,8 @@ end
         o.values("id", "w" => expr); o)
       @test occursin("\"v\"", replace(_sql(lifted(PormG.Functions.Concat(PormG.Functions.Value("n="), "g__v")); conn = conn)[:sql_text], "`" => "\""))
       @test occursin("COALESCE(", _sql(lifted(PormG.Functions.Coalesce("g__v", PormG.Functions.Value("x"))); conn = conn)[:sql_text])
+      # `LPad` reads the same answer (`_pad_textless`): it raised #122 ("the JSONField … is not text").
+      @test occursin(r"(?i)lpad\(", _sql(lifted(PormG.Functions.LPad("g__v", 5, "0")); conn = conn)[:sql_text])
       # The whole document under a CTE is still refused in `Concat`, as the column is (#1028).
       doc = (o = JL.Json_scratch.objects;
         o.with("g" => JL.Json_scratch.objects.values("id", "v" => "payload"), join_field = "id" => "id", join_type = "INNER");

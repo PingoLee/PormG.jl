@@ -1427,8 +1427,8 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
   [Functions and Dates](functions_and_dates.md)).
 
 A value of the wrong type raises `InvalidValueError`, which names the alias but never the value. When PormG cannot tell what
-type an expression returns, for example a `Case` whose branches have different types, or arithmetic
-over `Extract(x, "EPOCH")`, it binds the value as given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
+type an expression returns, for example a `Case` whose branches have different types, it binds the
+value as given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
 compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over
 `"total_points" => Sum("points")` renders `HAVING SUM("Tb"."points") > "Tb"."raceid"`.
 

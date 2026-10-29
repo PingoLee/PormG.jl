@@ -3009,77 +3009,77 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum F bigint << 1 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F bigint + epoch / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum F int + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Sum F int + epoch / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :sqlite) =>
@@ -3099,41 +3099,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F int + epoch / Count int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
   ("Cast Sum F int + epoch / Count int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
@@ -5655,11 +5655,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract minute F interval * 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract epoch F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract epoch F interval * 2 | cte", :sqlite) =>
@@ -5667,11 +5667,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract epoch F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract quarter F datetime - date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | alone", :sqlite) =>
@@ -6069,7 +6069,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract hour F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | alone", :mysql) =>
@@ -6081,7 +6081,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F time - time | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | subquery", :mysql) =>
@@ -7225,18 +7225,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("Sum F bigint + epoch / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Sum F bigint + epoch / 2 | cte", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Sum F int + epoch / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Sum F int + epoch / 2 | cte", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Sum F int + epoch / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
   ("Cast text ArrayField(CharField(3)) | alone", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres) =>

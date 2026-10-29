@@ -1937,10 +1937,11 @@ end
   # `ABS` over an integer date part renders PostgreSQL's own integer `abs`, with no cast.
   @test occursin("ABS((EXTRACT(DOW FROM \"Tb\".\"born\")::integer + 1))",
                  _ccd_render(Fn.Abs("born__@week_day"); conn = _CCD_PG))
-  # `EPOCH` stays fractional on PostgreSQL (`EXTRACT(EPOCH …)` is `numeric`), so it is no integer to
-  # keep and no whole number to refuse; SQLite has no `EPOCH` part at all.
+  # `EPOCH` stays fractional on PostgreSQL (`EXTRACT(EPOCH …)::numeric`, a decimal since #1457), so it
+  # is no integer to keep and no whole number to refuse; SQLite has no `EPOCH` part at all. `FLOOR`
+  # casts a non-integer operand to `numeric`, as it does a `DecimalField` column, so the cast repeats.
   @test _ccd_refusal(Fn.Cast(Fn.Floor(Fn.Extract("start_at", "epoch")) / 2, Models.IntegerField()); conn = _CCD_PG) === nothing
-  @test occursin("FLOOR((EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))::numeric) as \"x\"",
+  @test occursin("FLOOR((EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)::numeric) as \"x\"",
                  _ccd_render(Fn.Floor(Fn.Extract("start_at", "epoch")); conn = _CCD_PG))
   # Review of #1135: a part SQLite cannot render raises there (category 4), so it has no SQLite answer
   # to split from, and PostgreSQL keeps rendering it. `@quarter` is a node of its own on both engines;

@@ -361,9 +361,10 @@ _unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
 #   that names a formatter decides, where the walk demands that every operand agree. A filter value
 #   needs one to be checked by, and `Coalesce("finished", 5)` is checked as the first operand (#1034
 #   proposal 2). A `Coalesce` may be its fallback, so it drops a date part's range (`_unranged`);
-# - arithmetic the walk does not type (`Extract(x, "EPOCH")`, whose type is not stated, #1034 step
-#   5a typed the temporal arithmetic): a number when its left side is one, and a `Sum`/`Avg` of it a
-#   number, as before. A fallback, so no filter that checked its value stops checking it.
+# - arithmetic the walk does not type (a JSON key lookup, an untyped `Sum`; #1034 step 5a typed the
+#   temporal arithmetic and #1457 `Extract(x, "EPOCH")`): a number when its left side is one, and a
+#   `Sum`/`Avg` of it a number, as before. A fallback, so no filter that checked its value stops
+#   checking it.
 function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   p.formatter === nothing || return p.formatter
   name = p.function_name
@@ -392,7 +393,7 @@ function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
-  # formatter. See `_unranged`. Only what the walk does not type reaches here (`Extract(…, "EPOCH")`).
+  # formatter. See `_unranged`. Only what the walk does not type reaches here (a JSON key lookup).
   return _unranged(_expression_formatter(p.field_name, instruc)) === Models.format_number_sql ?
     Models.format_number_sql : nothing
 end
@@ -1507,7 +1508,8 @@ end
 # answers an integer, since the list types the value, not a comparison between engines (#1147). #1337:
 # an `EXTRACT` `QUARTER` is one, `EXTRACT(QUARTER FROM x)::integer` on PostgreSQL and MySQL's
 # `QUARTER(x)` an INT, as the `@quarter` transform already was.
-# `EPOCH` and the sub-second parts are fractional on PostgreSQL besides. Stated here because
+# The sub-second parts are fractional on PostgreSQL besides; `EPOCH` is a decimal, stated below
+# (`_epoch_extract`, #1457). Stated here because
 # `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
 # this list belongs once it does.
 const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
@@ -1518,6 +1520,18 @@ function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   p.function_name == "EXTRACT" || return false
   part = get(p.kwargs, "part", nothing)
   return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
+end
+
+# #1457 — `Extract(x, "EPOCH")` is a width-less decimal, the seconds with their fraction: PostgreSQL
+# renders `EXTRACT(EPOCH FROM x)::numeric` (`Dialect.EXTRACT`; `extract` is a `numeric` from 14 and a
+# `double precision` below, so the cast holds the type on every server), and MySQL's spelling is a
+# DECIMAL (`TIMESTAMPDIFF(MICROSECOND, …) / 1000000`, or a duration's microseconds over 10^6). SQLite
+# has no `EPOCH` part (`BackendCapabilityError`). Stated beside the integer parts for their reason:
+# `_result_rule(EXTRACT)` is `:unknown`, because the type is the part's.
+function _epoch_extract(p::Union{FObject,WindowFunction})::Bool
+  p.function_name == "EXTRACT" || return false
+  part = get(p.kwargs, "part", nothing)
+  return part isa AbstractString && Dialect.extract_part(part) == "EPOCH"
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name

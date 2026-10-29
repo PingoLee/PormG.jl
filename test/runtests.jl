@@ -121,6 +121,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Function Result Rules (#1034)" include("unit/test_expression_kind_rules.jl")
     @testset "Formatter From the Type Walk (#1034)" include("unit/test_formatter_from_walk.jl")
     @testset "MySQL Interval Alias Filter Binds Microseconds (#1456)" include("unit/test_mysql_interval_alias_filter.jl")
+    @testset "Extract EPOCH Is a Decimal (#1457)" include("unit/test_extract_epoch_type.jl")
     @testset "Temporal Arithmetic in the Type Walk (#1034)" include("unit/test_temporal_arithmetic_kind.jl")
     @testset "Untyped Operand Beside a Temporal Value (#1310)" include("unit/test_untyped_temporal_operand.jl")
     @testset "Number Function Over a Duration Refused (#1324)" include("unit/test_math_over_duration_refused.jl")

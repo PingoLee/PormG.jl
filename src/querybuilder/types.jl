@@ -541,7 +541,7 @@ end
   table_alias::SQLTableAlias
   alias::String
   object::SQLObject
-  select::Vector{SQLTypeField} = Array{SQLTypeField,1}(undef, 60)
+  select::Vector{SQLTypeField} = SQLTypeField[] # one slot per projection; `get_select_query` sizes it (#1335)
   join::Vector{String} = []  # values to be used in join query
   _where::Vector{String} = []  # values to be used in where query
   aggregate::Bool = false

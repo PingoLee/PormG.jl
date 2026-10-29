@@ -50,7 +50,7 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   # they hand a number straight back — but the decimal parser converts one.
   claimed = Set{Symbol}()
   for i in eachindex(instruc.select)
-    isassigned(instruc.select, i) || continue   # a preallocated `undef` buffer, not a list
+    isassigned(instruc.select, i) || continue   # sized to `values`, filled in order (#1335)
     v = instruc.select[i]
     _is_wildcard_projection(v) && continue
     name = _projection_output_name(v)
@@ -100,6 +100,10 @@ end
 """
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
   _guard_select_condition_collision(values, instruc)   # #706
+  # #1335: one slot per projection, so `select[i]` is `values[i]`'s. It was a fixed 60-slot buffer and
+  # the 61st projection threw `BoundsError`. Slots past `i` stay `undef` until the loop reaches them,
+  # which the readers called mid-build already guard with `isassigned`.
+  resize!(instruc.select, length(values))
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
     mark = parameter_mark(instruc)   # #1130: what this projection binds, for `projection_params`

@@ -152,6 +152,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "Nested-render Parameter Alignment (#432)" include("unit/test_parameter_alignment_nested.jl")
     @testset "Projection Name Collapse and Refusal (#441)" include("unit/test_projection_names.jl")
+    @testset "Projections Wider Than 60 (#1335)" include("unit/test_wide_projection.jl")
     @testset "Multi-path Cascade Delete Alignment (#452)" include("unit/test_delete_multipath_alignment.jl")
     @testset "Deletion Collector Traversal (#459)" include("unit/test_delete_collector_traversal.jl")
     @testset "Mutation Fence Shape (#765)" include("unit/test_mutation_fence_shape.jl")

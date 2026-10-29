@@ -211,11 +211,19 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
     return right isa Union{CDate,CDateTime} && op == "+" ? right : nothing
   end
   # #881: an interval on the right of a value that is neither a date nor an interval.
-  if p.operand isa Union{FExpression,FObject} || (p.operand isa String && _is_field_path(p.operand, instruc))
+  if _typed_right_operand(p.operand, instruc)
     right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) && return CInterval()
   end
   return nothing
 end
+
+# Whether the right side of F arithmetic or an ordering is typed when its left is neither a date nor an
+# interval: an expression, a function, a window function or a field path. The render
+# (`_render_expr_typed`) and the walk above both ask it, so the two cannot type different right sides.
+# A window function was missing from both until #1465: `F("grid") * Lag(<duration>)` was untyped, so
+# SQLite multiplied the duration's `HH:MM:SS` text while `Lag(<duration>) * F("grid")` was refused.
+_typed_right_operand(x, instruc::SQLInstruction) =
+  x isa Union{FExpression,FObject,WindowFunction} || (x isa String && _is_field_path(x, instruc))
 
 # #881: an interval on the left (`_render_interval_left`). A date on the right of `+` is the date
 # shifted, an interval beside it is an interval, and `*`/`/` by a number side scales it.

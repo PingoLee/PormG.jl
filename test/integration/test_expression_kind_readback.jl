@@ -99,14 +99,10 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)
-  # #1459: a window function over a duration on the RIGHT of `*` is untyped, where the same window on
-  # the left is an interval (and refused on SQLite). Pinned on the first row, whose `Lag` is NULL.
-  ("grid * Lag Case interval col | alone", :postgres) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | alone", :sqlite) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | alone", :mysql) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :postgres) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :sqlite) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :mysql) => (type = "Missing", value = "missing", read = nothing),
+  # (#1465: the `grid * Lag Case interval col` rows left this table when a window function on the RIGHT
+  # of `*` was typed as it is on the left: an interval on PostgreSQL and MySQL, refused on SQLite. They
+  # read back `missing` here, on a first row whose `Lag` is NULL; the testset "A duration window on the
+  # right of `*`" below reads a row whose `Lag` is not.)
   # #1439: a cast to an array reads back as the `Vector` an `ArrayField` of its element does. Flagged
   # `:unparsed` only because a PostgreSQL cell asks SQLite's parser table, which has no array parser
   # (SQLite and MySQL refuse the cast, so there is nothing to read back there). Before #1439 LibPQ
@@ -537,4 +533,36 @@ end
     end
   end
   @test outcome(PormG.Models.EmailField()) == "Hamilton"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A duration window on the right of `*` reads back as the duration it is (#1465)
+# On results 1 and 2 (race 18), ordered by `resultid`: result 2's `F("grid") * Lag("fastestlaptime")` is
+# its grid times result 1's fastest lap (`1:27.452`). Expected: on PostgreSQL and MySQL it reads back a
+# duration equal to that product, as `Lag(…) * F("grid")` does; on SQLite both orders raise
+# `QueryBuildError` (#881: a window over a duration has no millisecond form). Why: before #1465 the
+# right-hand order was untyped, so SQLite multiplied the duration's `HH:MM:SS` text and returned a
+# number, and the read-back rows above could not see it, since their row's `Lag` is NULL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A duration window on the right of `*` reads back as the duration it is (#1465)" begin
+  ns(x) = Dates.tons(x)   # a fixed period or a `CompoundPeriod`, whichever the driver delivers
+  plain(id, field) = (q = M.Result.objects; q.filter("resultid" => id); q.values(field); only(q.list())[Symbol(field)])
+  grid2, lap1 = plain(2, "grid"), plain(1, "fastestlaptime")
+  @test lap1 !== missing   # the premise: the row before has a lap time, so `Lag` is not NULL
+  window() = PormG.Functions.Lag("fastestlaptime", over = PormG.QueryBuilder.WindowOver(order_by = "resultid"))
+  for (side, expr) in (("right", () -> PormG.F("grid") * window()), ("left", () -> window() * PormG.F("grid")))
+    @testset "$side" begin
+      q = M.Result.objects
+      q.filter("resultid__@in" => [1, 2])
+      q.values("resultid", "v" => expr())
+      q.order_by("resultid")
+      if _EKR_ENGINE === :sqlite
+        @test_throws PormG.QueryBuildError q.list()
+      else
+        v = last(q.list())[:v]
+        @test v isa Union{Dates.Period,Dates.CompoundPeriod}
+        @test ns(v) == grid2 * ns(lap1)
+      end
+    end
+  end
 end

@@ -2135,16 +2135,20 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG(CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, \$5::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) * \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("grid * Lag Case interval col | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("grid * Lag Case interval col | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("grid * Lag Case interval col | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
-  ("grid * Lag Case interval col | alone", :sqlite, "v__@gt", "10") =>
+  ("grid * Lag Case interval col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("grid * Lag Case interval col | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`grid` * LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("grid * Lag Case interval col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((`R2`.`grid`) * (LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
   ("grid * Lag Case interval col | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * LAG(CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, \$5::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("grid * Lag Case interval col | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * LAG(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, ?) OVER (ORDER BY \"R2\".\"resultid\" ASC)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("grid * Lag Case interval col | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * LAG(CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, \$5::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Lag F ts - ts * 2 | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag F ts - ts * 2 | alone", :mysql, "v__@gt", "interval Minute(1)") =>

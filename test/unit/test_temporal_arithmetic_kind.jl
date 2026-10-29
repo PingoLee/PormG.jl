@@ -495,3 +495,50 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1465: a window function over a duration on the RIGHT of `*` is typed as it is on the left
+# `Lag(<duration>) * F("year")` was an interval and `F("year") * Lag(<duration>)` was nothing: the walk
+# (`_temporal_result_kind`) and the render (`_render_expr_typed`) typed a right side only when it was an
+# expression, a function or a path, and a `WindowFunction` is none of the three. Expected: on
+# PostgreSQL both orders are an interval to the walk and the render (`"year" * LAG(…)`); on MySQL both
+# are an interval rendered as the rounded microseconds (`CAST(ROUND((…) * (LAG(…))) AS SIGNED)`); on
+# SQLite both orders raise `QueryBuildError` (#881: a window over a duration has no millisecond form),
+# for a window over the column and over a `Case` of it alike. Why it matters: on SQLite the right-hand
+# order multiplied the duration's `HH:MM:SS` text and returned a wrong number, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+struct TakMockMySQL <: PormG.PormGMySQL end
+PormG.config["tak_my"] = PormG.Configuration.Settings(connections = TakMockMySQL(), change_data = true)
+
+@testset "#1465: a window over a duration on the right of `*` is an interval" begin
+  QB = PormG.QueryBuilder
+  over = QB.WindowOver(order_by = "raceid")
+  # Each window both ways round: over the column, and over a `Case` of it.
+  windows = (() -> PormG.Functions.Lag("laptime", over = over),
+             () -> PormG.Functions.Lag(Case([When("year" => 1, then = F("laptime"))]), over = over))
+  for (i, window) in enumerate(windows)
+    exprs = (left = () -> window() * F("year"), right = () -> F("year") * window())
+    for side in (:left, :right)
+      @testset "window $i, $side" begin
+        # PostgreSQL: the walk and the render both name an interval.
+        @test _tak_kinds(_tak_model("tak_pg"), exprs[side]()) == (PormG.CInterval(), PormG.CInterval())
+        # MySQL: an interval, rendered as whole microseconds (the left form's spelling, mirrored).
+        my = _tak_model("tak_my")
+        @test _tak_kinds(my, exprs[side]()) == (PormG.CInterval(), PormG.CInterval())
+        q = my.objects
+        q.values("v" => exprs[side]())
+        @test occursin("CAST(ROUND(", QB.query(q; show_query = :sql))
+        # SQLite: refused, never the text multiplied.
+        q = _tak_model("tak_sl").objects
+        q.values("v" => exprs[side]())
+        @test_throws PormG.QueryBuildError QB.query(q; show_query = :sql)
+      end
+    end
+    # A number divided by a duration window: SQLite divided by its `HH:MM:SS` text; now refused.
+    @testset "window $i, a number / the window on SQLite" begin
+      q = _tak_model("tak_sl").objects
+      q.values("v" => F("year") / window())
+      @test_throws PormG.QueryBuildError QB.query(q; show_query = :sql)
+    end
+  end
+end

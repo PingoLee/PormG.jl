@@ -1551,23 +1551,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Case interval col * grid | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("grid * Lag Case interval col | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("grid * Lag Case interval col | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | alone", :sqlite) =>
@@ -7201,18 +7201,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("grid * Lag Case interval col | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>

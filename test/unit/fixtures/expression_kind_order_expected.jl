@@ -1432,16 +1432,12 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Lag Case interval col * grid | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`grid`) * (LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC))) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`grid`) * (LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC))) AS SIGNED) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("grid * Lag Case interval col | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`grid`) * (LAG(CASE\nWHEN `R3`.`grid` = ? THEN `R3`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R3`.`resultid` ASC))) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`grid`) * (LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("grid * Lag Case interval col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64")]),

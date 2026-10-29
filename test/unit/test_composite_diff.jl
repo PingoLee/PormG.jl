@@ -1015,7 +1015,7 @@ end
           _cd_apply!(pool, p2)
           live = only(_cd_live(pool, "result"))
           @test haskey(live.indexes, "grid")
-          @test live.indexes["grid"] != ix.name
+          @test !(ix.name in live.indexes["grid"])
           @test _cd_converged(pool, ("result",), v2)
         finally
           close_pool!(pool)

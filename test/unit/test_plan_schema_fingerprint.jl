@@ -41,7 +41,7 @@ _ps739_col(name; type = CInt64(), nullable = false, pk = false, unique = false, 
 # A two-column `drivers` table, the base every fingerprint variation below starts from.
 function _ps739_table(; columns = [_ps739_col("driverid"; pk = true),
                                    _ps739_col("surname"; type = CVarChar(250), raw = "VARCHAR(250)")],
-                      indexes = Dict{String, Union{String, Nothing}}(),
+                      indexes = Dict{String, Vector{String}}(),
                       composites = LiveComposite[], checks = LiveCheck[])
     LiveTable("drivers", OrderedDict{String, ColumnSpec}(c.name => c for c in columns), indexes, composites, checks)
 end
@@ -120,7 +120,7 @@ _ps739_raised(f) = try f(); nothing catch e; e end
         "check"      => _ps739_table(columns = [_ps739_col("driverid"; pk = true, checks = CheckKind[NonNegativeCheck()]), surname()]),
         "rename"     => _ps739_table(columns = [_ps739_col("driverid"; pk = true), _ps739_col("family_name"; type = CVarChar(250))]),
         "new column" => _ps739_table(columns = [_ps739_col("driverid"; pk = true), surname(), _ps739_col("code"; type = CText())]),
-        "index"      => _ps739_table(indexes = Dict{String, Union{String, Nothing}}("surname" => "drivers_surname_idx")),
+        "index"      => _ps739_table(indexes = Dict{String, Vector{String}}("surname" => ["drivers_surname_idx"])),
         "composite"  => _ps739_table(composites = [LiveComposite("drivers_uniq", ["driverid", "surname"], true, true)]),
         "table check"=> _ps739_table(checks = [LiveCheck("drivers_ck", "driverid > 0", nothing)]),
     )

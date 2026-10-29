@@ -424,7 +424,7 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
     deparsed = "(setweight(to_tsvector('simple'::regconfig, COALESCE((title)::text, ''::text)), 'A'::\"char\") || " *
                "setweight(to_tsvector('simple'::regconfig, COALESCE(body, ''::text)), 'B'::\"char\"))"
     spec(d) = ColumnSpec("sv", PormG.CTsVector(), false, false, false, d, nothing, PormG.CheckKind[], nothing, "tsvector")
-    table = LiveTable("doc", PormG.OrderedCollections.OrderedDict{String, ColumnSpec}(), Dict{String, Union{String, Nothing}}())
+    table = LiveTable("doc", PormG.OrderedCollections.OrderedDict{String, ColumnSpec}(), Dict{String, Vector{String}}())
     back = Migrations.field_from_spec(spec(GeneratedExpression(canonical_db_default(deparsed), true, owner)), table, GEN_PG)
     @test back.generated_from == ("title", "body") && back.config == "simple" && back.weights == ("A", "B")
     @test Models.generated_sql(back) == Models.generated_sql(weighted)

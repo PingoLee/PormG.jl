@@ -691,7 +691,7 @@ end
          ("result_legacy", "points >= (0)::double precision", nothing)]
   @test occursin(pred, only(cap.sqls))
   # And a declared model whose marker matches plans nothing, though the texts differ.
-  live = LiveTable("result", live_table(_ck_result(), CK_PG).columns, Dict{String, Union{String, Nothing}}(),
+  live = LiveTable("result", live_table(_ck_result(), CK_PG).columns, Dict{String, Vector{String}}(),
                    PormG.Migrations.LiveComposite[], checks[1:1])
   @test all(isempty, values(_ck_plan(CK_PG, [live], _ck_result(CK_GRID))))
 end

@@ -107,7 +107,7 @@ results = OrderedDict{String, String}(
 );""",
 
 "Create index on driverid" =>
- """CREATE INDEX IF NOT EXISTS "results_driverid_a1b2c3d4_idx" ON results ("driverid");""")
+ """CREATE INDEX IF NOT EXISTS "results_driverid_idx" ON results ("driverid");""")
 
 end
 ```
@@ -115,7 +115,7 @@ end
 The outer structure is `OrderedDict{Symbol, OrderedDict{String, String}}` — one entry per table,
 keyed by table name. Operation descriptions are stable strings such as `"New model"`,
 `"Add field: <name>"`, `"Rename field: <name>"`, `"Remove field: <name>"`,
-`"Create index on <name>"`, and `"Drop table"`.
+`"Create index on <name>"`, `"Remove duplicate index <index> on <name>"`, and `"Drop table"`.
 
 Two label prefixes are **reserved** for hand-written data steps (#740): an entry whose label starts
 with `Data (pre):` runs before every schema statement of the plan, and one starting with

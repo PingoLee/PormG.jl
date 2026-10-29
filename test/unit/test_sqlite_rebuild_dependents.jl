@@ -446,17 +446,19 @@ end
 #     the trigger names the old table.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "trailing comments, triggers on dropped tables, and ON after a table rename (#729)" begin
-    # Trailing comments. `grid` is indexed in the model, so a second, hand-made index on it with a
-    # comment is part of the declared state and the plan leaves it alone.
+    # Trailing comments. `grid` is indexed in the model; the two hand-made indexes on it are
+    # DESCENDING, a shape the model cannot declare, so the plan reads them and leaves them alone and
+    # the rebuild re-creates them from their stored DDL. (Plain ascending copies were used here until
+    # #1341: those are now duplicates of `grid`'s own index, and the plan drops them.)
     indexed = "points = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true)"
     _rd729_project() do pool, settings, models
         _rd729_start!(pool, settings, models, _rd729_schema(result = indexed))
         fetch(pool, """CREATE VIEW "podium" AS SELECT "id" FROM "result" WHERE "points" > 15 -- podium only""")
-        fetch(pool, """CREATE INDEX "result_grid_note_idx" ON "result" ("grid") -- grid lookups""")
+        fetch(pool, """CREATE INDEX "result_grid_note_idx" ON "result" ("grid" DESC) -- grid lookups""")
         # SQLite also stores a block comment left OPEN at the end. A `;` after it is comment, and so is
         # everything after that — the trigger below and the foreign_key_check gate went unexecuted and
         # unreported (found in re-review), so the comment is closed first.
-        fetch(pool, """CREATE INDEX "result_grid_open_idx" ON "result" ("grid") /* grid lookups""")
+        fetch(pool, """CREATE INDEX "result_grid_open_idx" ON "result" ("grid" DESC) /* grid lookups""")
         fetch(pool, """CREATE TRIGGER "result_audit" AFTER INSERT ON "result" BEGIN
                          INSERT INTO "audit" ("n") VALUES (NEW."points");
                        END;""")

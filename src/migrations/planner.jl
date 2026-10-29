@@ -61,6 +61,163 @@ function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol};
   return "$(name)_$_hash" |> lowercase
 end
 
+# ── One-column (`db_index`) index names (#1341) ───────────────────────────────────────────────────
+#
+# `<table>_<column>_idx`, physical names, case kept: `composite_index_name`'s spelling at one column.
+# They used to carry `randstring(8)` (`_hash_field_name`), and `IF NOT EXISTS` compares NAMES, not
+# definitions, so every plan that misread a column as unindexed (#325) created one more copy of its
+# index under a new name. A derived name makes a repeated plan a no-op on PostgreSQL and SQLite. MySQL
+# has no `IF NOT EXISTS` for an index; there the plan creates only what the live schema lacks.
+#
+# A long name is cut to fit the engine and given 8 hex digits of its own hash — `_fit_derived_name`'s
+# scheme — on PostgreSQL too: it would cut the name itself, silently, so two long names sharing their
+# first 63 bytes would meet under one name and the second `IF NOT EXISTS` would create nothing.
+_fit_index_name(::PormGSQLite, name::String)::String = name
+_fit_index_name(::PormGPostgres, name::String)::String =
+  ncodeunits(name) <= 63 ? name : _cut_codeunits(name, 54) * "_" * bytes2hex(SHA.sha256(name))[1:8]
+_fit_index_name(::PormGMySQL, name::String)::String =
+  length(name) <= 64 ? name : first(name, 55) * "_" * bytes2hex(SHA.sha256(name))[1:8]
+
+# The longest prefix of `name` within `n` code units, cut on a character boundary.
+function _cut_codeunits(name::String, n::Int)::String
+  stop = 0
+  for i in eachindex(name)
+    i + ncodeunits(name[i]) - 1 > n && break
+    stop = i
+  end
+  return stop == 0 ? "" : name[1:stop]
+end
+
+"""
+    _one_column_index_name(conn, table, column) -> String
+
+The name PormG creates a `db_index` index under: `<table>_<column>_idx`, fitted to the engine
+(#1341). Existing indexes keep the names they have; nothing is renamed.
+"""
+_one_column_index_name(conn::_SQLEngine, table::AbstractString, column::AbstractString)::String =
+  _fit_index_name(conn, "$(table)_$(column)_idx")
+
+"""
+    IndexNameScope
+
+The plan-wide state a one-column index name is chosen against (#1341): `held`, the catalog key
+(`_composite_name_key`) of every index name the live schema holds on any table, and `targets`, the
+plan's name registry for the indexes it creates — the composite path's own (`_claim_composite_target!`),
+shared, so a model-level index that later derives the same name is refused rather than silently
+skipped by `IF NOT EXISTS`.
+"""
+struct IndexNameScope
+  held::Set{String}
+  targets::Dict{String, Tuple{String, String}}
+end
+IndexNameScope() = IndexNameScope(Set{String}(), Dict{String, Tuple{String, String}}())
+
+function IndexNameScope(conn::_SQLEngine, live::Vector{LiveTable},
+                        targets::Dict{String, Tuple{String, String}})
+  held = Set{String}()
+  for t in live
+    for names in values(t.indexes), name in names
+      push!(held, _composite_name_key(conn, name))
+    end
+    for c in t.composites
+      push!(held, _composite_name_key(conn, c.name))
+    end
+  end
+  return IndexNameScope(held, targets)
+end
+
+# The scope a table's `db_index` names are claimed in, with every composite name the table declares
+# also taken (#1341). `<table>_<b_c>_idx` and an `Index` over `b` and `c` derive one name; the
+# columns' claims run before the composite pass on a new table and for a new column, after it for
+# an existing one, so without this the same models file was refused on an empty database and
+# planned on one where the table already existed. Reserved, the `db_index` takes the hashed name.
+function _reserving_composites(conn::_SQLEngine, scope::IndexNameScope, model::PormGModel)::IndexNameScope
+  declared = declared_composites(model)
+  isempty(declared) && return scope
+  held = copy(scope.held)
+  for d in declared
+    push!(held, _composite_name_key(conn, _fit_derived_name(conn, d).name))
+  end
+  return IndexNameScope(held, scope.targets)
+end
+
+"""
+    _claim_one_column_index_name!(conn, scope, table, column) -> String
+
+The name a new `db_index` index on `table.column` is created under, claimed in `scope`.
+
+The derived name ([`_one_column_index_name`](@ref)) unless another index already holds it — a live
+one left behind by a column or table rename (existing indexes are never renamed), or one this plan
+creates — and then the same name with 8 hex digits of `table` and `column` before `_idx`, which is as
+deterministic. PostgreSQL and SQLite keep index names unique per schema, so creating a held name
+under `IF NOT EXISTS` would have created nothing. Raises `InvalidMigrationError` when both are held.
+"""
+function _claim_one_column_index_name!(conn::_SQLEngine, scope::IndexNameScope,
+                                       table::AbstractString, column::AbstractString)::String
+  base = "$(table)_$(column)"
+  derived = _one_column_index_name(conn, table, column)
+  hashed = _fit_index_name(conn, "$(base)_$(bytes2hex(SHA.sha256(string(table, '\0', column)))[1:8])_idx")
+  for name in (derived, hashed)
+    key = _composite_name_key(conn, name)
+    (key in scope.held || haskey(scope.targets, key)) && continue
+    scope.targets[key] = (name, String(table))
+    return name
+  end
+  throw(InvalidMigrationError(
+    "The index name PormG derives for the db_index of column '$(column)' on table '$(table)' is held by " *
+    "another index, and so is its hashed alternative; drop or rename one of them in a separate migration first"))
+end
+
+"""
+    _index_copy_kept(conn, table, column, names) -> String
+
+Which of a column's identical one-column indexes a plan that drops the others keeps (#1341): the one
+under the name PormG derives for it, if present, else the first by name.
+"""
+function _index_copy_kept(conn::_SQLEngine, table::AbstractString, column::AbstractString,
+                          names::Vector{String})::String
+  derived = _composite_name_key(conn, _one_column_index_name(conn, table, column))
+  i = findfirst(n -> _composite_name_key(conn, n) == derived, names)
+  return i === nothing ? minimum(names) : names[i]
+end
+
+"""
+    _plan_index_copies!(index_actions, conn, table, column, live_column, declared, live_names) -> Nothing
+
+Record what one column's `db_index` needs, against every live copy of its index (#1341). `column` is
+the column the plan's statements name and `live_column` the one the catalog knows (they differ on a
+rename); `live_names` is `nothing` when the live column has no index, and empty when only the fact
+of one is known.
+
+  * declared, none live — `:create`;
+  * declared, several live — keep one ([`_index_copy_kept`](@ref)) and `:drop_duplicate` the rest;
+  * not declared — drop every copy: the one the plan has always dropped as `:drop`, the others as
+    `:drop_duplicate`. The planner used to drop one copy per `makemigrations` run, since the extras
+    still read as an index, so N runs reached this same state; one plan reaches it now.
+"""
+function _plan_index_copies!(index_actions::Vector{Tuple{Symbol, String, Union{String, Nothing}}},
+                             conn::_SQLEngine, table::AbstractString, column::String,
+                             live_column::String, declared::Bool,
+                             live_names::Union{Vector{String}, Nothing})::Nothing
+  if live_names === nothing
+    declared && push!(index_actions, (:create, column, nothing))
+    return nothing
+  end
+  if isempty(live_names)
+    declared || push!(index_actions, (:drop, column, nothing))
+    return nothing
+  end
+  kept = _index_copy_kept(conn, table, live_column, live_names)
+  for name in live_names
+    if name == kept
+      declared || push!(index_actions, (:drop, column, name))
+    else
+      push!(index_actions, (:drop_duplicate, column, name))
+    end
+  end
+  return nothing
+end
+
 function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, key::String, value::String)
   value == "" && return
   if !haskey(migration_plan, model_name)
@@ -454,7 +611,8 @@ end
 # column with a live constraint — #504 is unrepresentable by construction rather than declined by a
 # guard. Every remaining caller is creating the column in this same migration, which is exactly why
 # the key is added unconditionally here.
-function _add_constrains(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+function _add_constrains(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String;
+                         index_names::IndexNameScope = IndexNameScope())::Nothing
   Models.is_many_to_many_field(field) && return nothing
 
   # to new fields
@@ -487,8 +645,9 @@ function _add_constrains(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, O
 
   # If the new field is also indexed (index targets the physical column, db_column #50)
   if !field.primary_key && field.db_index
-    index_name = name * "_idx" |> lowercase
     index_col = Models.field_db_column(field, string(field_name))
+    # #1341: derived from the physical table and column, not from `name` (the random FK base).
+    index_name = _claim_one_column_index_name!(conn, index_names, model_table_name(model), index_col)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name",
     Dialect.create_index(conn, Dialect._ddl_ident(conn, index_name), Dialect._ddl_ident(conn, model_table_name(model)), [Dialect._ddl_ident(conn, index_col)]))
   end
@@ -615,6 +774,19 @@ function _check_composite_targets_free(conn::_SQLEngine,
         "Index name '$(stored)' for table '$(target_table)' is already held by an index on table " *
         "'$(table)'. PormG keeps index names unique across a database's tables, so that a models file means the same on every backend: give " *
         "the UniqueConstraint or Index another name, or free the name in a separate migration first"))
+    end
+    # #1341: a `db_index` index holds a derived name too (`<table>_<column>_idx`), and the composite
+    # pass does not read `indexes`. Whatever claimed the name here is a composite — a new `db_index`
+    # name never takes a held one — and its CREATE has no `IF NOT EXISTS`, so it would fail at
+    # `migrate`. Refused whatever the table, and also when this same plan drops that index first
+    # (its `db_index` went away): conservative, and an explicit `name=` always plans.
+    for (col, names) in t.indexes, name in names
+      key = _composite_name_key(conn, name)
+      haskey(targets, key) || continue
+      stored, target_table = targets[key]
+      throw(InvalidMigrationError(
+        "Index name '$(stored)' for table '$(target_table)' is already held by the db_index index of " *
+        "column '$(col)' on table '$(table)'; give the UniqueConstraint or Index an explicit name="))
     end
   end
   return nothing
@@ -1486,11 +1658,13 @@ function _sql_text_countable(text::AbstractString, model::PormGModel, live_cols,
 end
 
 function _add_new_table(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
-                        composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
+                        composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
+                        index_names::IndexNameScope = IndexNameScope(Set{String}(), composite_targets))::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
+  column_names = _reserving_composites(conn, index_names, model)
   for (field_name, field) in model.fields
     name = _hash_field_name(model_name, field_name)
-    _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
+    _add_constrains(conn, migration_plan, model_name, model, field_name, field, name; index_names = column_names)
   end
   # A new table has no live side, so every declared composite is a create — the same emitter the
   # diff uses, which is what keeps a table created here and one altered later converging on one
@@ -1512,7 +1686,8 @@ function _add_new_field(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, Or
                         # #829: the table as the catalog knows it at plan time (`model_name` except on
                         # a table rename, #615), and the lossy-ALTER sink the finding goes into.
                         catalog_table::Union{Symbol, Nothing} = nothing,
-                        lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
+                        lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                        index_names::IndexNameScope = IndexNameScope())::Nothing
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
@@ -1526,7 +1701,7 @@ function _add_new_field(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, Or
   # clause inline. PostgreSQL accepts and ignores it — its key is added separately, by
   # `_add_constrains` on the next line.
   _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value, model = model))
-  _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
+  _add_constrains(conn, migration_plan, model_name, model, field_name, field, name; index_names = index_names)
   # #514: the other half. SQLite takes the inline clause only for a nullable, defaultless, non-unique
   # column (`sqlite_add_column_can_inline_fk` — SQLite's own `ADD COLUMN` rule, and Django's test
   # before it falls back to `_remake_table`). Any other shape has to reach its constraint through the
@@ -1893,7 +2068,7 @@ function _prune_recreated(live::LiveTable, cols)::LiveTable
   touches(c::LiveComposite) = any(in(gone), c.columns) || any(in(gone), c.include) ||
                               any(e -> any(g -> _text_names_column(e, g), gone), c.expressions) ||
                               any(g -> _text_names_column(c.condition, g), gone)
-  indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in live.indexes if !(k in gone))
+  indexes = Dict{String, Vector{String}}(k => v for (k, v) in live.indexes if !(k in gone))
   composites = filter(!touches, live.composites)
   checks = filter(c -> !any(g -> _text_names_column(c.sql, g), gone), live.checks)
   return LiveTable(live.name, live.columns, indexes, composites, checks)
@@ -1901,6 +2076,8 @@ end
 
 function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
                              composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
+                             # #1341: the one-column index names held and claimed plan-wide.
+                             index_names::IndexNameScope = IndexNameScope(Set{String}(), composite_targets),
                              sqlite_rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}} =
                                Dict{Symbol, Tuple{Symbol, Dict{String, String}}}(),
                              lossy_alters::Vector{LossyAlter} = LossyAlter[],
@@ -1964,15 +2141,17 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
   # rebuild re-creates every live secondary index verbatim (#82). A `DROP INDEX` emitted before
   # the rebuild is therefore undone by it, and whether that happened depended on which field the
   # Set yielded first. Collecting the actions here and flushing them below puts them after any
-  # rebuild, deterministically. Each entry is `(:create | :drop, physical column, hashed name,
-  # live index name or nothing)`.
+  # rebuild, deterministically. Each entry is `(:create | :drop | :drop_duplicate, physical column,
+  # live index name or nothing)` — see `_plan_index_copies!` (#1341).
   #
   # DECLARED BEFORE `_resolve_table_fields` since #556, and that placement is the whole fix for the
   # first of its two gaps. The rename branch lives inside `_resolve_table_fields`, which used to run
   # BEFORE this list existed — so a rename that also flipped `db_index` had nowhere to record the
   # index action and simply planned none, deferring it to the next `makemigrations`. It is a plain
   # mutable `Vector`, so a `push!` from in there lands in the list the flush loop below drains.
-  index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
+  index_actions = Tuple{Symbol, String, Union{String, Nothing}}[]
+  # #1341: the table's own composite names are taken for its `db_index` names (`_reserving_composites`).
+  index_names = _reserving_composites(conn, index_names, current_schema[model_name][:model])
 
   # One rename map per TABLE (#150/#556): old ⇒ new physical column, filled by the rename branch.
   # The SQLite rebuild re-creates the table's indexes and triggers against the NEW names, so it must
@@ -2019,6 +2198,7 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
 
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
+                        index_names=index_names,
                         lossy_alters=lossy_alters, preset_renames=preset_renames, excluded=hint_dropped,
                         fail_closed=fail_closed, rename_problems=rename_problems)
   # #742: every rename is answered now — refuse a declared condition naming a column that goes away.
@@ -2098,19 +2278,10 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
       # which routes `_drop_index` through `get_constraints_index` rather than raising. The readers
       # now record what the catalog holds — the old ones stamped `db_index = true` on every
       # relational column — so an adopted foreign key with no index plans its `CREATE INDEX` once.
-      old_indexed = haskey(live.indexes, original_db_key)
-
-      # Check if the field is also indexed
-      if !field.primary_key && field.db_index && !old_indexed
-        @pormg_debug false
-        push!(index_actions, (:create, field_name_stripped, name, nothing))
-      end
-
-      # Check if is need to remove the index
-      if !field.primary_key && old_indexed && !field.db_index
-        @pormg_debug
-        push!(index_actions, (:drop, field_name_stripped, name, live.indexes[original_db_key]))
-      end
+      # #1341: every live copy, not one name — see `_plan_index_copies!`.
+      field.primary_key ||
+        _plan_index_copies!(index_actions, conn, live.name, field_name_stripped, original_db_key,
+                            field.db_index, get(live.indexes, original_db_key, nothing))
     end
   end
 
@@ -2150,10 +2321,10 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
 
   # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
   # loop above registered, whichever field produced it.
-  for (kind, col, hashed, live_index_name) in index_actions
+  for (kind, col, live_index_name) in index_actions
     if kind === :create
       # #82/#325: the SQLite rebuild already re-emits every existing index, so a CREATE INDEX
-      # alongside one would duplicate it (the random suffix defeats IF NOT EXISTS). Introspection
+      # alongside one would duplicate it (a name the live index does not share defeats IF NOT EXISTS). Introspection
       # now reads `db_index` back on both backends, so this branch no longer fires merely because
       # SQLite could not see the index — but the probe stays: the rebuild is emitted from the
       # DECLARED model, which can carry an index the live schema is only about to gain.
@@ -2166,13 +2337,18 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
       # so a declared one over the column used to leave `db_index = true` with no index of its own.
       probe = _rebuilds_table(conn) ? get_constraints_index(conn, catalog_table, col) : nothing
       if probe === nothing || probe in dropped_composites
-        index_name = "$(hashed)_idx"
+        index_name = _claim_one_column_index_name!(conn, index_names, String(model_name), col)
         # `model_name`, not `live.name`: this is DDL, and it runs after a table rename (#615).
         _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
         Dialect.create_index(conn, Dialect._ddl_ident(conn, index_name), Dialect._ddl_ident(conn, string(model_name)), [Dialect._ddl_ident(conn, col)]))
       end
-    else
+    elseif kind === :drop
       _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name, catalog_table=catalog_table)
+    else
+      # #1341: an identical copy of the column's index, under another name. Its own label, so the
+      # copies of one column do not overwrite each other's step.
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Remove duplicate index $(live_index_name) on $col",
+        Dialect.drop_index(conn, live_index_name; table = model_name))
     end
   end
 end
@@ -2282,9 +2458,11 @@ function _resolve_table_fields(
                                 # `sqlite_rename_map` is the per-table rename map the rename
                                 # branch fills; the SQLite rebuild pass reads it at the end.
                                 # Defaulted so the function stays callable on its own.
-                                index_actions::Vector{Tuple{Symbol, String, String, Union{String, Nothing}}} =
-                                  Tuple{Symbol, String, String, Union{String, Nothing}}[],
+                                index_actions::Vector{Tuple{Symbol, String, Union{String, Nothing}}} =
+                                  Tuple{Symbol, String, Union{String, Nothing}}[],
                                 sqlite_rename_map::Dict{String, String} = Dict{String, String}(),
+                                # #1341: where an added column's `db_index` name is claimed.
+                                index_names::IndexNameScope = IndexNameScope(),
                                 # #803: the lossy-ALTER sink, owned by `get_migration_plan`'s caller.
                                 lossy_alters::Vector{LossyAlter} = LossyAlter[],
                                 # #735: answers known before anything is asked — added physical
@@ -2313,7 +2491,7 @@ function _resolve_table_fields(
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
       _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings),
-                     catalog_table = catalog_table, lossy_alters = lossy_alters)
+                     catalog_table = catalog_table, lossy_alters = lossy_alters, index_names = index_names)
     else
       # Only the answer is parsed inside the reader; the rename work below propagates its own
       # failures as themselves (#197).
@@ -2347,7 +2525,7 @@ function _resolve_table_fields(
       if old_field_sym === nothing
         # `field_name` is the physical column; pass the real field key (see above) (#50).
         _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings),
-                       catalog_table = catalog_table, lossy_alters = lossy_alters)
+                       catalog_table = catalog_table, lossy_alters = lossy_alters, index_names = index_names)
       else
         old_field_name = old_field_sym |> string
         old_spec = live.columns[model_fields_map[old_field_name]]
@@ -2425,25 +2603,22 @@ function _resolve_table_fields(
         # `index_actions` is drained by `_alter_table_fields` AFTER the whole field pass, so these
         # land after any table rebuild the rename registered; `_order_statements` then defers every
         # "Create index on …" to the very end (#152), after the RENAME COLUMN. An UNCHANGED
-        # `db_index` still plans nothing at all — neither branch fires — which is what keeps the
-        # index following the column across a plain rename (#515) instead of being dropped and
-        # re-created under a fresh hashed name.
-        old_indexed = haskey(live.indexes, delta.old_spec.name)
-        if !new_field.primary_key && new_field.db_index && !old_indexed
-          push!(index_actions, (:create, field_name, hashed_new_name, nothing))
-        end
-        if !new_field.primary_key && old_indexed && !new_field.db_index
+        # `db_index` plans nothing for the index the column keeps — only the extra copies of it go
+        # (#1341) — which is what keeps the index following the column across a plain rename (#515)
+        # instead of being dropped and re-created under a new name.
+        live_names = get(live.indexes, delta.old_spec.name, nothing)
+        if live_names !== nothing && isempty(live_names) && !new_field.db_index
           # Resolve the index NAME here, keyed on the PRE-rename column, instead of letting
           # `_drop_index` fall back to `get_constraints_index`. That fallback asks the catalog about
           # the column it is given -- which on this path is the POST-rename name the catalog has not
           # heard of yet, so it answers `nothing` and `_drop_index` plans nothing at all. Measured:
           # the drop direction of a rename+flip silently planned an empty migration.
-          live_index_name = live.indexes[delta.old_spec.name]
-          if live_index_name === nothing
-            live_index_name = get_constraints_index(conn, catalog_table, delta.old_spec.name)
-          end
-          push!(index_actions, (:drop, field_name, hashed_new_name, live_index_name))
+          found = get_constraints_index(conn, catalog_table, delta.old_spec.name)
+          found === nothing || (live_names = String[found])
         end
+        new_field.primary_key ||
+          _plan_index_copies!(index_actions, conn, live.name, field_name, delta.old_spec.name,
+                              new_field.db_index, live_names)
         # remove the old field from colect_deletion
         filter!(x -> x != old_field_sym, colect_deletion)
       end
@@ -3313,6 +3488,15 @@ schema_scope === nothing ||
 # #161: every model-level index name the plan creates or renames to, across all tables — the scope
 # the database enforces. See `_claim_composite_target!`.
 composite_targets = Dict{String, Tuple{String, String}}()
+# #1341: every index name the live schema holds, on any table (unmanaged ones included: a name is
+# unique per schema whoever owns the index), and the registry above — what a new `db_index` name is
+# chosen against.
+index_names = IndexNameScope(conn, all_live, composite_targets)
+# …and every composite name any managed model derives, so a `db_index` name that meets one on
+# ANOTHER table yields to it whichever table the diff reaches first (`_reserving_composites`).
+for entry in values(current_schema)
+  index_names = _reserving_composites(conn, index_names, entry[:model])
+end
 
 # MySQL: no CHECK name two models declare (unique per database there). Before the empty-database return
 # below: a first plan is where two new tables are most likely to share one, and the catalog lookup of
@@ -3324,7 +3508,8 @@ _refuse_shared_check_names(conn, current_schema)
 if isempty(all_live)
   # By table name, not `Dict` order (#735), so two runs over one models file write one plan.
   for model_name in sort!(collect(keys(current_schema)), by = String)
-    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets)
+    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets,
+                   index_names = index_names)
   end
   return migration_plan
 end
@@ -3436,14 +3621,16 @@ sqlite_rebuild_context = Dict{Symbol, Tuple{Symbol, Dict{String, String}}}()
 
 for table in matched
   _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive,
-                      composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
+                      composite_targets = composite_targets, index_names = index_names,
+                      sqlite_rebuild_context = sqlite_rebuild_context,
                       lossy_alters = lossy_alters, hints = hints, fail_closed = fail_closed,
                       rename_problems = rename_problems)
 end
 
 for (model_name, old_model_name) in decisions
   if old_model_name === nothing
-    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets)
+    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets,
+                   index_names = index_names)
   else
     # #615: the rename runs FIRST (its own bucket in `_order_statements`, whose docstring
     # records why), so the table's column work is planned against the NEW name — `model_name`,
@@ -3453,7 +3640,8 @@ for (model_name, old_model_name) in decisions
     # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
     # method. Registered under `model_name`, like the column work it precedes.
     _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive,
-                        composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
+                        composite_targets = composite_targets, index_names = index_names,
+                        sqlite_rebuild_context = sqlite_rebuild_context,
                         lossy_alters = lossy_alters, hints = hints, fail_closed = fail_closed,
                         rename_problems = rename_problems)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))

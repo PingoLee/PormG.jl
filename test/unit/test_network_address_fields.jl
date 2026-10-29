@@ -296,7 +296,7 @@ const NET28_CIDR_CORPUS = [
       spec = ColumnSpec("addr", ctype, true, false, false, NoDefault(), nothing,
                         Migrations.CheckKind[], nothing, ctype isa CInet ? "inet" : "cidr")
       tbl = Migrations.LiveTable("t", Migrations.OrderedDict("addr" => spec),
-                                 Dict{String, Union{String, Nothing}}())
+                                 Dict{String, Vector{String}}())
       # No "has no PormG field type" warning any more.
       f = @test_logs min_level = Logging.Warn Migrations.field_from_spec(spec, tbl, PG_NET28)
       @test f isa T && f.null

@@ -432,7 +432,7 @@ const ARR28_BASES = [
     for (base, (kind, _)) in ARR28_BASES
       spec = ColumnSpec("c", CArray(kind), true, false, false, NoDefault(), nothing,
                         Migrations.CheckKind[], nothing, "x[]")
-      tbl = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec), Dict{String, Union{String, Nothing}}())
+      tbl = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec), Dict{String, Vector{String}}())
       # No "has no PormG field type" warning.
       f = @test_logs min_level = Logging.Warn Migrations.field_from_spec(spec, tbl, PG_ARR28)
       @test f isa AF.sArrayField && f.null
@@ -442,12 +442,12 @@ const ARR28_BASES = [
     # A literal default comes along, canonical.
     spec = ColumnSpec("c", CArray(CInt32()), false, false, false, Migrations.LiteralDefault("{1,2}"), nothing,
                       Migrations.CheckKind[], nothing, "integer[]")
-    tbl = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec), Dict{String, Union{String, Nothing}}())
+    tbl = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec), Dict{String, Vector{String}}())
     @test Migrations.field_from_spec(spec, tbl, PG_ARR28).default == "{1,2}"
     # A modifier-less element warns, as its scalar arm does.
     spec_v = ColumnSpec("c", CArray(CVarChar(nothing)), true, false, false, NoDefault(), nothing,
                         Migrations.CheckKind[], nothing, "character varying[]")
-    tbl_v = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec_v), Dict{String, Union{String, Nothing}}())
+    tbl_v = Migrations.LiveTable("t", Migrations.OrderedDict("c" => spec_v), Dict{String, Vector{String}}())
     @test_logs (:warn, r"varchar without a length") Migrations.field_from_spec(spec_v, tbl_v, PG_ARR28)
   end
 

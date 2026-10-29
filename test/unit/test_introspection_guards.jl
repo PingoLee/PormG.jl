@@ -640,8 +640,8 @@ end
 
   # The index NAME is carried too, de-quoted, because the planner needs it to DROP the index when a
   # model stops declaring `db_index`. `_drop_index` re-quotes, so a quoted value would double up.
-  @test model.cache["index"]["slug"] == "db_index_guard_slug_idx"
-  @test model.cache["index"]["mixedCase"] == "db_index_guard_mixedcase_idx"
+  @test model.cache["index"]["slug"] == ["db_index_guard_slug_idx"]
+  @test model.cache["index"]["mixedCase"] == ["db_index_guard_mixedcase_idx"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,7 +926,7 @@ struct MockPg389 <: PormG.PormGPostgres end
 
     @test haskey(model.fields, "\"x\"")
     @test model.fields["\"x\""].db_index
-    @test model.cache["index"]["\"x\""] == "d1_probe_x_idx"
+    @test model.cache["index"]["\"x\""] == ["d1_probe_x_idx"]
   end
 
   @testset "the all-lowercase case is unchanged (control)" begin
@@ -1003,7 +1003,7 @@ end
   @test model.fields["Key Col"] isa PormG.Models.sIDField
   @test model.fields["Key Col"].primary_key
   @test model.fields["Idx Col"].db_index
-  @test model.cache["index"]["Idx Col"] == "probe2_idx"
+  @test model.cache["index"]["Idx Col"] == ["probe2_idx"]
 end
 
 @testset "a column NAMED like a marker does not mark itself (#414)" begin
@@ -1237,8 +1237,8 @@ end
     indexes      = [_ix("Idx, Col", "comma_idx_first"), _ix("plain", "comma_idx_second")]))
 
   @test idx.fields["Idx, Col"].db_index
-  @test idx.cache["index"]["Idx, Col"] == "comma_idx_first"
-  @test idx.cache["index"]["plain"]    == "comma_idx_second"
+  @test idx.cache["index"]["Idx, Col"] == ["comma_idx_first"]
+  @test idx.cache["index"]["plain"]    == ["comma_idx_second"]
 end
 
 @testset "a DEFAULT can no longer forge a column marker (#455)" begin

@@ -742,7 +742,7 @@ end
     # `driver ref`, so it stopped matching `col_name` the moment the name was torn. `db_index=true`
     # reading back false is the #325 churn, in a new place.
     @test spaced.fields["driver ref"].db_index
-    @test spaced.cache["index"]["driver ref"] == "pormg_it_spaced_ref_idx"
+    @test spaced.cache["index"]["driver ref"] == ["pormg_it_spaced_ref_idx"]
     if sized_text
       # The type survived too: `col_parts[2]` was `Id"`-shaped for the FK column and equally wrong
       # here, so a sized textual column degraded to TextField and lost its length.
@@ -872,7 +872,7 @@ end
 
     # 4. The index pair, the other zip. A shifted index NAME reaches `planner._drop_index`.
     @test comma_child.fields["Idx, Col"].db_index
-    @test comma_child.cache["index"]["Idx, Col"] == "pormg_it_comma_idx"
+    @test comma_child.cache["index"]["Idx, Col"] == ["pormg_it_comma_idx"]
 
     # 5. A DEFAULT containing `, `. Two distinct defects had to be fixed for this: the aggregate
     #    tear (pre-fix this produced the phantom field key `Scuderia'::text`) AND the reader's

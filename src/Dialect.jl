@@ -2705,7 +2705,11 @@ _sqlite_check_constraint_clause(c)::String =
 # other object already holds turns `IF NOT EXISTS` into a silent no-op — the table never gets its
 # index, the next `makemigrations` plans it again, and the plan converges never. Without the clause
 # the collision fails the migration loudly, inside its transaction. The single-column `db_index` path
-# keeps the clause: its names carry a random suffix and cannot collide that way.
+# keeps the clause, and since #1341 relies on it: its name is derived (`<table>_<column>_idx`), so a
+# plan repeated against a database that already has the index creates nothing. The planner picks
+# another derived name when the live schema it read holds this one (`_claim_one_column_index_name!`);
+# an object it does not read — an invalid index, an index on an ignored table — still makes the
+# clause a no-op.
 #
 # #29 adds an advanced index: an access `method` (`USING`), a `DESC` member and an operator class per
 # member, and the ownership `marker` PormG stores beside every advanced index it creates. Every

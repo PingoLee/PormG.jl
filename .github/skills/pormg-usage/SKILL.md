@@ -31,7 +31,8 @@ task needs.
    `PormG.@import_models "db/models.jl" models`. Outside a REPL, `load` needs `env=` or `PORMG_ENV`
    (it never falls back to `default_env:`), and registering models never loads their folder: with
    none loaded it raises `InvalidConfigurationError`. In a package, load it again in `__init__`;
-   repeating `load` with the same environment is free.
+   repeating `load` with the same environment is free. A test that only renders SQL loads nothing:
+   it calls `Configuration.register_offline("db")` instead (see [`debugging.md`](debugging.md)).
 4. **Load a driver package.** `LibPQ` (PostgreSQL) and `SQLite` are weak dependencies:
    `using PormG, LibPQ`. Without one `Configuration.load` raises `MissingConfigurationError`
    (*"the PostgreSQL backend requires LibPQ"*) at boot.
@@ -98,7 +99,7 @@ non-aggregate columns. Never write it yourself.
 | Correlated subqueries, CTEs, custom joins, window functions, multiple databases, advisory locks | [`advanced.md`](advanced.md) |
 | Concurrency, `fetch_async`, what spawned tasks see inside a transaction | [`async.md`](async.md) |
 | Catching and reporting errors, which call raises what | [`errors.md`](errors.md) |
-| Inspecting generated SQL, testing without a database, pool health, a query that returns the wrong thing | [`debugging.md`](debugging.md) |
+| Inspecting generated SQL, testing without a database (a golden-SQL suite that pins your app's SQL across PormG upgrades), pool health, a query that returns the wrong thing | [`debugging.md`](debugging.md) |
 
 The exhaustive reference is the PormG documentation, <https://pingolee.github.io/PormG.jl/stable/>.
 These files are the working patterns and the gotchas. Each links to the page with the full detail.
@@ -112,8 +113,10 @@ the pinned version and apply each entry:
 PormG.upgrade_guide(from = v"0.5")   # the version this project is pinned to today
 ```
 
-Each entry carries a grep for the old call pattern and a concrete `before → after`. After bumping,
-refresh this bundle so it matches the new version:
+Each entry carries a grep for the old call pattern and a concrete `before → after`. If the project
+has a golden-SQL suite ([`debugging.md`](debugging.md)), run it before and after the bump, and read
+each failing pin against the entries. After bumping, refresh this bundle so it matches the new
+version:
 
 ```julia
 PormG.install_ai_skills()   # overwrites .github/skills/pormg-usage/ and its .claude/skills/ stub, reports stale files

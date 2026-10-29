@@ -38,24 +38,56 @@ parameters. If a value appears inline in the SQL text, that is a bug worth repor
 
 ### Testing SQL without a database
 
-A golden-SQL test needs a configuration to bind the models to, but no server. Register the key
-**offline** — it renders the dialect's SQL and refuses to run anything:
+A golden-SQL suite pins the SQL your app issues, so a PormG upgrade that changes it shows up as a
+test diff before it reaches production. It needs a configuration to bind the models to, but no
+server. Register each key **offline**, which renders the dialect's SQL and refuses to run anything,
+**before** importing the models:
 
 ```julia
 using Test, PormG
-PormG.Configuration.register_offline("db"; adapter = :postgres)   # or :sqlite
-PormG.@import_models "db/models.jl" models
+PormG.Configuration.register_offline("db"; adapter = :postgres)   # one call per key; :sqlite too
+PormG.@import_models "db/models.jl" models                        # the app's model FILES
+import .models as M
 
-q = models.Driver.objects.filter("surname" => "Senna")
-@test inspect_query(q)[:sql_text] ==
-      "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
-@test PormG.Models.connection_key(models.Driver) == "db"
+squash(sql) = replace(strip(sql), r"\s+" => " ")                  # a reflow is not a diff
 
-PormG.Configuration.unregister_connection("db")
+q = M.Driver.objects.filter("surname" => "Senna")
+@test squash(inspect_query(q)[:sql_text]) ==
+      "SELECT * FROM \"driver\" as \"Tb\" WHERE \"Tb\".\"surname\" = \$1"
+@test inspect_query(q)[:parameters] == ["Senna"]
+
+info = M.Result.objects.filter("raceid" => 1).update("points" => 0, show_query = :dict)
+@test info[:parameters] == [1, 0]          # placeholder order: $1 is the WHERE value here
+
+@test_throws InvalidConfigurationError M.Driver.objects.filter("surname" => "Senna").list()
 ```
 
+- **Pin both `:sql_text` and `:parameters`**, one testset per query shape the app builds (each join
+  path, aggregate, subquery and write), with the query built where the app builds it. Pin a refusal
+  by its error type, never its message.
+- **Import the model files, not `using App`.** An app whose module or `__init__` calls
+  `Configuration.load("db"; env = …)` replaces the offline entry with a live pool, and only a
+  warning says so (#1451). Outside a REPL, models with no loaded or offline key raise
+  `InvalidConfigurationError`. Fix that with `register_offline`, never with a `load` or
+  `implicit = true`.
+- **An offline SQLite key needs `using SQLite`.** Without it, a query whose SQL depends on the
+  library's version (`NULLS FIRST`/`LAST`, window functions, `RIGHT`/`FULL` joins) raises
+  `InvalidConfigurationError`. With it, the SQL follows the SQLite library the environment
+  resolves (#1452). PostgreSQL needs no driver. MySQL has no offline form.
+- **A cascading `delete()` cannot be pinned offline.** When other models reference the deleted one,
+  the planner reads the database, so even `delete(show_query = :dict)` raises
+  `InvalidConfigurationError` on an offline key (#1453). Cover it in the integration suite.
+- **What it cannot catch:** the Julia type a read returns, the rows, anything the engine decides.
+  Cover those with one integration test per shape against a test database, in its own process.
+- **The upgrade loop:** green on the pinned version, then bump the pin and `Pkg.update("PormG")`,
+  then `PormG.upgrade_guide(from = <old pin>)` (it reads the log of the installed PormG, so it comes
+  after the update), and run again. Read each failing pin against the entries: apply the
+  `before → after`, or re-pin when the entry says the new SQL is the fix. A diff no entry explains
+  is a PormG bug to report.
+
 Do not write a mock backend type into `PormG.config` by hand: `register_offline` is the public
-form of that, and `Configuration.loaded_keys()` answers "what is loaded?".
+form of that, and `Configuration.loaded_keys()` answers "what is loaded?". The full recipe is on the
+[Testing Your App](https://pingolee.github.io/PormG.jl/stable/testing/) page.
 
 ### A test double that refuses what a write refuses
 

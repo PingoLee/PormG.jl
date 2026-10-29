@@ -733,6 +733,11 @@ physical connection is opened, in place of the process-wide `set_before_connect_
 PormG.Configuration.load("db"; env="prod")
 ```
 
+A test or a script that renders SQL and never runs a query does not `load`: it registers the key
+with `Configuration.register_offline` (below) instead, which opens no pool (see
+[Testing Your App](testing.md)). A `load` of a key registered
+offline replaces it with a live pool (#1451).
+
 Without `root`, `path` is both the connection key and the folder, resolved against `pwd()`. With
 `root`, the key is `path` as passed and the folder is `joinpath(root, path)`, stored absolute in
 `settings.db_def_folder`. That gives a short key from any working directory. `path` must then be
@@ -807,13 +812,21 @@ already registered as a live connection is refused:
 PormG.Configuration.register_offline("db")
 PormG.@import_models "db/models.jl" models
 info = PormG.inspect_query(models.Driver.objects.filter("surname" => "Senna"))
-info[:sql_text]    # "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
+info[:sql_text]    # "SELECT\n    *\nFROM \"driver\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
 PormG.Configuration.unregister_connection("db")
 ```
 
 Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline entry reads no
 `connection.yml`, so there is no environment block to select, and the value is a constant rather than
 `load`'s fallback.
+
+An offline PostgreSQL key needs no driver package. An offline SQLite key needs `using SQLite`.
+`NULLS FIRST`/`LAST`, window functions and `RIGHT`/`FULL` joins depend on the SQLite library's
+version, and without the package that version cannot be read, so building such a query raises
+`InvalidConfigurationError` (#1452). A `delete()` of a model that others reference, even with
+`show_query`, raises the same error on an offline key, because its planner reads the database to
+plan the cascade (#1453). A golden-SQL suite built on it is the subject of
+[Testing Your App](testing.md).
 
 ### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`
 

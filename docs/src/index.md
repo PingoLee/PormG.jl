@@ -332,6 +332,7 @@ This documentation is organized into the following sections:
 |  [Full-Text Search](read/full_text_search.md) | PostgreSQL full-text search: `@search`, ranking and headlines. |
 |  [Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
+| [Testing Your App](testing.md) | An offline golden-SQL suite with `register_offline`, and the integration tests it needs beside it. |
 | [Async & Concurrency](async.md) | Task-based concurrent queries, fan-out patterns, `fetch_async`, pool interplay. |
 | [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
 | [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |

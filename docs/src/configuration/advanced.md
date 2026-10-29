@@ -217,6 +217,11 @@ the guess one call at a time:
 PormG.Models.set_models(MyModels, "db"; implicit = true)
 ```
 
+A test or a script that only renders SQL and never runs a query needs neither: register the key
+with `Configuration.register_offline("db"; adapter = :postgres)` before importing the models. It
+binds them to a connection that renders SQL and never connects. A `load` or `implicit = true` there
+would open a real pool. The recipe is on [Testing Your App](../testing.md).
+
 There is no process-wide switch: whether a registration refuses never depends on what some other
 code in the process turned on earlier. The self-heal and the injected `__init__` above never load,
 not even in a REPL — `using SomePackage` at a REPL is an interactive session too.

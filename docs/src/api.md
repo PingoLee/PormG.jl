@@ -825,9 +825,10 @@ Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline
 An offline PostgreSQL key needs no driver package. An offline SQLite key needs `using SQLite`.
 `NULLS FIRST`/`LAST`, window functions and `RIGHT`/`FULL` joins depend on the SQLite library's
 version, and without the package that version cannot be read, so building such a query raises
-`InvalidConfigurationError` (#1452). A `delete()` of a model that others reference, even with
-`show_query`, raises the same error on an offline key, because its planner reads the database to
-plan the cascade (#1453). A golden-SQL suite built on it is the subject of
+`InvalidConfigurationError` (#1452). A `delete(show_query = …)` of a model that others reference
+renders its cascade without reading anything: the statements after the root-key read are scoped by
+an empty key list, and a `PROTECT` or `RESTRICT` relation raises `ProtectedError` as if related rows existed
+(#1453). A golden-SQL suite built on it is the subject of
 [Testing Your App](testing.md).
 
 ### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`

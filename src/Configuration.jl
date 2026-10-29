@@ -2106,6 +2106,16 @@ function register_offline(key::String; adapter::Symbol = :postgres,
 end
 
 _is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+_is_offline_key(key::Union{Nothing,String})::Bool = key !== nothing && _is_offline(config[key])
+
+"""
+    _is_offline_pool(pool) -> Bool
+
+Whether `pool` is the placeholder pool of a `register_offline` entry (#1453). An offline entry holds a
+real `PostgresConnectionPool`/`SQLiteConnectionPool`, so its pool's type says nothing; a path that asks
+"can I read from this pool?" by type asks this too.
+"""
+_is_offline_pool(pool)::Bool = pool isa _SQLEngine && _is_offline_key(connection_key_for_pool(pool))
 
 # `load`'s refusal of a key `register_offline` holds (#1451). Returned, not thrown: the call site throws.
 _offline_load_error(key::String)::InvalidConfigurationError = InvalidConfigurationError(
@@ -2301,7 +2311,7 @@ function ensure_before_connect!(pool::_SQLEngine)::Bool
   key = connection_key_for_pool(pool)
   # #1229: an offline entry renders SQL and never connects. Refused here, before the hook and before
   # any driver sees its placeholder connection string.
-  if key !== nothing && _is_offline(config[key])
+  if _is_offline_key(key)
     throw(InvalidConfigurationError(
       "The connection \"$(key)\" was registered with `register_offline`: it renders SQL " *
       "(`inspect_query`, `show_query`) but cannot run a query. Load a real configuration to execute."))

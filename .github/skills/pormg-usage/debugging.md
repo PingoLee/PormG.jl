@@ -74,9 +74,11 @@ info = M.Result.objects.filter("raceid" => 1).update("points" => 0, show_query =
   library's version (`NULLS FIRST`/`LAST`, window functions, `RIGHT`/`FULL` joins) raises
   `InvalidConfigurationError`. With it, the SQL follows the SQLite library the environment
   resolves (#1452). PostgreSQL needs no driver. MySQL has no offline form.
-- **A cascading `delete()` cannot be pinned offline.** When other models reference the deleted one,
-  the planner reads the database, so even `delete(show_query = :dict)` raises
-  `InvalidConfigurationError` on an offline key (#1453). Cover it in the integration suite.
+- **A cascading `delete()` pins its plan, not its rows.** On an offline key,
+  `delete(show_query = :dict)` reads nothing: it returns the root-key read, then each related
+  table's statement scoped by an empty key list (#1453). It assumes related rows exist, so a
+  `PROTECT`/`RESTRICT` relation raises `ProtectedError`. The rows it reaches are
+  the integration suite's to check.
 - **What it cannot catch:** the Julia type a read returns, the rows, anything the engine decides.
   Cover those with one integration test per shape against a test database, in its own process.
 - **The upgrade loop:** green on the pinned version, then bump the pin and `Pkg.update("PormG")`,

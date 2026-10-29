@@ -80,7 +80,8 @@ import PormG.ConnectionPool: _await_abandoned
 import PormG.ConnectionPool: _contains_nul, NUL_REFUSAL_REASON
 import PormG.Configuration: with_tx_context, ensure_transaction_scope, transaction_connection_for,
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
-	get_settings as get_configuration_settings
+	get_settings as get_configuration_settings,
+	_is_offline_pool  # #1453: an offline entry's pool reads nothing, whatever its type
 import PormG: @pormg_debug
 import Base: first, last, get
 

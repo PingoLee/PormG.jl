@@ -108,10 +108,14 @@ The order of `info[:parameters]` is the order the placeholders are numbered. On 
 differ from the order the values appear in the text. Above, `$1` is the `WHERE` value. Pinning both
 is what catches a value bound to the wrong placeholder.
 
-**A cascading `delete()` cannot be pinned offline yet.** When other models reference the one being
-deleted, the planner reads the database to plan the statements it renders (the root's keys, the
-related rows). On an offline key, even `delete(show_query = :dict)` then raises
-`InvalidConfigurationError` (#1453). Cover those `delete()` shapes in the integration suite.
+**A cascading `delete()` pins its plan, not its key set.** When other models reference the one
+being deleted, a live database is read to plan the cascade: the root's primary keys, and which related
+tables hold rows. An offline key reads nothing (#1453). `delete(show_query = :dict)` returns the
+root-key read as written, then every related table's statement, scoped by an empty key list
+(`= ANY($1)` bound to `[]` on PostgreSQL, `(1 = 0)` on SQLite). Pin which statements the cascade
+runs and in what order. Which rows it reaches is the integration suite's to check. With no rows to
+read, the plan assumes related rows exist, so a `PROTECT` or `RESTRICT` relation refuses the dry run
+with `ProtectedError`. Pin that refusal by its type.
 
 **Refusals are pinned by type.** When the application relies on PormG refusing something, pin it
 with the error type, never with the message text:

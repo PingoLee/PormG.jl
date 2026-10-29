@@ -165,6 +165,77 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# delete(show_query) renders its cascade on an offline key
+# What it tests: an F1 `Race` with a CASCADE `Result` on an offline key, `filter("year" => 1991)`.
+#   `delete(show_query = :dict)` returns three steps instead of raising: the root-key read, then the
+#   result and race DELETEs, scoped by the empty key list no read produced:
+#     PostgreSQL: lock   SELECT "Tb"."raceid" FROM "race" AS "Tb" WHERE "Tb"."year" = $1 FOR UPDATE  [1991]
+#                 delete … WHERE "Tb"."raceid" IN (SELECT … WHERE "R1"."raceid" = ANY($1) )   [[]]
+#                 delete DELETE FROM "race" AS "Tb" WHERE "Tb"."raceid" = ANY($1)              [[]]
+#     SQLite:     select … WHERE "Tb"."year" = ?  [1991]; then both DELETEs with `(1 = 0)`, no parameters
+#   The same steps as the plan on a mock backend (`connection =` a marker struct), the path the planner
+#   has always taken without a database. `delete()` itself still raises the offline refusal. A
+#   `PROTECT` relation (an F1 `Standing` on the race) refuses the dry run with `ProtectedError`: with no
+#   rows to read, the plan assumes related rows exist, as the mock does.
+# Why it matters: the planner asked `_is_live_pool` by pool type, and an offline entry holds a real
+#   pool, so it ran the root-key read and hit the offline refusal (#1453): the documented golden-SQL
+#   fixture could pin every terminal except `delete()`, which a hand-written mock could.
+# ─────────────────────────────────────────────────────────────────────────────
+struct Reg1453MockPg <: PormG.PormGPostgres end
+struct Reg1453MockSQLite <: PormG.PormGSQLite end
+
+@testset "delete(show_query) renders its cascade on an offline key (#1453)" begin
+  squash(sql) = strip(replace(sql, r"\s+" => " "))
+  steps(r) = [(s[:operation], s[:model], squash(s[:sql_text]), s[:parameters]) for s in (r isa Vector ? r : [r])]
+  expected = Dict(
+    :postgres => [
+      (:lock, "race", "SELECT \"Tb\".\"raceid\" FROM \"race\" AS \"Tb\" WHERE \"Tb\".\"year\" = \$1 FOR UPDATE", Any[1991]),
+      (:delete, "result", "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"raceid\" IN (SELECT \"R1\".\"raceid\" as \"raceid\" FROM \"race\" as \"R1\" WHERE \"R1\".\"raceid\" = ANY(\$1) )", Any[Any[]]),
+      (:delete, "race", "DELETE FROM \"race\" AS \"Tb\" WHERE \"Tb\".\"raceid\" = ANY(\$1)", Any[Any[]]),
+    ],
+    :sqlite => [
+      (:select, "race", "SELECT \"Tb\".\"raceid\" FROM \"race\" AS \"Tb\" WHERE \"Tb\".\"year\" = ?", Any[1991]),
+      (:delete, "result", "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"raceid\" IN (SELECT \"R1\".\"raceid\" as \"raceid\" FROM \"race\" as \"R1\" WHERE (1 = 0) )", Any[]),
+      (:delete, "race", "DELETE FROM \"race\" AS \"Tb\" WHERE (1 = 0)", Any[]),
+    ],
+  )
+  for (adapter, mock) in ((:postgres, Reg1453MockPg()), (:sqlite, Reg1453MockSQLite()))
+    key = "reg1453_offline_$(adapter)"
+    try
+      Configuration.register_offline(key; adapter = adapter)
+      mod = Module(Symbol("Reg1453", adapter))
+      Core.eval(mod, :(import PormG.Models))
+      Core.eval(mod, :(Race = Models.Model("race", raceid = Models.IDField(), year = Models.IntegerField())))
+      Core.eval(mod, :(Result = Models.Model("result", resultid = Models.IDField(), points = Models.FloatField(),
+                                             raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))))
+      Base.invokelatest(Models.set_models, mod, key)
+      race = Base.invokelatest(getfield, mod, :Race)
+
+      offline = steps(race.objects.filter("year" => 1991).delete(show_query = :dict))
+      @test offline == expected[adapter]
+      @test offline == steps(race.objects.filter("year" => 1991).delete(show_query = :dict, connection = mock))
+
+      err = try
+        race.objects.filter("year" => 1991).delete()
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      @test err !== nothing && occursin("registered with `register_offline`", sprint(showerror, err))
+
+      Core.eval(mod, :(Standing = Models.Model("standing", standingid = Models.IDField(),
+                                               raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "PROTECT"))))
+      Base.invokelatest(Models.set_models, mod, key)
+      race = Base.invokelatest(getfield, mod, :Race)
+      @test_throws PormG.ProtectedError race.objects.filter("year" => 1991).delete(show_query = :dict)
+    finally
+      Configuration.unregister_connection(key)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # loaded_keys and close_all!
 # What it tests: `loaded_keys()` lists static and dynamic entries, sorted; `close_all!()` closes
 #   every pool and keeps every entry registered, returning `nothing`.

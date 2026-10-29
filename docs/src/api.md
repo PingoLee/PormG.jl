@@ -802,7 +802,7 @@ ask what is loaded, instead of iterating `PormG.config`:
 PormG.Configuration.loaded_keys()   # ["db", "db_telemetry"]
 ```
 
-### `Configuration.register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true)`
+### `Configuration.register_offline(key; adapter = :postgres, server_version = nothing, django_prefix = nothing, change_data = true)`
 
 Registers `key` as a connection that renders SQL and never connects (#1229), for golden-SQL tests
 and `inspect_query` with no database. `adapter` (`:postgres` or `:sqlite`) picks the dialect. Models
@@ -822,10 +822,12 @@ Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline
 `connection.yml`, so there is no environment block to select, and the value is a constant rather than
 `load`'s fallback.
 
-An offline PostgreSQL key needs no driver package. An offline SQLite key needs `using SQLite`.
-`NULLS FIRST`/`LAST`, window functions and `RIGHT`/`FULL` joins depend on the SQLite library's
-version, and without the package that version cannot be read, so building such a query raises
-`InvalidConfigurationError` (#1452). A `delete(show_query = …)` of a model that others reference
+An offline key needs no driver package. `NULLS FIRST`/`LAST`, window functions, `RIGHT`/`FULL`
+joins and the bind-parameter limit of a bulk statement depend on the SQLite version, and an offline
+SQLite key renders them for its `server_version` (`3_045_000` for 3.45.0), never for the library of
+the machine that renders it. Without it, a query that needs the version raises
+`InvalidConfigurationError` naming `server_version`; `server_version` with `adapter = :postgres`
+raises the same error, since PostgreSQL's SQL depends on no server version (#1452). A `delete(show_query = …)` of a model that others reference
 renders its cascade without reading anything: the statements after the root-key read are scoped by
 an empty key list, and a `PROTECT` or `RESTRICT` relation raises `ProtectedError` as if related rows existed
 (#1453). A golden-SQL suite built on it is the subject of

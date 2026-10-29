@@ -70,10 +70,11 @@ info = M.Result.objects.filter("raceid" => 1).update("points" => 0, show_query =
   included (#1451). Outside a REPL, models with no loaded or offline key raise
   `InvalidConfigurationError`. Fix that with `register_offline`, never with a `load` or
   `implicit = true`.
-- **An offline SQLite key needs `using SQLite`.** Without it, a query whose SQL depends on the
-  library's version (`NULLS FIRST`/`LAST`, window functions, `RIGHT`/`FULL` joins) raises
-  `InvalidConfigurationError`. With it, the SQL follows the SQLite library the environment
-  resolves (#1452). PostgreSQL needs no driver. MySQL has no offline form.
+- **An offline SQLite key states its version:** `register_offline("db"; adapter = :sqlite,
+  server_version = 3_045_000)`. The SQL that depends on it (`NULLS FIRST`/`LAST`, window
+  functions, `RIGHT`/`FULL` joins, bulk chunking) is rendered for that version, never the host's
+  library. Without it such a query raises `InvalidConfigurationError` (#1452). No driver is needed
+  on either engine. MySQL has no offline form.
 - **A cascading `delete()` pins its plan, not its rows.** On an offline key,
   `delete(show_query = :dict)` reads nothing: it returns the root-key read, then each related
   table's statement scoped by an empty key list (#1453). It assumes related rows exist, so a

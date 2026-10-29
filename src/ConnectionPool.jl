@@ -54,6 +54,7 @@ export pool_stats
 
 # Import transaction context helpers from Configuration
 import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, in_transaction_on, current_transaction_depth, redact_secret
+import PormG.Configuration: _is_offline_key, _offline_server_version  # #1452: an offline SQLite key's stated version
 
 # #218: a raw-SQL manual-params array/tuple the caller binds with backend-native placeholders
 # ($1,$2 on PostgreSQL, ? on SQLite). PormG performs NO placeholder translation — the caller
@@ -410,6 +411,17 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   # so only one writer is ever outstanding. Distinct from `lock`, which only
   # guards the pool slot bookkeeping. See `with_sqlite_write_lock`.
   write_lock::ReentrantLock
+end
+
+# #1452: the version a SQLite pool's SQL is rendered for. A `register_offline` entry renders for the
+# version it stated, never for the library of the machine that renders it, so its pinned SQL is the
+# same everywhere and needs no driver; one that stated none refuses. Here, not beside the
+# `PormGSQLite` method in `Backend.jl`, because this is the first place that can name the concrete
+# pool an offline entry holds.
+function PormG.Kernel._server_version(pool::SQLiteConnectionPool)::Int
+  key = connection_key_for_pool(pool)
+  _is_offline_key(key) && return _offline_server_version(key)
+  return PormG.backend_sqlite_version(pool)
 end
 
 # #1130: a MySQL pool. Its slots behave like PostgreSQL's — all alike, no read/write

@@ -2055,7 +2055,8 @@ loaded_keys()::Vector{String} = sort!(collect(keys(config)))
 const _OFFLINE_CONNECTION = "pormg-offline"
 
 """
-    register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true) -> String
+    register_offline(key; adapter = :postgres, server_version = nothing, django_prefix = nothing,
+                     change_data = true) -> String
 
 Register `key` as a connection that renders SQL but never connects (#1229) — for golden-SQL tests
 and `inspect_query`/`show_query` without a database. `adapter` (`:postgres` or `:sqlite`) picks the
@@ -2074,16 +2075,39 @@ Registering the same key again replaces the offline entry. A key that `load` or
 `register_connection` registered is refused, not overwritten, and so is the reverse: `load` of an
 offline key raises `InvalidConfigurationError` (#1451).
 
+**An offline SQLite key states its version (#1452).** A few clauses depend on the SQLite version
+(`NULLS FIRST`/`LAST` from 3.30.0, window functions from 3.25.0, `RIGHT`/`FULL` joins from 3.39.0,
+and the bind-parameter limit a bulk statement is chunked by). An offline key renders them for
+`server_version`, in SQLite's packed form (`3_045_000` for 3.45.0), never for the library of the
+machine that runs it, so a pinned SQL text is the same on every machine and needs no driver. Without
+`server_version`, a query that needs the version raises `InvalidConfigurationError` naming it; every
+other query renders. PostgreSQL's query SQL depends on no server version, and `server_version` with
+`adapter = :postgres` raises `InvalidConfigurationError`.
+
+```julia
+PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3_045_000)
+```
+
 The entry's environment is always `"dev"` — `env(key)` and `status(key)` report it — whatever
 `PORMG_ENV` says (#1256). An offline entry reads no `connection.yml`, so there is no environment block
 for anything to select; the value is a constant, not the `load` fallback, and no session-dependent
 rule applies.
 """
 function register_offline(key::String; adapter::Symbol = :postgres,
+                          server_version::Union{Nothing, Integer} = nothing,
                           django_prefix::Union{Nothing, AbstractString} = nothing,
                           change_data::Bool = true)::String
   adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
     "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
+  # #1452: the version an offline SQLite key renders for. Checked before anything is replaced.
+  if server_version !== nothing
+    adapter === :sqlite || throw(InvalidConfigurationError(
+      "register_offline: `server_version` applies to `adapter = :sqlite` only; the SQL PormG renders for " *
+      "PostgreSQL depends on no server version."))
+    server_version > 0 || throw(InvalidConfigurationError(
+      "register_offline: `server_version` is SQLite's packed version number and must be positive " *
+      "(`3_045_000` for SQLite 3.45.0)."))
+  end
   if haskey(config, key)
     _is_offline(config[key]) || throw(InvalidConfigurationError(
       "Cannot register \"$(key)\" offline: that key is already registered as a live connection. " *
@@ -2096,8 +2120,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
   config[key] = Settings(
     app_env = DEV,                # a constant (#1256): an offline entry has no environment to select
     db_def_folder = key,          # `set_models(mod, key)` resolves to it like a loaded folder
-    db_config_settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"),
-                                           "offline" => true),
+    db_config_settings = _offline_config_settings(adapter, server_version),
     change_data = change_data,
     connections = pool,
     django_prefix = django_prefix === nothing ? nothing : String(django_prefix),
@@ -2107,6 +2130,29 @@ end
 
 _is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
 _is_offline_key(key::Union{Nothing,String})::Bool = key !== nothing && _is_offline(config[key])
+
+function _offline_config_settings(adapter::Symbol, server_version::Union{Nothing, Integer})::Dict{String, Any}
+  settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"), "offline" => true)
+  server_version === nothing || (settings["server_version"] = Int(server_version))
+  return settings
+end
+
+"""
+    _offline_server_version(key) -> Int
+
+The SQLite version the offline entry `key` renders for, as `register_offline(…; server_version)`
+stated it (#1452), or `InvalidConfigurationError` when it stated none: the SQL would otherwise follow
+the library of whichever machine renders it.
+"""
+function _offline_server_version(key::String)::Int
+  v = get(config[key].db_config_settings, "server_version", nothing)
+  v isa Int && return v
+  throw(InvalidConfigurationError(
+    "The connection \"$(key)\" was registered with `register_offline` and no `server_version`, and this " *
+    "query renders differently across SQLite versions. Pass the version to render for, e.g. " *
+    "`register_offline(\"$(key)\"; adapter = :sqlite, server_version = 3_045_000)` for SQLite 3.45.0, " *
+    "so the SQL does not depend on the machine that renders it."))
+end
 
 """
     _is_offline_pool(pool) -> Bool

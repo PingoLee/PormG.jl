@@ -313,6 +313,17 @@ const DOCERR_RACE_OFFLINE_PROTECT = let mod = Module(:DocErrOffline1453)
     Base.invokelatest(getfield, mod, :Race)
 end
 
+# #1452 — an offline SQLite key that states no `server_version`: an ungated query renders, and one whose
+# SQL depends on the SQLite version is refused.
+PormG.Configuration.register_offline("docerr_offline_sqlite"; adapter = :sqlite)
+const DOCERR_RESULT_OFFLINE_SQLITE = let mod = Module(:DocErrOffline1452)
+    Core.eval(mod, :(import PormG.Models))
+    Core.eval(mod, :(Result = Models.Model("docerr_result1452", resultid = Models.IDField(),
+                                           points = Models.FloatField(null = true))))
+    Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline_sqlite")
+    Base.invokelatest(getfield, mod, :Result)
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -3463,6 +3474,16 @@ const DOCERR_CASES = [
         "testing.md / api.md — a dry-run `delete(show_query = :dict)` past a PROTECT relation on a `register_offline` key raises ProtectedError (#1453)",
         ProtectedError,
         () -> DOCERR_RACE_OFFLINE_PROTECT.objects.filter("year" => 1991).delete(show_query = :dict),
+    ),
+    (
+        "testing.md / api.md — on an offline SQLite key with no `server_version`, a query whose SQL depends on the version raises InvalidConfigurationError (#1452)",
+        InvalidConfigurationError,
+        () -> PormG.inspect_query(DOCERR_RESULT_OFFLINE_SQLITE.objects.order_by("-points")),
+    ),
+    (
+        "api.md — `register_offline(key; server_version = …)` with `adapter = :postgres` raises InvalidConfigurationError (#1452)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration.register_offline("docerr_offline_pg_version"; server_version = 160_000),
     ),
 ]
 

@@ -39,7 +39,7 @@ import PormG: PormGError, UsageError, FieldAccessError, UnknownFieldError, Ambig
   OperationalError, StatementError
 # Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
 import PormG: with_location
-import PormG: _supports, _capability_error, _require_feature, _backend_name  # #1129: the backend capability table (Kernel)
+import PormG: _supports, _capability_error, _require_feature, _backend_name, _server_version  # #1129: the backend capability table (Kernel)
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
               run_in_transaction,
               NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS,  # #904
@@ -53,7 +53,6 @@ import PormG: LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERAT
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_last_insert_id     # MySQL: the AUTO_INCREMENT value an INSERT wrote (#1266)
 import PormG: backend_insert_report, backend_is_duplicate_key   # MySQL: a bulk INSERT's skips (#1267)
-import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
 import PormG: backend_mysql_parameter_limit   # MySQL: the driver's bind-parameter limit (#84, #1130)
 import PormG: backend_postgres_parameter_limit   # PostgreSQL: the driver's bind-parameter limit (#1447)
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser

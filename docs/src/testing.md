@@ -25,6 +25,7 @@ renders the dialect's SQL and refuses to run anything. Its keywords are:
 | Keyword | Default | Meaning |
 | :--- | :--- | :--- |
 | `adapter` | `:postgres` | The dialect: `:postgres` or `:sqlite`. MySQL has no offline form yet, and `:mysql` raises `InvalidConfigurationError`. |
+| `server_version` | `nothing` | SQLite only: the SQLite version the SQL is rendered for, in SQLite's packed form (`3_045_000` for 3.45.0). See below. |
 | `django_prefix` | `nothing` | The table prefix, when the app's models were imported from Django with one: the same value its `connection.yml` would give. |
 | `change_data` | `true` | The `connection.yml` setting of the same name, which defaults to `false` there. Leave it `true` to inspect `update` and `create`. |
 
@@ -32,12 +33,19 @@ An application with several keys registers each one: `register_offline("db")`,
 `register_offline("db_archive")`, and so on. `Configuration.unregister_connection(key)` removes one.
 Registering the same key again replaces the offline entry.
 
-**PostgreSQL needs no driver package.** An offline **SQLite** key needs `using SQLite`. A few clauses
-depend on the SQLite library's version. `NULLS FIRST`/`LAST` renders natively from 3.30 and is
-emulated below it, while window functions and `RIGHT`/`FULL` joins are refused below their versions.
-Without the package that version cannot be read, so building such a query raises
-`InvalidConfigurationError`. With the package, the SQL follows the SQLite library the environment
-resolves, so pin it on the environment CI runs (#1452).
+**No driver package is needed.** On PostgreSQL the SQL depends on no server version. On SQLite a
+few clauses depend on the version: `NULLS FIRST`/`LAST` renders natively from 3.30 and is emulated
+below it, window functions and `RIGHT`/`FULL` joins are refused below their versions, and a bulk
+statement is chunked by the version's bind-parameter limit. An offline SQLite key renders them for
+the `server_version` it states, never for the SQLite library of the machine that runs the suite, so
+two CI images pin the same SQL (#1452):
+
+```julia
+PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3_045_000)
+```
+
+Without `server_version`, a query that needs the version raises `InvalidConfigurationError` naming
+it, `using SQLite` or not. Every other query renders. State the version your production SQLite runs.
 
 ### Load the model files after it
 

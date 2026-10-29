@@ -236,6 +236,67 @@ struct Reg1453MockSQLite <: PormG.PormGSQLite end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# an offline SQLite key renders for the version it states
+# What it tests: `register_offline(key; adapter = :sqlite, server_version)` renders the version-gated
+#   clauses for that version, whatever library this process links (asserted newer than 3.30.0 first):
+#     3.29.0  order_by("-points") → ORDER BY ("Tb"."points" IS NULL) DESC, "Tb"."points" DESC
+#     3.30.0  order_by("-points") → ORDER BY "Tb"."points" DESC NULLS FIRST
+#     3.24.0  ROW_NUMBER() OVER (…) → BackendCapabilityError naming 3.25.0 and 3.24.0
+#   and a bulk statement chunks by the stated version's bind limit (999 below 3.32.0). With no
+#   `server_version`, a gated clause raises `InvalidConfigurationError` naming `server_version`, and an
+#   ungated query renders. `server_version` with `:postgres`, or not positive, is refused at registration.
+# Why it matters: an offline SQLite key asked the host's SQLite library (#1452), so it raised without
+#   `using SQLite` and, with it, pinned SQL that differs between two CI images for the same query.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an offline SQLite key renders for the version it states (#1452)" begin
+  @test Int(SQLite.C.sqlite3_libversion_number()) > 3_032_000   # the library is newer than every version below
+  squash(sql) = strip(replace(sql, r"\s+" => " "))
+  function offline_result(key; kw...)
+    Configuration.register_offline(key; adapter = :sqlite, kw...)
+    mod = Module(Symbol("Reg1452_", key))
+    Core.eval(mod, :(import PormG.Models))
+    Core.eval(mod, :(Result = Models.Model("result", resultid = Models.IDField(), points = Models.FloatField(null = true))))
+    Base.invokelatest(Models.set_models, mod, key)
+    return Base.invokelatest(getfield, mod, :Result)
+  end
+  ordered(r) = squash(PormG.inspect_query(r.objects.order_by("-points"))[:sql_text])
+  windowed(r) = r.objects.values("resultid", "rn" => PormG.QueryBuilder.RowNumber(over = PormG.QueryBuilder.WindowOver(order_by = ["-points"])))
+  refused(f) = try f(); nothing catch e; e end
+  keys = String[]
+  try
+    for (v, sql) in ((3_029_000, "SELECT * FROM \"result\" as \"Tb\" ORDER BY (\"Tb\".\"points\" IS NULL) DESC, \"Tb\".\"points\" DESC"),
+                     (3_030_000, "SELECT * FROM \"result\" as \"Tb\" ORDER BY \"Tb\".\"points\" DESC NULLS FIRST"))
+      push!(keys, "reg1452_v$(v)")
+      @test ordered(offline_result(last(keys); server_version = v)) == sql
+    end
+
+    push!(keys, "reg1452_v3024000")
+    old = offline_result(last(keys); server_version = 3_024_000)
+    err = refused(() -> PormG.inspect_query(windowed(old)))
+    @test err isa PormG.BackendCapabilityError
+    @test err !== nothing && occursin("3.25.0", sprint(showerror, err)) && occursin("3.24.0", sprint(showerror, err))
+    @test PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections) == 999
+
+    push!(keys, "reg1452_unset")
+    unset = offline_result(last(keys))
+    @test squash(PormG.inspect_query(unset.objects.filter("points" => 1.0))[:sql_text]) ==
+          "SELECT * FROM \"result\" as \"Tb\" WHERE \"Tb\".\"points\" = ?"
+    for f in (() -> ordered(unset), () -> PormG.inspect_query(windowed(unset)),
+              () -> PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections))
+      err = refused(f)
+      @test err isa PormG.InvalidConfigurationError
+      @test err !== nothing && occursin("server_version", sprint(showerror, err))
+    end
+
+    @test_throws PormG.InvalidConfigurationError Configuration.register_offline("reg1452_pg"; server_version = 160_000)
+    @test_throws PormG.InvalidConfigurationError Configuration.register_offline("reg1452_zero"; adapter = :sqlite, server_version = 0)
+    @test !haskey(PormG.config, "reg1452_pg") && !haskey(PormG.config, "reg1452_zero")
+  finally
+    foreach(Configuration.unregister_connection, keys)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # loaded_keys and close_all!
 # What it tests: `loaded_keys()` lists static and dynamic entries, sorted; `close_all!()` closes
 #   every pool and keeps every entry registered, returning `nothing`.

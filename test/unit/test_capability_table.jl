@@ -261,6 +261,8 @@ end
     "src/tools.jl" => 1,
     # Not a version: a byte bound in a docstring's CHECK example.
     "src/migrations/introspection.jl" => 1,
+    # Not a gate: `register_offline` checks that a stated `server_version` is positive (#1452).
+    "src/Configuration.jl" => 1,
   )
   found = Dict{String,Int}()
   for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(_CT_ROOT, top)), f in files

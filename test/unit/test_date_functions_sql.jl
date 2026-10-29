@@ -91,9 +91,12 @@ end
           "((CAST(strftime('%w', $(_COL)) AS INTEGER) + 6) % 7 + 1)"
     # The SQLite whitelist is fail-closed: an unsupported part must throw, not emit garbage.
     @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "CENTURY"), _SL)
-    # #571: PG-only parts that are fractional by definition stay bare — a cast would be lossy and
-    # there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …) casts.
-    for part in ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
+    # #571: PG-only parts that are fractional by definition are not cast to an integer — that would be
+    # lossy and there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …)
+    # casts. #1457: `EPOCH` is cast to `numeric`, the decimal PormG states for it on every server
+    # (`extract` is a `double precision` below PostgreSQL 14).
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "EPOCH"), _PG) == "EXTRACT(EPOCH FROM $(_COL))::numeric"
+    for part in ("JULIAN", "MILLISECONDS", "MICROSECONDS")
       @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))"
     end
     @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
@@ -167,7 +170,7 @@ end
     q = DateFnModels.Datefn_race.objects
     q.values("e" => Cast(Extract("date", "epoch"), "bigint"))
     @test occursin("(EXTRACT(EPOCH FROM ", inspect_query(q; connection = _PG)[:sql_text])
-    @test occursin("))::bigint", inspect_query(q; connection = _PG)[:sql_text])
+    @test occursin(")::numeric)::bigint", inspect_query(q; connection = _PG)[:sql_text])
   end
 
   # ===========================================================================

@@ -96,16 +96,17 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
-  # #1111: a `Sum` over an operand the walk does not type, divided — PostgreSQL's quotient is a
-  # `numeric`, which keeps the half, over an `integer` column as over a `bigint` one; the division
-  # view fails closed on it since #1034 phase 3 step 2a. SQLite has no `EPOCH` part, so the shape
-  # does not build there.
-  ("Sum F bigint + epoch / 2 | alone", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
-  ("Sum F bigint + epoch / 2 | cte", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
-  ("Sum F bigint + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
-  ("Sum F int + epoch / 2 | alone", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
-  ("Sum F int + epoch / 2 | cte", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
-  ("Sum F int + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
+  # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
+  # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
+  # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)
+  # #1459: a window function over a duration on the RIGHT of `*` is untyped, where the same window on
+  # the left is an interval (and refused on SQLite). Pinned on the first row, whose `Lag` is NULL.
+  ("grid * Lag Case interval col | alone", :postgres) => (type = "Missing", value = "missing", read = nothing),
+  ("grid * Lag Case interval col | alone", :sqlite) => (type = "Missing", value = "missing", read = nothing),
+  ("grid * Lag Case interval col | alone", :mysql) => (type = "Missing", value = "missing", read = nothing),
+  ("grid * Lag Case interval col | subquery", :postgres) => (type = "Missing", value = "missing", read = nothing),
+  ("grid * Lag Case interval col | subquery", :sqlite) => (type = "Missing", value = "missing", read = nothing),
+  ("grid * Lag Case interval col | subquery", :mysql) => (type = "Missing", value = "missing", read = nothing),
   # #1439: a cast to an array reads back as the `Vector` an `ArrayField` of its element does. Flagged
   # `:unparsed` only because a PostgreSQL cell asks SQLite's parser table, which has no array parser
   # (SQLite and MySQL refuse the cast, so there is nothing to read back there). Before #1439 LibPQ

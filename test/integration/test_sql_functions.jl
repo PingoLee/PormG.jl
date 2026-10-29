@@ -2986,3 +2986,65 @@ end
         values("raceid__date", "driverid__dob", "days" => F("raceid__date") - F("driverid__dob")).list())
     @test a[:days] == Dates.value(a[:raceid__date] - a[:driverid__dob])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1456: a duration filter on a `Cast(<duration>, "interval")` alias matches what the column filter matches
+# Expected: on PostgreSQL and MySQL, `values("v" => Cast("fastestlaptime", "interval")).filter("v__@gt"
+# => Minute(1) + Second(30))` returns the same `resultid`s as `filter("fastestlaptime__@gt" => …)`, and
+# the threshold splits the fastest laps, so a filter matching every positive duration would show. On
+# MySQL the alias used to bind `"00:01:30"` against the BIGINT microsecond column, which compares as 0
+# and matched every lap. SQLite has no interval cast and raises `BackendCapabilityError` (#822).
+# Why it matters: the row set is the meaning; the column filter is the oracle for it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1456: a duration filter on a Cast(<duration>, \"interval\") alias returns the column filter's rows" begin
+    threshold = Minute(1) + Second(30)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite has no interval cast (#822)
+        q = M.Result.objects
+        q.values("resultid", "v" => Cast("fastestlaptime", "interval"))
+        @test_throws PormG.BackendCapabilityError q.list()
+    else
+        by_column = Set(r[:resultid] for r in M.Result.objects.filter("fastestlaptime__@gt" => threshold).
+                                                     values("resultid").list(:dict))
+        timed = M.Result.objects.filter("fastestlaptime__@isnull" => false).count()
+        # The threshold splits the laps: some above, some at or below it.
+        @test 0 < length(by_column) < timed
+        q = M.Result.objects
+        q.values("resultid", "v" => Cast("fastestlaptime", "interval"))
+        q.filter("v__@gt" => threshold)
+        # The same results, not only as many.
+        @test Set(r[:resultid] for r in q.list(:dict)) == by_column
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1457: `Extract(x, "epoch")` reads back as a decimal, and its quotient keeps the fraction
+# Expected: on PostgreSQL (`EXTRACT(EPOCH FROM "Tb"."start_at")::numeric`) and MySQL
+# (`TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', …) / 1000000`), the seconds since 1970 of each
+# race's `start_at` read back as a `Decimal` equal to the instant computed in Julia, and `… / 2` as half
+# of it, fraction kept (MySQL refused that quotient before #1457). SQLite has no `EPOCH` part and raises
+# `BackendCapabilityError`. Why it matters: PormG states `EPOCH` is a decimal on every engine that has
+# it; this is the value, checked against Julia rather than against another engine.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1457: Extract(start_at, \"epoch\") reads back as the decimal seconds since 1970" begin
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite has no EPOCH part
+        q = M.Race.objects
+        q.values("raceid", "e" => Extract("start_at", "epoch"))
+        @test_throws PormG.BackendCapabilityError q.list()
+    else
+        to_utc(z) = z isa TimeZones.ZonedDateTime ? DateTime(TimeZones.astimezone(z, TimeZones.tz"UTC")) : DateTime(z)
+        q = M.Race.objects
+        q.filter("start_at__@isnull" => false)
+        q.values("raceid", "start_at", "e" => Extract("start_at", "epoch"), "h" => Extract("start_at", "epoch") / 2)
+        q.order_by("raceid")
+        rows = q.list(:dict)
+        @test length(rows) > 100
+        for r in rows
+            # The instant's seconds since 1970, exact: the fixture's start times are whole seconds.
+            want = Dates.value(to_utc(r[:start_at]) - DateTime(1970)) ÷ 1000
+            @test r[:e] isa PormG.QueryBuilder.Decimals.Decimal
+            # Compared as `Float64`, exact here: whole seconds and their halves, far below 2^53.
+            @test Float64(r[:e]) == want
+            @test Float64(r[:h]) == want / 2
+        end
+    end
+end

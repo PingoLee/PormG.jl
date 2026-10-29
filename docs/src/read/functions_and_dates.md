@@ -1330,8 +1330,10 @@ The part must be one its column holds — `Extract("date", "hour")` on a `DateFi
 `QueryBuildError` — and a filter on the result is held to the part's range. Both rules are the
 transforms' rules: see [Which columns a transform reads](#Which-columns-a-transform-reads).
 
-To change the result type, wrap the extract in `Cast`. `EPOCH` is fractional, so PormG leaves it
-uncast by default:
+To change the result type, wrap the extract in `Cast`. `EPOCH` is fractional: it is a decimal on
+PostgreSQL and MySQL, rendered `EXTRACT(EPOCH FROM x)::numeric` on PostgreSQL so that it is one on
+every server version (`extract` returns a `double precision` before PostgreSQL 14). For whole seconds,
+cast it:
 
 ```julia
 using PormG.Functions: Cast, Extract

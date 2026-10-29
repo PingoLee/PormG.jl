@@ -931,8 +931,8 @@ end
   # #1122: a projected `Value(true)` records `CBool`, so SQLite's stored 0/1 reads back as a `Bool`, as
   # a boolean column does since #965. Before, it recorded nothing alone or inside a `Subquery`, and was
   # typed under a CTE only through the CTE model's `BooleanField`. The kind is the projection's alone:
-  # `literal_canonical_kind` stays temporal-only, because it also feeds `_operand_kind` and the
-  # binders, which have no boolean representation to undo (#882).
+  # `literal_canonical_kind` stays temporal-only, because it also feeds the binders, which have no
+  # boolean representation to undo (#882).
   @testset "a Bool literal records CBool alone, in a Subquery and under a CTE (#1122)" begin
     F_ = PormG.Functions
     sub(e) = (s = RVC.Rvc_row.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => e); s)

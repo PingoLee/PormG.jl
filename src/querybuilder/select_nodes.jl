@@ -515,9 +515,8 @@ end
 # an interval are either. `MAX` over the milliseconds is the longest interval, where `MAX` over the
 # stored `HH:MM:SS` text was the last one in text order (`"99:00:00"` over `"100:00:00"`, and
 # `"-01:00:00"` over `"02:00:00"`); `SUM` and `AVG` over the text added up its leading hours (#900).
-# The third value types the projection on both engines: `_operand_kind` cannot type
-# `Max(F("start_at") - F("date"))`, because arithmetic answers `nothing` there, and it types no
-# `Sum` at all (a computed value is not the column) — only the render knows. Every other function
+# The third value types the projection on both engines: the render knows it as soon as it has
+# rendered, for `Max(F("start_at") - F("date"))` and a `Sum` alike. Every other function
 # renders exactly as before and answers `false, false`.
 #
 # #932: a grouping aggregate's argument is evaluated per input row, before GROUP BY, so it renders in

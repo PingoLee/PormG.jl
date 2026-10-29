@@ -1902,7 +1902,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast interval to interval | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Cast interval to interval | alone", :mysql, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "`Tb`.`fastestlaptime` > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "`Tb`.`fastestlaptime` > ?", params = [("60000000", "Int64")]),
   ("Cast interval to interval | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Cast interval to interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>
@@ -2061,6 +2061,122 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Max Case interval col | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    MAX(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Lag Cast ts + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast ts + 1 | alone", :mysql, "v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast ts + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast ts + 1 | alone", :postgres, "v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast ts + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Lag Cast ts + 1 | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG(CAST(`R2_1`.`start_at` AS DATETIME(3)), ?) OVER (ORDER BY `R2`.`resultid` ASC) + INTERVAL ? DAY) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Lag Cast ts + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Lag Cast ts + 1 | subquery", :postgres, "w__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG((\"R2_1\".\"start_at\")::timestamp, \$4::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) + make_interval(days => \$5::integer)) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Lag Case date col + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | alone", :mysql, "v__@gt", "date 2009-03-29") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Lag Case date col + 1 | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2_1`.`date`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC) + INTERVAL ? DAY) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Lag Case date col + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Lag Case date col + 1 | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((LAG(CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \"R2_1\".\"date\"\nELSE NULL\nEND\n, \$6::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) + make_interval(days => \$7::integer)))::date as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Lag Case date col + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Lag Case date col + 1 | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    date(LAG(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2_1\".\"date\"\nELSE NULL\nEND\n, ?) OVER (ORDER BY \"R2\".\"resultid\" ASC), '+' || ? || ' days') as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Lag Cast interval * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast interval * 2 | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast interval * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast interval * 2 | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast interval * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag Cast interval * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((LAG(`R2`.`fastestlaptime`, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Lag Cast interval * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag Cast interval * 2 | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG((\"R2\".\"fastestlaptime\")::interval, \$4::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) * \$5::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Lag Case interval col * grid | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case interval col * grid | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case interval col * grid | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case interval col * grid | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case interval col * grid | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag Case interval col * grid | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Lag Case interval col * grid | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag Case interval col * grid | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG(CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, \$5::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) * \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("grid * Lag Case interval col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("grid * Lag Case interval col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("grid * Lag Case interval col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("grid * Lag Case interval col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`grid` * LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("grid * Lag Case interval col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * LAG(CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, \$5::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("grid * Lag Case interval col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * LAG(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n, ?) OVER (ORDER BY \"R2\".\"resultid\" ASC)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Lag F ts - ts * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag F ts - ts * 2 | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag F ts - ts * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag F ts - ts * 2 | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag F ts - ts * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag F ts - ts * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R2_1`.`start_at`, `R2_1`.`start_at`)), ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Lag F ts - ts * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Lag F ts - ts * 2 | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG((\"R2_1\".\"start_at\" - \"R2_1\".\"start_at\"), \$4::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) * \$5::bigint) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F interval * Cast time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" * (\"Tb_1\".\"start_at\")::time) > \$1", params = [("10", "Int64")]),
+  ("F interval * Cast time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" * (\"R2_1\".\"start_at\")::time) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast time * F interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb_1\".\"start_at\")::time * \"Tb\".\"fastestlaptime\") > \$1", params = [("10", "Int64")]),
+  ("Cast time * F interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2_1\".\"start_at\")::time * \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F interval * Case time col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" * CASE\nWHEN \"Tb\".\"grid\" = \$2 THEN \"Tb_1\".\"time\"\nELSE NULL\nEND\n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F interval * Case time col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" * CASE\nWHEN \"R2\".\"grid\" = \$3 THEN \"R2_1\".\"time\"\nELSE NULL\nEND\n) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F interval / Cast time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" / (\"Tb_1\".\"start_at\")::time) > \$1", params = [("10", "Int64")]),
+  ("F interval / Cast time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" / (\"R2_1\".\"start_at\")::time) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped date col + 1 | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Case untyped date col + 1 | alone", :mysql, "v__@gt", "date 2009-03-29") =>
@@ -3837,22 +3953,82 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM((\"R2\".\"resultid\" << \$3::integer))::bigint as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sum F bigint << 1 | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    SUM((\"R2\".\"resultid\" << ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :having, sql = "(SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F bigint + epoch / 2 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Sum F bigint + epoch / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F bigint + epoch / 2 | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Sum F bigint + epoch / 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F bigint + epoch / 2 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum F bigint + epoch / 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Sum F int + epoch / 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :having, sql = "(SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F int + epoch / 2 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :having, sql = "(SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Sum F int + epoch / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F int + epoch / 2 | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Sum F int + epoch / 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Sum F int + epoch / 2 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum F int + epoch / 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast Sum F bigint + epoch / 2 int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2 int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2 int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2 int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2 int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F bigint + epoch / 2 int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::bigint))::integer > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("2", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / 2 int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::bigint))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "CAST(IF(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`Tb`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\"))) / \$2::double precision))::integer > \$3", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
+    (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"raceid\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$2::double precision))::integer > \$3", params = [("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres, "g__v__@gt", "10") =>
@@ -3860,7 +4036,31 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED), ~0 + ABS(CAST((SUM((`R2`.`raceid` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("2.0", "Float64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\"))) / \$3::double precision))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"raceid\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$3::double precision))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2.0", "Float64"), ("1", "Int64"), ("2.0", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST(ROUND((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?), ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(ROUND((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?), ?) AS SIGNED), ~0 + ABS(CAST(ROUND((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / ?), ?) AS SIGNED))) AS SIGNED) > ?", params = [("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(ROUND(((SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / \$3::bigint))::numeric, \$4::integer))::integer > \$5", params = [("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("2", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(ROUND((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?), ?) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(ROUND((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?), ?) AS SIGNED), ~0 + ABS(CAST(ROUND((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / ?), ?) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Round Sum F int + epoch / 2 int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (ROUND(((SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / \$4::bigint))::numeric, \$5::integer))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("2", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "CAST(IF(CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / COUNT(`Tb`.`raceid`)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / COUNT(`Tb`.`raceid`)) AS SIGNED), ~0 + ABS(CAST((SUM((`Tb`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000))) / COUNT(`Tb`.`raceid`)) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "((SUM((\"Tb\".\"year\" + EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)) / COUNT(\"Tb\".\"raceid\")))::integer > \$1", params = [("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / COUNT(`R2`.`raceid`)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / COUNT(`R2`.`raceid`)) AS SIGNED), ~0 + ABS(CAST((SUM((`R2`.`year` + (TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000))) / COUNT(`R2`.`raceid`)) AS SIGNED))) AS SIGNED) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Sum F int + epoch / Count int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((SUM((\"R2\".\"year\" + EXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric)) / COUNT(\"R2\".\"raceid\")))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "CAST((SELECT CONCAT(IF(`_pormg_us` < 0, '-', ''), IF(ABS(`_pormg_us`) DIV 3600000000 < 10, CONCAT('0', ABS(`_pormg_us`) DIV 3600000000), ABS(`_pormg_us`) DIV 3600000000), ':', IF(ABS(`_pormg_us`) DIV 60000000 % 60 < 10, CONCAT('0', ABS(`_pormg_us`) DIV 60000000 % 60), ABS(`_pormg_us`) DIV 60000000 % 60), ':', IF(ABS(`_pormg_us`) DIV 1000000 % 60 < 10, CONCAT('0', ABS(`_pormg_us`) DIV 1000000 % 60), ABS(`_pormg_us`) DIV 1000000 % 60), IF(ABS(`_pormg_us`) % 1000000 = 0, '', CONCAT('.', TRIM(TRAILING '0' FROM LPAD(ABS(`_pormg_us`) % 1000000, 6, '0'))))) FROM (SELECT CAST(ROUND((SUM((`Tb`.`fastestlaptime` + `Tb`.`fastestlaptime`))) * 1.0 / (?)) AS SIGNED) AS `_pormg_us`) AS `_pormg_d`) AS CHAR) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10\"", "String")]),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v__@gt", "text pole") =>
@@ -6411,12 +6611,20 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"time\" > ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("\"12:00:00\"", "String"), ("1", "Int64"), ("\"12:00:00\"", "String"), ("1", "Int64"), ("true", "Bool")]),
   ("Extract epoch F interval * 2 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
   ("Extract epoch F interval * 2 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint)) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::numeric > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::numeric > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
   ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint))::numeric as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"fastestlaptime\" * \$3::bigint))::numeric as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract year F hop date + interval | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM (`Tb_1`.`date` + INTERVAL (`Tb`.`fastestlaptime`) MICROSECOND)) > ?", params = [("10", "Int64")]),
   ("Extract year F hop date + interval | alone", :postgres, "v__@gt", "10") =>
@@ -6446,9 +6654,13 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Max F time - time | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Extract epoch F time - time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract epoch F time - time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric > \$1", params = [("\"10.5\"", "String")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\"))::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\"))::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Coalesce bool comparison | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool comparison | alone", :mysql, "v__@gt", "bool true") =>

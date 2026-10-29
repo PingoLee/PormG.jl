@@ -542,3 +542,42 @@ PormG.config["tak_my"] = PormG.Configuration.Settings(connections = TakMockMySQL
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1465 (review): a window over a date or a duration on the right of `+`/`-`, beside a float or text
+# The right side of `+` and `-` is typed through the same predicate as `*`, so beside a left that is
+# neither a date nor an integer column (a float, a text) a window over a date or a duration is a typed
+# side too. Expected: SQLite and MySQL raise `QueryBuildError` — the #882 "a date and a value PormG
+# cannot type" and #881 "an interval on the right of a value that is not one" refusals a plain column
+# there gets — and PostgreSQL renders the same `"points" + LAG(…)` as before. Why it matters: both
+# engines built these and computed on the date's text or number (`points + '2009-03-29'`), silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1465: a date or duration window on the right of `+`/`-` beside a float or text" begin
+  QB = PormG.QueryBuilder
+  over = QB.WindowOver(order_by = "raceid")
+  function model(key)
+    m = Model("tak_mixed", raceid = IDField(), date = DateField(), laptime = DurationField(),
+              points = PormG.Models.FloatField(), label = PormG.Models.CharField())
+    m.connect_key = key
+    return m
+  end
+  shapes = (
+    "points + Lag(date)"    => () -> F("points") + PormG.Functions.Lag("date", over = over),
+    "points - Lag(date)"    => () -> F("points") - PormG.Functions.Lag("date", over = over),
+    "points + Lag(laptime)" => () -> F("points") + PormG.Functions.Lag("laptime", over = over),
+    "points - Lag(laptime)" => () -> F("points") - PormG.Functions.Lag("laptime", over = over),
+    "label + Lag(laptime)"  => () -> F("label") + PormG.Functions.Lag("laptime", over = over),
+  )
+  for (label, expr) in shapes
+    @testset "$label" begin
+      for key in ("tak_sl", "tak_my")
+        q = model(key).objects
+        q.values("v" => expr())
+        @test_throws PormG.QueryBuildError QB.query(q; show_query = :sql)
+      end
+      q = model("tak_pg").objects
+      q.values("v" => expr())
+      @test occursin(r"\"Tb\"\.\"(points|label)\" [+-] LAG\(", QB.query(q; show_query = :sql))
+    end
+  end
+end

@@ -330,6 +330,15 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast float to numeric(3,1)", :Result,           m -> _EKM_FN.Cast("points", "numeric(3,1)")),
   ("Cast F int * 10 to numeric(2,0)", :Result,      m -> _EKM_FN.Cast(_EKM_Q.F("grid") * 10, "numeric(2,0)")),
   ("Coalesce decimal output numeric(4,2)", :Constructor_results, m -> _EKM_FN.Coalesce("points", 0; output_field = "numeric(4,2)")),
+  # D5 (#1034): a zero-scale cast in `Concat`. PostgreSQL and MySQL round it to a whole number and
+  # write `14`; SQLite's cast keeps a REAL operand's own text (`14.0`), and an integer's `14`.
+  ("Concat Cast int numeric(2,0)", :Result,         m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast("grid", "numeric(2,0)"))),
+  ("Concat Cast int numeric(10)", :Result,          m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast("grid", "numeric(10)"))),
+  ("Concat Cast Floor float numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast(_EKM_FN.Floor("points"), "numeric(10,0)"))),
+  ("Concat Cast Floor float DecimalField(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast(_EKM_FN.Floor("points"), PormG.Models.DecimalField(max_digits = 10, decimal_places = 0)))),
+  ("Concat Coalesce int output numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Coalesce("grid", 0; output_field = "numeric(10,0)"))),
+  ("Concat Coalesce Floor float output numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Coalesce(_EKM_FN.Floor("points"), 0; output_field = "numeric(10,0)"))),
+  ("Cast Cast Floor float numeric(10,0) integer", :Result, m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Floor("points"), "numeric(10,0)"), PormG.Models.IntegerField())),
   # #1215: a single-precision cast — `real`, `float4`, `float(p)` up to 24 — and `float(25)`, a double
   ("Cast float float4",       :Result,              m -> _EKM_FN.Cast("points", "float4")),
   ("Cast float float(24)",    :Result,              m -> _EKM_FN.Cast("points", "float(24)")),

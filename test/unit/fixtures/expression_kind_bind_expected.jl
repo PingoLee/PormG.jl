@@ -6381,6 +6381,24 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce decimal output numeric(4,2) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED), ~0 + ABS(CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((FLOOR((\"Tb\".\"points\")::numeric))::numeric(10,0))::integer > \$1", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(CAST(FLOOR(\"Tb\".\"points\") AS NUMERIC(10,0)) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(FLOOR(\"Tb\".\"points\") AS NUMERIC(10,0)) AS INTEGER) ELSE abs(CAST(CAST(FLOOR(\"Tb\".\"points\") AS NUMERIC(10,0)) AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST(CAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0)) AS SIGNED), ~0 + ABS(CAST(CAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0)) AS SIGNED))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((FLOOR((\"R2\".\"points\")::numeric))::numeric(10,0))::integer as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(CAST(FLOOR(\"R2\".\"points\") AS NUMERIC(10,0)) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(CAST(FLOOR(\"R2\".\"points\") AS NUMERIC(10,0)) AS INTEGER) ELSE abs(CAST(CAST(FLOOR(\"R2\".\"points\") AS NUMERIC(10,0)) AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Cast float float4 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS FLOAT) > ?", params = [("10", "Int64")]),
   ("Cast float float4 | alone", :mysql, "v__@gt", "float 10.5") =>

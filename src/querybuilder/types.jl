@@ -223,9 +223,10 @@ const ConnType = Union{_SQLEngine,Nothing}
 # #1034 phase 3 step 2c — what the integer-division view (#1111) answers for a computed CTE column,
 # asked while the body could still resolve its paths: `divided`, the column divided
 # (`_whole_numeric_operand`), and `quotient`, the column itself when it is such a quotient (a division
-# kind of `_concat_textless_operand`). Each is a `(kind, what)` or `nothing`. The type walk cannot
-# carry either: they hold where it names no kind (a `Sum` it cannot type), and a sum and its quotient
-# have that same no-kind.
+# kind of `_concat_textless_operand`, or D5's `:zero_scale_decimal`, a zero-scale cast SQLite does not
+# round). Each is a `(kind, what)` or `nothing`. The type walk cannot carry either: they hold where it
+# names no kind (a `Sum` it cannot type), and a sum and its quotient have that same no-kind; a
+# zero-scale cast's kind is the whole `CDecimal(p, 0)` whatever its operand.
 const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing}}
 # #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3 step
 # 2c: `"divisions"` the division answers of each computed column that has one; #1110: `"unapplied"`

@@ -4851,6 +4851,126 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64"), ("1", "Int64")]),
   ("Coalesce decimal output numeric(4,2) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64"), ("1", "Int64")]),
+  ("Concat Cast int numeric(2,0) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast int numeric(2,0) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast int numeric(2,0) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast int numeric(10) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast int numeric(10) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast int numeric(10) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("1", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64")]),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :postgres, "v") =>

@@ -3048,3 +3048,32 @@ end
         end
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D5 (#1034): a zero-scale cast in `Concat` writes the integer, where it builds
+# A cast to `numeric(p,0)` is a whole number. PostgreSQL (`CONCAT($1::text, ("Tb"."grid")::numeric(2,0))`)
+# and MySQL round it and write the integer; SQLite's cast to NUMERIC keeps a REAL as it is, so it writes
+# a whole float as `10.0`, and writes the integer only over an integer. Expected, on the first 50
+# results: `Concat(Value("#"), Cast("grid", "numeric(2,0)"))` reads `#<grid>` on every engine;
+# `Cast(Floor("points"), "numeric(10,0)")` in `Concat` reads `#<points rounded down>` on PostgreSQL and
+# MySQL and raises `QueryBuildError` on SQLite; cast to an integer first, it reads the same on every
+# engine. The expected text is built in Julia from the columns. Why it matters: before D5 every one of
+# these was refused on every engine, and on SQLite the float's `10.0` must not pass as `10`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "D5 (#1034): Concat over a zero-scale cast writes the integer where it builds" begin
+    base() = (q = M.Result.objects; q.filter("resultid__@lte" => 50); q.order_by("resultid"); q)
+    q = base()
+    q.values("resultid", "grid", "points",
+             "g" => Concat(Value("#"), Cast("grid", "numeric(2,0)")),
+             "i" => Concat(Value("#"), Cast(Cast(Floor("points"), "numeric(10,0)"), PormG.Models.IntegerField())))
+    df = q |> DataFrame
+    @test nrow(df) == 50
+    @test isempty([r.resultid for r in eachrow(df) if r.g != "#$(r.grid)"])
+    @test isempty([r.resultid for r in eachrow(df) if r.i != "#$(Int(floor(r.points)))"])
+    floor_cast = () -> (q = base(); q.values("resultid", "points", "f" => Concat(Value("#"), Cast(Floor("points"), "numeric(10,0)"))); q |> DataFrame)
+    by_engine(
+        postgres = () -> (df = floor_cast(); @test isempty([r.resultid for r in eachrow(df) if r.f != "#$(Int(floor(r.points)))"])),
+        mysql = () -> (df = floor_cast(); @test isempty([r.resultid for r in eachrow(df) if r.f != "#$(Int(floor(r.points)))"])),
+        sqlite = () -> (@test_throws PormG.QueryBuildError floor_cast()),
+    )()
+end

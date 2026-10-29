@@ -3441,23 +3441,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Case int float to integer | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :sqlite) =>
@@ -4341,23 +4341,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int to scale 1 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :sqlite) =>
@@ -4395,23 +4395,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float to numeric(3,1) | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(3, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :sqlite) =>
@@ -4431,113 +4431,113 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce decimal output numeric(4,2) | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(2,0) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(2,0) is not text: say which text you mean (#1027). Cast it to text first:"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast int numeric(10) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10) is not text: say which text you mean (#1027). Cast it to text first: "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float numeric(10,0) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float numeric(10,0) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float numeric(10,0) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float numeric(10,0) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float DecimalField(10,0) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Cast Floor float DecimalField(10,0) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Cast Floor float DecimalField(10,0) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce int output numeric(10,0) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Coalesce Floor float output numeric(10,0) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Coalesce Floor float output numeric(10,0) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
   ("Concat Coalesce Floor float output numeric(10,0) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and a value cast to numeric(10,0) is not text: say which text you mean (#1027). Cast it to text first"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :sqlite) =>

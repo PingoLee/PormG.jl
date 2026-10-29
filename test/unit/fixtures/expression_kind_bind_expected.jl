@@ -6381,6 +6381,186 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce decimal output numeric(4,2) | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(COALESCE(\"R2\".\"points\", ?) AS NUMERIC(4,2)) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Concat Cast int numeric(2,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(\"Tb\".\"grid\")::numeric(2,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(\"Tb\".\"grid\")::numeric(2,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(2,0)), '')) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(2,0)), '')) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(\"R2\".\"grid\")::numeric(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(\"R2\".\"grid\")::numeric(2,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(2,0)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(2,0) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(2,0)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(\"Tb\".\"grid\")::numeric(10)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(\"Tb\".\"grid\")::numeric(10)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(10)), '')) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(10)), '')) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(\"R2\".\"grid\")::numeric(10)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(\"R2\".\"grid\")::numeric(10)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(10)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast int numeric(10) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(10)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(FLOOR((\"Tb\".\"points\")::numeric))::numeric(10,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(FLOOR((\"Tb\".\"points\")::numeric))::numeric(10,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(FLOOR((\"R2\".\"points\")::numeric))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(FLOOR((\"R2\".\"points\")::numeric))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(FLOOR((\"Tb\".\"points\")::numeric))::numeric(10,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n(FLOOR((\"Tb\".\"points\")::numeric))::numeric(10,0)) > \$3", params = [("\"v=\"", "String"), ("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"v=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(FLOOR(`R2`.`points`) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(FLOOR((\"R2\".\"points\")::numeric))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n(FLOOR((\"R2\".\"points\")::numeric))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"v=\"", "String"), ("1", "Int64"), ("\"v=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(COALESCE(`Tb`.`grid`, ?) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(COALESCE(`Tb`.`grid`, ?) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$3::text,\n(COALESCE(\"Tb\".\"grid\", \$4::bigint))::numeric(10,0)) > \$5", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$3::text,\n(COALESCE(\"Tb\".\"grid\", \$4::bigint))::numeric(10,0)) > \$5", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(COALESCE(\"Tb\".\"grid\", ?) AS NUMERIC(10,0)), '')) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(CAST(COALESCE(\"Tb\".\"grid\", ?) AS NUMERIC(10,0)), '')) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(COALESCE(`R2`.`grid`, ?) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(COALESCE(`R2`.`grid`, ?) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$4::text,\n(COALESCE(\"R2\".\"grid\", \$5::bigint))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$4::text,\n(COALESCE(\"R2\".\"grid\", \$5::bigint))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(COALESCE(\"R2\".\"grid\", ?) AS NUMERIC(10,0)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(CAST(COALESCE(\"R2\".\"grid\", ?) AS NUMERIC(10,0)), '')) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(COALESCE(FLOOR(`Tb`.`points`), ?) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nCAST(COALESCE(FLOOR(`Tb`.`points`), ?) AS DECIMAL(65,0))) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$3::text,\n(COALESCE(FLOOR((\"Tb\".\"points\")::numeric), \$4::bigint))::numeric(10,0)) > \$5", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$3::text,\n(COALESCE(FLOOR((\"Tb\".\"points\")::numeric), \$4::bigint))::numeric(10,0)) > \$5", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("\"v=\"", "String"), ("0", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(COALESCE(FLOOR(`R2`.`points`), ?) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\nCAST(COALESCE(FLOOR(`R2`.`points`), ?) AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$4::text,\n(COALESCE(FLOOR((\"R2\".\"points\")::numeric), \$5::bigint))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$4::text,\n(COALESCE(FLOOR((\"R2\".\"points\")::numeric), \$5::bigint))::numeric(10,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"v=\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(IF(CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED), ~0 + ABS(CAST(CAST(FLOOR(`Tb`.`points`) AS DECIMAL(65,0)) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
   ("Cast Cast Floor float numeric(10,0) integer | alone", :postgres, "v__@gt", "10") =>

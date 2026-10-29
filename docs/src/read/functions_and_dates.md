@@ -501,6 +501,17 @@ A literal is refused when the `Concat` is built, and a column when the query is.
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
 integer column does (#1087). Divided, it is a decimal quotient, and refused like any decimal.
 
+A cast to a zero-scale decimal is whole too: `Cast(x, "numeric(p,0)")`, `numeric(p)`, a
+`DecimalField(…, decimal_places = 0)`, or a `numeric(p,0)` `output_field`. PostgreSQL and MySQL round
+the value to a whole number and write the integer (`15` for `14.6`, `14` for `14.0`), so `Concat`
+over one builds there. SQLite does not round such a cast: it keeps a float as it is, so a whole float
+writes `14.0`. It writes `14` over an integer, so `Concat(Value("#"), Cast("grid", "numeric(2,0)"))`
+builds on every engine. Over any other value, such as `Cast(Floor("points"), "numeric(10,0)")`,
+`Concat` raises `QueryBuildError` on SQLite. Cast it to an integer instead,
+`Cast(Cast(Floor("points"), "numeric(10,0)"), IntegerField())`, which writes `14` on every engine.
+A fractional value cast to a scale is refused on SQLite before that, as a rounding it does not do
+(see [A cast an engine computes differently](#A-cast-an-engine-computes-differently)).
+
 Say which text you mean:
 
 - **cast it to text**, `Cast("points", "text")`, which writes the engine's own text:

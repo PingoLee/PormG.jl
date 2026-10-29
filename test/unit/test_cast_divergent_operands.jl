@@ -1344,6 +1344,49 @@ _is_1087(e) = e isa QueryBuildError && occursin("(#1087)", _ccd_msg(e))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# D5 (#1034): a zero-scale cast is whole, as a zero-scale column is (#1087)
+# `Cast(x, "numeric(p,0)")`, `numeric(p)`, a `DecimalField(…, decimal_places = 0)` and a `numeric(p,0)`
+# `output_field` round to a whole number on PostgreSQL and MySQL, which write the integer (`15`, `14`).
+# SQLite's cast to NUMERIC keeps a REAL as it is (`14.0`), and writes `14` only over an integer
+# (measured on PostgreSQL 18.6, MySQL 8.4 and SQLite 3.54.0). Expected: `Concat` over one built on every
+# engine over an integer column; over a whole float (`Floor("points")`) built on PostgreSQL, refused on
+# SQLite naming the integer cast that writes `14` everywhere; in a CTE column the same. Before, every
+# such `Concat` was refused on every engine as a decimal's text (#1027). Why it matters: one rule for
+# a declared scale, whether column or cast, and SQLite's `14.0` is not let through as the integer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "D5 (#1034): a zero-scale cast in Concat is whole where the engine writes the integer" begin
+  whole_float = Fn.Cast(Fn.Floor("points"), "numeric(10,0)")
+  for cast in (Fn.Cast("number", "numeric(2,0)"), Fn.Cast("number", "numeric(10)"),
+               Fn.Cast(_CF("number") * 10, Models.DecimalField(max_digits = 10, decimal_places = 0)),
+               Fn.Coalesce("number", 0; output_field = "numeric(10,0)"), Fn.Cast("grid", "numeric(4,0)"))
+    @test _ccd_builds(Fn.Concat(Fn.Value("#"), cast))
+  end
+  @test occursin("CONCAT(\$1::text, (\"Tb\".\"number\")::numeric(2,0))",
+                 replace(_ccd_render(Fn.Concat(Fn.Value("#"), Fn.Cast("number", "numeric(2,0)")); conn = _CCD_PG), "\n" => " "))
+  for cast in (whole_float, Fn.Cast(Fn.Floor("points"), Models.DecimalField(max_digits = 10, decimal_places = 0)),
+               Fn.Coalesce(Fn.Floor("points"), 0; output_field = "numeric(10,0)"))
+    errs = _ccd_expect(Fn.Concat(Fn.Value("#"), cast); departs = _SL_ONLY, issue = "#1034",
+                       named = "Concat of a value cast to numeric(10,0)")
+    @test occursin("Cast(x, IntegerField())", _ccd_msg(errs.sqlite))
+  end
+  # The spelling the message names writes the integer on every engine.
+  @test _ccd_builds(Fn.Concat(Fn.Value("#"), Fn.Cast(whole_float, Models.IntegerField())))
+  # An unscaled `numeric` and a scale of one are no whole number: still a decimal's text everywhere.
+  _ccd_refused_everywhere(Fn.Concat(Fn.Value("#"), Fn.Cast("number", "numeric")); issue = "#1027", named = "a value cast to numeric")
+  _ccd_refused_everywhere(Fn.Concat(Fn.Value("#"), Fn.Cast("number", "numeric(10,1)")); issue = "#1027")
+  # Through a CTE column, as alone: the walk keeps the declared scale the CTE model's field drops.
+  incte(cast) = conn -> (t = CCD.Ccd_team.objects; body = CCD.Ccd_driver.objects;
+                          body.values("team", "v" => cast); t.with("c" => body, join_field = "id" => "team");
+                          t.values("x" => Fn.Concat(Fn.Value("#"), PormG.CTE("c", "v"))); _ccd_sql(t; conn = conn))
+  @test _ccd_builds(nothing; run = incte(Fn.Cast("number", "numeric(2,0)")))
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1034", run = incte(whole_float))
+  # The integer cast over a whole float builds; over a value PormG cannot type (a JSON key's sum) it is
+  # SQLite's truncation of what it does not round (#1028), refused there only.
+  @test _ccd_builds(Fn.Cast(whole_float, Models.IntegerField()))
+  _ccd_expect(Fn.Cast(Fn.Cast(Fn.Sum("payload__n"), "numeric(10,0)"), Models.IntegerField()); departs = _SL_ONLY, issue = "#1028")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1087, #1150: a zero-scale DecimalField reads like an integer column; divided, it is a decimal quotient
 # Both engines write a whole-number decimal `14`, so `Concat` and a cast to text or an integer pass.
 # Divided, it means a decimal quotient (`15 / 2` is `7.5`, PostgreSQL's `numeric / int`). SQLite stores

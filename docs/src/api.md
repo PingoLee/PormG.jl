@@ -736,7 +736,8 @@ PormG.Configuration.load("db"; env="prod")
 A test or a script that renders SQL and never runs a query does not `load`: it registers the key
 with `Configuration.register_offline` (below) instead, which opens no pool (see
 [Testing Your App](testing.md)). A `load` of a key registered
-offline replaces it with a live pool (#1451).
+offline raises `InvalidConfigurationError`, `force = true` included, rather than replace it with a
+live pool (#1451). Call `unregister_connection(key)` first to load it.
 
 Without `root`, `path` is both the connection key and the folder, resolved against `pwd()`. With
 `root`, the key is `path` as passed and the folder is `joinpath(root, path)`, stored absolute in
@@ -805,8 +806,9 @@ PormG.Configuration.loaded_keys()   # ["db", "db_telemetry"]
 
 Registers `key` as a connection that renders SQL and never connects (#1229), for golden-SQL tests
 and `inspect_query` with no database. `adapter` (`:postgres` or `:sqlite`) picks the dialect. Models
-bind to it like a loaded folder. Running a query on it raises `InvalidConfigurationError`, and a key
-already registered as a live connection is refused:
+bind to it like a loaded folder. Running a query on it raises `InvalidConfigurationError`, a key
+already registered as a live connection is refused, and a later `load` of the offline key raises
+`InvalidConfigurationError` (#1451):
 
 ```julia
 PormG.Configuration.register_offline("db")

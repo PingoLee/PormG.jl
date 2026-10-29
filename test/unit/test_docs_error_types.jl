@@ -3444,6 +3444,11 @@ const DOCERR_CASES = [
         () -> PormG.Configuration.register_offline("docerr_offline_mysql"; adapter = :mysql),
     ),
     (
+        "testing.md / api.md — `Configuration.load` of a `register_offline` key raises InvalidConfigurationError, `force = true` included (#1451)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration.load("docerr_offline"; env = "dev", force = true),
+    ),
+    (
         "testing.md — `delete(show_query = :dict)` of a referenced model on a `register_offline` key raises InvalidConfigurationError (#1453)",
         InvalidConfigurationError,
         () -> DOCERR_DRIVER_OFFLINE.objects.filter("surname" => "Senna").delete(show_query = :dict),

@@ -1553,6 +1553,11 @@ package bootstrap — `load` in the module body **and** in `__init__` — safe t
 `env` for the same folder is a reload: the file is read again and the pool rebuilt, with a warning,
 since connections checked out of the old pool are closed. Pass `force = true` to re-read and rebuild
 anyway, e.g. after editing `connection.yml` in a running session.
+
+**An offline key is refused (#1451).** A key that `register_offline` registered, under its own
+spelling or another spelling of the same folder, raises `InvalidConfigurationError`, `force = true`
+included: loading would replace the offline entry with a live pool. Call `unregister_connection(key)`
+first, or load under another key.
 """
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   # create settings if does not exists
@@ -1598,6 +1603,11 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       "the key, so another spelling of the same folder (e.g. `abspath(\"$(path)\")`) registers " *
       "alongside it."))
   end
+  # #1451: the mirror of `register_offline`'s refusal of a live key. Without it, the `load` an
+  # application's `__init__` runs swapped a test suite's offline entry for a live pool, and only the
+  # reload warning said so. Keyed on `path` and checked before the folder is, for #620's reason: an
+  # offline key usually names no folder. `force` does not override it, as it does not override #620.
+  haskey(config, path) && _is_offline(config[path]) && throw(_offline_load_error(path))
 
   @pormg_debug false
 
@@ -1624,6 +1634,11 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       "`PormG.setup(\"$(folder)\")`, or call `PormG.Configuration.load(\"$(path)\"; $(root === nothing ? "" : root_kw * ", ")scaffold=true)` " *
       "to write a skeleton to edit."))
   end
+  # #1451: another spelling of the folder (`abspath("db")`) resolves to the offline entry through its
+  # `db_def_folder`, which is the key. Before the environment and the driver are checked: the answer
+  # is the same whatever either says.
+  aliased = _resolve_loaded_key(path, config; folder = folder)
+  aliased !== nothing && _is_offline(config[aliased]) && throw(_offline_load_error(aliased))
 
   # Resolve the environment with the file's `default_env:` folded into the precedence (#205). The
   # guesses (`default_env:`, `dev`) are a REPL's or an implicit load's only (#1228).
@@ -2056,7 +2071,8 @@ PormG.Configuration.unregister_connection("db")
 ```
 
 Registering the same key again replaces the offline entry. A key that `load` or
-`register_connection` registered is refused, not overwritten.
+`register_connection` registered is refused, not overwritten, and so is the reverse: `load` of an
+offline key raises `InvalidConfigurationError` (#1451).
 
 The entry's environment is always `"dev"` — `env(key)` and `status(key)` report it — whatever
 `PORMG_ENV` says (#1256). An offline entry reads no `connection.yml`, so there is no environment block
@@ -2090,6 +2106,12 @@ function register_offline(key::String; adapter::Symbol = :postgres,
 end
 
 _is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+
+# `load`'s refusal of a key `register_offline` holds (#1451). Returned, not thrown: the call site throws.
+_offline_load_error(key::String)::InvalidConfigurationError = InvalidConfigurationError(
+  "Cannot load \"$(key)\": that key is registered offline with `register_offline`, and loading would " *
+  "replace it with a live pool. Call `unregister_connection(\"$(key)\")` first if the offline entry is " *
+  "finished with, or load the configuration under another key.")
 
 """
     close_all!() -> Nothing

@@ -12,6 +12,7 @@ using Test
 using PormG
 import PormG: Configuration, Models
 import JSON
+using SQLite   # the #1451 testset's last `load` builds a live SQLite pool, which needs the extension
 
 # A throwaway models module with one F1 model, exactly what `@import_models` would evaluate.
 function _reg1229_models(name::Symbol)
@@ -112,6 +113,54 @@ end
   finally
     Configuration.unregister_connection(key)
     Configuration.unregister_connection(live)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# load refuses a key register_offline holds
+# What it tests: `load` of an offline key raises `InvalidConfigurationError` naming
+#   `unregister_connection`, under the key itself (`load("db"; root)`), with `force = true`, and under
+#   another spelling of the same folder (the absolute path, from the folder's parent). Each refusal
+#   leaves the offline entry in place, same pool object. After `unregister_connection` the same `load`
+#   registers a live SQLite pool. No SQL is involved; the folder holds a SQLite `:memory:` yml.
+# Why it matters: an application's `__init__` runs `load("db"; env = …)`, and before #1451 that
+#   replaced a golden-SQL suite's offline entry with a live pool with only a reload warning, so the
+#   suite that believed itself offline reached a database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "load refuses a key register_offline holds (#1451)" begin
+  mktempdir() do root
+    db_dir = joinpath(root, "db"); mkpath(db_dir)
+    write(joinpath(db_dir, "connection.yml"),
+          "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: false\n    change_data: false\n")
+    key = "db"
+    saved = copy(PormG.config)
+    delete!(PormG.config, key)   # another file's hand-built "db" entry would answer the folder lookup
+    try
+      Configuration.register_offline(key)
+      pool = PormG.config[key].connections
+      refused(f) = try f(); nothing catch e; e end
+
+      for (label, call) in (("the key", () -> Configuration.load(key; root = root, env = "dev")),
+                            ("force", () -> Configuration.load(key; root = root, env = "dev", force = true)),
+                            ("another spelling", () -> cd(() -> Configuration.load(db_dir; env = "dev"), root)))
+        err = refused(call)
+        @test err isa PormG.InvalidConfigurationError
+        @test err !== nothing && occursin("registered offline", sprint(showerror, err))
+        @test err !== nothing && occursin("unregister_connection(\"db\")", sprint(showerror, err))
+        @test Configuration._is_offline(PormG.config[key])
+        @test PormG.config[key].connections === pool
+      end
+
+      Configuration.unregister_connection(key)
+      @test Configuration.load(key; root = root, env = "dev") == key
+      @test !Configuration._is_offline(PormG.config[key])
+      @test PormG.config[key].connections isa PormG.PormGSQLite
+    finally
+      haskey(PormG.config, key) && Configuration.unregister_connection(key)
+      for (k, v) in saved
+        haskey(PormG.config, k) || (PormG.config[k] = v)
+      end
+    end
   end
 end
 

@@ -66,8 +66,8 @@ info = M.Result.objects.filter("raceid" => 1).update("points" => 0, show_query =
   path, aggregate, subquery and write), with the query built where the app builds it. Pin a refusal
   by its error type, never its message.
 - **Import the model files, not `using App`.** An app whose module or `__init__` calls
-  `Configuration.load("db"; env = …)` replaces the offline entry with a live pool, and only a
-  warning says so (#1451). Outside a REPL, models with no loaded or offline key raise
+  `Configuration.load("db"; env = …)` raises `InvalidConfigurationError` on an offline key, `force`
+  included (#1451). Outside a REPL, models with no loaded or offline key raise
   `InvalidConfigurationError`. Fix that with `register_offline`, never with a `load` or
   `implicit = true`.
 - **An offline SQLite key needs `using SQLite`.** Without it, a query whose SQL depends on the

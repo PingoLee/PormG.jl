@@ -51,9 +51,9 @@ The models bind to the offline key the same way they bind to a loaded configurat
 already defined.
 
 **Import the model files, not the application.** When `using App` runs the app's own
-`Configuration.load("db"; env = …)`, in its module body or its `__init__`, that `load` **replaces
-the offline entry with a live pool**, and the only signal is a reload warning (#1451). The suite you
-believe is offline then reaches the database. Point `@import_models` at the app's models files, and
+`Configuration.load("db"; env = …)`, in its module body or its `__init__`, that `load` raises
+`InvalidConfigurationError`: a key registered offline is never replaced by a live pool, and
+`force = true` does not change that (#1451). Point `@import_models` at the app's models files, and
 keep whatever the suite needs from the app (a function that builds a query, say) in a file that does
 not load a configuration.
 
@@ -153,8 +153,8 @@ import .models as M
 end
 ```
 
-Keep that file in its own process, apart from the offline suite. A key is either offline or loaded,
-and a `load` of a key the offline suite registered would replace it (#1451).
+Keep that file in its own process, apart from the offline suite. A key is either offline or loaded:
+a `load` of a key the offline suite registered raises `InvalidConfigurationError` (#1451).
 
 ## Why not a hand-written mock backend
 

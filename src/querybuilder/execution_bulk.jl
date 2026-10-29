@@ -1213,7 +1213,8 @@ _sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766
 # Bind message; 32767 on Postgres.jl, which writes that count as an `Int16` (#1447). SQLite: probed
 # from the library version.
 _backend_parameter_limit(conn::PormGPostgres) = backend_postgres_parameter_limit(conn)
-_backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite_version(conn))
+# #1452: through `_server_version`, so an offline SQLite key chunks by the version it states.
+_backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(_server_version(conn))
 # MySQL: what its driver binds in one statement (`backend_mysql_parameter_limit`). The protocol's 2-byte
 # count (COM_STMT_PREPARE) allows 65535, but MySQL.jl refuses a statement past its own `max_columns`
 # (4096 by default) with a `ProtocolError` before sending it: a bulk write of 861 nine-column rows failed.

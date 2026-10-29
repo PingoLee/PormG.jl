@@ -26,7 +26,7 @@ using Dates, UUIDs
 
 const KEYS_1239 = (postgres = "pormg1239_offline_pg", sqlite = "pormg1239_offline_sl")
 PormG.Configuration.register_offline(KEYS_1239.postgres; adapter = :postgres)
-PormG.Configuration.register_offline(KEYS_1239.sqlite; adapter = :sqlite)
+PormG.Configuration.register_offline(KEYS_1239.sqlite; adapter = :sqlite, server_version = 3_045_000)   # #1452
 
 # The same F1 models, bound once per engine.
 for (engine, key) in pairs(KEYS_1239)

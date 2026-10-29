@@ -126,7 +126,7 @@ end
   like = Models.Index(fields = ("driverref",), name = "live_timing_driverref_like", opclasses = ("text_pattern_ops",))
   try
     Configuration.register_offline("host1230_pg"; adapter = :postgres)
-    Configuration.register_offline("host1230_sl"; adapter = :sqlite)
+    Configuration.register_offline("host1230_sl"; adapter = :sqlite, server_version = 3_045_000)   # #1452
     pg = PormG.config["host1230_pg"].connections
     sl = PormG.config["host1230_sl"].connections
 

@@ -690,11 +690,13 @@ end
 should_check_related_existence(collector::DeletionCollector)::Bool = _is_live_pool(collector.settings.connections)
 
 # A pool backed by a database, rather than a mock engine marker (the unit suite's), so a read on it
-# returns rows.
+# returns rows. #1453: a `register_offline` entry holds a real pool type and never reads, so its plan
+# takes the mock path — the statements without the probes — instead of raising on the first probe.
 function _is_live_pool(pool)::Bool
   connection_pool = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-  return pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool ||
-         pool isa connection_pool.MySQLConnectionPool   # #1130: a live MySQL pool probes like the others
+  live_type = pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool ||
+              pool isa connection_pool.MySQLConnectionPool   # #1130: a live MySQL pool probes like the others
+  return live_type && !_is_offline_pool(pool)
 end
 
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})

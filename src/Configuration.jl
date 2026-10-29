@@ -1553,6 +1553,11 @@ package bootstrap — `load` in the module body **and** in `__init__` — safe t
 `env` for the same folder is a reload: the file is read again and the pool rebuilt, with a warning,
 since connections checked out of the old pool are closed. Pass `force = true` to re-read and rebuild
 anyway, e.g. after editing `connection.yml` in a running session.
+
+**An offline key is refused (#1451).** A key that `register_offline` registered, under its own
+spelling or another spelling of the same folder, raises `InvalidConfigurationError`, `force = true`
+included: loading would replace the offline entry with a live pool. Call `unregister_connection(key)`
+first, or load under another key.
 """
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   # create settings if does not exists
@@ -1598,8 +1603,20 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       "the key, so another spelling of the same folder (e.g. `abspath(\"$(path)\")`) registers " *
       "alongside it."))
   end
+  # #1451: the mirror of `register_offline`'s refusal of a live key. Without it, the `load` an
+  # application's `__init__` runs swapped a test suite's offline entry for a live pool, and only the
+  # reload warning said so. Keyed on `path` and checked before the folder is, for #620's reason: an
+  # offline key usually names no folder. `force` does not override it, as it does not override #620.
+  haskey(config, path) && _is_offline(config[path]) && throw(_offline_load_error(path))
 
   @pormg_debug false
+
+  # #1451: another spelling of the folder (`abspath("db")`) resolves to the offline entry through its
+  # `db_def_folder`, which is the key. Before the folder, the environment and the driver are checked,
+  # for the reason above: the answer is the same whatever they say, and a missing folder would
+  # otherwise be scaffolded or reported as the thing to create.
+  aliased = _resolve_loaded_key(path, config; folder = folder)
+  aliased !== nothing && _is_offline(config[aliased]) && throw(_offline_load_error(aliased))
 
   db_settings_file = joinpath(folder, PORMG_DB_CONFIG_FILE_NAME)
 
@@ -2040,7 +2057,8 @@ loaded_keys()::Vector{String} = sort!(collect(keys(config)))
 const _OFFLINE_CONNECTION = "pormg-offline"
 
 """
-    register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true) -> String
+    register_offline(key; adapter = :postgres, server_version = nothing, django_prefix = nothing,
+                     change_data = true) -> String
 
 Register `key` as a connection that renders SQL but never connects (#1229) — for golden-SQL tests
 and `inspect_query`/`show_query` without a database. `adapter` (`:postgres` or `:sqlite`) picks the
@@ -2056,7 +2074,21 @@ PormG.Configuration.unregister_connection("db")
 ```
 
 Registering the same key again replaces the offline entry. A key that `load` or
-`register_connection` registered is refused, not overwritten.
+`register_connection` registered is refused, not overwritten, and so is the reverse: `load` of an
+offline key raises `InvalidConfigurationError` (#1451).
+
+**An offline SQLite key states its version (#1452).** A few clauses depend on the SQLite version
+(`NULLS FIRST`/`LAST` from 3.30.0, window functions from 3.25.0, `RIGHT`/`FULL` joins from 3.39.0,
+and the bind-parameter limit a bulk statement is chunked by). An offline key renders them for
+`server_version`, in SQLite's packed form (`3_045_000` for 3.45.0), never for the library of the
+machine that runs it, so a pinned SQL text is the same on every machine and needs no driver. Without
+`server_version`, a query that needs the version raises `InvalidConfigurationError` naming it (a bulk
+write always does, whatever its row count); every other query renders. PostgreSQL's query SQL depends on no server version, and `server_version` with
+`adapter = :postgres` raises `InvalidConfigurationError`.
+
+```julia
+PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3_045_000)
+```
 
 The entry's environment is always `"dev"` — `env(key)` and `status(key)` report it — whatever
 `PORMG_ENV` says (#1256). An offline entry reads no `connection.yml`, so there is no environment block
@@ -2064,10 +2096,20 @@ for anything to select; the value is a constant, not the `load` fallback, and no
 rule applies.
 """
 function register_offline(key::String; adapter::Symbol = :postgres,
+                          server_version::Union{Nothing, Integer} = nothing,
                           django_prefix::Union{Nothing, AbstractString} = nothing,
                           change_data::Bool = true)::String
   adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
     "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
+  # #1452: the version an offline SQLite key renders for. Checked before anything is replaced.
+  if server_version !== nothing
+    adapter === :sqlite || throw(InvalidConfigurationError(
+      "register_offline: `server_version` applies to `adapter = :sqlite` only; the SQL PormG renders for " *
+      "PostgreSQL depends on no server version."))
+    server_version > 0 || throw(InvalidConfigurationError(
+      "register_offline: `server_version` is SQLite's packed version number and must be positive " *
+      "(`3_045_000` for SQLite 3.45.0)."))
+  end
   if haskey(config, key)
     _is_offline(config[key]) || throw(InvalidConfigurationError(
       "Cannot register \"$(key)\" offline: that key is already registered as a live connection. " *
@@ -2080,8 +2122,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
   config[key] = Settings(
     app_env = DEV,                # a constant (#1256): an offline entry has no environment to select
     db_def_folder = key,          # `set_models(mod, key)` resolves to it like a loaded folder
-    db_config_settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"),
-                                           "offline" => true),
+    db_config_settings = _offline_config_settings(adapter, server_version),
     change_data = change_data,
     connections = pool,
     django_prefix = django_prefix === nothing ? nothing : String(django_prefix),
@@ -2090,6 +2131,45 @@ function register_offline(key::String; adapter::Symbol = :postgres,
 end
 
 _is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+_is_offline_key(key::Union{Nothing,String})::Bool = key !== nothing && _is_offline(config[key])
+
+function _offline_config_settings(adapter::Symbol, server_version::Union{Nothing, Integer})::Dict{String, Any}
+  settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"), "offline" => true)
+  server_version === nothing || (settings["server_version"] = Int(server_version))
+  return settings
+end
+
+"""
+    _offline_server_version(key) -> Int
+
+The SQLite version the offline entry `key` renders for, as `register_offline(…; server_version)`
+stated it (#1452), or `InvalidConfigurationError` when it stated none: the SQL would otherwise follow
+the library of whichever machine renders it.
+"""
+function _offline_server_version(key::String)::Int
+  v = get(config[key].db_config_settings, "server_version", nothing)
+  v isa Int && return v
+  throw(InvalidConfigurationError(
+    "The connection \"$(key)\" was registered with `register_offline` and no `server_version`, and this " *
+    "query renders differently across SQLite versions. Pass the version to render for, e.g. " *
+    "`register_offline(\"$(key)\"; adapter = :sqlite, server_version = 3_045_000)` for SQLite 3.45.0, " *
+    "so the SQL does not depend on the machine that renders it."))
+end
+
+"""
+    _is_offline_pool(pool) -> Bool
+
+Whether `pool` is the placeholder pool of a `register_offline` entry (#1453). An offline entry holds a
+real `PostgresConnectionPool`/`SQLiteConnectionPool`, so its pool's type says nothing; a path that asks
+"can I read from this pool?" by type asks this too.
+"""
+_is_offline_pool(pool)::Bool = pool isa _SQLEngine && _is_offline_key(connection_key_for_pool(pool))
+
+# `load`'s refusal of a key `register_offline` holds (#1451). Returned, not thrown: the call site throws.
+_offline_load_error(key::String)::InvalidConfigurationError = InvalidConfigurationError(
+  "Cannot load \"$(key)\": that key is registered offline with `register_offline`, and loading would " *
+  "replace it with a live pool. Call `unregister_connection(\"$(key)\")` first if the offline entry is " *
+  "finished with, or load the configuration under another key.")
 
 """
     close_all!() -> Nothing
@@ -2279,7 +2359,7 @@ function ensure_before_connect!(pool::_SQLEngine)::Bool
   key = connection_key_for_pool(pool)
   # #1229: an offline entry renders SQL and never connects. Refused here, before the hook and before
   # any driver sees its placeholder connection string.
-  if key !== nothing && _is_offline(config[key])
+  if _is_offline_key(key)
     throw(InvalidConfigurationError(
       "The connection \"$(key)\" was registered with `register_offline`: it renders SQL " *
       "(`inspect_query`, `show_query`) but cannot run a query. Load a real configuration to execute."))

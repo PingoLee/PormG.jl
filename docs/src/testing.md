@@ -25,6 +25,7 @@ renders the dialect's SQL and refuses to run anything. Its keywords are:
 | Keyword | Default | Meaning |
 | :--- | :--- | :--- |
 | `adapter` | `:postgres` | The dialect: `:postgres` or `:sqlite`. MySQL has no offline form yet, and `:mysql` raises `InvalidConfigurationError`. |
+| `server_version` | `nothing` | SQLite only: the SQLite version the SQL is rendered for, in SQLite's packed form (`3_045_000` for 3.45.0). See below. |
 | `django_prefix` | `nothing` | The table prefix, when the app's models were imported from Django with one: the same value its `connection.yml` would give. |
 | `change_data` | `true` | The `connection.yml` setting of the same name, which defaults to `false` there. Leave it `true` to inspect `update` and `create`. |
 
@@ -32,12 +33,20 @@ An application with several keys registers each one: `register_offline("db")`,
 `register_offline("db_archive")`, and so on. `Configuration.unregister_connection(key)` removes one.
 Registering the same key again replaces the offline entry.
 
-**PostgreSQL needs no driver package.** An offline **SQLite** key needs `using SQLite`. A few clauses
-depend on the SQLite library's version. `NULLS FIRST`/`LAST` renders natively from 3.30 and is
-emulated below it, while window functions and `RIGHT`/`FULL` joins are refused below their versions.
-Without the package that version cannot be read, so building such a query raises
-`InvalidConfigurationError`. With the package, the SQL follows the SQLite library the environment
-resolves, so pin it on the environment CI runs (#1452).
+**No driver package is needed.** On PostgreSQL the SQL depends on no server version. On SQLite a
+few clauses depend on the version: `NULLS FIRST`/`LAST` renders natively from 3.30 and is emulated
+below it, window functions and `RIGHT`/`FULL` joins are refused below their versions, and a bulk
+statement is chunked by the version's bind-parameter limit. An offline SQLite key renders them for
+the `server_version` it states, never for the SQLite library of the machine that runs the suite, so
+two CI images pin the same SQL (#1452):
+
+```julia
+PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3_045_000)
+```
+
+Without `server_version`, a query that needs the version raises `InvalidConfigurationError` naming
+it, `using SQLite` or not. A bulk write always needs it, whatever its row count, since it is chunked by
+the bind limit. Every other query renders. State the version your production SQLite runs.
 
 ### Load the model files after it
 
@@ -51,9 +60,9 @@ The models bind to the offline key the same way they bind to a loaded configurat
 already defined.
 
 **Import the model files, not the application.** When `using App` runs the app's own
-`Configuration.load("db"; env = …)`, in its module body or its `__init__`, that `load` **replaces
-the offline entry with a live pool**, and the only signal is a reload warning (#1451). The suite you
-believe is offline then reaches the database. Point `@import_models` at the app's models files, and
+`Configuration.load("db"; env = …)`, in its module body or its `__init__`, that `load` raises
+`InvalidConfigurationError`: a key registered offline is never replaced by a live pool, and
+`force = true` does not change that (#1451). Point `@import_models` at the app's models files, and
 keep whatever the suite needs from the app (a function that builds a query, say) in a file that does
 not load a configuration.
 
@@ -108,10 +117,14 @@ The order of `info[:parameters]` is the order the placeholders are numbered. On 
 differ from the order the values appear in the text. Above, `$1` is the `WHERE` value. Pinning both
 is what catches a value bound to the wrong placeholder.
 
-**A cascading `delete()` cannot be pinned offline yet.** When other models reference the one being
-deleted, the planner reads the database to plan the statements it renders (the root's keys, the
-related rows). On an offline key, even `delete(show_query = :dict)` then raises
-`InvalidConfigurationError` (#1453). Cover those `delete()` shapes in the integration suite.
+**A cascading `delete()` pins its plan, not its key set.** When other models reference the one
+being deleted, a live database is read to plan the cascade: the root's primary keys, and which related
+tables hold rows. An offline key reads nothing (#1453). `delete(show_query = :dict)` returns the
+root-key read as written, then every related table's statement, scoped by an empty key list
+(`= ANY($1)` bound to `[]` on PostgreSQL, `(1 = 0)` on SQLite). Pin which statements the cascade
+runs and in what order. Which rows it reaches is the integration suite's to check. With no rows to
+read, the plan assumes related rows exist, so a `PROTECT` or `RESTRICT` relation refuses the dry run
+with `ProtectedError`. Pin that refusal by its type.
 
 **Refusals are pinned by type.** When the application relies on PormG refusing something, pin it
 with the error type, never with the message text:
@@ -153,8 +166,8 @@ import .models as M
 end
 ```
 
-Keep that file in its own process, apart from the offline suite. A key is either offline or loaded,
-and a `load` of a key the offline suite registered would replace it (#1451).
+Keep that file in its own process, apart from the offline suite. A key is either offline or loaded:
+a `load` of a key the offline suite registered raises `InvalidConfigurationError` (#1451).
 
 ## Why not a hand-written mock backend
 

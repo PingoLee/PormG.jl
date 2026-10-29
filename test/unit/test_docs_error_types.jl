@@ -290,7 +290,7 @@ end
 
 # #1442 — the testing page's offline fixture: models registered on a `register_offline` key, which
 # renders SQL and refuses to run it. Registered through `set_models`, as `@import_models` does, so the
-# Driver carries the reverse relation from Result: a `delete()` of it has a cascade to plan (#1453).
+# Driver carries the reverse relation from Result.
 PormG.Configuration.register_offline("docerr_offline")
 const DOCERR_DRIVER_OFFLINE = let mod = Module(:DocErrOffline1442)
     Core.eval(mod, :(import PormG.Models))
@@ -300,6 +300,28 @@ const DOCERR_DRIVER_OFFLINE = let mod = Module(:DocErrOffline1442)
                                            driverid = Models.ForeignKey(Driver, pk_field = "driverid"))))
     Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline")
     Base.invokelatest(getfield, mod, :Driver)
+end
+
+# #1453 — a dry-run `delete()` on an offline key reads nothing, so it assumes related rows exist: a
+# PROTECT relation refuses it, as on the unit suite's mock backend.
+const DOCERR_RACE_OFFLINE_PROTECT = let mod = Module(:DocErrOffline1453)
+    Core.eval(mod, :(import PormG.Models))
+    Core.eval(mod, :(Race = Models.Model("docerr_race1453", raceid = Models.IDField(), year = Models.IntegerField())))
+    Core.eval(mod, :(Standing = Models.Model("docerr_standing1453", standingid = Models.IDField(),
+                                             raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "PROTECT"))))
+    Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline")
+    Base.invokelatest(getfield, mod, :Race)
+end
+
+# #1452 — an offline SQLite key that states no `server_version`: an ungated query renders, and one whose
+# SQL depends on the SQLite version is refused.
+PormG.Configuration.register_offline("docerr_offline_sqlite"; adapter = :sqlite)
+const DOCERR_RESULT_OFFLINE_SQLITE = let mod = Module(:DocErrOffline1452)
+    Core.eval(mod, :(import PormG.Models))
+    Core.eval(mod, :(Result = Models.Model("docerr_result1452", resultid = Models.IDField(),
+                                           points = Models.FloatField(null = true))))
+    Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline_sqlite")
+    Base.invokelatest(getfield, mod, :Result)
 end
 
 # (docs claim this test pins, expected type, the call that must raise it).
@@ -3444,9 +3466,24 @@ const DOCERR_CASES = [
         () -> PormG.Configuration.register_offline("docerr_offline_mysql"; adapter = :mysql),
     ),
     (
-        "testing.md — `delete(show_query = :dict)` of a referenced model on a `register_offline` key raises InvalidConfigurationError (#1453)",
+        "testing.md / api.md — `Configuration.load` of a `register_offline` key raises InvalidConfigurationError, `force = true` included (#1451)",
         InvalidConfigurationError,
-        () -> DOCERR_DRIVER_OFFLINE.objects.filter("surname" => "Senna").delete(show_query = :dict),
+        () -> PormG.Configuration.load("docerr_offline"; env = "dev", force = true),
+    ),
+    (
+        "testing.md / api.md — a dry-run `delete(show_query = :dict)` past a PROTECT relation on a `register_offline` key raises ProtectedError (#1453)",
+        ProtectedError,
+        () -> DOCERR_RACE_OFFLINE_PROTECT.objects.filter("year" => 1991).delete(show_query = :dict),
+    ),
+    (
+        "testing.md / api.md — on an offline SQLite key with no `server_version`, a query whose SQL depends on the version raises InvalidConfigurationError (#1452)",
+        InvalidConfigurationError,
+        () -> PormG.inspect_query(DOCERR_RESULT_OFFLINE_SQLITE.objects.order_by("-points")),
+    ),
+    (
+        "api.md — `register_offline(key; server_version = …)` with `adapter = :postgres` raises InvalidConfigurationError (#1452)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration.register_offline("docerr_offline_pg_version"; server_version = 160_000),
     ),
 ]
 

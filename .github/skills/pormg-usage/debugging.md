@@ -66,17 +66,20 @@ info = M.Result.objects.filter("raceid" => 1).update("points" => 0, show_query =
   path, aggregate, subquery and write), with the query built where the app builds it. Pin a refusal
   by its error type, never its message.
 - **Import the model files, not `using App`.** An app whose module or `__init__` calls
-  `Configuration.load("db"; env = …)` replaces the offline entry with a live pool, and only a
-  warning says so (#1451). Outside a REPL, models with no loaded or offline key raise
+  `Configuration.load("db"; env = …)` raises `InvalidConfigurationError` on an offline key, `force`
+  included (#1451). Outside a REPL, models with no loaded or offline key raise
   `InvalidConfigurationError`. Fix that with `register_offline`, never with a `load` or
   `implicit = true`.
-- **An offline SQLite key needs `using SQLite`.** Without it, a query whose SQL depends on the
-  library's version (`NULLS FIRST`/`LAST`, window functions, `RIGHT`/`FULL` joins) raises
-  `InvalidConfigurationError`. With it, the SQL follows the SQLite library the environment
-  resolves (#1452). PostgreSQL needs no driver. MySQL has no offline form.
-- **A cascading `delete()` cannot be pinned offline.** When other models reference the deleted one,
-  the planner reads the database, so even `delete(show_query = :dict)` raises
-  `InvalidConfigurationError` on an offline key (#1453). Cover it in the integration suite.
+- **An offline SQLite key states its version:** `register_offline("db"; adapter = :sqlite,
+  server_version = 3_045_000)`. The SQL that depends on it (`NULLS FIRST`/`LAST`, window
+  functions, `RIGHT`/`FULL` joins, bulk chunking) is rendered for that version, never the host's
+  library. Without it such a query raises `InvalidConfigurationError` (#1452). No driver is needed
+  on either engine. MySQL has no offline form.
+- **A cascading `delete()` pins its plan, not its rows.** On an offline key,
+  `delete(show_query = :dict)` reads nothing: it returns the root-key read, then each related
+  table's statement scoped by an empty key list (#1453). It assumes related rows exist, so a
+  `PROTECT`/`RESTRICT` relation raises `ProtectedError`. The rows it reaches are
+  the integration suite's to check.
 - **What it cannot catch:** the Julia type a read returns, the rows, anything the engine decides.
   Cover those with one integration test per shape against a test database, in its own process.
 - **The upgrade loop:** green on the pinned version, then bump the pin and `Pkg.update("PormG")`,

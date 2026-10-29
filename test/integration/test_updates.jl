@@ -1275,7 +1275,7 @@ end
             pool    = PormG.config[PORMG_DB_FOLDER].connections
             limit   = PormG.QueryBuilder._backend_parameter_limit(pool)
             per_row = 8                          # 7 SET columns + the id match key
-            effective = fld(limit, per_row)      # 4095 on SQLite (32766), 8191 on PG (65535)
+            effective = fld(limit, per_row)      # 4095 on SQLite (32766), 8191 on LibPQ (65535), 4095 on Postgres.jl (32767)
             nrows   = effective + 1              # one row past a single capped chunk
 
             # No static filters ⇒ zero fixed WHERE overhead, so the effective chunk is

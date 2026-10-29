@@ -310,7 +310,8 @@ end
 
 # What: `remove` with more ids than one statement binds, and on SQLite `add` with more targets than one
 # `INSERT OR IGNORE … VALUES` binds, on each engine's real limit (SQLite 32766, MySQL.jl 4096, PostgreSQL
-# 65535). SQL: `DELETE … WHERE owner = ? AND related IN (?, …)` and the `INSERT OR IGNORE` per group.
+# 65535 on LibPQ and 32767 on Postgres.jl, #1447). SQL: `DELETE … WHERE owner = ? AND related IN (?, …)`
+# and the `INSERT OR IGNORE` per group.
 # Why (#1355): each was one statement whatever the count, so the remove raised QueryBuildError on MySQL
 # before it was sent and failed at the driver on SQLite, as did SQLite's add; split under the limit in one
 # transaction, as the bulk writers are, they complete.
@@ -323,7 +324,7 @@ end
     driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "limit1355")
     manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
     limit = PormG.QueryBuilder._backend_parameter_limit(PormG.config[PORMG_DB_FOLDER].connections)
-    @test limit == by_engine(sqlite = 32766, postgres = 65535, mysql = 4096)
+    @test limit == expected_parameter_limit()   # 32767 on Postgres.jl, 65535 on LibPQ (#1447)
 
     manager.add(sponsor_a, sponsor_b, sponsor_c)
     # One parameter per id plus the owner's: `limit` ids no sponsor has, and two that are linked.

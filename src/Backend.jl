@@ -96,6 +96,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
 #   backend_mysql_parameter_limit(pool)                 -> Int parameters one prepared statement binds (below, not in the loop)
+#   backend_postgres_parameter_limit(pool)              -> Int parameters one PostgreSQL statement binds (below, not in the loop)
 #
 # `backend_cancel_query!` and `backend_drain_connection!` are the abandoned-await pair (#315) —
 # named rather than positioned, because this list grows. A Ctrl-C leaves the driver mid-operation, and
@@ -134,6 +135,13 @@ Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
 # a statement past it before sending it. Not in the loop above: rendering never needs the driver.
 function backend_mysql_parameter_limit end
 backend_mysql_parameter_limit(::PormGMySQL)::Int = 65535
+
+# The most parameters one PostgreSQL statement binds, per driver (#1447). The protocol counts them in an
+# unsigned 2-byte field of the Bind message, 65535, which is what libpq binds: this fallback's answer, so the
+# LibPQ extension needs no method, and a mock pool or a pool without its driver renders by it. The Postgres.jl
+# extension answers its driver's own, lower limit. Not in the loop above: rendering never needs the driver.
+function backend_postgres_parameter_limit end
+backend_postgres_parameter_limit(::PormGPostgres)::Int = 65535
 
 """
     backend_classify_error(pool, e) -> Symbol

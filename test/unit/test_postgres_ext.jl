@@ -71,6 +71,8 @@ struct NetClosingError <: Exception end
     (PormG.backend_num_affected_rows, (PostgresPool, Any)),
     (PormG.backend_num_rows, (PostgresPool, Any)),
     (PormG.backend_copy_in!, (PostgresPool, PgConn, String, Any)),
+    # Postgres.jl binds fewer parameters per statement than the protocol allows (#1447).
+    (PormG.backend_postgres_parameter_limit, (PostgresPool,)),
     # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
     # still the extension's own.
     (PormG.backend_error_fields, (Postgres.Error,)),
@@ -84,7 +86,7 @@ struct NetClosingError <: Exception end
   # LibPQ's marker-typed method for a Postgres.jl pool. The engine-only ones are not PostgreSQL's: the
   # two version probes, MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266), and
   # MySQL's bulk INSERT report and duplicate-key test (PostgreSQL counts rows and reads SQLSTATE, #1267),
-  # and MySQL's driver parameter limit (PostgreSQL's is the protocol's, `_backend_parameter_limit`).
+  # and MySQL's driver parameter limit (PostgreSQL's own is `backend_postgres_parameter_limit`, a row above).
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
@@ -100,6 +102,29 @@ struct NetClosingError <: Exception end
   @test which(PormG.backend_is_connection_error, Tuple{LibPQPool, Any}).module === LibPQExtMod
   @test which(PormG.backend_num_rows, Tuple{LibPQPool, Any}).module === LibPQExtMod
   @test which(PormG.backend_is_cancellation, Tuple{LibPQ.Errors.QueryCanceled}).module === LibPQExtMod
+end
+
+# What: the bind-parameter limit PormG sizes a PostgreSQL statement to is the driver's — 32767 on
+#   Postgres.jl, 65535 on LibPQ — and the writes it splits follow it: a many-to-many `remove`'s id groups,
+#   and a bulk statement's `fld(limit, 8)` rows of eight columns when no positive `chunk_size` is given
+#   (4095 on Postgres.jl, 8191 on LibPQ).
+# SQL: none — the limit decides how many statements a write splits into (`DELETE … IN (?, …)` per batch).
+# Why (#1447): Postgres.jl writes the Bind message's parameter count as an `Int16`, so a statement of
+#   32768–65535 parameters, which PormG sized against the protocol's 65535, raised `InexactError` at the
+#   driver instead of being split. LibPQ answers the core fallback, the protocol's limit, unchanged.
+@testset "the bind-parameter limit is the PostgreSQL driver's (#1447)" begin
+  pg = CP.PostgresConnectionPool("host=h"; driver = :postgres)
+  lpq = CP.PostgresConnectionPool("host=h"; driver = :libpq)
+  @test PormG.QueryBuilder._backend_parameter_limit(pg) == 32767
+  @test PormG.QueryBuilder._backend_parameter_limit(lpq) == 65535
+  @test which(PormG.backend_postgres_parameter_limit, Tuple{LibPQPool}).module === PormG
+  @test PormG.QueryBuilder._bulk_chunk_rows(pg, 0, 8, 0, :bulk_insert) == 4095
+  @test PormG.QueryBuilder._bulk_chunk_rows(lpq, 0, 8, 0, :bulk_insert) == 8191
+  # The issue's own path: a many-to-many `remove` binds the owner and one parameter per id, so 32767 ids
+  # are two statements on Postgres.jl and one on LibPQ.
+  remove_sizes(pool, n) = length.(PormG.QueryBuilder._m2m_id_chunks(pool, Any[1:n...], 1, 1, :many_to_many_remove))
+  @test remove_sizes(pg, 32767) == [32766, 1]
+  @test remove_sizes(lpq, 32767) == [32767]
 end
 
 @testset "no method ambiguity with both PostgreSQL extensions loaded (#788)" begin

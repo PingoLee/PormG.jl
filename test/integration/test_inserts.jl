@@ -789,17 +789,18 @@ end
     #      driver's true limit: post-fix → a 2-element Vector; pre-fix (uncapped) → a
     #      single un-split SQL String, so `res isa Vector` fails (mutation gate).
     #   2. execute — proves the auto-split writes the FULL row set correctly across the
-    #      chunk boundary. On PostgreSQL 65535 is a hard wire-protocol limit, so pre-fix
-    #      this also overflows the driver; on SQLite the runtime limit can exceed our
+    #      chunk boundary. On PostgreSQL the limit is the driver's (65535 on LibPQ, 32767
+    #      on Postgres.jl, #1447), so pre-fix this also overflows the driver; on SQLite the runtime limit can exceed our
     #      conservative 32766 default, so there the execute is a correctness check (the
     #      show_query assertion is the SQLite gate).
     #
-    # nrows tracks the live backend limit: 4096 rows on SQLite (32766), 8192 on PG.
+    # nrows tracks the live backend limit: 4096 rows on SQLite (32766) and Postgres.jl
+    # (32767), 8192 on LibPQ (65535).
     #
     # Since #672 PostgreSQL binds one ARRAY per column — 8 parameters whatever the row
     # count — so there the cap never binds: chunk_size == nrows is honoured as ONE
-    # statement, and executing it is the proof that 65535 no longer limits the chunk
-    # (nrows × 8 per-cell parameters would overflow the wire protocol). SQLite still
+    # statement, and executing it is the proof that the driver's limit no longer limits
+    # the chunk (nrows × 8 per-cell parameters would overflow it). SQLite still
     # binds per cell and keeps the two-chunk split.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "auto-chunks to respect the backend bind-parameter limit (#84)" begin
@@ -814,7 +815,7 @@ end
         # value. This is the one check that actually fails if the constant is wrong.
         # SQLite: the shipped SQLite.jl is ≥3.32.0, so the default is 32766 (a regression
         # to 999 on an ancient build would fail here, which is the correct signal).
-        @test limit == by_engine(sqlite = 32766, postgres = 65535, mysql = 4096)   # each engine's own ceiling (#1179); MySQL.jl binds 4096
+        @test limit == expected_parameter_limit()   # each engine's own ceiling (#1179), each PostgreSQL driver's (#1447)
 
         ncols = 8                              # all payload columns, incl. the explicit id
         nrows = fld(limit, ncols) + 1          # one row past a single capped chunk

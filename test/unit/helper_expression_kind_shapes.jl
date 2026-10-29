@@ -517,6 +517,18 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast int smallint[]",     :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{7,8}"), "smallint[]")),
   ("Cast float real[]",       :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{0.5}"), "real[]")),
   ("Cast int integer[][]",    :Result,              m -> _EKM_FN.Cast(_EKM_FN.Value("{{7,8}}"), "integer[][]")),
+  # #1458: a JSON document and a key lookup into it. The lookup's value is the data's scalar, whose type
+  # PormG cannot know, so every reader must treat it as unnamed, and the bare document as the document.
+  ("json document",           :Field_validation_scratch, m -> "payload"),
+  ("json key",                :Field_validation_scratch, m -> "payload__n"),
+  ("F json key + 1",          :Field_validation_scratch, m -> _EKM_Q.F("payload__n") + 1),
+  ("F json key / 2",          :Field_validation_scratch, m -> _EKM_Q.F("payload__n") / 2),
+  ("Sum json key",            :Field_validation_scratch, m -> _EKM_FN.Sum("payload__n")),
+  ("Sum json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Sum("payload__n") / 2),
+  ("Max json key",            :Field_validation_scratch, m -> _EKM_FN.Max("payload__n")),
+  ("Floor json key / 2",      :Field_validation_scratch, m -> _EKM_FN.Floor("payload__n") / 2),
+  ("Cast json key integer",   :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "integer")),
+  ("Concat json key",         :Field_validation_scratch, m -> _EKM_FN.Concat(_EKM_FN.Value("n="), "payload__n")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

@@ -37,6 +37,27 @@ const _EKR_ENGINE = engine_key()   # no fallback: a backend added later has no r
 const _EKR_ROW = Dict{Symbol,Int}(:Result => 1, :Race => 1, :Constructor_results => 3835)
 const _EKR_MARKER = "ekm-1034"
 
+# The rows the F1 fixture does not seed, per base model: how to remove them, and how to create one
+# (returning its id). A boolean row, and (#1458) a JSON document `{"n": 7}` for the key-lookup shapes.
+function _ekr_purge(model, field)
+  p = model.objects
+  p.filter(field => _EKR_MARKER)
+  p.exists() && p.delete()
+  return nothing
+end
+const _EKR_MARKERS = Dict{Symbol,NamedTuple}(
+  :New_join_position => (
+    purge = () -> _ekr_purge(M.New_join_position, "description"),
+    create = () -> M.New_join_position.objects.create("description" => _EKR_MARKER, "boolean_field" => true,
+                                                      "result" => 1)[:id]),
+  :Field_validation_scratch => (
+    purge = () -> _ekr_purge(M.Field_validation_scratch, "slug"),
+    create = () -> M.Field_validation_scratch.objects.create(
+      "uuid_token" => UUIDs.UUID("10340000-0000-4000-8000-000000001458"),
+      "canonical_url" => "https://example.com/ekm-1034", "slug" => _EKR_MARKER,
+      "payload" => Dict("n" => 7))[:id]),
+)
+
 # The cell's label, shape and context, from its id ("<label> | <context>").
 function _ekr_cell(id::String)
   label, ctx = split(id, " | ")
@@ -96,6 +117,14 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1458: `Floor` over a JSON key holding `7`, divided by 2. PostgreSQL renders `FLOOR((x)::numeric)`,
+  # so the quotient keeps its fraction; SQLite's `FLOOR` keeps the integer the JSON holds, so its `/` is
+  # integer division. A different value, not a different spelling: a departure recorded as found, not
+  # fixed here (MySQL already refuses the shape, a side whose type PormG cannot name).
+  ("Floor json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Floor json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Floor json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Floor json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)
@@ -134,6 +163,8 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
   # #1307: the same day count through a `Case` over a date column, so the same two widths.
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
+  # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
+  "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -145,14 +176,13 @@ const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if ba
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression-kind matrix: the disagreeing cells read back (#1034)" begin
   @test !isempty(_EKR_CELLS)
-  # The boolean shapes' row, created only when a disagreeing cell reads one, and always removed.
-  needs_marker = any(id -> _ekr_cell(id)[2] === :New_join_position, _EKR_CELLS)
-  purge() = (p = M.New_join_position.objects; p.filter("description" => _EKR_MARKER); p.exists() && p.delete())
+  # A marker row (`_EKR_MARKERS`), created only when a disagreeing cell reads its model, and always removed.
+  needs_marker = intersect(Set(_ekr_cell(id)[2] for id in _EKR_CELLS), keys(_EKR_MARKERS))
+  purge() = foreach(b -> _EKR_MARKERS[b].purge(), needs_marker)
   try
-    if needs_marker
-      purge()
-      created = M.New_join_position.objects.create("description" => _EKR_MARKER, "boolean_field" => true, "result" => 1)
-      _EKR_ROW[:New_join_position] = created[:id]
+    purge()
+    for b in needs_marker
+      _EKR_ROW[b] = _EKR_MARKERS[b].create()
     end
     for id in _EKR_CELLS
       @testset "$id" begin
@@ -168,7 +198,7 @@ const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if ba
       end
     end
   finally
-    needs_marker && purge()
+    purge()
   end
 end
 

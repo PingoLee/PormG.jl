@@ -7151,4 +7151,162 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(\$2::text)::integer[][] > \$3", params = [("\"{{7,8}}\"", "String"), ("\"{{7,8}}\"", "String"), ("10", "Int64")]),
   ("Cast int integer[][] | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::text)::integer[][] as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("\"{{7,8}}\"", "String"), ("1", "Int64"), ("\"{{7,8}}\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("json document | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json document | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json document | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json document | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > CAST(? AS JSON)", params = [("\"10\"", "String")]),
+  ("json document | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("json document | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("json document | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    `R2`.`payload` as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("json document | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"payload\" as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("json document | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"payload\" as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("json key | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json key | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json key | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
+  ("json key | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > CAST(? AS JSON)", params = [("\"10\"", "String")]),
+  ("json key | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("json key | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("json key | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("json key | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"payload\" #>> '{\"n\"}' as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("json key | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    json_extract(\"R2\".\"payload\", '\$.n') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("F json key + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"payload\" #>> '{\"n\"}' + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(json_extract(\"Tb\".\"payload\", '\$.n') + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) + ?) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"payload\" #>> '{\"n\"}' + \$3::bigint) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (json_extract(\"R2\".\"payload\", '\$.n') + ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key / 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"payload\" #>> '{\"n\"}' / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F json key / 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(json_extract(\"Tb\".\"payload\", '\$.n') / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("F json key / 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"payload\" #>> '{\"n\"}' / \$3::bigint) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F json key / 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (json_extract(\"R2\".\"payload\", '\$.n') / ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum json key | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) > ?", params = [("10", "Int64")]),
+  ("Sum json key | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"payload\" #>> '{\"n\"}') > \$1", params = [("10", "Int64")]),
+  ("Sum json key | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM(json_extract(\"Tb\".\"payload\", '\$.n')) > ?", params = [("10", "Int64")]),
+  ("Sum json key | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sum json key | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sum json key | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sum json key | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum json key | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(\"R2\".\"payload\" #>> '{\"n\"}') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum json key | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM(json_extract(\"R2\".\"payload\", '\$.n')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM(\"Tb\".\"payload\" #>> '{\"n\"}') / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "(SUM(json_extract(\"Tb\".\"payload\", '\$.n')) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM(\"R2\".\"payload\" #>> '{\"n\"}') / \$3::bigint) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum json key / 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (SUM(json_extract(\"R2\".\"payload\", '\$.n')) / ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max json key | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) > ?", params = [("\"10\"", "String")]),
+  ("Max json key | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX(\"Tb\".\"payload\" #>> '{\"n\"}') > \$1", params = [("\"10\"", "String")]),
+  ("Max json key | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX(json_extract(\"Tb\".\"payload\", '\$.n')) > ?", params = [("\"10\"", "String")]),
+  ("Max json key | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > CAST(? AS JSON)", params = [("\"10\"", "String")]),
+  ("Max json key | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Max json key | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Max json key | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Max json key | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(\"R2\".\"payload\" #>> '{\"n\"}') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Max json key | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(json_extract(\"R2\".\"payload\", '\$.n')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Floor json key / 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(FLOOR((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Floor json key / 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(FLOOR((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric) / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Floor json key / 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(FLOOR(json_extract(\"Tb\".\"payload\", '\$.n')) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Floor json key / 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (FLOOR((\"R2\".\"payload\" #>> '{\"n\"}')::numeric) / \$3::bigint) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor json key / 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (FLOOR((\"R2\".\"payload\" #>> '{\"n\"}')::numeric) / \$3::bigint) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Floor json key / 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (FLOOR(json_extract(\"R2\".\"payload\", '\$.n')) / ?) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast json key integer | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(IF(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED), ~0 + ABS(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED))) AS SIGNED) > ?", params = [("10", "Int64")]),
+  ("Cast json key integer | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"payload\" #>> '{\"n\"}')::integer > \$1", params = [("10", "Int64")]),
+  ("Cast json key integer | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE WHEN CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS INTEGER) ELSE abs(CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS INTEGER) * 0 - 9223372036854775807 - 1) END > ?", params = [("10", "Int64")]),
+  ("Cast json key integer | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Cast json key integer | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Cast json key integer | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Cast json key integer | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(IF(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED) BETWEEN -2147483648 AND 2147483647, CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED), ~0 + ABS(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS SIGNED))) AS SIGNED) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast json key integer | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"payload\" #>> '{\"n\"}')::integer as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast json key integer | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE WHEN CAST(json_extract(\"R2\".\"payload\", '\$.n') AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN CAST(json_extract(\"R2\".\"payload\", '\$.n') AS INTEGER) ELSE abs(CAST(json_extract(\"R2\".\"payload\", '\$.n') AS INTEGER) * 0 - 9223372036854775807 - 1) END as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Concat json key | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\n(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\n(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n\"Tb\".\"payload\" #>> '{\"n\"}') > \$3", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | alone", :postgres, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\n\"Tb\".\"payload\" #>> '{\"n\"}') > \$3", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(json_extract(\"Tb\".\"payload\", '\$.n'), '')) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | alone", :sqlite, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(json_extract(\"Tb\".\"payload\", '\$.n'), '')) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\n(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat json key | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\n(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat json key | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n\"R2\".\"payload\" #>> '{\"n\"}') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat json key | subquery", :postgres, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\n\"R2\".\"payload\" #>> '{\"n\"}') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$4 \n) > \$5", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Concat json key | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(json_extract(\"R2\".\"payload\", '\$.n'), '')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat json key | subquery", :sqlite, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(json_extract(\"R2\".\"payload\", '\$.n'), '')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
 )

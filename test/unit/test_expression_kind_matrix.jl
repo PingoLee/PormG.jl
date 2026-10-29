@@ -134,10 +134,11 @@ for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"), (:Ekm
     result = Models.IntegerField(null = true),
     boolean_field = Models.BooleanField(null = true),
   )
-  # #1387: the F1 fixture's one UUID column.
+  # #1387: the F1 fixture's one UUID column; #1458: and its one JSON column.
   Field_validation_scratch = Models.Model("field_validation_scratch",
     id = Models.IDField(),
     uuid_token = Models.UUIDField(unique = true),
+    payload = Models.JSONField(null = true),
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end

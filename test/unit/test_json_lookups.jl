@@ -586,3 +586,48 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1471: a quotient over a JSON key's number keeps its fraction, so SQLite refuses it
+# A JSON number has no integer type, so `/` over one means a quotient that keeps its fraction.
+# SQLite's `json_extract` hands over the integer the document holds, and `FLOOR`, `CEIL`, `ABS`, `MAX`,
+# `COALESCE`, `SUM` and arithmetic keep it, so `FLOOR(json_extract(…)) / ?` divided as integers (`7 / 2`
+# was `3`). Expected: each such side refused on SQLite (`_MEANING_DEPARTURES`, `:division`), the message
+# naming SQLite only, the side, and the explicit spelling on the key; PostgreSQL builds
+# `FLOOR((… #>> '{n}')::numeric) / $1::bigint`, which keeps the fraction. A side that names its number —
+# `Round` (a REAL on SQLite, cast by `_division_sql`), `Cast(key, "numeric")` — builds on SQLite.
+# Why it matters: the SQLite answer was a different value with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1471: a quotient over a JSON key is refused on SQLite, built on PostgreSQL" begin
+  FN = PormG.Functions
+  quotient(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  for (label, expr) in (
+      ("the key", () -> PormG.QueryBuilder.F("payload__n") / 2),
+      ("Floor", () -> FN.Floor("payload__n") / 2),
+      ("Ceil", () -> FN.Ceil("payload__n") / 2),
+      ("Abs", () -> FN.Abs("payload__n") / 2),
+      ("Max", () -> FN.Max("payload__n") / 2),
+      ("Sum", () -> FN.Sum("payload__n") / 2),
+      ("Coalesce", () -> FN.Coalesce("payload__n", 0) / 2),
+      ("arithmetic", () -> (PormG.QueryBuilder.F("payload__n") + 1) / 2),
+      ("the divisor", () -> PormG.QueryBuilder.F("id") / FN.Floor("payload__n")))
+    @testset "$label" begin
+      e = try _sql(quotient(expr()); conn = _JL_SL); nothing catch err; err end
+      @test e isa PormG.QueryBuildError
+      msg = plain(e)
+      @test occursin("JSON key `payload__n`", msg)
+      @test occursin("SQLite computes an integer quotient", msg)
+      @test occursin("PormG refuses it on SQLite (#1471)", msg)
+      @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
+    end
+  end
+  @test occursin("FLOOR((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric) / \$1::bigint",
+                 _sql(quotient(FN.Floor("payload__n") / 2); conn = _JL_PG)[:sql_text])
+  # The sides that name their number build on SQLite, and so does a fractional divisor: SQLite
+  # divides by a float as REAL, which keeps the fraction.
+  @test occursin("json_extract(\"Tb\".\"payload\", '\$.n') / ?", _sql(quotient(PormG.QueryBuilder.F("payload__n") / 2.0); conn = _JL_SL)[:sql_text])
+  @test occursin("CAST(ROUND(", _sql(quotient(FN.Round("payload__n") / 2); conn = _JL_SL)[:sql_text])
+  @test occursin("AS NUMERIC)", _sql(quotient(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
+end

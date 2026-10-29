@@ -134,25 +134,20 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
-  # #1458: `Floor` over a JSON key holding `7`, divided by 2. PostgreSQL renders `FLOOR((x)::numeric)`,
-  # so the quotient keeps its fraction; SQLite's `FLOOR` keeps the integer the JSON holds, so its `/` is
-  # integer division. A different value, not a different spelling: a departure recorded as found, not
-  # fixed here (MySQL already refuses the shape, a side whose type PormG cannot name).
+  # #1458, #1471: `Floor`, `Ceil` and `Abs` over a JSON key holding `7`, divided by 2. PostgreSQL renders
+  # `FLOOR((x)::numeric)`, so the quotient keeps its fraction, the meaning (a JSON number has no integer
+  # type). SQLite kept the integer the JSON holds and divided as integers (`Int64 3`) until #1471, which
+  # refuses it there (`_MEANING_DEPARTURES`, `:division`); MySQL refuses the shape too, a side whose
+  # type PormG cannot name. So each is read back on PostgreSQL only.
   ("Floor json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Floor json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Floor json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Floor json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
-  # #1471: its siblings. `Ceil` and `Abs` read as `Floor` does, the same departure. `Round` is a `numeric` on PostgreSQL and MySQL and a REAL on SQLite,
-  # which `_division_sql` casts, so all three keep the fraction; the read path records no kind for it,
-  # so each driver's type comes through (`Decimal` vs `Float64`, the same value).
   ("Ceil json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Ceil json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Ceil json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Ceil json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Abs json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Abs json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Abs json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
-  ("Abs json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  # #1471: `Round` is a `numeric` on PostgreSQL and MySQL and a REAL on SQLite, which `_division_sql`
+  # casts, so all three keep the fraction. The read path records no kind for it, so each driver's type
+  # comes through (`Decimal` vs `Float64`, the same value).
   ("Round json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
   ("Round json key / 2 | alone", :sqlite) => (type = "Float64", value = "3.5", read = nothing),
   ("Round json key / 2 | alone", :mysql) => (type = "Decimal", value = "3.5", read = nothing),
@@ -205,11 +200,8 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
   "F date - date | cte", "Case untyped date col - date | cte",   # #1460: as CTE columns too
   "F date - date literal | alone", "F date - date literal | subquery", "F date - date literal | cte",
-  # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
-  "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
-  # #1471: `Ceil` and `Abs` are `Floor`'s departure; `Round` over a JSON key, divided, is the same value,
-  # a REAL on SQLite (representation).
-  "Ceil json key / 2 | alone", "Ceil json key / 2 | subquery", "Abs json key / 2 | alone", "Abs json key / 2 | subquery",
+  # #1471: `Round` over a JSON key, divided, is the same value on every engine, a REAL on SQLite
+  # (representation). (`Floor`/`Ceil`/`Abs` over one left this set with #1471: SQLite refuses them.)
   "Round json key / 2 | alone", "Round json key / 2 | subquery",
 ])
 

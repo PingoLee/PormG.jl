@@ -27,7 +27,7 @@
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
 # (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325, #1417), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
-# hold), `:single_precision` (`real`, #1215), `:sized_text` (a text type of a declared length, #1252) and `:concat` (a `Concat` operand). `kinds` are the
+# hold), `:single_precision` (`real`, #1215), `:sized_text` (a text type of a declared length, #1252), `:concat` (a `Concat` operand) and `:division` (a side of `/`, #1471). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
 # text`), since two engines can depart from one meaning with different values; `_computes` picks the
@@ -143,6 +143,17 @@ const _MEANING_DEPARTURES = (
    meaning = declared -> "the text cut to $(something(_sized_text_length(declared), 0)) characters",
    computes = (PormGSQLite => _ -> "every character of it, since it enforces no length",),
    fix = (_, _) -> "Cast to text of no declared length, \e[32mCast(x, \"text\")\e[0m or \e[32mCast(x, CharField())\e[0m, and cut the fetched value in Julia (\e[32mfirst(s, n)\e[0m)."),
+  # #1471: a JSON number has no integer type, so its quotient keeps the fraction. SQLite's
+  # `json_extract` hands over the integer the document holds, and `FLOOR`, `ABS`, `SUM`, `MAX` keep
+  # it, so `/` divides as integers there (measured on 3.54.0: `{"n": 7}` gives `3`). PostgreSQL
+  # computes the fraction where it builds (`FLOOR((x)::numeric) / 2` is `3.5`), and raises at the
+  # server where it reads the key as text (`#>>` over `+` or `SUM`), an error the tie-breaker leaves
+  # to raise. MySQL's `/` keeps the fraction (it refuses a side PormG cannot type before this row
+  # is read, #1130). The operand decides nothing beyond holding a key, so the one kind is `:json_number`.
+  (targets = (:division,), kinds = (:json_number,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1471",
+   meaning = _ -> "a quotient that keeps its fraction, since a JSON number has no integer type",
+   computes = (PormGSQLite => _ -> "an integer quotient when the key holds a whole number (`7 / 2` is `3`)",),
+   fix = (flag, _) -> "Say the number type you mean: \e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and \e[32mCast(\"$(flag)\", BigIntegerField())\e[0m divides as integers."),
 )
 
 # #1260 — the spelling of a temporal part for the operand a refusal names: a path takes the transform

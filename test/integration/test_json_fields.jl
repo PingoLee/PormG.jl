@@ -199,6 +199,28 @@ end
             @test q.count() == 1
         end
 
+        # #1471: a JSON number has no integer type, so a quotient over a key keeps its fraction.
+        # `points` holds 15. PostgreSQL renders `FLOOR((x #>> '{points}')::numeric) / $1::bigint`, 7.5.
+        # SQLite's `json_extract` hands over the integer 15, and `FLOOR(…) / ?` divided it as integers
+        # (`7`) with nothing to say so: it refuses the quotient now, naming the explicit spelling.
+        # MySQL already refused it (a side whose type PormG cannot name). The explicit spelling,
+        # `Cast(key, "numeric") / 2`, is 7.5 on every engine.
+        @testset "a quotient over a JSON key keeps its fraction or is refused (#1471)" begin
+            floor_half = () -> (q = base(); q.values("v" => Floor("payload__points") / 2); only(q.list())["v"])
+            by_engine(
+                postgres = () -> (@test floor_half() == 7.5),
+                sqlite = () -> begin
+                    e = try floor_half(); nothing catch err; err end
+                    @test e isa PormG.QueryBuildError
+                    @test occursin("#1471", sprint(showerror, e))
+                    @test occursin("Cast(\"payload__points\", \"numeric\")", replace(sprint(showerror, e), r"\e\[[0-9;]*m" => ""))
+                end,
+                mysql = () -> (@test_throws PormG.QueryBuildError floor_half()),
+            )()
+            q = base(); q.values("v" => Cast("payload__points", "numeric") / 2)
+            @test only(q.list())["v"] == 7.5
+        end
+
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────
         if requires(:jsonb_operators)
             @testset "containment and key operators" begin

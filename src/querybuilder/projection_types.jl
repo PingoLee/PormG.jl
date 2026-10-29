@@ -837,6 +837,37 @@ _json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference}, instruc:
   _expression_kind(p, instruc) isa CJSONValue
 _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
+# #1471 — a side of `/` whose value is the number a JSON key holds: the key itself, or a value that
+# carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
+# `Max`, `Coalesce`, a `Case` branch, `Lag`), a `Sum` of it. A JSON number has no integer type, so its
+# quotient keeps the fraction (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over
+# the integer the document holds, and these keep it, so `/` there divides as integers. A declared type
+# (`Cast`, an `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the
+# number and carry no key. `(what, flag)`: the side as a refusal names it, and the key's path for the
+# explicit spelling; or `nothing`.
+_json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
+function _json_number_side(p::FExpression, instruc::SQLInstruction)
+  p.operation === nothing && return _json_number_side(p.field_name, instruc)
+  p.operation in ("+", "-", "*") || return nothing
+  side = something(_json_number_side(p.field_name, instruc), _json_number_side(p.operand, instruc), Some(nothing))
+  return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
+end
+_json_number_side(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+  _json_key_lookup_operand(p, instruc) ? ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p)) : nothing
+function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  name = p.function_name
+  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  declared isa AbstractString && !isempty(declared) && return nothing
+  name == "SUM" || _result_rule(p) in _OPERAND_TYPED_RULES || return nothing
+  values = _undeclared_case(p) ? _case_values(p) : (p.column isa AbstractVector ? p.column : (p.column,))
+  for value in values
+    side = _json_number_side(value, instruc)
+    side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
+  end
+  return nothing
+end
+_json_number_side(::Any, ::SQLInstruction) = nothing
+
 # #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`
 # compares, through `_render_json_lookup_comparison`, for the operators that renders.
 function _alias_projects_json_key(having_key::MemoKey, instruc::SQLInstruction)::Bool

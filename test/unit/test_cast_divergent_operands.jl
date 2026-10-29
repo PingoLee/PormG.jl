@@ -152,6 +152,21 @@ function _ccd_expect(expr; departs::NamedTuple{(:postgres, :sqlite)}, issue::Abs
   end
   return (postgres = errs[1], sqlite = errs[2])
 end
+# #1471: a quotient over a sum holding a JSON key, the one value these fixtures' walk cannot type.
+# PostgreSQL refuses it as #1111's untyped sum; SQLite, whose `json_extract` hands over the integer
+# the document holds and divides it as one, refuses it as #1471's JSON number before any other rule
+# reads the quotient. `named` is checked on PostgreSQL, whose message names the untyped sum.
+function _ccd_expect_json_quotient(expr; named::Union{AbstractString,Nothing} = nothing,
+                                   run = conn -> _ccd_render(expr; conn = conn))
+  pg = try run(_CCD_PG); nothing catch e; e end
+  @test pg isa QueryBuildError
+  @test occursin("so PormG refuses it on PostgreSQL (#1111)", pg === nothing ? "" : _ccd_msg(pg))
+  named === nothing || @test occursin(named, pg === nothing ? "" : _ccd_msg(pg))
+  sl = try run(_CCD_SL); nothing catch e; e end
+  @test sl isa QueryBuildError
+  @test occursin("so PormG refuses it on SQLite (#1471)", sl === nothing ? "" : _ccd_msg(sl))
+  return (postgres = pg, sqlite = sl)
+end
 # EXPLICIT INTENT: refused on every engine, with `issue`'s tag, `named` in the message, and no
 # engine named. Returns the messages.
 function _ccd_refused_everywhere(expr; issue::AbstractString, named::Union{AbstractString,Nothing} = nothing,
@@ -1458,9 +1473,13 @@ end
   _ccd_expect(Fn.Cast(Fn.Floor("grid") / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
               named = "a decimal quotient")
   @test _ccd_builds(Fn.Cast(Fn.Round(_CF("grid") / 2), Models.IntegerField()))
-  # Over an operand PormG cannot type, `Floor` is not refused: a float under it is a REAL on SQLite
-  # too, and the engines agree. Only a type that is known is answered (review of #1111).
-  @test _ccd_builds(Fn.Cast(Fn.Floor("payload__points") / 2, Models.IntegerField()))
+  # Over a JSON key, `Floor` is not this rule's: the #1111 review let it through because a float under
+  # it is a REAL on SQLite too. A key holding an integer is not (#1471): SQLite's `FLOOR` keeps the
+  # integer and divides it as one, `7 / 2` is `3` where PostgreSQL's `FLOOR((x)::numeric) / 2` is `3.5`
+  # (measured, PostgreSQL 18.6 and SQLite 3.54.0), so its cast to an integer was `3` against `4`. The
+  # quotient itself is refused on SQLite now, a JSON number having no integer type; PostgreSQL builds.
+  _ccd_expect(Fn.Cast(Fn.Floor("payload__points") / 2, Models.IntegerField()); departs = _SL_ONLY,
+              issue = "#1471", named = "the JSON key `payload__points`")
   # A `Case` whose branches are bare strings binds the text `'points'`, not the column: text under
   # `Floor` is refused on every engine (#1293), where it used to build as an untyped operand.
   text_case = Fn.Cast(Fn.Floor(Fn.Case(Fn.When("active" => true, then = "points"), default = "points")) / 2, Models.IntegerField())
@@ -1562,8 +1581,8 @@ end
   @test _ccd_builds(Fn.Cast(Fn.Floor(Fn.Round("number")) / 2, "text"))
   # What still reaches the #1111 refusal: a sum of an operand the walk cannot type (a JSON key lookup
   # beside a column), which PostgreSQL may compute as a `sum(bigint)`, a `numeric`.
-  _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2, Models.IntegerField()); departs = _PG_ONLY,
-              issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+  _ccd_expect_json_quotient(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2, Models.IntegerField());
+                            named = "`SUM(…)` over a value PormG cannot type")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1571,16 +1590,16 @@ end
 # Unknown is decided once for the division view: refused on the engine whose sum can depart
 # (`_untyped_sum_departs`), whether or not a `bigint` can be seen inside. Before, a separate classifier
 # looked for one, and `Sum(F("number") + F("payload__n")) / 2` (an `integer` column) built on
-# PostgreSQL. Expected on PostgreSQL: the #1111 refusal naming the untyped sum; SQLite builds
-# `CAST((SUM(("Tb"."number" + json_extract("Tb"."payload", '$.n'))) / ?) AS INTEGER)`.
+# PostgreSQL. Expected on PostgreSQL: the #1111 refusal naming the untyped sum. SQLite built
+# `CAST((SUM(("Tb"."number" + json_extract("Tb"."payload", '$.n'))) / ?) AS INTEGER)` until #1471: the
+# value the walk cannot type here is a JSON key, whose number SQLite divides as an integer, so it
+# refuses the quotient now (`_ccd_expect_json_quotient`).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034 phase 3 step 2a: a Sum the walk cannot type, divided, is refused on PostgreSQL" begin
   for target in (Models.IntegerField(), Models.CharField(), "numeric(10,1)")
-    _ccd_expect(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, target); departs = _PG_ONLY,
-                issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+    _ccd_expect_json_quotient(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, target);
+                              named = "`SUM(…)` over a value PormG cannot type")
   end
-  @test occursin("WHEN CAST((SUM((\"Tb\".\"number\" + json_extract(\"Tb\".\"payload\", '\$.n'))) / ?) AS INTEGER) BETWEEN -2147483648 AND 2147483647 THEN",
-                 _ccd_render(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_SL))
   # The message says the sum is untyped and what each spelling divides as.
   msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_PG))
   @test occursin("means an integer quotient (`15 / 2` is `7`) when the sum is whole", msg)
@@ -1601,8 +1620,8 @@ end
                           named = "an interval expression")
   # Only a quotient that IS the operand answers as its rendered interval: an untyped sum's quotient
   # times an interval is an interval at the top, but the half reaches its value, so it stays refused.
-  _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2 * Fn.Max(_CF("laptime")), "text");
-              departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+  _ccd_expect_json_quotient(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2 * Fn.Max(_CF("laptime")), "text");
+                            named = "`SUM(…)` over a value PormG cannot type")
   # A date difference is a day count, a NUMBER, though it roots in a date. Since #1034 step 5a the walk
   # types it (`integer`), so its sum is an integer sum the walk can name: alone a `sum(integer)`, a
   # `bigint` on PostgreSQL; with a `bigint` added, a `sum(bigint)`, which `Dialect.SUM` renders
@@ -1624,11 +1643,12 @@ end
 # a typed one — `Max("laptime") * (Sum(…) / 2)`, the second operand of a `Coalesce`, a `Case` default
 # after a float branch — was not found, and PostgreSQL kept the half SQLite drops: a silent different
 # answer. Expected on PostgreSQL: the #1111 refusal naming the untyped sum, as the left-hand form
-# always got; SQLite builds the cast to text, e.g.
-# `CAST((… * ((SUM(("Tb"."laps_total" + json_extract("Tb"."payload", '$.n'))) / ?))) AS TEXT)`.
-# Beside an interval, a float or a decimal the quotient decides only where it departs: on SQLite the
-# value is that interval or that fraction, refused as one (#1259, #1028, #1040, #1027) on either
-# side — the left-hand form built there before, and the right-hand one on PostgreSQL.
+# always got, wherever the quotient sits. SQLite built the cast to text, e.g.
+# `CAST((… * ((SUM(("Tb"."laps_total" + json_extract("Tb"."payload", '$.n'))) / ?))) AS TEXT)`, and
+# refused the value beside an interval, a float or a decimal as that interval or that fraction
+# (#1259, #1028, #1040, #1027). Since #1471 it refuses the quotient itself, before any of those rules
+# reads it: the sum holds a JSON key, the value these fixtures' walk cannot type, and SQLite divides
+# its number as an integer. The PostgreSQL half is this testset's; SQLite's is #1471's everywhere.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1305: an untyped Sum's quotient is refused on PostgreSQL wherever it sits in the expression" begin
   q() = Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2
@@ -1641,7 +1661,7 @@ end
       Fn.Max("laptime") * Fn.Round(q()),
       mx() / q(),                                  # the quotient is the divisor: the top is a quotient too
       Fn.Coalesce(Fn.Max("laptime"), q() * mx()))  # a later operand
-    _ccd_expect(Fn.Cast(expr, "text"); departs = _PG_ONLY, issue = "#1111", named = untyped_named)
+    _ccd_expect_json_quotient(Fn.Cast(expr, "text"); named = untyped_named)
   end
   # A later `Case` branch: the quotient is a CTE column the body divided, so the outer query does not
   # aggregate and the `Case` condition can read a column.
@@ -1653,35 +1673,22 @@ end
     t.values("x" => outer)
     return t
   end
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column",
+  _ccd_expect_json_quotient(nothing; named = "the CTE column",
               run = conn -> _ccd_sql(withcte(Fn.Cast(Fn.Case(Fn.When("rating" => 1.0, then = _CF("rating")),
                                                              default = PormG.CTE("c", "half")), "text")); conn = conn))
   # `+` with an interval on the right of a number is SQLite's own refusal; PostgreSQL refuses the half.
   @test occursin("(#1111)", _ccd_msg(_ccd_refusal(Fn.Cast(q() + Fn.Max("laptime"), "text"); conn = _CCD_PG)))
-  # Where the division does not depart, the value is still the interval it is: cast to an integer it is
-  # refused on SQLite as an interval (#1259), whichever side the quotient is on, and `Concat` refuses it
-  # as an interval (#1028) — while PostgreSQL refuses the half (#1111).
+  # Beside an interval, a float or a decimal, on whichever side the quotient is: PostgreSQL refuses the
+  # half (#1111). SQLite refused the value as that interval (#1259, and in `Concat` #1028) or that
+  # fraction (#1028, #1040, #1027) until #1471, which refuses the quotient inside first.
   for expr in (Fn.Cast(q() * mx(), Models.IntegerField()), Fn.Cast(mx() * q(), Models.IntegerField()),
-               Fn.Cast(mx() / q(), Models.IntegerField()))
-    @test occursin("(#1259)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
-    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
-  end
-  for expr in (Fn.Concat(Fn.Value("|"), q() * mx()), Fn.Concat(Fn.Value("|"), mx() * q()))
-    @test occursin("an interval expression is not text", _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
-    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
-  end
-  # Beside a float or a decimal the same holds, whichever side the quotient is on: PostgreSQL refuses
-  # the half, and SQLite refuses the fraction its cast would truncate (#1028), round (#1040) or write
-  # as its own text (#1027). Before, the side that came first decided, on each engine.
-  for (expr, sqlite_issue) in ((Fn.Cast(q() * 1.5, Models.IntegerField()), "(#1028)"),
-                               (Fn.Cast(1.5 * q(), Models.IntegerField()), "(#1028)"),
-                               (Fn.Cast(q() * Fn.Max("points"), Models.IntegerField()), "(#1028)"),
-                               (Fn.Cast(Fn.Max("points") * q(), Models.IntegerField()), "(#1028)"),
-                               (Fn.Cast(Fn.Coalesce(q(), 0.5), Models.IntegerField()), "(#1028)"),
-                               (Fn.Cast(q() * Fn.Max("price"), "numeric(10,1)"), "(#1040)"),
-                               (Fn.Concat(Fn.Value("-"), q() * 1.5), "(#1027)"))
-    @test occursin(sqlite_issue, _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
-    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
+               Fn.Cast(mx() / q(), Models.IntegerField()),
+               Fn.Concat(Fn.Value("|"), q() * mx()), Fn.Concat(Fn.Value("|"), mx() * q()),
+               Fn.Cast(q() * 1.5, Models.IntegerField()), Fn.Cast(1.5 * q(), Models.IntegerField()),
+               Fn.Cast(q() * Fn.Max("points"), Models.IntegerField()), Fn.Cast(Fn.Max("points") * q(), Models.IntegerField()),
+               Fn.Cast(Fn.Coalesce(q(), 0.5), Models.IntegerField()), Fn.Cast(q() * Fn.Max("price"), "numeric(10,1)"),
+               Fn.Concat(Fn.Value("-"), q() * 1.5))
+    _ccd_expect_json_quotient(expr)
   end
   # What answered first still names the operand when no side is a quotient: the message is unchanged.
   @test occursin("`COALESCE(…)` over `MAX(…)` over the DurationField `laptime`",
@@ -2301,7 +2308,9 @@ end
 # the outer query, through every rule that reads it, on shapes the expression-kind matrix cannot
 # build (its models have no JSON field):
 # - a body `Sum(F("laps_total") + F("payload__n"))` sums a `bigint` with a value the walk cannot type,
-#   so PostgreSQL's `sum(bigint)` is a `numeric`: divided, refused there (#1111), built on SQLite;
+#   so PostgreSQL's `sum(bigint)` is a `numeric`: divided, refused there (#1111). On SQLite the column
+#   divided outside builds (its record names no JSON key, a #1471 follow-up), and the body that divides
+#   it is refused (#1471);
 # - a body `Count` is a `bigint` on PostgreSQL: summed beside an untyped value, the same (#1111). Beside
 #   an integer column the walk names the sum, and PostgreSQL renders `SUM(…)::bigint` (#1147), so it builds;
 # - a body `Avg` of a float is a float: cast to an integer, refused on SQLite (#1028). Of an interval
@@ -2315,12 +2324,15 @@ end
 # '$.n'))) as "w"` read as `CAST("R1_1"."w" AS TEXT)` on SQLite.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: a CTE column answers the division and text rules as its body expression does" begin
-  function withcte(outer)
+  # `wq`, the quotient, is a body of its own: SQLite refuses it (#1471), which would refuse every
+  # outer query over the shared body there.
+  function withcte(outer; quotient::Bool = false)
     q = CCD.Ccd_driver.objects
     body = CCD.Ccd_driver.objects
+    quotient && (body.values("id", "wq" => Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2);
+                 q.with("c" => body, join_field = "id" => "id"); q.values("x" => outer); return q)
     body.values("id",
                 "w"    => Fn.Sum(_CF("laps_total") + _CF("payload__n")),   # a `sum(bigint)` the walk cannot type
-                "wq"   => Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2,  # … and its quotient
                 "cnt"  => Fn.Count("id"),                                    # a `bigint`, typed as an integer
                 "bf"   => _CF("laps_total") * _CF("points"),                 # a float, with a `bigint` side
                 "avgl" => Fn.Avg("laptime"),
@@ -2331,7 +2343,7 @@ end
     q.values("x" => outer)
     return q
   end
-  cte(outer) = conn -> _ccd_sql(withcte(outer); conn = conn)
+  cte(outer; quotient::Bool = false) = conn -> _ccd_sql(withcte(outer; quotient = quotient); conn = conn)
   w = "the CTE column `CTE(\"c\", \"w\")` (`SUM(…)` over a value PormG cannot type)"
   # The whole number PostgreSQL computes as `numeric`, divided: under `Coalesce`, an extremum, `Floor`
   # and an outer `Sum`, to an integer and to a scaled numeric.
@@ -2345,7 +2357,7 @@ end
   # walk names neither, so the body records which one each column is (`CTEDivision`).
   wq = "the CTE column `CTE(\"c\", \"wq\")` (arithmetic over `SUM(…)` over a value PormG cannot type)"
   for target in (Models.IntegerField(), "numeric(10,1)")
-    _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = wq, run = cte(Fn.Cast(PormG.CTE("c", "wq"), target)))
+    _ccd_expect_json_quotient(nothing; named = wq, run = cte(Fn.Cast(PormG.CTE("c", "wq"), target); quotient = true))
     @test _ccd_builds(nothing; run = cte(Fn.Cast(PormG.CTE("c", "w"), target)))
   end
   # An outer `Sum` over it is itself a sum the walk cannot type, so the refusal names that one.
@@ -2353,14 +2365,16 @@ end
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "w"), 0)) / 2, Models.IntegerField())))
   # The `bigint` column summed beside a value the walk cannot type, and beside one it can. The sum is
   # what the walk cannot type, so the refusal names it (#1034 phase 3 step 2a), not the `bigint` inside.
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type",
-              run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type",
-              run = cte(Fn.Cast(Fn.Sum(Fn.Greatest(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
+  _ccd_expect_json_quotient(nothing; named = "`SUM(…)` over a value PormG cannot type",
+                            run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
+  _ccd_expect_json_quotient(nothing; named = "`SUM(…)` over a value PormG cannot type",
+                            run = cte(Fn.Cast(Fn.Sum(Fn.Greatest(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "number")) / 2, Models.IntegerField())))
-  # A float with a `bigint` side: the float decides, so the cast to an integer is SQLite's truncation.
-  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028",
-              named = "over the FloatField `CTE(\"c\", \"bf\")`",
+  # A float with a `bigint` side, beside the JSON key: PostgreSQL builds it. SQLite refused the cast to
+  # an integer as its truncation of the float (#1028) until #1471; the walk cannot name the `Coalesce`,
+  # so a row whose float is NULL sums the key's integer and divides it as one: refused as #1471's.
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1471",
+              named = "over the JSON key `payload__n`",
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "bf"), "payload__n")) / 2, Models.IntegerField())))
   # An average, of an interval or of a float, cast to an integer.
   for (col, field, issue) in (("avgl", "DurationField", "#1259"), ("avgp", "FloatField", "#1028"))

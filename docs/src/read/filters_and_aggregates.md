@@ -443,6 +443,25 @@ against a column means the same thing on all of them.
     it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
     avoid numeric object keys in a `__` path.
 
+### Arithmetic over a key
+
+A key's value has the type the data gives it, so PormG does not know whether `wins` holds an integer
+or a float. State the number you mean with a cast before computing on it:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "half" => Cast("metadata__wins", "numeric") / 2)    # 60.5 on every engine
+```
+
+A JSON number has no integer type, so a quotient over one keeps its fraction. SQLite's
+`json_extract` returns the integer the document holds, and `Floor`, `Ceil`, `Abs`, `Max`, `Coalesce`,
+`Sum` and arithmetic keep it, so SQLite would divide `121 / 2` as integers and return `60`. A `/` with
+such a side, `Floor("metadata__wins") / 2` for example, therefore raises `QueryBuildError` on SQLite,
+naming the cast to write (#1471). PostgreSQL extracts the key as text: it computes the fraction where
+a function casts it (`Floor`, `Ceil`, `Abs`, `Round`), and raises at the server for arithmetic on the
+text itself (`F("metadata__wins") / 2`, `Sum("metadata__wins")`). MySQL refuses the quotient when the
+query is built (a side whose type PormG cannot name). The cast works on all three.
+
 ### A whole document (`field => document`)
 
 A filter on the column itself compares the whole stored document, and `get_or_create` and

@@ -142,6 +142,23 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Floor json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
   ("Floor json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  # #1471: its siblings. `Ceil` and `Abs` read as `Floor` does, the same departure. `Round` is a `numeric` on PostgreSQL and MySQL and a REAL on SQLite,
+  # which `_division_sql` casts, so all three keep the fraction; the read path records no kind for it,
+  # so each driver's type comes through (`Decimal` vs `Float64`, the same value).
+  ("Ceil json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Ceil json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Ceil json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Ceil json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Abs json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Abs json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Abs json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Abs json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Round json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Round json key / 2 | alone", :sqlite) => (type = "Float64", value = "3.5", read = nothing),
+  ("Round json key / 2 | alone", :mysql) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Round json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Round json key / 2 | subquery", :sqlite) => (type = "Float64", value = "3.5", read = nothing),
+  ("Round json key / 2 | subquery", :mysql) => (type = "Decimal", value = "3.5", read = nothing),
   # #1460: `Extract(x, "EPOCH")` (a decimal since #1457) is a CTE column now, typed `DecimalField` from
   # the walk; it was refused there before. Twice result 1's fastest lap (87.452 s), and a time minus
   # itself. SQLite has no `EPOCH` part.
@@ -190,6 +207,10 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date literal | alone", "F date - date literal | subquery", "F date - date literal | cte",
   # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
   "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
+  # #1471: `Ceil` and `Abs` are `Floor`'s departure; `Round` over a JSON key, divided, is the same value,
+  # a REAL on SQLite (representation).
+  "Ceil json key / 2 | alone", "Ceil json key / 2 | subquery", "Abs json key / 2 | alone", "Abs json key / 2 | subquery",
+  "Round json key / 2 | alone", "Round json key / 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

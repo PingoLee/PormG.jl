@@ -7358,6 +7358,132 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Floor json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Ceil json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Ceil json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is CEIL(…), whose result type PormG cannot name. Name the type the column h"),
+  ("Ceil json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is CEIL(…), whose result type PormG cannot name. Name the type the column h"),
+  ("Ceil json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Ceil json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Ceil json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Abs json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ABS(…), whose result type PormG cannot name. Name the type the column ho"),
+  ("Abs json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ABS(…), whose result type PormG cannot name. Name the type the column ho"),
+  ("Abs json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Abs json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Round json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round json key / 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round json key / 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Max json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Max json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("Max json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("Max json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Max json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG cannot name. Name the type the colu"),
+  ("Coalesce json key 0 / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG cannot name. Name the type the colu"),
+  ("Coalesce json key 0 / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Cast json key numeric / 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast json key integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast json key integer | alone", :sqlite) =>
@@ -7479,6 +7605,26 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=decimal")],
   ("Floor json key / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=decimal")],
+  ("Ceil json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Ceil json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Round json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=numeric")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

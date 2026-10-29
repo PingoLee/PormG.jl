@@ -529,6 +529,16 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Sum json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Sum("payload__n") / 2),
   ("Max json key",            :Field_validation_scratch, m -> _EKM_FN.Max("payload__n")),
   ("Floor json key / 2",      :Field_validation_scratch, m -> _EKM_FN.Floor("payload__n") / 2),
+  # #1471: the siblings of `Floor json key / 2`. A function that keeps its operand's value (`Ceil`,
+  # `Abs`, `Max`, `Coalesce`) or arithmetic over the key carries the number the JSON holds; `Round`
+  # is a REAL on SQLite, and a declared `numeric` is the explicit spelling.
+  ("Ceil json key / 2",       :Field_validation_scratch, m -> _EKM_FN.Ceil("payload__n") / 2),
+  ("Abs json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Abs("payload__n") / 2),
+  ("Round json key / 2",      :Field_validation_scratch, m -> _EKM_FN.Round("payload__n") / 2),
+  ("Max json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Max("payload__n") / 2),
+  ("Coalesce json key 0 / 2", :Field_validation_scratch, m -> _EKM_FN.Coalesce("payload__n", 0) / 2),
+  ("F json key + 1 / 2",      :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") + 1) / 2),
+  ("Cast json key numeric / 2", :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "numeric") / 2),
   ("Cast json key integer",   :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "integer")),
   ("Concat json key",         :Field_validation_scratch, m -> _EKM_FN.Concat(_EKM_FN.Value("n="), "payload__n")),
 ]

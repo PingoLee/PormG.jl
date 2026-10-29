@@ -23,10 +23,10 @@ using Test
 using DataFrames
 using PormG
 import PormG: InvalidValueError
-# The SQLite bulk writers need the driver extension even under `show_query` (they reserve ids).
+# The SQLite bulk writers size their chunks by the SQLite version even under `show_query`; the offline
+# key states it (#1452), so no library is asked.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
-# The SQLite key states the version it renders for (#1452): a bulk statement is chunked by its bind limit.
 PormG.Configuration.register_offline("wer1283_pg"; adapter = :postgres)
 PormG.Configuration.register_offline("wer1283_sl"; adapter = :sqlite, server_version = 3_045_000)
 

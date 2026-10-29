@@ -25,12 +25,12 @@ using Dates
 using DataFrames
 using PormG
 import PormG: InvalidValueError
-# The SQLite bulk writers need the driver extension even under `show_query` (they reserve ids).
+# The SQLite bulk writers size their chunks by the SQLite version even under `show_query`; the offline
+# key states it (#1452), so no library is asked.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
-for (key, adapter) in (("bfv1290_pg", :postgres), ("bfv1290_sl", :sqlite))
-  PormG.Configuration.register_offline(key; adapter = adapter)
-end
+PormG.Configuration.register_offline("bfv1290_pg"; adapter = :postgres)
+PormG.Configuration.register_offline("bfv1290_sl"; adapter = :sqlite, server_version = 3_045_000)
 
 # The F1 results table, with its `finished` flag.
 const _BFV_MODEL_EXPR = quote

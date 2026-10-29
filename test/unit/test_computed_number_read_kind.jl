@@ -165,9 +165,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # A CTE column and a Subquery read as what their body computed, and the binder does not see it
 # The outer projection of a CTE column (`"g__a"`) over `Avg("grid")` records `CFloat64` (the body's read kind),
-# and so does a `Subquery` of one; `_operand_kind` — the comparison binder's and `_is_number_side`'s
-# view (#882) — still answers `nothing` for both. Why: the read path must see the meaning, and a float
-# read kind must not change how a filter against that column binds.
+# and so does a `Subquery` of one; `_render_side_kind` — the comparison binder's and `_is_number_side`'s
+# view (#882; `_operand_kind` until #1459) — still answers `nothing` for both. Why: the read path must
+# see the meaning, and a float read kind must not change how a filter against that column binds.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1121: a CTE column and a Subquery read as their computed number; the binder view is unchanged" begin
   for (engine, mod) in _CN_ENGINES
@@ -181,7 +181,7 @@ end
       @test q.object.projection_kinds[:v] == _CN_FLOAT
       handle = instr[].object.values[findfirst(v -> _CN_QB._projection_output_name(v) == "v", instr[].object.values)].field
       @test handle isa _CN_QB.CTEReference
-      @test _CN_QB._operand_kind(handle, instr[]) === nothing
+      @test _CN_QB._render_side_kind(handle, instr[]) === nothing
 
       inner = mod.Result.objects
       inner.filter("resultid" => _CN_QB.OuterRef("resultid"))
@@ -192,7 +192,7 @@ end
       _CN_QB.query(s; show_query = :sql, built = i -> (sinstr[] = i))
       @test s.object.projection_kinds[:v] == _CN_FLOAT
       node = only(sinstr[].object.values).field
-      @test _CN_QB._operand_kind(node, sinstr[]) === nothing
+      @test _CN_QB._render_side_kind(node, sinstr[]) === nothing
 
       # A function over a Subquery whose inner value is one of its operands' (review of #1121): the
       # inner `Coalesce` records its meaning, so the outer `Abs` composes the meaning, not one
@@ -302,7 +302,8 @@ end
 # A CTE column over `Cast(Round(F("points") * 1.5, 2), "numeric(10,2)")` — the body renders
 # `(ROUND((("points" * $1::double precision))::numeric, $2::integer))::numeric(10,2)` on PostgreSQL,
 # `CAST(ROUND(("points" * ?), ?) AS NUMERIC(10,2))` on SQLite — and a `Subquery` projecting it record `CDecimal(nothing, nothing)` for the outer
-# projection on PostgreSQL, while `_operand_kind` — the comparison binder's view (#882) — still answers `nothing`. Why: the read kind is the read path's alone
+# projection on PostgreSQL, while `_render_side_kind` — the comparison binder's view (#882; `_operand_kind`
+# until #1459) — still answers `nothing`. Why: the read kind is the read path's alone
 # (`_without_numeric_read`); a filter against the column must bind exactly as it did before #1212.
 # On SQLite the outer projection records the declared `CDecimal(10, 2)` (#1110): SQLite does not apply
 # the declaration, so the read path does. The binder's view is the same on both engines: the width is
@@ -323,7 +324,7 @@ end
       _CN_QB.query(q; show_query = :sql, built = i -> (instr[] = i))
       @test q.object.projection_kinds[:v] == want
       handle = instr[].object.values[findfirst(v -> _CN_QB._projection_output_name(v) == "v", instr[].object.values)].field
-      @test _CN_QB._operand_kind(handle, instr[]) == binder
+      @test _CN_QB._render_side_kind(handle, instr[]) == binder
 
       inner = mod.Result.objects
       inner.filter("resultid" => _CN_QB.OuterRef("resultid"))
@@ -333,7 +334,7 @@ end
       sinstr = Ref{Any}(nothing)
       _CN_QB.query(s; show_query = :sql, built = i -> (sinstr[] = i))
       @test s.object.projection_kinds[:v] == want
-      @test _CN_QB._operand_kind(only(sinstr[].object.values).field, sinstr[]) == binder
+      @test _CN_QB._render_side_kind(only(sinstr[].object.values).field, sinstr[]) == binder
     end
   end
 end

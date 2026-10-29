@@ -1,28 +1,17 @@
-# #1034 — ONE WALK for "what type does this expression have?", asked under one of three policies.
+# #1034 — ONE WALK for "what type does this expression have?", asked under one of two policies.
 #
 # The question used to be answered by a function per consumer, each walking the tree its own way and
 # each forgetting a shape the others typed: read kinds alone took six fixes, one per shape (#564,
 # #800, #824, #888, #965, #979). The walk below is written once — paths and transforms, joined and CTE
 # handles, a `Subquery`, literals, and each function through the rule it states beside its
-# constructor (`_result_rule`, `functions.jl`) — and the policies differ only where one of them
-# declines to answer ON PURPOSE, or (`_MeaningKinds`) answers what a computed number means:
+# constructor (`_result_rule`, `functions.jl`) — and the two policies differ only on a computed number:
 #
-# - `_ReadKinds` — the #564 READ kind, as the per-shape readers answered it before this file existed:
-#   what `_operand_kind` and `_function_projection_kind` answer (the expression-kind matrix pins every
-#   cell). The read path itself no longer asks it — it reads `_read_kind`, a view of `_MeaningKinds`
-#   (#1034 step 3, below), and the binder's formatter is a view of `_AllKinds` (step 4) — and its
-#   remaining readers are the comparison binder's number and interval sides (`_operand_kind`), and the
-#   render's side typing (`_side_kind` over a transformed path, `_side_function_kind`, the function arm
-#   of `_render_interval_operand`), deliberately narrow (#882). `Concat`'s temporal check
-#   (`_textless_temporal`) reads `_AllKinds` since step 5c. A column has a kind only when the representation table
-#   owns one (`field_canonical_kind`: temporal, decimal, array — no integer, float, text or boolean,
-#   because the table also feeds the comparison binder, #882); a literal only a temporal one
-#   (`literal_canonical_kind`, #721); a computed number none (`Sum`/`Avg` went through a double,
-#   #648); and a boolean is the one the build's formatter already names (`_is_boolean_valued`, #965).
 # - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. The expression-kind
-#   matrix records it beside the others (its `kind` channel), and #1034's phase 3 moves the readers
-#   onto it one at a time, each move a reviewed diff of that fixture. Its first reader is
-#   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil`/`Round` render and the #1111 division check.
+#   matrix records it (its `kind` channel), and #1034's phase 3 moved the readers onto it one at a
+#   time, each move a reviewed diff of that fixture: `_integer_operand_kind` (#1147, the
+#   `Abs`/`Floor`/`Ceil`/`Round` render and the #1111 division check), the binder's formatter (step 4),
+#   `Concat`'s temporal check (`_textless_temporal`, step 5c), and the render's side typing, which reads
+#   it through a temporal narrowing (`_temporal_side_kind`, #882, #1459).
 # - `_MeaningKinds` — what a value MEANS, on every engine (#1121): `_AllKinds` in every arm but a
 #   computed number, which is its function's `_output_kind` (Django's `output_field`) rather than the
 #   type one engine happens to compute it as (`_computed_kind`). `Avg("grid")` is a `numeric` on
@@ -30,21 +19,22 @@
 #   (`_read_kind`), which records a computed number as that type so the read path turns either engine's
 #   answer into it, and records every other kind a read parser undoes.
 #
-# All three are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
+# A third policy, `_ReadKinds`, answered the #564 read kind as the per-shape readers had before this
+# file existed (`_operand_kind`, `_function_projection_kind`). #1459 deleted it once its last readers,
+# the render's side typing and the interval arm of `_render_interval_operand` (#1456), read the walk.
+#
+# Both are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
 #
-# The read kind types no `F` arithmetic, as `_operand_kind` never has; a comparison is a boolean.
-# Every kind types the numeric operators (`_operation_kind`), and since #1034 step 5a TEMPORAL arithmetic
+# Both type the numeric operators (`_operation_kind`), and since #1034 step 5a TEMPORAL arithmetic
 # too: the walk computes the kind the render gives it (`_temporal_arith_kind`), rather than reading it
 # from the render, so a node asked in another build still has one (decided by the maintainer). Since
 # step 5b both ask the one copy of the rule, `_temporal_result_kind`. It is asked after the render, as
 # every kind is: a joined path's column is found through the memo the render fills.
-struct _ReadKinds end
-# The two policies that name every type: they differ only on a computed number.
+# The two policies: they differ only on a computed number.
 abstract type _EveryKind end
 struct _AllKinds <: _EveryKind end
 struct _MeaningKinds <: _EveryKind end
-const _KindPolicy = Union{_ReadKinds,_EveryKind}
 
 """
     _expression_kind(x, instruc) -> Union{CanonicalType, Nothing}
@@ -55,20 +45,20 @@ none. Read after `x` renders. See the policies above.
 _expression_kind(x, instruc::SQLInstruction)::Union{CanonicalType,Nothing} = _infer_kind(x, instruc, _AllKinds())
 
 # ── The walk ─────────────────────────────────────────────────────────────────────────────────────────
-function _infer_kind(p::String, instruc::SQLInstruction, policy::_KindPolicy)
+function _infer_kind(p::String, instruc::SQLInstruction, policy::_EveryKind)
   # A transformed path (`"ts__@date"`) names the transform's result, not the column — through the one
   # transform ladder (#562), the call `_get_filter_query(::String)` renders with.
   occursin("__@", p) && return _infer_function_kind(_check_function(p), instruc, policy)
   column_field = _alias_column_field(p, instruc)
   return column_field === nothing ? nothing : _column_kind(column_field, policy)
 end
-_infer_kind(p::FExpression, instruc::SQLInstruction, policy::_KindPolicy) =
+_infer_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind) =
   p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) :
   _memo_kind(() -> _operation_kind(p, instruc, policy), p, instruc, policy)
-_infer_kind(p::SQLField, instruc::SQLInstruction, policy::_KindPolicy) = _infer_kind(p.field, instruc, policy)
-_infer_kind(p::SQLText, ::SQLInstruction, policy::_KindPolicy) =
+_infer_kind(p::SQLField, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(p.field, instruc, policy)
+_infer_kind(p::SQLText, ::SQLInstruction, policy::_EveryKind) =
   _is_null_literal(p.field) ? nothing : _literal_kind(p.field, policy)
-_infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_KindPolicy) =
+_infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind) =
   _memo_kind(() -> _infer_function_kind(p, instruc, policy), p, instruc, policy)
 
 # A walk only reads the instruction, so within one question a node has one kind however often it is
@@ -91,27 +81,25 @@ function _memo_kind(f, node, instruc::SQLInstruction, tag)
   end
 end
 # #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it.
-function _infer_kind(p::JoinedReference, instruc::SQLInstruction, policy::_KindPolicy)
+function _infer_kind(p::JoinedReference, instruc::SQLInstruction, policy::_EveryKind)
   column_field = _alias_column_field(p, instruc)
   return column_field === nothing ? nothing : _column_kind(column_field, policy)
 end
-_infer_kind(p::CTEReference, instruc::SQLInstruction, policy::_KindPolicy) = _cte_column_kind(p, instruc, policy)
-# #888: a `Subquery(...)` is its one projected column, as its own build typed it (`_subquery_kind`).
-# #1153: every kind reads the record of the inner expression's own kind, and falls back to the read
-# kind where there is none (a wildcard projection).
-_infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_ReadKinds) = _subquery_kind(p, instruc)
+_infer_kind(p::CTEReference, instruc::SQLInstruction, policy::_EveryKind) = _cte_column_kind(p, instruc, policy)
+# #888: a `Subquery(...)` is its one projected column, as its own build typed it.
+# #1153: the walk reads the record of the inner expression's own kind, and falls back to the inner
+# build's read record where there is none (a wildcard projection, `_subquery_read_record`).
 function _infer_kind(p::SubqueryObject, instruc::SQLInstruction, policy::_EveryKind)
   # #1121: a computed number's meaning, which the inner build recorded as its read kind.
   meant = _numeric_meaning_record(p, instruc, policy)
   meant === nothing || return meant
   recorded = instruc.subquery_all_kinds === nothing ? nothing : get(instruc.subquery_all_kinds, p, nothing)
-  return recorded === nothing ? _subquery_kind(p, instruc) : recorded
+  return recorded === nothing ? _subquery_read_record(p, instruc) : recorded
 end
 # A predicate is a boolean. The read kind leaves it to the formatter bridge (#965), which reads it here.
 _infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_EveryKind) = CBool()
-_infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+_infer_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
 
-_operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # #1147: `+`, `-`, `*` and `/` over two integers is an integer on both engines — PostgreSQL resolves
 # `int4 + int8` to `int8` and divides two integers as integers, as SQLite does — so the widest of the
 # two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`).
@@ -356,7 +344,6 @@ function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLI
 end
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
-_column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
 _column_kind(f, ::_EveryKind) = _field_kind(f)
 
 # Every type a field declares, by its `.type` — the string `Dialect` renders the column from, which is
@@ -423,7 +410,6 @@ _kind_family(::Union{CText,CVarChar}) = CText
 _kind_family(k::CanonicalType) = typeof(k)
 _kind_family(::Nothing) = nothing
 
-_literal_kind(x, ::_ReadKinds) = literal_canonical_kind(x)
 _literal_kind(::Bool, ::_EveryKind) = CBool()
 _literal_kind(::Integer, ::_EveryKind) = CInt64()
 _literal_kind(::AbstractFloat, ::_EveryKind) = CFloat64()
@@ -432,28 +418,6 @@ _literal_kind(::AbstractString, ::_EveryKind) = CText()
 _literal_kind(x, ::_EveryKind) = literal_canonical_kind(x)
 
 # ── Functions, by their `_result_rule` ───────────────────────────────────────────────────────────────
-# The read kind (#800, #822, #824, #852, #953, #965): a declared date, `DATE`, a boolean the formatter
-# names, and a value that is one of its operands' own values. Every other function answers `nothing`
-# and its value stays as the driver delivered it — the fail-open default.
-function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_ReadKinds)
-  rule = _result_rule(p)
-  if p isa FObject && rule in (:declared, :one_of)
-    declared = _declared_cast(p)
-    declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
-  end
-  rule isa CDate && return CDate()
-  # #953, #965: a boolean value is typed a boolean, whichever function produced it. PostgreSQL's
-  # driver types it already; SQLite delivers the 0/1 it stores, which `value_parser(::CBool, …)` turns
-  # back into a `Bool`. `field_canonical_kind` names no boolean kind (#882), so the formatter the build
-  # already gives the value decides: an extremum over a boolean, a `Cast`/`output_field` naming one,
-  # `Coalesce` or `Case` over booleans. A window value function returns its operand's own value, so
-  # its operand decides.
-  _is_boolean_valued(p, instruc) && return CBool()
-  p isa FObject && rule === :one_of && return _agreeing_kind(p, instruc, policy)
-  p isa FObject && rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
-  rule === :operand || return nothing
-  return _infer_kind(p.column, instruc, policy)
-end
 # Every kind: a declared cast is the type (#852, and `Case`'s `output_field`), then the rule.
 function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind)
   rule = _result_rule(p)
@@ -472,7 +436,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
   return nothing
 end
-_infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+_infer_function_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
 
 # A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
 # float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
@@ -570,17 +534,13 @@ function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,No
 end
 
 # #824 — the kind of a function whose value is one of several operands' own values. Typed only on
-# agreement: every operand names the SAME kind (a `CDecimal` of the same width, a `CDateTime` of the
-# same flavour). An operand with no kind — a text or number column, a number, arithmetic, a function
-# PormG does not type — disqualifies the whole projection: the value may be that operand's, and a
-# kind taken from the others would run text through a date parser (`Coalesce("note", Date(…))`). A
-# NULL literal is skipped: it is never the value. A declared `output_field` other than `date` (which
-# `_infer_function_kind` answers first) is kept only when it names the kind the operands agree on:
-# the cast it renders (#852) is not a read kind of its own here — `Cast(x, "numeric(10,2)")` records
-# none in this walk either; a declared decimal reads through the numeric read view instead (#1212) —
-# so a declaration that disagrees with the operands records nothing here. (Under `_AllKinds` a
-# declaration has already answered, and the operands agree under PostgreSQL's numeric promotion.)
-function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_KindPolicy)::Union{CanonicalType,Nothing}
+# agreement: every operand names a kind, and the kinds unify as PostgreSQL resolves a `COALESCE`
+# (`_unify_kinds`). An operand with no kind — arithmetic, a function PormG does not type —
+# disqualifies the whole projection: the value may be that operand's, and a kind taken from the others
+# would run text through a date parser (`Coalesce("note", Date(…))`). A NULL literal is skipped: it is
+# never the value. A declared `output_field` never reaches here: `_infer_function_kind` answers it
+# first, as the cast it renders (#852).
+function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
   kind = nothing
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue   # the #812 `Case` rule
@@ -589,18 +549,11 @@ function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_KindPolicy
     kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
     kind === nothing && return nothing
   end
-  declared = get(p.kwargs, "output_field", nothing)
-  if kind !== nothing && declared isa AbstractString
-    declared_field = _sql_type_field(declared)
-    (declared_field === nothing || _column_kind(declared_field, policy) != kind) && return nothing
-  end
   return kind
 end
 
-# Two operands' kinds as one value's. The read kind demands the same kind: a parser runs per column,
-# not per row. Every kind follows PostgreSQL's resolution of a `COALESCE`/`CASE`: integers widen,
+# Two operands' kinds as one value's, as PostgreSQL resolves a `COALESCE`/`CASE`: integers widen,
 # `integer` < `numeric` < `double precision`, and text is text whatever its length.
-_unify_kinds(a::CanonicalType, b::CanonicalType, ::_ReadKinds) = a == b ? a : nothing
 function _unify_kinds(a::CanonicalType, b::CanonicalType, ::_EveryKind)
   a == b && return a
   ra, rb = _numeric_rank(a), _numeric_rank(b)
@@ -694,9 +647,10 @@ _operand_meaning(::Any) = nothing
 # The read path records a kind per projection (`projection_kinds`, #564) so that a read parser can undo
 # what one engine did to the value: SQLite's stored text for a date, a time, a timestamp or an interval,
 # its 0/1 for a boolean, its REAL for a decimal (`value_parser`, `value_repr.jl`). That kind used to be
-# assembled at each projection site from five sources — the `_ReadKinds` walk, the column lookup, the
-# formatter's boolean, the record of a `Subquery`, and the numeric read kind (#1121) — each written for
-# one shape (#564, #800, #824, #888, #965, #979, #1121). It is now one view of the walk.
+# assembled at each projection site from five sources — a read-kind policy of the walk (deleted by
+# #1459), the column lookup, the formatter's boolean, the record of a `Subquery`, and the numeric read
+# kind (#1121) — each written for one shape (#564, #800, #824, #888, #965, #979, #1121). It is now one
+# view of the walk.
 #
 # The view keeps the kinds a parser undoes and drops the rest: an integer, a float column, text, JSON or
 # a uuid reads as the driver delivers it (#882's reason, now a filter rather than a gap in the walk).
@@ -905,11 +859,11 @@ function _numeric_read_record(x::Union{CTEReference,SubqueryObject}, instruc::SQ
   return _numeric_view(recorded)
 end
 _numeric_meaning_record(x, instruc::SQLInstruction, ::_MeaningKinds) = _numeric_read_record(x, instruc)
-_numeric_meaning_record(x, ::SQLInstruction, ::Union{_ReadKinds,_AllKinds}) = nothing
+_numeric_meaning_record(x, ::SQLInstruction, ::_AllKinds) = nothing
 
-# #882: the comparison binder and `_is_number_side` read a CTE column's or a `Subquery`'s recorded
-# kind through `_operand_kind`, and name no float there (a float side is not a number side to them).
-# A numeric read kind is the READ path's, so that view does not see it.
+# A read record's kind with its numeric read kind taken out (#1121): a computed number's numeric read
+# kind is the READ path's (#882), so the walk does not take a number from a CTE body's or a
+# `Subquery`'s read record when it falls back to one (`_cte_column_kind`, `_subquery_read_record`).
 _without_numeric_read(k) = _numeric_view(k) === nothing ? k : nothing
 
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
@@ -944,10 +898,11 @@ end
 #
 # The CTE handle is NOT its inferred field: `_set_field_from_sql_function` hands an `Avg("amount")`
 # column the operand's own `DecimalField`, which would run a computed double through the decimal
-# parser (#648). Under `_AllKinds` the column is its expression's own type, which the body recorded
-# while it could still resolve its paths (`cte["kinds"]`, #1147): a `Rank` is an integer there though
-# it reads back with no kind to undo. The read kind stays the body's read record.
-function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_KindPolicy = _ReadKinds())::Union{CanonicalType,Nothing}
+# parser (#648). The column is its expression's own type, which the body recorded while it could
+# still resolve its paths (`cte["kinds"]`, #1147): a `Rank` is an integer there though it reads back
+# with no kind to undo. A column the body's walk named nothing for falls back to the body's read
+# record, without its numeric read kind (`_without_numeric_read`).
+function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
   if occursin("__", ref.path)
     column_field = _alias_column_field(ref, instruc)
     return column_field === nothing ? nothing : _column_kind(column_field, policy)
@@ -963,7 +918,6 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_K
   _reads_unapplied_declaration(ref, instruc) && return nothing   # #1110: a numeric read kind
   return _without_numeric_read(get(body.object.projection_kinds, Symbol(ref.path), nothing))
 end
-_cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
 function _cte_expression_kind(cte::AbstractDict, path::String, ::_EveryKind)
   kinds = get(cte, "kinds", nothing)
   return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing

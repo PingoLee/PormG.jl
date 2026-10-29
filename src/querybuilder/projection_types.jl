@@ -1,8 +1,8 @@
 # What a projection renders as, and predicates on it (#130): the formatter and kind inferred for a
-# projected expression (`_expression_formatter`, `_operand_kind`, `_function_projection_kind`, the
-# subquery and CTE-column kinds), what an alias reads, and rendering a filter that compares a
-# projection alias. Shared across the query builder: the SELECT and filter renderers, `build`,
-# `expression_render.jl`, `select_nodes.jl`, `filter_nodes.jl`, `ctes.jl` and `functions.jl`.
+# projected expression (`_expression_formatter`, the subquery and CTE-column kinds), what an alias
+# reads, and rendering a filter that compares a projection alias. Shared across the query builder: the
+# SELECT and filter renderers, `build`, `expression_render.jl`, `select_nodes.jl`, `filter_nodes.jl`,
+# `ctes.jl` and `functions.jl`.
 
 # SQLite keeps a number compared with a NUMBER-typed alias native: an aggregate or arithmetic result
 # has no column affinity there, and neither has a bound parameter, so `SUM(x) = '1.5'` — what
@@ -433,35 +433,6 @@ function _all_boolean(values, instruc::SQLInstruction)::Bool
   return typed
 end
 
-# #800 — the canonical kind a FUNCTION projection's value is stored as, for the #564 read path, or
-# `nothing` when it is not one the representation table owns or cannot be named.
-#
-# Django's `output_field` question, answered only where the answer is not a guess: an extremum and
-# the window VALUE functions return one of their operand's own values, so they have its kind — on
-# SQLite that is the column's stored text, which the column's parser undoes. `SUM`/`AVG`/`COUNT` are
-# computed and never inherit it: a sum of intervals is not an interval PormG wrote, and a decimal sum
-# went through a double (#648's reason). Every other function answers `nothing` and its value stays
-# as the driver delivered it — the fail-open default.
-#
-# Called AFTER the projection renders, like `_projection_column_kind`: resolving a joined path is
-# what populates the memo `_alias_column_field` reads.
-#
-# #822: a `Cast(x, "date")`, or a `Case` whose `output_field` is a date, is a date because the SQL
-# makes it one on both engines — `::date` on PostgreSQL, `date(…)` on SQLite — so it reads back as a
-# `Date` on both, not a `Date` on one and a `String` on the other.
-#
-# #824: the `@date` transform is a date for the same reason — `(col)::date` on PostgreSQL,
-# `strftime('%Y-%m-%d', …)` on SQLite (`Dialect.DATE`) — whatever its operand. `COALESCE`, `GREATEST`
-# and `LEAST` declared `date` are dates for the `Cast` reason: since #852 they render the cast on both
-# engines (`date(…)` on SQLite). Otherwise their value is one operand's own: they are typed only when
-# every operand agrees (`_agreeing_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
-#
-# #1034: the read POLICY of the one walk in `expression_kind.jl`, where each of these rules is stated
-# once; `_expression_kind` is the same walk asked for every kind.
-_function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
-  _infer_function_kind(p, instruc, _ReadKinds())
-_function_projection_kind(::Any, ::SQLInstruction) = nothing
-
 function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   # `_expression_formatter` takes the FIRST operand that names a type, which is right for a filter
   # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
@@ -473,22 +444,6 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
 end
 _is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
   _result_rule(p) === :operand && _expression_formatter(p.column, instruc) === Models.format_bool_sql
-
-# The operand's kind: a column path is its field's; a bare `F(col)` is the column; a function is what
-# `_function_projection_kind` says of it, so `Max(Coalesce(…))` and `Coalesce(Max("d"), …)` compose; a
-# literal is its Julia type's (#721's rule, the kind a projected `Value(x)` records). Any other operand
-# — arithmetic — answers `nothing`, rather than a kind the value may not have.
-#
-# #888: a `Subquery(...)` is its one projected column, as its own build typed it — see
-# `_subquery_kind`.
-#
-# #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it, so the two
-# agree. A `CTE(...)` handle is NOT its inferred field: `_set_field_from_sql_function` hands an
-# `Avg("amount")` column the operand's own `DecimalField`, which would run a computed double through
-# the decimal parser (#648). It is the body's own read record instead — see `_cte_column_kind`.
-#
-# #1034: the read policy of the walk in `expression_kind.jl`.
-_operand_kind(p, instruc::SQLInstruction) = _infer_kind(p, instruc, _ReadKinds())
 
 # #1027 — a `Concat` operand that has no single text: `(kind, what)`, `kind` one of `:bool`, `:float`,
 # `:decimal`, `:numeric`, or `nothing`. PostgreSQL's `CONCAT` writes each operand through its type's
@@ -1605,17 +1560,15 @@ _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction
 _textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)
 _textless_number(::Any, ::SQLInstruction) = nothing
 
-# #888 — the read kind of a `Subquery(...)`: its one projected column's, by `_cte_column_kind`'s rule.
-# The inner build typed that column the way it types any projection (a plain column has its kind,
-# `Max` its operand's, a `Cast(…, "date")` `CDate`, and `Avg`/`Sum`/`Count`/arithmetic none), and
-# `_get_select_query(::SubqueryObject)` filed it under the node when it rendered it. So this is read
-# AFTER the render, like every kind lookup here; a node this build did not render — or an inner
-# projection with no kind — answers `nothing`, the fail-open default, and the value stays as the
-# driver delivered it.
-# #1121: a computed number's numeric read kind is the read path's alone (`_without_numeric_read`);
-# the projection reads the whole record through `_read_kind` (#1034 step 3). This view is the binder's
-# and the render's side typing (`_render_side_kind`, kept narrow on purpose, #1034 step 5b).
-_subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+# #888, #1153 — a `Subquery(...)`'s READ record, for the one projection the type walk did not file a
+# kind for: a wildcard projection, whose expression the walk never sees (`_infer_kind(::SubqueryObject,
+# …, ::_EveryKind)` reads the walk's own record first). The inner build typed its column the way it
+# types any projection for the read path, and `_get_select_query(::SubqueryObject)` filed that under
+# the node when it rendered it, so this is read AFTER the render, like every kind lookup here. A node
+# this build did not render answers `nothing`, the fail-open default.
+# #1121: a computed number's numeric read kind is the read path's alone (`_without_numeric_read`):
+# the walk does not take a number from a read record.
+_subquery_read_record(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
   _reads_unapplied_declaration(p, instruc) ? nothing :   # #1110: a declared width is a numeric read kind
   _without_numeric_read(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 

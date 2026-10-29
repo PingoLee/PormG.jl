@@ -460,3 +460,38 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1459: a side of the render's arithmetic is the walk's kind, narrowed to a temporal one
+# The render types a side of F arithmetic or a comparison (`_side_kind`, `_side_function_kind`) from
+# the walk, keeping only a date, a timestamp, a time or an interval. Expected, on both engines:
+# `Max("date")` and `"start_at__@date"` are dates; `"date__@year"` is an integer to the walk and no
+# kind as a side, so an integer date part is never a day count (#882); `Max(<DecimalField>)` is a
+# decimal to the walk and no kind as a side, which `_is_number_side` reads as a number side, as it read
+# the `CDecimal(10, 2)` the read-kind policy named before #1459. Why it matters: the side readers lost
+# their own policy of the walk (`_ReadKinds`) in #1459, and these are the answers that policy gave.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1459: a side's kind is the walk's, narrowed to a temporal kind" begin
+  QB = PormG.QueryBuilder
+  for (backend, key) in ((:postgres, "tak_pg"), (:sqlite, "tak_sl"))
+    @testset "$backend" begin
+      m = Model("tak_side_races", raceid = IDField(), date = DateField(), start_at = DateTimeField(),
+                points = PormG.Models.DecimalField(max_digits = 10, decimal_places = 2))
+      m.connect_key = key
+      q = m.objects
+      q.values("d" => Max("date"), "t" => "start_at__@date", "y" => "date__@year", "p" => Max("points"))
+      instr = QB.build(q.object)
+      node(name) = QB._projected_source(QB.memo_key(:base, name), instr).field
+      # Temporal kinds reach the side.
+      @test QB._side_kind(node("d"), instr) == PormG.CDate()
+      @test QB._side_kind(node("t"), instr) == PormG.CDate()
+      # An integer date part: the walk names it, the side does not (#882).
+      @test QB._expression_kind(node("y"), instr) isa Union{PormG.CInt32,PormG.CInt64}
+      @test QB._side_kind(node("y"), instr) === nothing
+      # `Max(<DecimalField>)`: a decimal to the walk, no side kind, and still a number side.
+      @test QB._expression_kind(node("p"), instr) == PormG.CDecimal(10, 2)
+      @test QB._side_kind(node("p"), instr) === nothing
+      @test QB._is_number_side(node("p"), QB._side_kind(node("p"), instr), instr)
+    end
+  end
+end

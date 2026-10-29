@@ -578,7 +578,7 @@ end
   end
 
   # The transform keeps its read formatter with a subquery inside, which is what reads the value back
-  # as a date (`_function_projection_kind` answers `CDate()` for a `DATE` node whatever its operand).
+  # as a date (the walk answers `CDate()` for a `DATE` node whatever its operand).
   @test QBA.DATE(Subquery(dsub())).formatter === PormG.Models.format_date_sql
   @test QBA.QUARTER(Subquery(dsub())).formatter === PormG.Models.format_quarter_sql
   @test QBA.QUADRIMESTER(Subquery(dsub())).formatter === PormG.Models.format_quadrimester_sql

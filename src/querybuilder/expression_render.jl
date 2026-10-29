@@ -349,8 +349,7 @@ end
 # hours, and `Max("time") + d` has the millisecond form #881 refused it for. On PostgreSQL the SQL is
 # unchanged. On both engines, a function with no millisecond form is typed `CInterval` wherever the
 # side rule says it is one (an interval candidate over an interval, as `_render_function_body`
-# computes it), which
-# `_function_projection_kind` alone cannot say of a `Sum`. Every other function is typed as before.
+# computes it). Every other function is typed as before.
 function _render_function_operand_typed(v::FObject, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   sql, interval_ms, _ = _render_function_typed(v, instruc)
   interval_ms && return sql, _IntervalMs()
@@ -371,8 +370,19 @@ end
 # The order rule is the caller's: render first, then call this.
 _side_kind(value::Any, instruc::SQLInstruction) = _projection_column_kind(value, instruc)
 _side_kind(value::String, instruc::SQLInstruction) =
-  occursin("__@", value) ? _operand_kind(value, instruc) : _projection_column_kind(value, instruc)
+  occursin("__@", value) ? _temporal_side_kind(_expression_kind(value, instruc)) : _projection_column_kind(value, instruc)
 _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _side_function_kind(value, instruc)
+
+# #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
+# arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
+# integer beside a date is a whole number of days to the render (#568, #882), so the integer the walk
+# names for a date part (`"start_at__@year"`, `Extract(x, "MONTH")`) would shift a date by the year
+# rather than refuse; a text, a float or a decimal side is a number side or no side to `_is_number_side`
+# either way. Before #1459 a side read a policy of its own inside the walk (`_ReadKinds`), which named
+# fewer temporal kinds: none for a window function over a cast, a `Case` or arithmetic, and no `CTime`
+# for a cast or a `Case`. Those sides are typed now, so `Lag(<date>) + 1` shifts a date, and a duration
+# times a time cast is refused on the engines that compute on what they store (#1459's upgrade entry).
+_temporal_side_kind(k) = _is_temporal_kind(k) ? k : nothing
 
 # #965 — a function SIDE's kind is its projection kind, except a boolean #965 typed. `CBool` is a READ
 # kind: it tells SQLite's parser to turn the 0/1 back into a `Bool`. A side's kind types the arithmetic
@@ -382,8 +392,8 @@ _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _side_function_kin
 # extremum keeps the kind it has had since #953, so `Max("dur") * Max("is_active")` is still refused
 # on SQLite rather than multiplying the milliseconds by 0/1, which PostgreSQL has no operator for.
 function _side_function_kind(v::SQLTypeFunction, instruc::SQLInstruction)
-  kind = _function_projection_kind(v, instruc)
-  kind isa CBool || return kind
+  kind = _expression_kind(v, instruc)
+  kind isa CBool || return _temporal_side_kind(kind)
   return v isa FObject && v.function_name in ("MAX", "MIN") ? kind : nothing
 end
 

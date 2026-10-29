@@ -1416,24 +1416,20 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Lag Case date col + 1 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Cast interval * 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+    (stage = :ok, sql = "(CAST(ROUND((LAG(`Tb`.`fastestlaptime`, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG(`Tb`.`fastestlaptime`, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64")]),
   ("Lag Cast interval * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Lag Cast interval * 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG(`R3`.`fastestlaptime`, ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG(`R2`.`fastestlaptime`, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag Cast interval * 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(CAST(ROUND((LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (`Tb`.`grid`)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (`Tb`.`grid`)) AS SIGNED) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Lag Case interval col * grid | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG(CASE\nWHEN `R3`.`grid` = ? THEN `R3`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (`R3`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("Lag Case interval col * grid | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
@@ -1448,51 +1444,27 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("grid * Lag Case interval col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+    (stage = :ok, sql = "(CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64")]),
   ("Lag F ts - ts * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
-  ("Lag F ts - ts * 2 | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Lag F ts - ts * 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R3_1`.`start_at`, `R3_1`.`start_at`)), ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R2_1`.`start_at`, `R2_1`.`start_at`)), ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("Lag F ts - ts * 2 | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("F interval * Cast time | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (CAST(`Tb_1`.`start_at` AS TIME(6)))) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`fastestlaptime`) * (CAST(`Tb_1`.`start_at` AS TIME(6)))) AS SIGNED) ASC", params = Tuple{Any, String}[]),
   ("F interval * Cast time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval * Cast time | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`fastestlaptime`) * (CAST(`R3_1`.`start_at` AS TIME(6)))) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`fastestlaptime`) * (CAST(`R2_1`.`start_at` AS TIME(6)))) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval * Cast time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast time * F interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(ROUND((CAST(`Tb_1`.`start_at` AS TIME(6))) * (`Tb`.`fastestlaptime`)) AS SIGNED) IS NULL) ASC, CAST(ROUND((CAST(`Tb_1`.`start_at` AS TIME(6))) * (`Tb`.`fastestlaptime`)) AS SIGNED) ASC", params = Tuple{Any, String}[]),
   ("Cast time * F interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast time * F interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((CAST(`R3_1`.`start_at` AS TIME(6))) * (`R3`.`fastestlaptime`)) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((CAST(`R2_1`.`start_at` AS TIME(6))) * (`R2`.`fastestlaptime`)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Cast time * F interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("F interval * Case time col | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * (CASE\nWHEN `Tb`.`grid` = ? THEN `Tb_1`.`time`\nELSE NULL\nEND\n)) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`fastestlaptime`) * (CASE\nWHEN `Tb`.`grid` = ? THEN `Tb_1`.`time`\nELSE NULL\nEND\n)) AS SIGNED) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval * Case time col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("F interval * Case time col | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb_1\".\"time\"\nELSE NULL\nEND\n)) AS INTEGER) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("F interval * Case time col | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`fastestlaptime`) * (CASE\nWHEN `R3`.`grid` = ? THEN `R3_1`.`time`\nELSE NULL\nEND\n)) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`fastestlaptime`) * (CASE\nWHEN `R2`.`grid` = ? THEN `R2_1`.`time`\nELSE NULL\nEND\n)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval * Case time col | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("F interval * Case time col | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2_1\".\"time\"\nELSE NULL\nEND\n)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("F interval / Cast time | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`fastestlaptime`) * 1.0 / (CAST(`Tb_1`.`start_at` AS TIME(6)))) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`fastestlaptime`) * 1.0 / (CAST(`Tb_1`.`start_at` AS TIME(6)))) AS SIGNED) ASC", params = Tuple{Any, String}[]),
   ("F interval / Cast time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval / Cast time | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`fastestlaptime`) * 1.0 / (CAST(`R3_1`.`start_at` AS TIME(6)))) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`fastestlaptime`) * 1.0 / (CAST(`R2_1`.`start_at` AS TIME(6)))) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval / Cast time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Case untyped date col + 1 | alone", :mysql, "v") =>

@@ -57,7 +57,8 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
   # `handler`, our copy), so the value this text returns has that kind. File it under the node the
-  # caller holds, for `_operand_kind` to read once the enclosing projection has rendered.
+  # caller holds, for `_read_kind` and `_subquery_read_record` to read once the enclosing projection
+  # has rendered.
   _record_subquery_kind!(instruc, v, handler)
   # #929: and the formatter a value compared with it must satisfy, for `_expression_formatter`.
   _record_subquery_formatter!(instruc, v, inner_formatter[])

@@ -11,8 +11,6 @@
 # - `read`      — the kind the build recorded for the column (`projection_kinds`, #564): what the read path
 #                 parses the value with;
 # - `render`    — the kind the render computed (`_render_operand_kind`, #1028);
-# - `operand`   — `_operand_kind`, the read-kind reader and comparison binder's view;
-# - `function_` — `_function_projection_kind`, the function arm of the same;
 # - `column`    — `_projection_column_kind`, the temporal-arithmetic view. For `F` arithmetic it answers
 #                 the ROOTED column's kind by contract (the left column, not the result), so there it is
 #                 recorded as `"rooted: <kind>"` and is no claim about the expression;
@@ -30,6 +28,8 @@
 #                 `numeric`. Recorded, not compared, as `kind` is; under a CTE it is what the CTE column
 #                 answers, which pins phase 3 step 1 (#1034) moving the CTE's records. (A `bigint`
 #                 channel beside it recorded the classifier #1034 phase 3 step 2a deleted.)
+# (`operand` and `function_` recorded the read-kind readers `_operand_kind` and
+# `_function_projection_kind` until #1459 deleted them with their policy, `_ReadKinds`.)
 #
 # The BIND CHANNEL is recorded beside the cells, in its own fixture (`fixtures/expression_kind_bind_expected.jl`):
 # each `:ok` cell built again with a filter on its column, and what that build renders (the WHERE or
@@ -189,8 +189,6 @@ function _ekm_channels(instr, name::Symbol)
   render = _ekm_ask(() -> last(_EKM_QB._render_operand_kind(node, instr; _as = "ekm_probe")))
   ch = (
     render    = render,
-    operand   = _ekm_ask(() -> _EKM_QB._operand_kind(node, instr)),
-    function_ = _ekm_ask(() -> _EKM_QB._function_projection_kind(node, instr)),
     column    = _ekm_rooted(node, _ekm_ask(() -> _EKM_QB._projection_column_kind(node, instr))),
     formatter = _ekm_ask(() -> _EKM_QB._expression_formatter(node, instr)),
     textless  = _ekm_ask(() -> _EKM_QB._concat_textless_operand(node, instr)),
@@ -281,7 +279,7 @@ const _EKM_FIELD_FAMILY = Dict(
   "sDateField" => :date, "sDateTimeField" => :datetime, "sTimeField" => :time, "sDurationField" => :interval,
   "sJSONField" => :json, "sUUIDField" => :uuid, "sBinaryField" => :binary)   # #1194: a `bytea`/`blob` cast
 
-const _EKM_KIND_CHANNELS = (:read, :render, :operand, :function_, :column)
+const _EKM_KIND_CHANNELS = (:read, :render, :column)
 
 function _ekm_family(channel::Symbol, answer)
   answer isa String || return nothing
@@ -328,9 +326,7 @@ end
 # Channels compared across contexts. `read` and the formatter/textless views are asked of the node
 # itself alone and of the CTE handle or the `Subquery` node elsewhere, so a difference between them is
 # what a caller sees change when it moves the same expression into a CTE or a subquery. Left out:
-# `column` (it reads the column a path roots in, not the context), `operand` (it answers nothing for an
-# `Exists` or an aggregate by design, while the CTE and `Subquery` arms read the filed read kind), and
-# the CTE-only channels.
+# `column` (it reads the column a path roots in, not the context) and the CTE-only channels.
 const _EKM_CROSS_CHANNELS = (:read, :formatter, :textless)
 
 """
@@ -700,7 +696,7 @@ else
     @test isempty(_ekm_disagreements(obs(read = "CDecimal(12, 2)", formatter = "format_number_sql")))
     @test isempty(_ekm_disagreements(obs(read = "CTime()", formatter = "format_text_sql")))
     @test isempty(_ekm_disagreements(obs(formatter = "format_number_sql")))          # int/float: no parser
-    @test isempty(_ekm_disagreements(obs(read = "CDate()", operand = "error: MethodError")))
+    @test isempty(_ekm_disagreements(obs(read = "CDate()", render = "error: MethodError")))
     @test _ekm_disagreements(obs(cte_field = "sIntegerField", textless = "float")) ==
           [(:conflict, "textless=float vs cte_field=int")]
     @test _ekm_disagreements(obs(formatter = "format_bool_sql")) == [(:gap, "read=none vs formatter=bool")]

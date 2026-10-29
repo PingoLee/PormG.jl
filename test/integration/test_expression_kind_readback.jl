@@ -117,6 +117,13 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1460 (review): the day count with a date literal, race 1 (2009-03-29) minus 2009-03-01.
+  ("F date - date literal | alone", :postgres) => (type = "Int32", value = "28", read = "CInt32()"),
+  ("F date - date literal | alone", :sqlite) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | alone", :mysql) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :postgres) => (type = "Int32", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :sqlite) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :mysql) => (type = "Int64", value = "28", read = "CInt32()"),
   # #1460: both day counts are CTE columns now (the walk names them `CInt32`), read back as above.
   ("F date - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
@@ -177,6 +184,7 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   # #1307: the same day count through a `Case` over a date column, so the same two widths.
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
   "F date - date | cte", "Case untyped date col - date | cte",   # #1460: as CTE columns too
+  "F date - date literal | alone", "F date - date literal | subquery",
   # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
   "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
 ])

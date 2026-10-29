@@ -939,6 +939,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"date\" - \"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F date - date | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(julianday(\"R2\".\"date\") - julianday(\"R2\".\"date\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F date - date literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "DATEDIFF(`Tb`.`date`, ?) > ?", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"date\" - \$2::date) > \$3", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(julianday(\"Tb\".\"date\") - julianday(?) AS INTEGER) > ?", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    DATEDIFF(`R2`.`date`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"2009-03-01\"", "String"), ("1", "Int64"), ("\"2009-03-01\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("F date - date literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"date\" - \$3::date) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("\"2009-03-01\"", "String"), ("1", "Int64"), ("\"2009-03-01\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("F date - date literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(julianday(\"R2\".\"date\") - julianday(?) AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("\"2009-03-01\"", "String"), ("1", "Int64"), ("\"2009-03-01\"", "String"), ("1", "Int64"), ("10", "Int64")]),
   ("F comparison | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F comparison | alone", :mysql, "v__@gt", "bool true") =>

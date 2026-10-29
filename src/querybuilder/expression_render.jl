@@ -779,7 +779,11 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   elseif node isa FObject
     raw, ms, interval = _render_function_typed(node, instruc; _as = _as)
     ms && return _interval_ms_as_text(raw, instruc.connection), raw, true
-    interval = interval || _function_projection_kind(node, instruc) isa CInterval
+    # #1456: the walk decides, as it does for every other operand below. The read kind named no interval
+    # for `Cast(d, "interval")`, a `Case` over durations or `Max(Case(…))`, so on MySQL, which stores
+    # the microseconds, an alias filter over the cast bound `"00:01:00"` against the BIGINT — compared
+    # as the number 0, it matched every positive duration.
+    interval = interval || _expression_kind(node, instruc) isa CInterval
     # #1130: where the engine stores the integer, an interval function is its own integer form.
     sqlite && interval && _stores_interval_as_units(instruc.connection) && return raw, raw, true
     return raw, nothing, interval

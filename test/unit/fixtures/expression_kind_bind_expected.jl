@@ -1902,7 +1902,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Cast interval to interval | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Cast interval to interval | alone", :mysql, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "`Tb`.`fastestlaptime` > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "`Tb`.`fastestlaptime` > ?", params = [("60000000", "Int64")]),
   ("Cast interval to interval | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Cast interval to interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>

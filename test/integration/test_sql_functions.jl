@@ -2986,3 +2986,32 @@ end
         values("raceid__date", "driverid__dob", "days" => F("raceid__date") - F("driverid__dob")).list())
     @test a[:days] == Dates.value(a[:raceid__date] - a[:driverid__dob])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1456: a duration filter on a `Cast(<duration>, "interval")` alias matches what the column filter matches
+# Expected: on PostgreSQL and MySQL, `values("v" => Cast("fastestlaptime", "interval")).filter("v__@gt"
+# => Minute(1) + Second(30))` returns the same `resultid`s as `filter("fastestlaptime__@gt" => …)`, and
+# the threshold splits the fastest laps, so a filter matching every positive duration would show. On
+# MySQL the alias used to bind `"00:01:30"` against the BIGINT microsecond column, which compares as 0
+# and matched every lap. SQLite has no interval cast and raises `BackendCapabilityError` (#822).
+# Why it matters: the row set is the meaning; the column filter is the oracle for it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1456: a duration filter on a Cast(<duration>, \"interval\") alias returns the column filter's rows" begin
+    threshold = Minute(1) + Second(30)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite has no interval cast (#822)
+        q = M.Result.objects
+        q.values("resultid", "v" => Cast("fastestlaptime", "interval"))
+        @test_throws PormG.BackendCapabilityError q.list()
+    else
+        by_column = Set(r[:resultid] for r in M.Result.objects.filter("fastestlaptime__@gt" => threshold).
+                                                     values("resultid").list(:dict))
+        timed = M.Result.objects.filter("fastestlaptime__@isnull" => false).count()
+        # The threshold splits the laps: some above, some at or below it.
+        @test 0 < length(by_column) < timed
+        q = M.Result.objects
+        q.values("resultid", "v" => Cast("fastestlaptime", "interval"))
+        q.filter("v__@gt" => threshold)
+        # The same results, not only as many.
+        @test Set(r[:resultid] for r in q.list(:dict)) == by_column
+    end
+end

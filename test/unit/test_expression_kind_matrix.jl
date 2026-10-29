@@ -167,7 +167,8 @@ end
 _ekm_show(::Nothing) = nothing
 _ekm_show(f::Function) = String(nameof(f))
 _ekm_show(t::Tuple{Symbol,String}) = String(first(t))   # a textless classification's kind, not its label
-_ekm_show(k::PormG.CanonicalType) = replace(string(k), "PormG.Kernel." => "")   # `CDate()`, not its module path
+# `CDate()`, not its module path; `CJSONValue()` (#1458) is the walk's own, in `QueryBuilder`
+_ekm_show(k::PormG.CanonicalType) = replace(string(k), "PormG.Kernel." => "", "PormG.QueryBuilder." => "")
 _ekm_show(x) = string(x)
 function _ekm_ask(f)
   try

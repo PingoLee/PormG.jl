@@ -1054,13 +1054,11 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
               _set_field_from_sql_function(value_part.field, value_part._as, instruct)
       fields[key_new] = Models.field_without_db_column(_meant_column_field(typed, source, path, instruct))
       push!(selected_field_names, key_new)
-      # A JSON key lookup holds the value at the key, which the walk types by its column's JSONField:
-      # it records no kind, so the outer query does not read it as the document (`_json_document_operand`).
+      # The walk's kind, which tells a JSON key lookup (`CJSONValue`, the value at the key) from the
+      # document (`CJSON`) itself (#1458), so the outer query reads each as what it holds. A later entry
+      # under the same name with a kind answers for it, as its field does.
       kind = _expression_kind(source, instruct)
-      json_value = path !== nothing && memo_json_lookup(instruct, memo_key(:base, path))
-      # A later entry under the same name answers for it, as its field does (a JSON key lookup drops an
-      # earlier entry's kind).
-      json_value ? delete!(kinds, key_new) : kind === nothing || (kinds[key_new] = kind)
+      kind === nothing || (kinds[key_new] = kind)
       path === nothing && _record_cte_division!(divisions, key_new, source, instruct)
       _reads_unapplied_declaration(source, instruct) ? push!(unapplied, key_new) : delete!(unapplied, key_new)
     catch e

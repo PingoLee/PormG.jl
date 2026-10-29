@@ -7209,29 +7209,29 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("json document | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
   ("json key | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | after_when", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | after_when", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | after_when", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("json key | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("F json key + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key + 1 | alone", :sqlite) =>
@@ -7305,23 +7305,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Max json key | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSON()", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Floor json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor json key / 2 | alone", :sqlite) =>
@@ -7453,10 +7453,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Max json key", :postgres) =>
-    ["drops textless: alone=none, cte=json, subquery=none"],
-  ("Max json key", :sqlite) =>
-    ["drops textless: alone=none, cte=json, subquery=none"],
-  ("Max json key", :mysql) =>
-    ["drops textless: alone=none, cte=json, subquery=none"],
 )

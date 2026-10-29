@@ -367,13 +367,28 @@ driver.sponsors.add(2, 3)
 driver.sponsors.add(Dict(:id => 4))
 ```
 
-An `add` of several targets is all or nothing: its statements run in one transaction, or in yours when
-one is open, so a target that fails (an id with no row, which fails the foreign key) leaves none of
-them linked. Inside your `atomic` block the `add` opens no savepoint: an error that leaves the block
-rolls the whole block back, while one you catch inside it (on MySQL, which checks each statement) keeps
-the targets written before the failing one. On PostgreSQL the foreign keys PormG creates are checked at
-`COMMIT`, as SQLite's are inside a transaction, so there the failure is reported when your block ends
-rather than at the `add`, and the whole block rolls back.
+An `add` sends one statement for all its targets on PostgreSQL. On MySQL and SQLite it sends one per
+group of targets that fits the driver's bind limit (2048 targets on MySQL, two parameters each), and
+the groups run in one transaction, or in yours when one is open. On PostgreSQL and MySQL a target
+already linked is skipped, and a target given twice in one call is linked once, so `add` needs no
+unique key on an explicit through table there. SQLite's `add` is `INSERT OR IGNORE`, which skips a link
+only on the through table's unique key: the through table PormG generates has one, and an explicit
+through model needs a `UniqueConstraint` over its two keys.
+
+Two targets are the same target when PormG binds the same value for them: an integer key given as a
+number and as integer text (`5`, `"5"`) is one target, and a UUID is compared lower-cased. On MySQL a text key
+in a table PormG did not create may use a case-insensitive collation, where `"LOTUS"` and `"lotus"` are
+one key to the database but two targets to PormG, so link them in separate calls. On PostgreSQL the
+targets are bound as an array of the related key's declared type, so that type must compare with the
+through table's column, as for `bulk_insert`.
+
+An `add` is all or nothing: a target that fails (an id with no row, which fails the foreign key)
+leaves none of them linked. Inside your `atomic` block the `add` opens no savepoint: an error that
+leaves the block rolls the whole block back, while one you catch inside it keeps only the groups
+written before the failing one (on MySQL, which checks each statement, and only when the `add` was split
+into groups). On PostgreSQL the foreign keys PormG creates are checked at `COMMIT`, as SQLite's are
+inside a transaction, so there the failure is reported when your block ends rather than at the `add`,
+and the whole block rolls back.
 
 ### `.remove(targets...)` — Removing relationships
 

@@ -2049,7 +2049,7 @@ end
 # SET `Tb`.col = source.col WHERE `Tb`.key = source.key`, every SET target qualified (a bare one is
 # ambiguous there, error 1052, measured); a `filters=` membership subquery over the same table inside a
 # derived table (error 1093 otherwise); the parameters in text order. PostgreSQL and SQLite render as
-# before. The many-to-many `add` takes PostgreSQL's idempotent NOT EXISTS shape.
+# before. The many-to-many `add` is one method per engine (#1413): each its own statement shape.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL bulk_update: a multi-table UPDATE over a VALUES ROW derived table" begin
   df = DataFrames.DataFrame(constructorid = [1, 2], nationality = ["British", missing])
@@ -2073,10 +2073,10 @@ end
   @test _MR_QB.bulk_update(MrSLUp.Constructor, df; show_query = :sql) ==
         "WITH source(\"constructorid\", \"nationality\") AS (\n  VALUES (?, ?), (?, ?)\n)\nUPDATE \"constructor\"\n" *
         "SET \"nationality\" = source.\"nationality\"\nFROM source\nWHERE \"constructor\".\"constructorid\" = source.\"constructorid\"\n"
-  # The many-to-many `add`: PostgreSQL's NOT EXISTS shape on MySQL too, SQLite's INSERT OR IGNORE.
-  my_add = which(_MR_QB._m2m_add!, Tuple{MrMockMySQL, Any, Any, Any, Any, Any, Any})
-  @test my_add === which(_MR_QB._m2m_add!, Tuple{MrMockPostgres, Any, Any, Any, Any, Any, Any})
-  @test my_add !== which(_MR_QB._m2m_add!, Tuple{MrMockSQLite, Any, Any, Any, Any, Any, Any})
+  # The many-to-many `add`: one method per engine, chosen by dispatch (#1413) — MySQL's `VALUES ROW`
+  # groups, PostgreSQL's `unnest` array, SQLite's INSERT OR IGNORE — and no shared method with a branch.
+  add_method(T) = which(_MR_QB._m2m_add!, Tuple{T, Any, Any, Any, Any, Any, Any, PormG.PormGField})
+  @test length(unique([add_method(MrMockMySQL), add_method(MrMockPostgres), add_method(MrMockSQLite)])) == 3
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

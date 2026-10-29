@@ -269,8 +269,9 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
         end
 
         # What: the many-to-many manager adds, removes, clears and sets the links of one row.
-        # SQL: add is INSERT INTO <join> (o, r) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM <join> WHERE o = ?
-        #      AND r = ?) per target; remove and clear a DELETE; set reads the links, then removes and adds.
+        # SQL: add is INSERT INTO <join> (o, r) SELECT `v`.`o`, `v`.`r` FROM (VALUES ROW(?, ?), …) AS `v` (`o`, `r`)
+        #      WHERE NOT EXISTS (SELECT 1 FROM <join> AS `e` WHERE `e`.o = `v`.`o` AND `e`.r = `v`.`r`), one per
+        #      group of targets (#1413); remove and clear a DELETE; set reads the links, then removes and adds.
         # Why: MySQL runs PostgreSQL's idempotent INSERT as written, and it needs no unique key (#1130).
         @testset "the many-to-many manager: add, remove, clear, set" begin
             marlboro, camel, jps = (K.Sponsor.objects.create("name" => n).id for n in ("Marlboro", "Camel", "JPS"))
@@ -287,11 +288,14 @@ if only_on(:mysql, "bulk writes through the MySQL query builder (phase 3c)")
             K.Season.sponsors(season.id).clear()
             @test isempty(linked())
             # The NOT EXISTS shape needs no unique key: on a join table without one, a repeated add still
-            # writes one row (an INSERT IGNORE would write two).
+            # writes one row (an INSERT IGNORE would write two), and so does a target repeated within one
+            # add, which one statement cannot see itself insert (#1413: deduplicated before it is built).
             run("CREATE TABLE `p3k_plain_join` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `o` BIGINT NOT NULL, `r` BIGINT NOT NULL)" * tail)
             QB = PormG.QueryBuilder
+            sponsor_key = K.Sponsor.fields["id"]
             for _ in 1:2
-                QB._m2m_add!(pool, PormG.config["p3k_my"], "`p3k_plain_join`", "`o`", "`r`", season.id, [marlboro])
+                QB._m2m_add!(pool, PormG.config["p3k_my"], "`p3k_plain_join`", "`o`", "`r`", season.id,
+                             [marlboro, marlboro, string(marlboro)], sponsor_key)
             end
             @test only(DataFrame(run("SELECT COUNT(*) AS n FROM `p3k_plain_join`")).n) == 1
         end

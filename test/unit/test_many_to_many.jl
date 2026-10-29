@@ -1658,14 +1658,17 @@ PormG.backend_mysql_parameter_limit(::M2MLimitMySQL1355) = 4096
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1399: PostgreSQL's and MySQL's add runs its statements in one transaction
-# What: the statements a many-to-many `add` sends on a PostgreSQL pool (the method is MySQL's too): one
-# target is one statement with no transaction of its own; several are one transaction, which a failing
-# target rolls back; inside a caller's transaction they run on its connection with no BEGIN of their own.
-# SQL: `BEGIN;`, `INSERT INTO … SELECT $1, $2 WHERE NOT EXISTS (…);` per target, then `COMMIT;` — or
-# `ROLLBACK;` when one fails. Asserted live in test/integration/test_many_to_many.jl on every engine.
-# Why: each INSERT ran in autocommit, so an add whose last target had no row left the earlier links
-# written; SQLite's add and every engine's remove already ran their statements in one transaction (#1355).
+# #1399 / #1413: PostgreSQL's many-to-many add is one statement, whatever the number of targets
+# What: the statements an `add` sends on a recording PostgreSQL pool. Any number of targets is ONE
+# `INSERT … SELECT … FROM unnest($2::bigint[])` with three parameters and no transaction of its own (one
+# statement is atomic); a repeated target is bound once; inside a caller's transaction it runs on that
+# connection, which the caller commits; a failure is raised and the connection goes back to the pool.
+# SQL: INSERT INTO "seasons_drivers" ("seasons_id", "drivers_id") SELECT $1, "u"."x" FROM unnest($2::bigint[])
+#      AS "u"("x") WHERE NOT EXISTS (SELECT 1 FROM "seasons_drivers" AS "e" WHERE "e"."seasons_id" = $3 AND
+#      "e"."drivers_id" = "u"."x"); — asserted live in test/integration/test_many_to_many.jl.
+# Why: #1399 put the per-target statements in one transaction, which held its locks for N round trips;
+# #1413 sends one statement. One statement cannot see its own inserts, so a repeat must be dropped
+# before it is built, or it links twice (no unique key) or raises (with one).
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct FakeConn1399
   id::Int
@@ -1679,12 +1682,18 @@ mutable struct MockPGPool1399 <: PormG.PormGPostgres
   fail_on::Int              # the INSERT, counted from 1, that fails; 0 for none
   inserts::Int
   executed::Vector{String}  # every statement the "driver" received, in order
+  bound::Vector{Vector{Any}}  # each statement's parameters, in order
 end
-MockPGPool1399() = MockPGPool1399(Any[FakeConn1399(1)], [true], "mock://pg1399", 1, ReentrantLock(), 0, 0, String[])
+MockPGPool1399() = MockPGPool1399(Any[FakeConn1399(1)], [true], "mock://pg1399", 1, ReentrantLock(), 0, 0, String[],
+                                  Vector{Any}[])
 PormG.backend_is_alive(::MockPGPool1399, conn) = conn isa FakeConn1399
 PormG.backend_connect(::MockPGPool1399; kwargs...) = FakeConn1399(2)
+_bound1399(params) = params isa PormG.PormGPostgresParam ? collect(Any, params.parameters) :
+                     params isa PormG.AbstractPormGParam ? PormG.QueryBuilder.get_final_parameters(params) :
+                     params === nothing ? Any[] : collect(Any, params)
 function PormG.backend_execute_async(pool::MockPGPool1399, conn, sql::String, params)
   push!(pool.executed, sql)
+  push!(pool.bound, _bound1399(params))
   failing = startswith(sql, "INSERT") && (pool.inserts += 1) == pool.fail_on
   return @async begin
     failing && error("mock: foreign key violation")
@@ -1705,39 +1714,182 @@ Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerFie
 PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
 end
 
-@testset "#1399: PostgreSQL's and MySQL's many-to-many add runs in one transaction" begin
+@testset "#1399 / #1413: PostgreSQL's many-to-many add is one statement" begin
   rel = Models.get_many_to_many_relation(ManyToManyTx1399.Season, "drivers")
   manager = PormG.QueryBuilder.ManyToManyManager(ManyToManyTx1399.Season, ManyToManyTx1399.Driver, rel, 1)
   sent() = [first(split(sql)) for sql in POOL_1399.executed]
   function reset!(fail_on::Int = 0)
     empty!(POOL_1399.executed)
+    empty!(POOL_1399.bound)
     POOL_1399.inserts = 0
     POOL_1399.fail_on = fail_on
   end
+  table = PormG.QueryBuilder.safe_table_identifier(rel.through_table, POOL_1399)
+  owner = PormG.QueryBuilder.safe_column_identifier(rel.owner_column, POOL_1399)
+  related = PormG.QueryBuilder.safe_column_identifier(rel.related_column, POOL_1399)
+  expected_sql = "INSERT INTO $table ($owner, $related) SELECT \$1, \"u\".\"x\" FROM unnest(\$2::bigint[]) AS \"u\"(\"x\") " *
+                 "WHERE NOT EXISTS (SELECT 1 FROM $table AS \"e\" WHERE \"e\".$owner = \$3 AND \"e\".$related = \"u\".\"x\");"
 
-  # One target: one statement, as before.
+  # One target: one statement, its id in a one-element array.
   reset!()
   @test PormG.QueryBuilder.add(manager, 7) === nothing
-  @test sent() == ["INSERT"]
+  @test POOL_1399.executed == [expected_sql]
+  @test POOL_1399.bound == [Any[1, Any[7], 1]]
 
-  # Several targets: one transaction around them.
+  # Several targets: still one statement, three parameters, and no transaction of its own.
   reset!()
   @test PormG.QueryBuilder.add(manager, 7, 8, 9) === nothing
-  @test sent() == ["BEGIN;", "INSERT", "INSERT", "INSERT", "COMMIT;"]
-  @test all(sql -> occursin("WHERE NOT EXISTS", sql), POOL_1399.executed[2:4])
+  @test POOL_1399.executed == [expected_sql]
+  @test POOL_1399.bound == [Any[1, Any[7, 8, 9], 1]]
 
-  # The last target fails: the transaction is rolled back, never committed.
-  reset!(3)
+  # A repeated target is bound once, first occurrence first — including an integer key given as text,
+  # which the column compares as its number. Mutation gate: without the dedupe the array is
+  # [7, 8, 7, "8"] and one statement inserts 7 and 8 twice.
+  reset!()
+  PormG.QueryBuilder.add(manager, 7, 8, 7, "8")
+  @test POOL_1399.bound == [Any[1, Any[7, 8], 1]]
+  # Integer text alone, or first, is bound as its integer, not as the text the formatter kept.
+  reset!()
+  PormG.QueryBuilder.add(manager, "8", 7)
+  @test POOL_1399.bound == [Any[1, Any[8, 7], 1]] && POOL_1399.bound[1][2][1] isa Int64
+
+  # The statement fails: the error is raised and the connection is back in the pool.
+  reset!(1)
   @test_throws PormG.PormGError PormG.QueryBuilder.add(manager, 7, 8, 9)
-  @test sent() == ["BEGIN;", "INSERT", "INSERT", "INSERT", "ROLLBACK;"]
-  @test all(POOL_1399.available)   # the connection is back in the pool
+  @test sent() == ["INSERT"]
+  @test all(POOL_1399.available)
 
-  # Inside the caller's transaction, the add opens none of its own: the caller commits.
+  # Inside the caller's transaction it runs on that connection; the caller commits.
   reset!()
   PormG.ConnectionPool.atomic("m2m_tx_mock_1399") do
     PormG.QueryBuilder.add(manager, 7, 8)
   end
-  @test sent() == ["BEGIN;", "INSERT", "INSERT", "COMMIT;"]
+  @test sent() == ["BEGIN;", "INSERT", "COMMIT;"]
   @test all(POOL_1399.available)
+  reset!()
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1413: the PostgreSQL array is typed from the related key, and two spellings of one target bind once
+# What: a UUID related key binds a `uuid[]` of lower-cased ids, a target given in both cases once; a
+# CharField related key binds a `varchar[]` and keeps a numeric text as text: `"5"` and `"05"` are two keys.
+# SQL: … FROM unnest($2::uuid[]) …, … FROM unnest($2::varchar[]) …
+# Why: the array's type is what the column compares the targets with (`_pg_bulk_param_type`, as the bulk
+# writers type theirs); a key typed as `bigint` regardless would fail on any other key, and the only
+# live fixtures have `IDField` keys. A spelling the dedupe missed would insert one target twice.
+# ─────────────────────────────────────────────────────────────────────────────
+module ManyToManyKeys1413
+import PormG
+import PormG.Models
+Livery = Models.Model("liveries", uid = Models.UUIDField(primary_key = true), name = Models.CharField())
+Grid = Models.Model("grids", slot = Models.CharField(primary_key = true, max_length = 8))
+Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
+  liveries = Models.ManyToManyField(Livery, related_name = "seasons"),
+  grids = Models.ManyToManyField(Grid, related_name = "seasons"))
+PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
+end
+
+@testset "#1413: PostgreSQL's add types its array from the related key" begin
+  QB = PormG.QueryBuilder
+  manager(field, related) = QB.ManyToManyManager(ManyToManyKeys1413.Season, related,
+                                                 Models.get_many_to_many_relation(ManyToManyKeys1413.Season, field), 1)
+  reset!() = (empty!(POOL_1399.executed); empty!(POOL_1399.bound); POOL_1399.inserts = 0; POOL_1399.fail_on = 0)
+  uid = "123e4567-e89b-12d3-a456-426614174000"
+  reset!()
+  QB.add(manager("liveries", ManyToManyKeys1413.Livery), uid, uppercase(uid))
+  @test occursin("FROM unnest(\$2::uuid[]) AS", only(POOL_1399.executed))
+  @test POOL_1399.bound == [Any[1, Any[uid], 1]]
+  reset!()
+  QB.add(manager("grids", ManyToManyKeys1413.Grid), "5", "05", "5")
+  @test occursin("FROM unnest(\$2::varchar[]) AS", only(POOL_1399.executed))
+  @test POOL_1399.bound == [Any[1, Any["5", "05"], 1]]
+  reset!()
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1413: MySQL's many-to-many add is one statement per group of targets, split under the bind limit
+# What: the statements an `add` sends on a recording MySQL pool whose driver binds 4096 parameters: up
+# to 2048 targets (two parameters each) are one statement with no transaction of its own; 2049 are two
+# statements, 2048 rows then 1, in one transaction; a repeated target is bound once.
+# SQL: INSERT INTO `seasons_drivers` (`seasons_id`, `drivers_id`) SELECT `v`.`o`, `v`.`r` FROM
+#      (VALUES ROW(?, ?), …) AS `v` (`o`, `r`) WHERE NOT EXISTS (SELECT 1 FROM `seasons_drivers` AS `e`
+#      WHERE `e`.`seasons_id` = `v`.`o` AND `e`.`drivers_id` = `v`.`r`); — live past the limit in
+#      test/integration/test_many_to_many.jl.
+# Why: one statement per target held the add's locks, and the ranges its NOT EXISTS reads, for N round
+# trips; one statement for all of them would exceed the driver's bind limit past 2048 targets.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct MockMyPool1413 <: PormG.PormGMySQL
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  executed::Vector{String}
+  bound::Vector{Vector{Any}}
+end
+MockMyPool1413() = MockMyPool1413(Any[FakeConn1399(1)], [true], "mock://my1413", 1, ReentrantLock(), String[],
+                                  Vector{Any}[])
+PormG.backend_is_alive(::MockMyPool1413, conn) = conn isa FakeConn1399
+PormG.backend_connect(::MockMyPool1413; kwargs...) = FakeConn1399(2)
+PormG.backend_mysql_parameter_limit(::MockMyPool1413) = 4096
+function PormG.backend_execute_async(pool::MockMyPool1413, conn, sql::String, params)
+  push!(pool.executed, sql)
+  push!(pool.bound, _bound1399(params))
+  return @async NamedTuple[]
+end
+
+const POOL_1413 = MockMyPool1413()
+PormG.config["m2m_my_mock_1413"] = PormG.Configuration.Settings(
+  connections = POOL_1413, change_data = true, db_def_folder = "m2m_my_mock_1413")
+
+module ManyToManyMy1413
+import PormG
+import PormG.Models
+Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
+Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
+  drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+PormG.Models.set_models(@__MODULE__, "m2m_my_mock_1413")
+end
+
+@testset "#1413: MySQL's many-to-many add is one statement per group under the bind limit" begin
+  rel = Models.get_many_to_many_relation(ManyToManyMy1413.Season, "drivers")
+  manager = PormG.QueryBuilder.ManyToManyManager(ManyToManyMy1413.Season, ManyToManyMy1413.Driver, rel, 1)
+  reset!() = (empty!(POOL_1413.executed); empty!(POOL_1413.bound))
+  inserts() = filter(sql -> startswith(sql, "INSERT"), POOL_1413.executed)
+  rows(sql) = count("ROW(?, ?)", sql)
+
+  # Three targets: one statement, the exact shape.
+  reset!()
+  PormG.QueryBuilder.add(manager, 7, 8, 9)
+  table = PormG.QueryBuilder.safe_table_identifier(rel.through_table, POOL_1413)
+  owner = PormG.QueryBuilder.safe_column_identifier(rel.owner_column, POOL_1413)
+  related = PormG.QueryBuilder.safe_column_identifier(rel.related_column, POOL_1413)
+  @test POOL_1413.executed == ["INSERT INTO $table ($owner, $related) SELECT `v`.`o`, `v`.`r` " *
+    "FROM (VALUES ROW(?, ?), ROW(?, ?), ROW(?, ?)) AS `v` (`o`, `r`) WHERE NOT EXISTS (SELECT 1 FROM $table " *
+    "AS `e` WHERE `e`.$owner = `v`.`o` AND `e`.$related = `v`.`r`);"]
+  @test POOL_1413.bound == [Any[1, 7, 1, 8, 1, 9]]
+
+  # Integer text is bound as its integer: a `VALUES` column mixing numbers and text would be text,
+  # which MySQL compares with the key as a double.
+  reset!()
+  PormG.QueryBuilder.add(manager, "7")
+  @test POOL_1413.bound == [Any[1, 7]] && POOL_1413.bound[1][2] isa Int64
+
+  # 2048 targets fill one statement (4096 parameters); no transaction.
+  reset!()
+  PormG.QueryBuilder.add(manager, collect(1:2048))
+  @test length(POOL_1413.executed) == 1 && rows(only(POOL_1413.executed)) == 2048
+
+  # 2049: two statements, 2048 rows then 1, in one transaction.
+  reset!()
+  PormG.QueryBuilder.add(manager, collect(1:2049))
+  @test first(POOL_1413.executed) == "START TRANSACTION;" && last(POOL_1413.executed) == "COMMIT;"
+  @test rows.(inserts()) == [2048, 1]
+  @test POOL_1413.bound[end - 1] == Any[1, 2049]
+
+  # 2049 targets of which one is a repeat: 2048 distinct, one statement.
+  reset!()
+  PormG.QueryBuilder.add(manager, vcat(collect(1:2048), [5]))
+  @test length(POOL_1413.executed) == 1 && rows(only(POOL_1413.executed)) == 2048
   reset!()
 end

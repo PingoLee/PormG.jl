@@ -128,6 +128,19 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Lag interval",            :Result,              m -> _EKM_FN.Lag("fastestlaptime", over = _ekm_over(:Result))),
   ("NullIf interval",         :Result,              m -> _EKM_FN.NullIf("fastestlaptime", _EKM_Q.F("fastestlaptime"))),
   ("Max Case interval col",   :Result,              m -> _EKM_FN.Max(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("fastestlaptime"))]))),
+  # #1459: a side of F arithmetic the render types through `_side_function_kind` — a window value
+  # function over a temporal value, and a time cast or `Case` beside a duration — recorded before the
+  # side readers moved from the read-kind policy onto the walk.
+  ("Lag Cast ts + 1",         :Result,              m -> _EKM_FN.Lag(_EKM_FN.Cast("raceid__start_at", "timestamp"), over = _ekm_over(:Result)) + 1),
+  ("Lag Case date col + 1",   :Result,              m -> _EKM_FN.Lag(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("raceid__date"))]), over = _ekm_over(:Result)) + 1),
+  ("Lag Cast interval * 2",   :Result,              m -> _EKM_FN.Lag(_EKM_FN.Cast("fastestlaptime", "interval"), over = _ekm_over(:Result)) * 2),
+  ("Lag Case interval col * grid", :Result,         m -> _EKM_FN.Lag(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("fastestlaptime"))]), over = _ekm_over(:Result)) * _EKM_Q.F("grid")),
+  ("grid * Lag Case interval col", :Result,         m -> _EKM_Q.F("grid") * _EKM_FN.Lag(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("fastestlaptime"))]), over = _ekm_over(:Result))),
+  ("Lag F ts - ts * 2",       :Result,              m -> _EKM_FN.Lag(_EKM_Q.F("raceid__start_at") - _EKM_Q.F("raceid__start_at"), over = _ekm_over(:Result)) * 2),
+  ("F interval * Cast time",  :Result,              m -> _EKM_Q.F("fastestlaptime") * _EKM_FN.Cast("raceid__start_at", "time")),
+  ("Cast time * F interval",  :Result,              m -> _EKM_FN.Cast("raceid__start_at", "time") * _EKM_Q.F("fastestlaptime")),
+  ("F interval * Case time col", :Result,           m -> _EKM_Q.F("fastestlaptime") * _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("raceid__time"))])),
+  ("F interval / Cast time",  :Result,              m -> _EKM_Q.F("fastestlaptime") / _EKM_FN.Cast("raceid__start_at", "time")),
   # #1307: such a `Case` as the date side of F temporal arithmetic, as `F("date")` is above
   ("Case untyped date col + 1", :Race,              m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) + 1),
   ("Case untyped date col - date", :Race,           m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) - _EKM_Q.F("date")),

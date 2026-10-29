@@ -1478,6 +1478,186 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max Case interval col | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag Cast ts + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast ts + 1 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Lag Cast ts + 1 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast ts + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Lag Cast ts + 1 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Lag Cast ts + 1 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Lag Cast ts + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast ts + 1 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Lag Cast ts + 1 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case date col + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case date col + 1 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case date col + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Case date col + 1 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Lag Cast interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast interval * 2 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Lag Cast interval * 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Lag Cast interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Lag Cast interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Lag Cast interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Cast interval * 2 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Lag Cast interval * 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case interval col * grid | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case interval col * grid | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Lag Case interval col * grid | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag Case interval col * grid | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("grid * Lag Case interval col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("grid * Lag Case interval col | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("grid * Lag Case interval col | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("grid * Lag Case interval col | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from LAG over a FExpression argument. Project the window over a field path instead (#685)."),
+  ("Lag F ts - ts * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from LAG over a FExpression argument. Project the window over a field path instead (#685)."),
+  ("Lag F ts - ts * 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from LAG over a FExpression argument. Project the window over a field path instead (#685)."),
+  ("Lag F ts - ts * 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("Lag F ts - ts * 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = nothing, whole_numeric = nothing),
+  ("F interval * Cast time | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Cast time | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval * Cast time | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Cast time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * Cast time | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval * Cast time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * Cast time | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Cast time | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval * Cast time | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast time * F interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast time * F interval | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast time * F interval | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast time * F interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Cast time * F interval | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast time * F interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("Cast time * F interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast time * F interval | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast time * F interval | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * Case time col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * Case time col | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * Case time col | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * Case time col | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / Cast time | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / Cast time | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval / Cast time | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / Cast time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F interval / Cast time | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval / Cast time | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F interval / Cast time | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / Cast time | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("F interval / Cast time | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Case untyped date col + 1 | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | alone", :sqlite) =>
@@ -7021,6 +7201,58 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("Lag Cast ts + 1 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=datetime")],
+  ("Lag Cast ts + 1 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=datetime")],
+  ("Lag Cast ts + 1 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=datetime")],
+  ("Lag Cast ts + 1 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=datetime")],
+  ("Lag Cast interval * 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Cast interval * 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Cast interval * 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Cast interval * 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | alone", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | alone", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag Case interval col * grid | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | alone", :postgres) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | alone", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | alone", :mysql) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | subquery", :postgres) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | subquery", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("grid * Lag Case interval col | subquery", :mysql) =>
+    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=interval")],
+  ("Lag F ts - ts * 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=interval")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>

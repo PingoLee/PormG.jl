@@ -329,3 +329,124 @@ end
         end
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# setup(path; root): the AI skills go into the project root, not pwd() (#1294)
+# `setup` asked whether to install the skills and then called `install_ai_skills()`, which defaults
+# to `pwd()`: `setup(joinpath(app, "db"))` from anywhere but `app` wrote `connection.yml` into the app
+# and the skills somewhere else, so a caller scaffolding a project had to `cd` the whole process into
+# it. `root` means what it means for `Configuration.load`: the folder is `joinpath(root, path)` and the
+# skills go into `root`. Without `root` nothing moves: both still resolve against `pwd()`.
+# Hermetic: SQLite is chosen at the prompt, and `setup` only writes files — it never connects.
+# ─────────────────────────────────────────────────────────────────────────────
+# Drive the five prompts (adapter, SQLite filename, time zone, models file, AI skills) from `answers`
+# and capture what `setup` prints. Returns `(result, output)`.
+function _ai1294_setup(answers::AbstractString, args...; kwargs...)
+    mktempdir() do io_dir
+        stdin_file, stdout_file = joinpath(io_dir, "stdin"), joinpath(io_dir, "stdout")
+        write(stdin_file, answers)
+        result = open(stdin_file) do in_io
+            open(stdout_file, "w") do out_io
+                redirect_stdin(in_io) do
+                    redirect_stdout(out_io) do
+                        PormG.setup(args...; kwargs...)
+                    end
+                end
+            end
+        end
+        return result, read(stdout_file, String)
+    end
+end
+
+# Every file under `dir`, relative to it.
+_ai1294_files(dir) = sort!([relpath(joinpath(r, f), dir) for (r, _, fs) in walkdir(dir) for f in fs])
+
+const _AI1294_SQLITE_DEFAULTS = "2\n\n\n\n"            # SQLite, database.sqlite, UTC, models.jl
+
+@testset "setup(path; root) writes the config and the skills under root, from any pwd (#1294)" begin
+    mktempdir() do project
+        mktempdir() do elsewhere
+            r, out = cd(elsewhere) do
+                _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "y\n", "db"; root = project)
+            end
+            @test isfile(joinpath(project, "db", "connection.yml"))
+            @test isfile(joinpath(project, "db", "models.jl"))
+            @test isfile(joinpath(project, ".github", "skills", "pormg-usage", "SKILL.md"))
+            @test isfile(joinpath(project, ".claude", "skills", "pormg-usage", "SKILL.md"))
+            @test r.installed_dir == joinpath(project, ".github", "skills", "pormg-usage")
+            @test isempty(_ai1294_files(elsewhere))               # pwd() got nothing — the defect
+            # The prompt names where the skills will go, and the load hint carries the root.
+            @test occursin("install PormG AI skills into $(abspath(project))?", out)
+            # `repr`, so a Windows root (`C:\\Users\\…`) prints as a string literal that parses.
+            @test occursin("PormG.Configuration.load(\"db\"; root = $(repr(project)))", out)
+        end
+    end
+end
+
+@testset "setup(path) without root still resolves both against pwd() (#1294)" begin
+    mktempdir() do project
+        here, r, out = cd(project) do
+            (pwd(), _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "\n", "db")...)   # empty answer: default Y
+        end
+        @test isfile(joinpath(project, "db", "connection.yml"))
+        @test isfile(joinpath(project, ".github", "skills", "pormg-usage", "SKILL.md"))
+        @test realpath(r.installed_dir) == realpath(joinpath(project, ".github", "skills", "pormg-usage"))
+        @test occursin("PormG.Configuration.load(\"db\")", out)   # no root keyword in the hint
+        @test occursin("install PormG AI skills into $(here)?", out)   # the prompt names pwd()
+    end
+end
+
+@testset "setup refuses an absolute path with root, before writing anything (#1294)" begin
+    mktempdir() do project
+        mktempdir() do elsewhere
+            err = cd(elsewhere) do
+                try
+                    _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "y\n", joinpath(elsewhere, "db"); root = project)
+                    nothing
+                catch e
+                    e
+                end
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test err !== nothing && occursin("setup(\"db\"; root = …)", err.msg)
+            @test isempty(_ai1294_files(project))
+            @test isempty(_ai1294_files(elsewhere))
+        end
+    end
+end
+
+@testset "setup with root installs no skills when the answer is n (#1294)" begin
+    mktempdir() do project
+        _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "n\n", "db"; root = project)
+        @test isfile(joinpath(project, "db", "connection.yml"))
+        @test !isdir(joinpath(project, ".github"))
+        @test !isdir(joinpath(project, ".claude"))
+    end
+end
+
+@testset "setup with a relative root resolves it against pwd() and keeps it in the load hint (#1294)" begin
+    mktempdir() do parent
+        here, r, out = cd(parent) do
+            (pwd(), _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "y\n", "db"; root = "race_control")...)
+        end
+        @test isfile(joinpath(parent, "race_control", "db", "connection.yml"))
+        @test isfile(joinpath(parent, "race_control", ".github", "skills", "pormg-usage", "SKILL.md"))
+        @test !isdir(joinpath(parent, ".github"))                # not the working directory itself
+        @test occursin("install PormG AI skills into $(joinpath(here, "race_control"))?", out)
+        # The relative root, as passed: the call `load` accepts from the same working directory.
+        @test occursin("PormG.Configuration.load(\"db\"; root = \"race_control\")", out)
+    end
+end
+
+# The load hint is printed to be pasted, so it is a Julia string literal on every platform: a `$` in
+# the root (or a Windows `C:\Users`) must come out escaped. A temp path has neither on Linux/macOS,
+# which is why this case names one explicitly rather than relying on the Windows CI leg alone.
+@testset "setup prints the load hint's root as a literal that parses (#1294)" begin
+    mktempdir() do project
+        root = joinpath(project, raw"pit$lane")
+        _, out = _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "n\n", "db"; root = root)
+        @test occursin("load(\"db\"; root = $(repr(root)))", out)
+        @test occursin(raw"pit\$lane", out)                     # escaped, not raw interpolation
+        @test isfile(joinpath(root, "db", "connection.yml"))
+    end
+end

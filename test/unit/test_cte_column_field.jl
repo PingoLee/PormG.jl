@@ -203,6 +203,7 @@ const _CCF_MY = CcfMockMySQL()
   sub = CCF.Ccf_result.objects
   sub.filter("resultid" => PormG.OuterRef("resultid"))
   sub.values("points")
+  sub.limit(1)   # one row per correlation, as a scalar `Subquery` should say
   over = PormG.QueryBuilder.WindowOver(order_by = "resultid")
   # (projection, expected field, a value the outer filter compares with it)
   families = (

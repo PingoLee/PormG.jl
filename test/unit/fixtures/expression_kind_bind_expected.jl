@@ -927,6 +927,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"date\" - \"Tb\".\"date\") > \$1", params = [("10", "Int64")]),
   ("F date - date | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("F date - date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("F date - date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("F date - date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("F date - date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    DATEDIFF(`R2`.`date`, `R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F date - date | subquery", :postgres, "w__@gt", "10") =>
@@ -2511,6 +2517,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$2 THEN \"Tb\".\"date\"\nELSE NULL\nEND\n - \"Tb\".\"date\") > \$3", params = [("2009", "Int64"), ("2009", "Int64"), ("10", "Int64")]),
   ("Case untyped date col - date | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(julianday(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\"\nELSE NULL\nEND\n) - julianday(\"Tb\".\"date\") AS INTEGER) > ?", params = [("2009", "Int64"), ("2009", "Int64"), ("10", "Int64")]),
+  ("Case untyped date col - date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2009", "Int64"), ("10", "Int64")]),
+  ("Case untyped date col - date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2009", "Int64"), ("10", "Int64")]),
+  ("Case untyped date col - date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2009", "Int64"), ("10", "Int64")]),
   ("Case untyped date col - date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    DATEDIFF(CASE\nWHEN `R2`.`year` = ? THEN `R2`.`date`\nELSE NULL\nEND\n, `R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped date col - date | subquery", :postgres, "w__@gt", "10") =>

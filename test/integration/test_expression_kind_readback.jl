@@ -117,6 +117,13 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1460: both day counts are CTE columns now (the walk names them `CInt32`), read back as above.
+  ("F date - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("F date - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("F date - date | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   # #1458: `Floor` over a JSON key holding `7`, divided by 2. PostgreSQL renders `FLOOR((x)::numeric)`,
   # so the quotient keeps its fraction; SQLite's `FLOOR` keeps the integer the JSON holds, so its `/` is
   # integer division. A different value, not a different spelling: a departure recorded as found, not
@@ -169,6 +176,7 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
   # #1307: the same day count through a `Case` over a date column, so the same two widths.
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
+  "F date - date | cte", "Case untyped date col - date | cte",   # #1460: as CTE columns too
   # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
   "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
 ])

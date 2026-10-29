@@ -621,11 +621,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :sqlite) =>
@@ -1683,11 +1683,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | subquery", :sqlite) =>
@@ -7387,6 +7387,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date - date | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | cte", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
   ("F date - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
@@ -7398,6 +7404,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("Case untyped date col - date | alone", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("Case untyped date col - date | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | cte", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
   ("Case untyped date col - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],

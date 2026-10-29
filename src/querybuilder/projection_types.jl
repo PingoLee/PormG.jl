@@ -1596,7 +1596,10 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   end
   rule = _result_rule(p)
   rule === :numeric && return (:numeric, "`$(name)(…)`")
-  rule in _OPERAND_TYPED_RULES || return nothing
+  # #1034 (the #1457 leftover): a function whose value is not its operand's is classified by the kind
+  # the walk gives it, as its CTE column is (`_cte_textless_record`), so the two contexts agree.
+  # `Extract(x, "EPOCH")` is a decimal there since #1457, and its text is a decimal's.
+  rule in _OPERAND_TYPED_RULES || return _textless_walk_leaf(p, instruc)
   # The whole classifier, not only the number half: `Lag("active")` is the boolean's own value, and
   # `_expression_formatter` does not type a window value function. A `Lag`/`Lead` `default` is one of
   # its values too (#1147 step 2, `_with_window_default`): `Lag("number"; default = 3.5)` is a float.
@@ -1610,6 +1613,15 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   end
   side = _division_first((_concat_textless_operand(operand, instruc) for operand in operands), instruc.connection)
   return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
+end
+# #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
+# names it (`_expression_kind`); any other kind has one text, `nothing`. A zero-scale decimal is whole,
+# as D5 decides for a declared one.
+function _textless_walk_leaf(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  k = _expression_kind(p, instruc)
+  k isa CFloat64 && return (:float, "`$(p.function_name)(…)`")
+  k isa CDecimal && !_whole_kind(k) && return (:decimal, "`$(p.function_name)(…)`")
+  return nothing
 end
 # D5 (#1034) — a zero-scale cast (`numeric(p,0)`, `numeric(p)`, a `DecimalField(…, decimal_places = 0)`,
 # as a `Cast` or an `output_field`) is a whole number, as a zero-scale column is since #1087: PostgreSQL

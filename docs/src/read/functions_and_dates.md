@@ -489,7 +489,8 @@ refusal covers:
   column, joined paths included;
 - a `true`, `1.5`, `Decimal`, `DateTime` or `Period` literal;
 - an expression of one of those types: a comparison or `Q(...)` condition, arithmetic, an extremum
-  or window value, a `Cast` to a float or a decimal, `Sum` of a duration, and the functions
+  or window value, a `Cast` to a float or a decimal, `Extract(x, "epoch")` (the seconds as a decimal,
+  #1457), `Sum` of a duration, and the functions
   PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`). `Round` over
   an integer is that integer (#1196), so it passes;
 - a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so

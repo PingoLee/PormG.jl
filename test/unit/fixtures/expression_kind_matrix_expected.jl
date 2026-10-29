@@ -5799,11 +5799,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract minute F interval * 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract epoch F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :sqlite) =>
@@ -5811,11 +5811,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract quarter F datetime - date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | alone", :sqlite) =>
@@ -6213,7 +6213,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract hour F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | alone", :mysql) =>
@@ -6225,29 +6225,29 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F time - time | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Concat Extract epoch start_at | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract epoch start_at | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Concat Extract epoch start_at | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract epoch start_at | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract epoch start_at | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Concat Extract epoch start_at | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract epoch start_at | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract epoch start_at | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Concat Extract epoch start_at | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
   ("Concat Extract year start_at | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Extract year start_at | alone", :sqlite) =>
@@ -7741,12 +7741,24 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("Extract epoch F interval * 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Extract epoch F interval * 2 | cte", :postgres) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
   ("Extract epoch F interval * 2 | cte", :mysql) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F time - time | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Extract epoch F time - time | cte", :postgres) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F time - time | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Cast text ArrayField(CharField(3)) | alone", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres) =>
@@ -7815,10 +7827,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Extract epoch F interval * 2", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Extract epoch F interval * 2", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Extract epoch F time - time", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
 )

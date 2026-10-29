@@ -7735,30 +7735,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\"))::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\"))::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
-  ("Concat Extract epoch start_at | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\n(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000)) > ?", params = [("\"t=\"", "String"), ("\"t=\"", "String"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | alone", :mysql, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\n(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `Tb`.`start_at`) / 1000000)) > ?", params = [("\"t=\"", "String"), ("\"t=\"", "String"), ("\"pole\"", "String")]),
-  ("Concat Extract epoch start_at | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\nEXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric) > \$3", params = [("\"t=\"", "String"), ("\"t=\"", "String"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | alone", :postgres, "v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "CONCAT(\$2::text,\nEXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric) > \$3", params = [("\"t=\"", "String"), ("\"t=\"", "String"), ("\"pole\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"t=\"", "String"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :mysql, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"t=\"", "String"), ("\"pole\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"t=\"", "String"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :postgres, "g__v__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"t=\"", "String"), ("\"pole\"", "String")]),
-  ("Concat Extract epoch start_at | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\n(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"t=\"", "String"), ("1", "Int64"), ("\"t=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | subquery", :mysql, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\n(TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', `R2`.`start_at`) / 1000000)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"t=\"", "String"), ("1", "Int64"), ("\"t=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
-  ("Concat Extract epoch start_at | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\nEXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("\"t=\"", "String"), ("1", "Int64"), ("\"t=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Concat Extract epoch start_at | subquery", :postgres, "w__@gt", "text pole") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\$3::text,\nEXTRACT(EPOCH FROM \"R2\".\"start_at\")::numeric) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("\"t=\"", "String"), ("1", "Int64"), ("\"t=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Concat Extract year start_at | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n?,\nEXTRACT(YEAR FROM `Tb`.`start_at`)) > ?", params = [("\"y=\"", "String"), ("\"y=\"", "String"), ("\"10\"", "String")]),
   ("Concat Extract year start_at | alone", :mysql, "v__@gt", "text pole") =>

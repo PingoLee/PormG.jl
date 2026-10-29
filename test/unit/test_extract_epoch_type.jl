@@ -27,7 +27,7 @@ PormG.config["epoch_sl"] = PormG.Configuration.Settings(connections = EpochMockS
 function _epoch_model(key)
   m = Model("epoch_races", raceid = IDField(), year = IntegerField(), start_at = DateTimeField(null = true),
             fastestlaptime = DurationField(null = true))
-  m.connect_key = key
+  m.connect_key = key; m._module = Main   # a CTE resolves its model through the module (#1034 testset below)
   return m
 end
 const _EPOCH_PG = _epoch_model("epoch_pg")
@@ -100,4 +100,39 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1457: SQLite still has no EPOCH part" begin
   @test_throws PormG.BackendCapabilityError _epoch_sql(_EPOCH_SL, Extract("start_at", "EPOCH"), EpochMockSQLite())
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1034 (the #1457 leftover): `Concat` reads `EPOCH`'s kind from the walk, alone as under a CTE
+# `_concat_textless_operand` gave `Extract(x, "EPOCH")` alone no class, while the same expression as a
+# CTE column (a `DecimalField` since #1460) was a decimal: `Concat` over it built alone and was refused
+# under a CTE. The classifier's leaf reads the walk now. Expected on PostgreSQL and MySQL: the class is
+# `:decimal` alone and as a CTE column; `Concat(Value("t="), Extract("start_at", "EPOCH"))` raises the
+# #1027 explicit-intent refusal, naming `Cast(…, "text")`; with the cast it builds. An integer part
+# (`YEAR`) still passes. Why it matters: one answer in every context, and a decimal's text is the
+# engine's own (its places differ), which `Concat` does not choose for the caller.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: Concat over Extract(x, \"EPOCH\") is a decimal's text, alone as under a CTE" begin
+  QB = PormG.QueryBuilder
+  Fn = PormG.Functions
+  for (m, conn) in ((_EPOCH_PG, EpochMockPostgres()), (_EPOCH_MY, EpochMockMySQL()))
+    engine = nameof(typeof(conn))
+    @testset "$engine" begin
+      instr, node = _epoch_built(m, Extract("start_at", "EPOCH"))
+      @test QB._concat_textless_operand(node, instr) == (:decimal, "`EXTRACT(…)`")
+      # The CTE column agrees.
+      body = m.objects; body.values("raceid", "e" => Extract("start_at", "EPOCH"))
+      outer = m.objects; outer.with("c" => body, join_field = "raceid" => "raceid"); outer.values("w" => PormG.CTE("c", "e"))
+      r = Ref{Any}()
+      QB.query(outer; connection = conn, show_query = :sql,
+               built = i -> (r[] = QB._concat_textless_operand(QB._projected_source(QB.memo_key(:base, "w"), i).field, i)))
+      @test r[] !== nothing && r[][1] === :decimal
+      err = try _epoch_sql(m, Fn.Concat(Fn.Value("t="), Extract("start_at", "EPOCH")), conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+      @test occursin("(#1027)", msg) && occursin("Cast(", msg)
+      @test occursin(r"CONCAT(_WS)?\(", _epoch_sql(m, Fn.Concat(Fn.Value("t="), Fn.Cast(Extract("start_at", "EPOCH"), "text")), conn))   # MySQL: `CONCAT_WS`
+      @test occursin(r"CONCAT(_WS)?\(", _epoch_sql(m, Fn.Concat(Fn.Value("y="), Extract("start_at", "YEAR")), conn))
+    end
+  end
 end

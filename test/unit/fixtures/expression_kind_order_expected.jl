@@ -5839,22 +5839,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract epoch F time - time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Concat Extract epoch start_at | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :postgres, "g__v") =>
-    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | cte", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"t=\"", "String")]),
-  ("Concat Extract epoch start_at | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"t=\"", "String"), ("1", "Int64")]),
-  ("Concat Extract epoch start_at | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"t=\"", "String"), ("1", "Int64")]),
   ("Concat Extract year start_at | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"y=\"", "String")]),
   ("Concat Extract year start_at | alone", :postgres, "v") =>

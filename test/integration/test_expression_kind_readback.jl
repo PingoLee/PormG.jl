@@ -160,6 +160,15 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | cte", :postgres) => (type = "Decimal", value = "174.904", read = nothing),
   ("Extract epoch F interval * 2 | cte", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
   ("Extract epoch F time - time | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  # #1034 (the #1457 leftover): alone and in a `Subquery` the classifier reads the walk's decimal now, as
+  # the CTE column above does, so these cells are flagged a read gap (no read kind is recorded). They
+  # read back the same `Decimal` the CTE column does, on both engines.
+  ("Extract epoch F interval * 2 | alone", :postgres) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F interval * 2 | alone", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F interval * 2 | subquery", :postgres) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F interval * 2 | subquery", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F time - time | alone", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract epoch F time - time | subquery", :postgres) => (type = "Decimal", value = "0", read = nothing),
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)

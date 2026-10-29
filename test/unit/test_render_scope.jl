@@ -204,9 +204,10 @@ const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
     "src/querybuilder/execution_bulk.jl" => Dict(
         "set_context!(parameters, :select)" => 3,
         "new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)" => 1),
-    # the many-to-many manager's own INSERT / DELETE / SELECT statements.
+    # the many-to-many manager's own INSERT / DELETE / SELECT statements; `add` is one method per
+    # engine since #1413, each starting its own collector.
     "src/querybuilder/many_to_many.jl" => Dict(
-        "set_context!(parameters, :select)" => 2,
+        "set_context!(parameters, :select)" => 3,
         "set_context!(parameters, :where)" => 3),
     # the deletion collector's shared predicate collector.
     "src/querybuilder/deletion.jl" => Dict(

@@ -334,10 +334,9 @@ end
 
     # SQLite's add binds two parameters per target: the same target past one statement, which the join
     # table's unique index makes INSERT OR IGNORE take once — one link row each, read from the table
-    # itself (`all()` is a semi-join, blind to a repeated row). PostgreSQL and MySQL insert one target
-    # per statement, four parameters each, whatever the count, so no add of theirs is split.
-    add_binds_all_targets = by_engine(postgres = false, sqlite = true, mysql = false)
-    if add_binds_all_targets
+    # itself (`all()` is a semi-join, blind to a repeated row). PostgreSQL and MySQL drop a repeated
+    # target before the statement is built (#1413), so theirs are exercised below with distinct targets.
+    if by_engine(postgres = false, sqlite = true, mysql = false)
         @test manager.add(fill(sponsor_a, fld(limit, 2) + 1)) === nothing
         @test sort(PormG.QueryBuilder._m2m_current_ids(manager)) == sort(Any[sponsor_a[:id], sponsor_c[:id]])
         # The split runs in one transaction: a target with no sponsor row, in the second statement, fails
@@ -351,9 +350,96 @@ end
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
 end
 
+# What: an `add` of more distinct targets than MySQL.jl binds in one statement (4096 parameters, two a
+# target: 2049 targets) links every one, and a target with no row in the last group links none of them.
+# SQL: PostgreSQL one `INSERT … SELECT $1, "u"."x" FROM unnest($2::bigint[]) … WHERE NOT EXISTS (…)`;
+# MySQL `INSERT … SELECT `v`.`o`, `v`.`r` FROM (VALUES ROW(?, ?), …) … WHERE NOT EXISTS (…)` for 2048
+# targets, then one for the rest, in one transaction.
+# Why (#1413): the add sent one statement per target; one statement for all of them must still fit the
+# driver's bind limit, and a split add must stay all or nothing (#1399).
+# PostgreSQL and MySQL: SQLite's add is `INSERT OR IGNORE` per group, covered above (#1355).
+if by_engine(postgres = true, sqlite = false, mysql = true)
+    @testset "Many-to-Many: an add past MySQL's bind limit links every target (#1413)" begin
+        M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+        n = 2049
+        bulk_insert(M.M2m_sponsor_scratch.objects, DataFrame(name = ["Bulk1413_$i" for i in 1:n]))
+        ids = Any[row[:id] for row in M.M2m_sponsor_scratch.objects.filter("name__@startswith" => "Bulk1413_").values("id").list()]
+        @test length(ids) == n
+        driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "bulk1413")
+        manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
+
+        # A target with no sponsor row, last: the second MySQL statement fails, and the first one's links go
+        # with it; on PostgreSQL the one statement fails.
+        @test_throws PormG.IntegrityError manager.add(vcat(ids[1:2048], Any[99_999_999]))
+        @test isempty(PormG.QueryBuilder._m2m_current_ids(manager))
+
+        @test manager.add(ids) === nothing
+        @test sort(PormG.QueryBuilder._m2m_current_ids(manager)) == sort(ids)
+        # Again: every target is linked already, so NOT EXISTS writes nothing.
+        @test manager.add(ids) === nothing
+        @test length(PormG.QueryBuilder._m2m_current_ids(manager)) == n
+
+        M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
+# What: a target repeated within one `add` links once — on the auto-generated through table, which has a
+# unique key, and on an explicit through model without one; an integer key given once as a number and
+# once as text is the same target.
+# SQL: one statement whose targets hold each id once (PostgreSQL's array, MySQL's `VALUES ROW` list).
+# Why (#1413): one statement does not see the rows it inserts, so a repeat passes `NOT EXISTS` twice —
+# an IntegrityError on the unique key, a second row without it. The per-target statements it replaced
+# each saw the one before. SQLite's `INSERT OR IGNORE` relies on the unique key and is not covered here.
+# PostgreSQL and MySQL: SQLite's add is `INSERT OR IGNORE` per group, covered above (#1355).
+if by_engine(postgres = true, sqlite = false, mysql = true)
+    @testset "Many-to-Many: a target repeated within one add links once (#1413)" begin
+        M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+        sponsor_a = M.M2m_sponsor_scratch.objects.create("name" => "RepeatA")
+        sponsor_b = M.M2m_sponsor_scratch.objects.create("name" => "RepeatB")
+        driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "repeat1413")
+        manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
+        @test manager.add(sponsor_a, sponsor_b, sponsor_a, string(sponsor_b[:id])) === nothing
+        @test sort(PormG.QueryBuilder._m2m_current_ids(manager)) == sort(Any[sponsor_a[:id], sponsor_b[:id]])
+
+        # MySQL checks each statement, and a failed one leaves the transaction open: an `add` whose error
+        # is caught inside the caller's block writes none of its targets, since they are one statement now.
+        if by_engine(postgres = false, sqlite = false, mysql = true)
+            manager.clear()
+            PormG.atomic(PORMG_DB_FOLDER) do
+                try
+                    manager.add(sponsor_a, sponsor_b, 99_999_999)
+                catch e
+                    e isa PormG.IntegrityError || rethrow()
+                end
+            end
+            @test isempty(PormG.QueryBuilder._m2m_current_ids(manager))
+        end
+
+        # The explicit through model has no unique key on (driver, team): a repeat would be a second row.
+        M.M2m_link_plain_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_driver_plain_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_team_plain_scratch.objects.delete(allow_delete_all=true)
+        plain = M.M2m_driver_plain_scratch.objects.create("driverref" => "repeat1413")
+        team_a = M.M2m_team_plain_scratch.objects.create("name" => "RepeatTeamA")
+        team_b = M.M2m_team_plain_scratch.objects.create("name" => "RepeatTeamB")
+        @test M.M2m_driver_plain_scratch.teams(plain).add(team_a, team_a, team_b, team_a) === nothing
+        @test M.M2m_link_plain_scratch.objects.count() == 2
+
+        M.M2m_link_plain_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_driver_plain_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_team_plain_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
 # What: an `add` of several targets is all or nothing, on its own and inside the caller's `atomic`.
-# SQL: PostgreSQL and MySQL send `INSERT … SELECT … WHERE NOT EXISTS (…)` per target inside one
-# BEGIN … COMMIT, or inside the caller's; SQLite one `INSERT OR IGNORE … VALUES (?, ?), …`. A target with
+# SQL: PostgreSQL one `INSERT … SELECT … FROM unnest(…) WHERE NOT EXISTS (…)`, MySQL one
+# `INSERT … SELECT … FROM (VALUES ROW(?, ?), …) WHERE NOT EXISTS (…)` per group (#1413), SQLite one
+# `INSERT OR IGNORE … VALUES (?, ?), …`, alone or inside the caller's transaction. A target with
 # no sponsor row fails its foreign key — at its INSERT on MySQL and SQLite outside a transaction, at
 # COMMIT where the foreign keys are deferred (PostgreSQL, and SQLite inside one).
 # Why (#1399): PostgreSQL's and MySQL's INSERTs each ran in autocommit, so the add raised and kept the

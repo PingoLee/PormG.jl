@@ -160,8 +160,12 @@ function add(manager::ManyToManyManager, targets...)
   owner_column = safe_column_identifier(manager.relation.owner_column, connection)
   related_column = safe_column_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
+  # The related key's field: PostgreSQL types the targets' array from it, and the dedupe below compares
+  # an integer key's text as its number (#1413).
+  related_pk_field = manager.related_model.fields[manager.relation.related_pk]
 
-  _m2m_add!(connection, settings, table_name, owner_column, related_column, owner_value, target_ids)
+  _m2m_add!(connection, settings, table_name, owner_column, related_column, owner_value, target_ids,
+            related_pk_field)
   return nothing
 end
 
@@ -181,28 +185,81 @@ function _m2m_in_one_transaction(f, settings, statements::Int)
   return run_in_transaction(f, settings)
 end
 
-# Insert each (owner, target) pair that is not there yet, one method per engine.
-# PostgreSQL and MySQL: INSERT ... SELECT ... WHERE NOT EXISTS, idempotent whether or not the through
-# table has a unique constraint (auto-generated through tables have one; explicit through models
-# typically do not). One statement per target: Postgres/LibPQ parameterized queries do not allow
-# multiple statements in a single query execution. MySQL runs the statement as written, with no
-# `FROM DUAL`, and reads its own table in the NOT EXISTS (measured on 8.4, #1130 phase 3c-2).
-# The statements of an add of several targets run in one transaction, the caller's if one is open, so a
-# target that fails (an id with no row) leaves none of them linked (#1399), as SQLite's groups do.
-function _m2m_add!(connection::Union{PormGPostgres, PormGMySQL}, settings, table_name, owner_column,
-                   related_column, owner_value, target_ids)
-  _m2m_in_one_transaction(settings, length(target_ids)) do
-    for target_id in target_ids
+# Insert each (owner, target) pair that is not there yet, one method per engine and one statement per
+# add, or per group of targets where the engine's bind limit splits it (#1413). PostgreSQL and MySQL
+# insert with `INSERT … SELECT … WHERE NOT EXISTS`, idempotent whether or not the through table has a
+# unique constraint (auto-generated through tables have one; explicit through models typically do
+# not). Groups run in one transaction, the caller's if one is open, so a target that fails (an id with
+# no row) leaves none of them linked (#1399).
+#
+# One statement does not see the rows it inserts itself, so a target repeated within one add would
+# pass `NOT EXISTS` twice: two rows on a through table without a unique key, an `IntegrityError` on
+# one with it. The per-target statements this replaced each saw the one before, so repeats linked
+# once; `_m2m_distinct_ids` keeps that. SQLite needs no dedupe: `INSERT OR IGNORE` drops a repeat on
+# the through table's unique key, and its #1355 split relies on receiving the targets as given.
+#
+# An integer key's integer text is bound as its integer. The formatter keeps `"5"` as text, which the
+# column compares as its number (`"5.0"` stays text, as before): two spellings of one target would otherwise both pass the dedupe, and
+# on MySQL a `VALUES` column mixing numbers and text becomes text, compared with the key as a double.
+function _m2m_distinct_ids(target_ids::AbstractVector, related_pk_field::PormGField)::Vector{Any}
+  integer_key = _m2m_integer_key(related_pk_field)
+  seen = Set{Any}()
+  out = Any[]
+  for raw in target_ids
+    id = _m2m_bound_id(raw, integer_key)
+    id in seen && continue
+    push!(seen, id)
+    push!(out, id)
+  end
+  return out
+end
+_m2m_integer_key(field::PormGField)::Bool = getproperty(field, :type) in ("INTEGER", "BIGINT", "SMALLINT", "INTEGER UNSIGNED")
+_m2m_bound_id(id::AbstractString, integer_key::Bool) = integer_key ? something(tryparse(Int64, id), id) : id
+_m2m_bound_id(id, ::Bool) = id
+
+# PostgreSQL: one statement per add, whatever the number of targets — three parameters, the targets in
+# one array typed as the related key's column is (`_pg_bulk_param_type`, as the bulk writers type their
+# `unnest` arrays, #672), each element as the bulk writers bind it (`_pg_array_element`).
+function _m2m_add!(connection::PormGPostgres, settings, table_name, owner_column, related_column,
+                   owner_value, target_ids, related_pk_field::PormGField)
+  ids = _m2m_distinct_ids(target_ids, related_pk_field)
+  parameters = get_parameter(connection)
+  set_context!(parameters, :select)
+  owner_ph = add_parameter!(parameters, owner_value)
+  targets_ph = add_parameter!(parameters, Any[_pg_array_element(id) for id in ids];
+                              sql_type = "$(_pg_bulk_param_type(related_pk_field, connection))[]")
+  owner_ph2 = add_parameter!(parameters, owner_value)
+  sql = "INSERT INTO $table_name ($owner_column, $related_column) " *
+        "SELECT $owner_ph, \"u\".\"x\" FROM unnest($targets_ph) AS \"u\"(\"x\") " *
+        "WHERE NOT EXISTS (" *
+          "SELECT 1 FROM $table_name AS \"e\" " *
+          "WHERE \"e\".$owner_column = $owner_ph2 AND \"e\".$related_column = \"u\".\"x\"" *
+        ");"
+  fetch(settings, sql, parameters)
+  return nothing
+end
+
+# MySQL: one statement per group of targets, two parameters a target, the groups split under the
+# driver's bind limit (`_m2m_id_chunks`, 4096 by default) and run in one transaction. The statement
+# reads its own target table in the `NOT EXISTS`, which MySQL accepts for an INSERT (measured on 8.4,
+# #1130 phase 3c-2).
+function _m2m_add!(connection::PormGMySQL, settings, table_name, owner_column, related_column,
+                   owner_value, target_ids, related_pk_field::PormGField)
+  chunks = _m2m_id_chunks(connection, _m2m_distinct_ids(target_ids, related_pk_field), 2, 0, :many_to_many_add)
+  _m2m_in_one_transaction(settings, length(chunks)) do
+    for chunk in chunks
       parameters = get_parameter(connection)
       set_context!(parameters, :select)
-      owner_ph = add_parameter!(parameters, owner_value)
-      target_ph = add_parameter!(parameters, target_id)
-      owner_ph2 = add_parameter!(parameters, owner_value)
-      target_ph2 = add_parameter!(parameters, target_id)
+      rows = String[]
+      for target_id in chunk
+        owner_placeholder = add_parameter!(parameters, owner_value)
+        target_placeholder = add_parameter!(parameters, target_id)
+        push!(rows, "ROW($owner_placeholder, $target_placeholder)")
+      end
       sql = "INSERT INTO $table_name ($owner_column, $related_column) " *
-            "SELECT $owner_ph, $target_ph " *
+            "SELECT `v`.`o`, `v`.`r` FROM (VALUES $(join(rows, ", "))) AS `v` (`o`, `r`) " *
             "WHERE NOT EXISTS (" *
-              "SELECT 1 FROM $table_name WHERE $owner_column = $owner_ph2 AND $related_column = $target_ph2" *
+              "SELECT 1 FROM $table_name AS `e` WHERE `e`.$owner_column = `v`.`o` AND `e`.$related_column = `v`.`r`" *
             ");"
       fetch(settings, sql, parameters)
     end
@@ -212,7 +269,7 @@ end
 
 # SQLite: one `INSERT OR IGNORE … VALUES (?, ?), …` per group of targets, two parameters each (#1355).
 function _m2m_add!(connection::PormGSQLite, settings, table_name, owner_column, related_column, owner_value,
-                   target_ids)
+                   target_ids, related_pk_field::PormGField)
   chunks = _m2m_id_chunks(connection, target_ids, 2, 0, :many_to_many_add)
   _m2m_in_one_transaction(settings, length(chunks)) do
     for chunk in chunks

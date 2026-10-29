@@ -369,6 +369,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @year | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @year | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @year | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("transform @year | subquery", :postgres, "w") =>
@@ -381,6 +393,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("transform @date | subquery", :postgres, "w") =>
@@ -393,6 +417,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @hour | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("transform @hour | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("transform @hour | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("transform @hour | subquery", :postgres, "w") =>
@@ -405,6 +441,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("ToChar YYYY-MM | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar YYYY-MM | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("ToChar YYYY-MM | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("ToChar YYYY-MM | subquery", :postgres, "w") =>
@@ -417,6 +465,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract year | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract year | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Extract year | subquery", :postgres, "w") =>
@@ -427,6 +487,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Extract quarter | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract quarter | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Extract quarter | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Extract quarter | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract quarter | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract quarter | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Extract quarter | subquery", :postgres, "w") =>
@@ -451,6 +519,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Extract quarter / 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Extract quarter / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Extract quarter / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Extract quarter / 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Extract quarter / 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Extract quarter / 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Extract quarter / 2 | subquery", :postgres, "w") =>
@@ -581,6 +657,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Day(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Day(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Day(1) | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Day(1) | subquery", :postgres, "w") =>
@@ -593,6 +681,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F datetime - datetime | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F datetime - datetime | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F datetime - datetime | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    (-TIMESTAMPDIFF(MICROSECOND, `R3`.`start_at`, `R3`.`start_at`)) as `t`\nFROM `race` as `R3`\nWHERE `R3`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    (-TIMESTAMPDIFF(MICROSECOND, `R2`.`start_at`, `R2`.`start_at`)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F datetime - datetime | subquery", :postgres, "w") =>
@@ -605,12 +705,48 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date - date | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date - date | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date - date literal | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"2009-03-01\"", "String"), ("1", "Int64")]),
+  ("F date - date literal | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String"), ("1", "Int64")]),
+  ("F date - date literal | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String"), ("1", "Int64")]),
   ("F comparison | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("F comparison | alone", :postgres, "v") =>
@@ -641,6 +777,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Hour(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Hour(1) | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Hour(1) | subquery", :postgres, "w") =>
@@ -653,6 +801,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F datetime - Hour(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F datetime - Hour(1) | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F datetime - Hour(1) | subquery", :postgres, "w") =>
@@ -665,6 +825,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + 1 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + 1 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + 1 | subquery", :postgres, "w") =>
@@ -677,6 +849,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date + int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date + int col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date + int col | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date + int col | subquery", :postgres, "w") =>
@@ -689,6 +873,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - int col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - int col | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date - int col | subquery", :postgres, "w") =>
@@ -701,6 +897,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval + interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval + interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    (`R3`.`fastestlaptime` + `R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    (`R2`.`fastestlaptime` + `R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval + interval | subquery", :postgres, "w") =>
@@ -713,6 +921,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F interval * 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
+  ("F interval * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("F interval * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("F interval * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F interval * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F interval * 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F interval * 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("2", "Int64")]),
   ("F interval * 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`fastestlaptime`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("F interval * 2 | subquery", :postgres, "w") =>
@@ -725,6 +945,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval / int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (\"Tb\".\"grid\")) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval / int col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval / int col | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`fastestlaptime`) * 1.0 / (`R3`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`fastestlaptime`) * 1.0 / (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval / int col | subquery", :postgres, "w") =>
@@ -737,6 +969,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int col * interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((\"Tb\".\"grid\") * (((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int col * interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int col * interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`grid`) * (`R3`.`fastestlaptime`)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`grid`) * (`R2`.`fastestlaptime`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F int col * interval | subquery", :postgres, "w") =>
@@ -749,6 +993,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F hop date + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop date + interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F hop date + interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F hop date + interval | subquery", :postgres, "w") =>
@@ -761,6 +1017,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F hop datetime + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F hop datetime + interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F hop datetime + interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F hop datetime + interval | subquery", :postgres, "w") =>
@@ -785,6 +1053,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Max F datetime - datetime | alone", :sqlite, "v") =>
     (stage = :ok, sql = "MAX(CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER)) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F datetime - datetime | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Max F datetime - datetime | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    MAX((-TIMESTAMPDIFF(MICROSECOND, `R3`.`start_at`, `R3`.`start_at`))) as `t`\nFROM `race` as `R3`\nWHERE `R3`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    MAX((-TIMESTAMPDIFF(MICROSECOND, `R2`.`start_at`, `R2`.`start_at`))) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Max F datetime - datetime | subquery", :postgres, "w") =>
@@ -797,6 +1077,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs F date - date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs F date - date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs F date - date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Abs F date - date | subquery", :postgres, "w") =>
@@ -1365,6 +1657,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("NullIf interval | alone", :sqlite, "v") =>
     (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
+  ("NullIf interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("NullIf interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("NullIf interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("NullIf interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    NULLIF(`R3`.`fastestlaptime`, `R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    NULLIF(`R2`.`fastestlaptime`, `R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("NullIf interval | subquery", :postgres, "w") =>
@@ -1399,6 +1703,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Lag Cast ts + 1 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Cast ts + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Cast ts + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Cast ts + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Cast ts + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Lag Cast ts + 1 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Cast ts + 1 | subquery", :postgres, "w") =>
@@ -1409,6 +1721,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case date col + 1 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case date col + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case date col + 1 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case date col + 1 | subquery", :postgres, "w") =>
@@ -1419,6 +1743,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(CAST(ROUND((LAG(`Tb`.`fastestlaptime`, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG(`Tb`.`fastestlaptime`, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64")]),
   ("Lag Cast interval * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag Cast interval * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag Cast interval * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag Cast interval * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag Cast interval * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Lag Cast interval * 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG(`R3`.`fastestlaptime`, ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG(`R2`.`fastestlaptime`, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag Cast interval * 2 | subquery", :postgres, "w") =>
@@ -1427,26 +1759,46 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(CAST(ROUND((LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (`Tb`.`grid`)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (`Tb`.`grid`)) AS SIGNED) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case interval col * grid | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case interval col * grid | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case interval col * grid | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Lag Case interval col * grid | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG(CASE\nWHEN `R3`.`grid` = ? THEN `R3`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (`R3`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag Case interval col * grid | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`grid`) * (LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC))) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`grid`) * (LAG(CASE\nWHEN `Tb`.`grid` = ? THEN `Tb`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `Tb`.`resultid` ASC))) AS SIGNED) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("grid * Lag Case interval col | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("grid * Lag Case interval col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("grid * Lag Case interval col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("grid * Lag Case interval col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("grid * Lag Case interval col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`grid`) * (LAG(CASE\nWHEN `R3`.`grid` = ? THEN `R3`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R3`.`resultid` ASC))) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`grid`) * (LAG(CASE\nWHEN `R2`.`grid` = ? THEN `R2`.`fastestlaptime`\nELSE NULL\nEND\n, ?) OVER (ORDER BY `R2`.`resultid` ASC))) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("grid * Lag Case interval col | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
-  ("grid * Lag Case interval col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `Tb_1`.`start_at`, `Tb_1`.`start_at`)), ?) OVER (ORDER BY `Tb`.`resultid` ASC)) * (?)) AS SIGNED) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64")]),
   ("Lag F ts - ts * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag F ts - ts * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag F ts - ts * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag F ts - ts * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Lag F ts - ts * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Lag F ts - ts * 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R3_1`.`start_at`, `R3_1`.`start_at`)), ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R2_1`.`start_at`, `R2_1`.`start_at`)), ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | subquery", :postgres, "w") =>
@@ -1473,6 +1825,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped date col + 1 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped date col + 1 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Case untyped date col + 1 | subquery", :postgres, "w") =>
@@ -1485,6 +1849,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped date col - date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped date col - date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped date col - date | subquery", :postgres, "w") =>
@@ -1497,6 +1873,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped zoned col + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped zoned col + interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped zoned col + interval | subquery", :postgres, "w") =>
@@ -1821,6 +2209,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce date date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce date date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce date date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Coalesce date date | subquery", :postgres, "w") =>
@@ -1833,6 +2233,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce float int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce float int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce float int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Coalesce float int | subquery", :postgres, "w") =>
@@ -1845,6 +2257,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce int float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce int float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce int float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Coalesce int float | subquery", :postgres, "w") =>
@@ -1857,6 +2281,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("false", "Bool")]),
   ("Coalesce bool literal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("false", "Bool")]),
+  ("Coalesce bool literal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("false", "Bool")]),
   ("Coalesce bool literal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("false", "Bool"), ("1", "Int64")]),
   ("Coalesce bool literal | subquery", :postgres, "w") =>
@@ -1869,6 +2305,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Greatest datetime | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Greatest datetime | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Greatest datetime | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Greatest datetime | subquery", :postgres, "w") =>
@@ -1881,6 +2329,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Least decimal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Least decimal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Least decimal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Least decimal | subquery", :postgres, "w") =>
@@ -1893,6 +2353,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("NullIf date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("NullIf date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("NullIf date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("NullIf date | subquery", :postgres, "w") =>
@@ -2097,6 +2569,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Concat text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Concat text | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Concat text | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Concat text | subquery", :postgres, "w") =>
@@ -2109,6 +2593,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Upper text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Upper text | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Upper text | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Upper text | subquery", :postgres, "w") =>
@@ -2121,6 +2617,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Length text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Length text | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Length text | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Length text | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Length text | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Length text | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Length text | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Length text | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Length text | subquery", :postgres, "w") =>
@@ -2133,6 +2641,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
   ("Round float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("0", "Int64")]),
+  ("Round float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0", "Int64")]),
+  ("Round float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64")]),
   ("Round float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0", "Int64"), ("1", "Int64")]),
   ("Round float | subquery", :postgres, "w") =>
@@ -2145,6 +2665,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
   ("Round decimal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round decimal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("0", "Int64")]),
+  ("Round decimal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0", "Int64")]),
+  ("Round decimal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round decimal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round decimal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0", "Int64")]),
+  ("Round decimal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0", "Int64")]),
   ("Round decimal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0", "Int64"), ("1", "Int64")]),
   ("Round decimal | subquery", :postgres, "w") =>
@@ -2157,6 +2689,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Abs float | subquery", :postgres, "w") =>
@@ -2169,6 +2713,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs decimal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs decimal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs decimal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Abs decimal | subquery", :postgres, "w") =>
@@ -2181,6 +2737,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Mod int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Mod int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Mod int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Mod int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Mod int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Mod int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Mod int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Mod int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Mod int | subquery", :postgres, "w") =>
@@ -2193,6 +2761,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Abs int | subquery", :postgres, "w") =>
@@ -2205,6 +2785,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs bigint | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Abs bigint | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Abs bigint | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Abs bigint | subquery", :postgres, "w") =>
@@ -2217,6 +2809,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Floor int | subquery", :postgres, "w") =>
@@ -2229,6 +2833,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ceil int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ceil int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Ceil int | subquery", :postgres, "w") =>
@@ -2241,6 +2857,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Round int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Round int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Round int | subquery", :postgres, "w") =>
@@ -2253,6 +2881,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round int places | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round int places | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round int places | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Round int places | subquery", :postgres, "w") =>
@@ -2265,6 +2905,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round bigint | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round bigint | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round bigint | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Round bigint | subquery", :postgres, "w") =>
@@ -2277,6 +2929,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Round int / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Round int / 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Round int / 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Round int / 2 | subquery", :postgres, "w") =>
@@ -2289,6 +2953,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor year part | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor year part | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor year part | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Floor year part | subquery", :postgres, "w") =>
@@ -2325,6 +3001,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Floor float | subquery", :postgres, "w") =>
@@ -2337,6 +3025,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ceil float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ceil float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ceil float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Ceil float | subquery", :postgres, "w") =>
@@ -2349,6 +3049,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor decimal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Floor decimal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Floor decimal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Floor decimal | subquery", :postgres, "w") =>
@@ -2361,6 +3073,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sqrt float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sqrt float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Sqrt float | subquery", :postgres, "w") =>
@@ -2373,6 +3097,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sqrt int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sqrt int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sqrt int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Sqrt int | subquery", :postgres, "w") =>
@@ -2385,6 +3121,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Exp int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exp int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Exp int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Exp int | subquery", :postgres, "w") =>
@@ -2397,6 +3145,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ln float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Ln float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Ln float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Ln float | subquery", :postgres, "w") =>
@@ -2409,6 +3169,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Power float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Power float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Power float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Power float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Power float | subquery", :postgres, "w") =>
@@ -2421,6 +3193,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Power int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Power int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Power int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Power int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Power int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Power int | subquery", :postgres, "w") =>
@@ -2665,6 +3449,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Floor F int + 1 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor F int + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Floor F int + 1 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Floor F int + 1 | subquery", :postgres, "w") =>
@@ -2725,6 +3521,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
   ("Floor F int & 3 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("3", "Int64")]),
+  ("Floor F int & 3 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("3", "Int64")]),
   ("Floor F int & 3 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("3", "Int64"), ("1", "Int64")]),
   ("Floor F int & 3 | subquery", :postgres, "w") =>
@@ -3017,6 +3825,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Floor Subquery int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor Subquery int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Floor Subquery int | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Floor Subquery int | subquery", :postgres, "w") =>
@@ -3077,6 +3897,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Coalesce int float / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Coalesce int float / 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Coalesce int float / 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Coalesce int float / 2 | subquery", :postgres, "w") =>
@@ -3137,6 +3969,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
   ("NullIf int float / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
+  ("NullIf int float / 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("0.5", "Float64"), ("2", "Int64")]),
   ("NullIf int float / 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("0.5", "Float64"), ("2", "Int64"), ("1", "Int64")]),
   ("NullIf int float / 2 | subquery", :postgres, "w") =>
@@ -3245,6 +4089,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2021-01-01", "Date")]),
   ("Coalesce date Date(zoned) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2021-01-01\"", "String")]),
+  ("Coalesce date Date(zoned) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2021-01-01", "Date")]),
+  ("Coalesce date Date(zoned) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2021-01-01", "Date")]),
+  ("Coalesce date Date(zoned) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2021-01-01", "Date")]),
+  ("Coalesce date Date(zoned) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2021-01-01", "Date")]),
+  ("Coalesce date Date(zoned) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2021-01-01\"", "String")]),
+  ("Coalesce date Date(zoned) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2021-01-01\"", "String")]),
   ("Coalesce date Date(zoned) | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2021-01-01", "Date"), ("1", "Int64")]),
   ("Coalesce date Date(zoned) | subquery", :postgres, "w") =>
@@ -3257,6 +4113,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime")]),
   ("Coalesce zoned zoned | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2020-12-31T22:30:00.000+00:00\"", "String")]),
+  ("Coalesce zoned zoned | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime")]),
+  ("Coalesce zoned zoned | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime")]),
+  ("Coalesce zoned zoned | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime")]),
+  ("Coalesce zoned zoned | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime")]),
+  ("Coalesce zoned zoned | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2020-12-31T22:30:00.000+00:00\"", "String")]),
+  ("Coalesce zoned zoned | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2020-12-31T22:30:00.000+00:00\"", "String")]),
   ("Coalesce zoned zoned | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime"), ("1", "Int64")]),
   ("Coalesce zoned zoned | subquery", :postgres, "w") =>
@@ -4545,6 +5413,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery Max hop date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Max hop date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery Max hop date | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Subquery Max hop date | subquery", :postgres, "w") =>
@@ -4557,6 +5437,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery Avg float | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery Avg float | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery Avg float | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Subquery Avg float | subquery", :postgres, "w") =>
@@ -4569,6 +5461,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery path decimal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Subquery path decimal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Subquery path decimal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Subquery path decimal | subquery", :postgres, "w") =>
@@ -4581,6 +5485,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Exists | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exists | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Exists | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Exists | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exists | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exists | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Exists | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Exists | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Exists | subquery", :postgres, "w") =>
@@ -4593,6 +5509,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Max Q | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Max Q | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Max Q | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Max Q | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Max Q | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Max Q | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Max Q | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Max Q | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Max Q | subquery", :postgres, "w") =>
@@ -4605,6 +5533,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Min Qor | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
+  ("Min Qor | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64")]),
   ("Min Qor | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Min Qor | subquery", :postgres, "w") =>
@@ -4617,6 +5557,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
   ("Coalesce Q false | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
+  ("Coalesce Q false | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("false", "Bool")]),
   ("Coalesce Q false | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64")]),
   ("Coalesce Q false | subquery", :postgres, "w") =>
@@ -4629,6 +5581,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
   ("Case then Q | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
+  ("Case then Q | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool")]),
   ("Case then Q | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64")]),
   ("Case then Q | subquery", :postgres, "w") =>
@@ -4649,6 +5613,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
   ("F time > Time literal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
+  ("F time > Time literal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"12:00:00\"", "String")]),
   ("F time > Time literal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"12:00:00\"", "String"), ("1", "Int64")]),
   ("F time > Time literal | subquery", :postgres, "w") =>
@@ -4659,6 +5635,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Extract epoch F interval * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Extract epoch F interval * 2 | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Extract epoch F interval * 2 | subquery", :postgres, "w") =>
@@ -4669,6 +5653,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract year F hop date + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract year F hop date + interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract year F hop date + interval | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Extract year F hop date + interval | subquery", :postgres, "w") =>
@@ -4677,14 +5673,26 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F time - time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F time - time | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F time - time | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F time - time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Max F time - time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F time - time | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max F time - time | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Max F time - time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Extract epoch F time - time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract epoch F time - time | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract epoch F time - time | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Extract epoch F time - time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Coalesce bool comparison | alone", :mysql, "v") =>
@@ -4693,6 +5701,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Coalesce bool comparison | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Coalesce bool comparison | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Coalesce bool comparison | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("Coalesce bool comparison | subquery", :postgres, "w") =>
@@ -4705,6 +5725,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round Extract year | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Round Extract year | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Round Extract year | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Round Extract year | subquery", :postgres, "w") =>
@@ -4805,6 +5837,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("ToChar time HH:MI | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("ToChar time HH:MI | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("ToChar time HH:MI | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("ToChar time HH:MI | subquery", :postgres, "w") =>
@@ -5055,4 +6099,192 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"{{7,8}}\"", "String")]),
   ("Cast int integer[][] | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"{{7,8}}\"", "String"), ("1", "Int64")]),
+  ("json document | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("json document | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("json document | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("json document | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json document | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("json document | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("json document | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("json key | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("json key | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("json key | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("json key | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("json key | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("json key | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("json key | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F json key + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
+  ("F json key + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F json key + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F json key + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F json key + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F json key + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F json key / 2 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F json key / 2 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F json key / 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("F json key / 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Sum json key | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Sum json key | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Sum json key | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Sum json key | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Sum json key | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Sum json key / 2 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum json key / 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Sum json key / 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Max json key | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Max json key | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Max json key | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Max json key | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Max json key | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Floor json key / 2 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Floor json key / 2 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Floor json key / 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Floor json key / 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast json key integer | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Cast json key integer | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast json key integer | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Cast json key integer | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast json key integer | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Concat json key | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("\"n=\"", "String")]),
+  ("Concat json key | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String")]),
+  ("Concat json key | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"n=\"", "String"), ("1", "Int64")]),
+  ("Concat json key | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String"), ("1", "Int64")]),
+  ("Concat json key | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String"), ("1", "Int64")]),
 )

@@ -608,8 +608,8 @@ end
 # PostgreSQL has no common type, and the query does not say whether it means the flag or a count.
 # Beside a date, text or a UUID it has no reading on any engine. A JSON document beside another type is
 # the same: SQLite answers the document's text, PostgreSQL fails at the server. A JSON key lookup
-# (`"payload__driver"`) stays unclassified, since its type is the data's: the walk names it `CJSON`,
-# as its field, so `_temporal_mix` skips it by the record of rendered lookups (`_json_key_lookup_operand`).
+# (`"payload__driver"`) stays unclassified, since its type is the data's: the walk names it
+# `CJSONValue` (#1458), which has no class.
 #
 # Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
 # and a kind of any other family are let through, and a conflict between two typed operands is refused
@@ -655,10 +655,9 @@ function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction
   declared = _declares_mix_type(p)
   sides = Tuple{Symbol,String,Bool}[]
   for value in _temporal_mix_values(p)
+    # #1386: a key lookup is the key's value, of the data's type (`CJSONValue`, #1458): no class.
     class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
     class === nothing && continue
-    # #1386: a key lookup is typed as its JSONField, but its value is the key's, of the data's type.
-    class === :json && _json_key_lookup_operand(value, instruc) && continue
     side = (class, _temporal_mix_label(value), value isa SQLText)
     for seen in sides
       _is_mix(seen[1], class) && !(declared && _declaration_lifts(seen[1], class)) && return (seen, side)
@@ -816,33 +815,26 @@ end
 _json_document_operand(p::SQLField, instruc::SQLInstruction) = _json_document_operand(p.field, instruc)
 _json_document_operand(p::FExpression, instruc::SQLInstruction) =
   p.operation === nothing && _json_document_operand(p.field_name, instruc)
+# The walk tells the two apart (#1458): the document is `CJSON`, a key lookup the key's `CJSONValue`,
+# for a path, a `Joined` handle and a CTE column alike. A handle whose path goes on past the column is
+# let through, as it was before the walk named it.
 function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
-  _alias_column_field(p, instruc) isa Models.sJSONField || return false
-  # A CTE column the body projected as a key lookup holds that value; its field is the JSONField all
-  # the same, so its kind says which: only the document records `CJSON` (`_build_cte_custom_model`).
-  p isa CTEReference && !(_expression_kind(p, instruc) isa CJSON) && return false
-  # The join walk records every key lookup it renders (`_render_json_lookup`); any other path to a
-  # JSONField names the column. A handle whose path goes on past the column is let through.
-  p isa String || occursin("__", p.path) && return false
-  return !memo_json_lookup(instruc, p isa String ? memo_key(:base, p) : memo_key(p))
+  p isa String || !occursin("__", p.path) || return false
+  return _expression_kind(p, instruc) isa CJSON
 end
 _json_document_operand(::Any, ::SQLInstruction) = false
 
 # #1382: the other half — an operand that is a KEY LOOKUP into a JSONField (`F("payload__driver")`), the
 # key's value rather than the document. Its field is the JSONField all the same (`_render_json_lookup`
-# memoizes it so), so the field alone cannot tell the two apart; the record of rendered key lookups can,
-# and for a CTE column the kind its body recorded (only the document records `CJSON`). Decided by that
-# evidence, never as "not known to be the document": a handle `_json_document_operand` lets through is
-# not thereby a key.
+# memoizes it so), so the field alone cannot tell the two apart; the walk can (`CJSONValue`, #1458),
+# from the record of rendered key lookups, and for a CTE column from the kind its body recorded. Decided
+# by that evidence, never as "not known to be the document": a handle `_json_document_operand` lets
+# through is not thereby a key.
 _json_key_lookup_operand(p::SQLField, instruc::SQLInstruction) = _json_key_lookup_operand(p.field, instruc)
 _json_key_lookup_operand(p::FExpression, instruc::SQLInstruction) =
   p.operation === nothing && _json_key_lookup_operand(p.field_name, instruc)
-_json_key_lookup_operand(p::String, instruc::SQLInstruction) =
-  _alias_column_field(p, instruc) isa Models.sJSONField && memo_json_lookup(instruc, memo_key(:base, p))
-_json_key_lookup_operand(p::JoinedReference, instruc::SQLInstruction) =
-  _alias_column_field(p, instruc) isa Models.sJSONField && memo_json_lookup(instruc, memo_key(p))
-_json_key_lookup_operand(p::CTEReference, instruc::SQLInstruction) =
-  _alias_column_field(p, instruc) isa Models.sJSONField && !(_expression_kind(p, instruc) isa CJSON)
+_json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+  _expression_kind(p, instruc) isa CJSONValue
 _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
 # #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`

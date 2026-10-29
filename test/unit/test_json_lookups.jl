@@ -527,3 +527,62 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1458 (#1034 phase 4, D1): the walk names a key lookup the key's value, `CJSONValue`, not the document
+# Before, `_expression_kind("payload__n")` was the document's `CJSON()`, and four readers told a key from
+# the document by the record of rendered lookups instead. Expected, on PostgreSQL, SQLite and MySQL:
+# the document is `CJSON()` and a key lookup `CJSONValue()` — alone, as a CTE column the outer query
+# reads (which recorded no kind before), and as `Max` over the key under a CTE (which the outer query
+# read as the document). That last column now builds in `Concat` and in `Coalesce` beside text, as the
+# same `Max` already did alone: it raised #1028 ("the JSONField … is not text") and #1386 ("mixes a JSON
+# document"). The bare lookup keeps the JSON formatter (#1382). Why it matters: one answer for what a key
+# lookup is, in every context, instead of a patch per reader.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1458: a JSON key lookup is the key's value to the walk, in every context" begin
+  QB = PormG.QueryBuilder
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @testset "$(nameof(typeof(conn)))" begin
+      # The walk's answers, asked of the built instruction while `query` holds it (its `built` callback).
+      asked(q, f) = (r = Ref{Any}(); QB.query(q; connection = conn, show_query = :sql, built = i -> (r[] = f(i))); r[])
+      node(i, name) = QB._projected_source(QB.memo_key(:base, name), i).field
+      # Alone: the document and a key lookup.
+      q = JL.Json_scratch.objects
+      q.values("id", "d" => "payload", "k" => "payload__n")
+      alone = asked(q, i -> (d = QB._expression_kind(node(i, "d"), i), k = QB._expression_kind(node(i, "k"), i),
+        kformat = QB._expression_formatter(node(i, "k"), i),
+        ddoc = QB._json_document_operand(node(i, "d"), i), kdoc = QB._json_document_operand(node(i, "k"), i),
+        kkey = QB._json_key_lookup_operand(node(i, "k"), i), dkey = QB._json_key_lookup_operand(node(i, "d"), i)))
+      @test alone.d == PormG.CJSON()
+      @test alone.k == QB.CJSONValue()
+      # The bare lookup keeps the JSON formatter (#1382's alias comparison reads the lookup, not it).
+      @test alone.kformat === PormG.Models.format_json_sql
+      # The readers that told the two apart now read the walk.
+      @test alone.ddoc && !alone.kdoc
+      @test alone.kkey && !alone.dkey
+
+      # Under a CTE: the body records each column's kind, so the outer query reads the same answers.
+      body = JL.Json_scratch.objects
+      body.values("id", "d" => "payload", "k" => "payload__n", "m" => QB.Max("payload__n"))
+      outer = JL.Json_scratch.objects
+      outer.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+      outer.values("id", "gd" => "g__d", "gk" => "g__k", "gm" => "g__m")
+      ctek = asked(outer, i -> Tuple(QB._expression_kind(node(i, n), i) for n in ("gd", "gk", "gm")))
+      @test ctek == (PormG.CJSON(), QB.CJSONValue(), QB.CJSONValue())
+
+      # `Max` over a key, through a CTE, is the key's value: it joins text and sits beside it.
+      lifted(expr) = (o = JL.Json_scratch.objects;
+        o.with("g" => JL.Json_scratch.objects.values("id", "v" => QB.Max("payload__n")), join_field = "id" => "id", join_type = "INNER");
+        o.values("id", "w" => expr); o)
+      @test occursin("\"v\"", replace(_sql(lifted(PormG.Functions.Concat(PormG.Functions.Value("n="), "g__v")); conn = conn)[:sql_text], "`" => "\""))
+      @test occursin("COALESCE(", _sql(lifted(PormG.Functions.Coalesce("g__v", PormG.Functions.Value("x"))); conn = conn)[:sql_text])
+      # `LPad` reads the same answer (`_pad_textless`): it raised #122 ("the JSONField … is not text").
+      @test occursin(r"(?i)lpad\(", _sql(lifted(PormG.Functions.LPad("g__v", 5, "0")); conn = conn)[:sql_text])
+      # The whole document under a CTE is still refused in `Concat`, as the column is (#1028).
+      doc = (o = JL.Json_scratch.objects;
+        o.with("g" => JL.Json_scratch.objects.values("id", "v" => "payload"), join_field = "id" => "id", join_type = "INNER");
+        o.values("id", "w" => PormG.Functions.Concat(PormG.Functions.Value("n="), "g__v")); o)
+      @test_throws PormG.QueryBuildError _sql(doc; conn = conn)
+    end
+  end
+end

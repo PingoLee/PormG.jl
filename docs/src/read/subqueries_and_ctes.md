@@ -715,7 +715,7 @@ boolean compared with a comparison binds as a boolean (#1034):
 | A field path (`"points"`, `"driverid__surname"`) | That field |
 | `Count` | Integer |
 | `Sum` | The type of what it sums: an integer over integers, a float over a float, a decimal over a decimal, a duration over a duration (`Sum("fastestlaptime")`) |
-| `Avg`, `Min`, `Max` | The type of what they aggregate: a field path (`Max("raceid__date")`) or a `Joined(...)` column is that field, and `F` arithmetic (`Max(F("points") * 2)`) is typed as the arithmetic row below says. `Avg` over integers is a float. A function is typed as it is when projected bare, so `Max(Coalesce("points", 0.0))` needs an `output_field` (#1116) |
+| `Avg`, `Min`, `Max` | The type of what they aggregate: a field path (`Max("raceid__date")`) or a `Joined(...)` column is that field, and `F` arithmetic (`Max(F("points") * 2)`) is typed as the arithmetic row below says. `Avg` over integers is a float. A function operand is typed as it is when projected bare, so `Max(Coalesce("points", 0.0))` is a float (#1116, #1460) |
 | `Rank`, `DenseRank`, `RowNumber` | Integer |
 | `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` | The column the window reads |
 | A function given `output_field = …`, or `Cast(x, type)` | The type it names |
@@ -724,12 +724,29 @@ boolean compared with a comparison binds as a boolean (#1034):
 | An `F` comparison (`F("grid") < F("positionorder")`) | Boolean |
 | `Value(x)` | Its Julia type: `1` is an integer, `1.5` a float, `"win"` text |
 | `Case` / `When` | See below |
+| Any other function, a window over an expression, date or duration arithmetic (`F("date") + Day(1)`), a `Subquery` or an `Exists` | The type PormG names for its value (#1460): `Upper` and `Concat` are text, `Floor("points")` a float, `Extract("date", "year")` an integer, `F("date") + Day(1)` a date, `Exists(...)` a boolean, and a `Subquery` its one column's type |
 
-Any other function raises `QueryBuildError` when the query is built. Give it an `output_field` or
-wrap it in `Cast` to name its type. The same applies to `F` arithmetic on a value that is not a
-number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`. A bare `Subquery`
-projected in the body raises `QueryBuildError` too; wrap it in `Cast` to name its type
-(`Cast(Subquery(s), "integer")`). An `Exists` there raises as well; project it in the outer query instead.
+A projection whose type PormG cannot name raises `QueryBuildError` when the query is built: `F`
+arithmetic on a value that is not a number (a text column plus `1`, or a JSON key lookup's value),
+`Value(missing)`, and a function or a `Subquery` over such a value. Give it an `output_field` or wrap
+it in `Cast` to name its type (`Cast(Subquery(s), "integer")` for a `Subquery`). Before #1460 every
+function but `Count`, `Sum`, `Avg`, `Min`, `Max` and `Case` raised there, whatever it returned.
+
+```julia
+using PormG.Functions: Upper
+
+# The 2009 Australian GP (race 1), each driver's surname in capitals: `Upper` is text, so "BUTTON"
+# binds as text with no declaration.
+names = M.Result.objects
+names.filter("raceid" => 1)
+names.values("resultid", "upper_name" => Upper("driverid__surname"))
+
+query = M.Result.objects
+query.with("n" => names, join_field = "resultid" => "resultid")
+query.filter("raceid" => 1, "n__upper_name" => "BUTTON")
+query.values("resultid", "n__upper_name")
+df = query |> DataFrame   # one row: "BUTTON"
+```
 
 This type is for **binding** a value compared with the column, and for a function over the column in
 the outer query, which treats it as a column of that type: `Sum(CTE("r", "ahead"))` over a comparison
@@ -771,7 +788,8 @@ branches, meaning every `then` and the `default`:
 
 The branches must agree. Integers and floats mix, giving a float. Anything else raises
 `QueryBuildError` and asks for `output_field`: text beside a number, only `NULL` branches, or a
-function PormG cannot type (`Lower`, `Concat`, …). PormG does not guess a type here, because the
+value PormG cannot type (text arithmetic, a JSON key lookup's value). A function branch is typed as
+the table above types it: `Lower` and `Concat` are text (#1460). PormG does not guess a type here, because the
 type decides how the value is bound, and a wrong guess changes the result without any error.
 Before #812 an expression branch made the column text. The filter below then bound the string
 `"7"`, and SQLite returned **no rows**.
@@ -792,8 +810,8 @@ query.values("resultid", "driverid__surname", "podium__podium_pts")
 df = query |> DataFrame   # Button (10.0) and Barrichello (8.0)
 ```
 
-When PormG cannot type a branch, name the type yourself. The `output_field` also becomes the SQL
-cast, so every row really holds that type:
+When PormG cannot type a branch, or to state the type yourself, pass `output_field`. It also becomes
+the SQL cast, so every row really holds that type:
 
 ```julia
 using PormG.Functions: Lower
@@ -812,8 +830,8 @@ query.values("resultid", "w__winner")
 df = query |> DataFrame   # one row: "button"
 ```
 
-Without `output_field`, this `Case` raises `QueryBuildError`, since PormG does not infer the type of
-`Lower`.
+Here the declaration is optional: `Lower` is text, as the default `""` is, so the column is text
+without it too. Before #1460 this `Case` raised `QueryBuildError` without it.
 
 `F` arithmetic needs no declaration when its operands are numbers. Here `grid` and `positionorder`
 are integers, so `gain` is an integer and the filter binds `5` as a number:

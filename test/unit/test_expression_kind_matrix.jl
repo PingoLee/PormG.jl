@@ -134,10 +134,11 @@ for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"), (:Ekm
     result = Models.IntegerField(null = true),
     boolean_field = Models.BooleanField(null = true),
   )
-  # #1387: the F1 fixture's one UUID column.
+  # #1387: the F1 fixture's one UUID column; #1458: and its one JSON column.
   Field_validation_scratch = Models.Model("field_validation_scratch",
     id = Models.IDField(),
     uuid_token = Models.UUIDField(unique = true),
+    payload = Models.JSONField(null = true),
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end
@@ -166,7 +167,8 @@ end
 _ekm_show(::Nothing) = nothing
 _ekm_show(f::Function) = String(nameof(f))
 _ekm_show(t::Tuple{Symbol,String}) = String(first(t))   # a textless classification's kind, not its label
-_ekm_show(k::PormG.CanonicalType) = replace(string(k), "PormG.Kernel." => "")   # `CDate()`, not its module path
+# `CDate()`, not its module path; `CJSONValue()` (#1458) is the walk's own, in `QueryBuilder`
+_ekm_show(k::PormG.CanonicalType) = replace(string(k), "PormG.Kernel." => "", "PormG.QueryBuilder." => "")
 _ekm_show(x) = string(x)
 function _ekm_ask(f)
   try

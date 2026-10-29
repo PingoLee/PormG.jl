@@ -672,10 +672,19 @@ end
   @test _adm_867_msg(() -> _adm_render(q)) === nothing
   @test occursin(r"\"R2\"\.\"parent(_id)?\" = \"R1\"\.\"id\"", _adm_render(q))
 
-  # A CTE body cannot type a window over a bare subquery (#878's reason), and says how to: a `Cast`
-  # inside the window, which builds, and whose filter binds after the body's own parameters.
+  # #1460: a CTE body types a window over a bare subquery as the walk names the subquery's one column
+  # (`Max("qty")`, an integer); #887 refused it until then. Where the walk names nothing (text plus a
+  # number) it still refuses, and says how to fix it: a `Cast` inside the window, which builds, and
+  # whose filter binds after the body's own parameters.
   body = AD.Adm_parent.objects
   body.values("id", "p" => Lag(Subquery(nsub()), over = over))
+  q = AD.Adm_child.objects
+  q.with("ev" => body, join_field = "parent" => "id")
+  q.values("id", CTE("ev", "p"))
+  @test _adm_867_msg(() -> _adm_render(q)) === nothing
+  untyped_sub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id")); s.values("t" => F("note") + 1); s)
+  body = AD.Adm_parent.objects
+  body.values("id", "p" => Lag(Subquery(untyped_sub()), over = over))
   q = AD.Adm_child.objects
   q.with("ev" => body, join_field = "parent" => "id")
   q.values("id", CTE("ev", "p"))

@@ -1881,8 +1881,9 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
     # with microseconds there, and answered.
     if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS ||
        v.operation in ("=", "!=") && _stores_interval_as_units(instruc.connection)
-      # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left.
-      if v.operand isa Union{FExpression,FObject} || (v.operand isa String && _is_field_path(v.operand, instruc))
+      # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left;
+      # #1465: a window function too (`F("grid") * Lag("fastestlaptime", over = …)`).
+      if _typed_right_operand(v.operand, instruc)
         right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)
         # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
         _is_interval_kind(right_kind) &&

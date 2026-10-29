@@ -37,6 +37,26 @@ struct _AllKinds <: _EveryKind end
 struct _MeaningKinds <: _EveryKind end
 
 """
+    CJSONValue()
+
+#1458 (#1034 phase 4, decision D1) — the value at a key of a JSON document (`"payload__n"`): a JSON
+scalar whose type is the data's, so PormG cannot name it. A kind of the walk only, never of a column, so
+it lives here rather than in the column IR (`column_ir.jl`): no migration ever sees it.
+
+Its field is the document's `JSONField` (`_kind_field`), so the bare lookup keeps the JSON formatter
+(#1382); every other reader takes it as unnamed, as it takes `nothing`. Before #1458 the walk named a
+key lookup the document's `CJSON()`, and four readers told the two apart by the record of rendered
+lookups instead (`_unnamed_side`, the CTE `kinds` record, `_json_document_operand`,
+`_json_key_lookup_operand`).
+"""
+struct CJSONValue <: CanonicalType end
+
+# Whether the path `key` whose column is `field` is a key lookup into it: a JSONField the join walk
+# rendered as `#>>`/`json_extract` (`_render_json_lookup` records each, keyed by its namespace).
+_json_key_value(field, instruc::SQLInstruction, key) =
+  field isa Models.sJSONField && memo_json_lookup(instruc, key)
+
+"""
     _expression_kind(x, instruc) -> Union{CanonicalType, Nothing}
 
 Every type PormG can name for the expression `x`, on `instruc`'s engine, or `nothing` when it names
@@ -50,7 +70,9 @@ function _infer_kind(p::String, instruc::SQLInstruction, policy::_EveryKind)
   # transform ladder (#562), the call `_get_filter_query(::String)` renders with.
   occursin("__@", p) && return _infer_function_kind(_check_function(p), instruc, policy)
   column_field = _alias_column_field(p, instruc)
-  return column_field === nothing ? nothing : _column_kind(column_field, policy)
+  column_field === nothing && return nothing
+  _json_key_value(column_field, instruc, memo_key(:base, p)) && return CJSONValue()   # #1458
+  return _column_kind(column_field, policy)
 end
 _infer_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind) =
   p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) :
@@ -83,7 +105,9 @@ end
 # #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it.
 function _infer_kind(p::JoinedReference, instruc::SQLInstruction, policy::_EveryKind)
   column_field = _alias_column_field(p, instruc)
-  return column_field === nothing ? nothing : _column_kind(column_field, policy)
+  column_field === nothing && return nothing
+  _json_key_value(column_field, instruc, memo_key(p)) && return CJSONValue()   # #1458
+  return _column_kind(column_field, policy)
 end
 _infer_kind(p::CTEReference, instruc::SQLInstruction, policy::_EveryKind) = _cte_column_kind(p, instruc, policy)
 # #888: a `Subquery(...)` is its one projected column, as its own build typed it.
@@ -211,11 +235,19 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
     return right isa Union{CDate,CDateTime} && op == "+" ? right : nothing
   end
   # #881: an interval on the right of a value that is neither a date nor an interval.
-  if p.operand isa Union{FExpression,FObject} || (p.operand isa String && _is_field_path(p.operand, instruc))
+  if _typed_right_operand(p.operand, instruc)
     right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) && return CInterval()
   end
   return nothing
 end
+
+# Whether the right side of F arithmetic or an ordering is typed when its left is neither a date nor an
+# interval: an expression, a function, a window function or a field path. The render
+# (`_render_expr_typed`) and the walk above both ask it, so the two cannot type different right sides.
+# A window function was missing from both until #1465: `F("grid") * Lag(<duration>)` was untyped, so
+# SQLite multiplied the duration's `HH:MM:SS` text while `Lag(<duration>) * F("grid")` was refused.
+_typed_right_operand(x, instruc::SQLInstruction) =
+  x isa Union{FExpression,FObject,WindowFunction} || (x isa String && _is_field_path(x, instruc))
 
 # #881: an interval on the left (`_render_interval_left`). A date on the right of `+` is the date
 # shifted, an interval beside it is an interval, and `*`/`/` by a number side scales it.
@@ -279,10 +311,11 @@ _side_walk_kind(x::OuterRefObject, instruc::SQLInstruction) =
   instruc.outer === nothing ? nothing : _side_walk_kind(x.field_name, instruc.outer)
 _side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
 
-# A JSON value counts as unnamed: the walk names a key lookup (`"payload__n"`) the document's `CJSON`,
-# not the scalar the lookup returns, whose type is the data's (#1034 phase 4 lists it).
+# A JSON value counts as unnamed: a key lookup (`"payload__n"`) is the scalar at the key, whose type is
+# the data's (`CJSONValue`, #1458), and a whole document is no date, interval or number either.
 _unnamed_side(x, instruc::SQLInstruction) =
-  !_is_null_literal(x isa SQLText ? x.field : x) && (k = _side_walk_kind(x, instruc); k === nothing || k isa CJSON)
+  !_is_null_literal(x isa SQLText ? x.field : x) &&
+  (k = _side_walk_kind(x, instruc); k === nothing || k isa Union{CJSON,CJSONValue})
 # #1323: a time of day too. SQLite holds it as its `HH:MM:SS` text and MySQL reads its digits as a
 # number, so an unnamed value beside one, or holding one, is the same question as beside a date.
 _is_temporal_kind(k) = k isa Union{CDate,CDateTime,CTime,CInterval}
@@ -389,6 +422,7 @@ _kind_field(::CTime) = Models.TimeField()
 _kind_field(::CInterval) = Models.DurationField()
 _kind_field(::CUUID) = Models.UUIDField()
 _kind_field(::CJSON) = Models.JSONField()
+_kind_field(::CJSONValue) = Models.JSONField()   # #1458: the key's own column, so the JSON formatter (#1382)
 _kind_field(::Any) = nothing
 # #1034 step 4 — the formatter view: what a value compared with an expression of kind `k` must
 # satisfy (`_expression_formatter`, `projection_types.jl`). A number of any width takes the number
@@ -907,7 +941,9 @@ end
 function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
   if occursin("__", ref.path)
     column_field = _alias_column_field(ref, instruc)
-    return column_field === nothing ? nothing : _column_kind(column_field, policy)
+    column_field === nothing && return nothing
+    _json_key_value(column_field, instruc, memo_key(ref)) && return CJSONValue()   # #1458
+    return _column_kind(column_field, policy)
   end
   meant = _numeric_meaning_record(ref, instruc, policy)
   meant === nothing || return meant

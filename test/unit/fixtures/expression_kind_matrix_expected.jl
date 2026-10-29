@@ -351,11 +351,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @year | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("transform @year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | subquery", :sqlite) =>
@@ -369,11 +369,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @date | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("transform @date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("transform @date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :sqlite) =>
@@ -387,11 +387,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("transform @hour | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("transform @hour | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | subquery", :sqlite) =>
@@ -405,11 +405,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("ToChar YYYY-MM | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | subquery", :sqlite) =>
@@ -423,11 +423,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract year | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | subquery", :sqlite) =>
@@ -441,11 +441,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract quarter | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Extract quarter | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_quarter_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract quarter | subquery", :sqlite) =>
@@ -477,11 +477,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract quarter / 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is EXTRACT(…), whose result type PormG does not infer. Name the type the co"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: quarter"),
   ("Extract quarter / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is EXTRACT(…), whose result type PormG does not infer. Name the type the co"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract quarter / 2 | subquery", :sqlite) =>
@@ -585,11 +585,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Day(1) | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :sqlite) =>
@@ -603,11 +603,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F datetime - datetime | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CDateTime(true)", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :sqlite) =>
@@ -621,16 +621,34 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :sqlite) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | alone", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | alone", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | alone", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | cte", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | cte", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | cte", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | subquery", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | subquery", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date literal | subquery", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F comparison | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
@@ -657,11 +675,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Hour(1) | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :sqlite) =>
@@ -675,11 +693,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F datetime - Hour(1) | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | subquery", :sqlite) =>
@@ -693,11 +711,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + 1 | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :sqlite) =>
@@ -711,11 +729,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + int col | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :sqlite) =>
@@ -729,11 +747,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - int col | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :sqlite) =>
@@ -747,11 +765,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval + interval | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | subquery", :sqlite) =>
@@ -765,11 +783,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval * 2 | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | subquery", :sqlite) =>
@@ -783,11 +801,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval / int col | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | subquery", :sqlite) =>
@@ -801,11 +819,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F int col * interval | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | subquery", :sqlite) =>
@@ -819,11 +837,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop date + interval | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :sqlite) =>
@@ -837,11 +855,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop datetime + interval | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | subquery", :sqlite) =>
@@ -873,11 +891,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max F datetime - datetime | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | subquery", :sqlite) =>
@@ -891,11 +909,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs F date - date | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Abs F date - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :sqlite) =>
@@ -1449,11 +1467,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("NullIf interval | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | subquery", :sqlite) =>
@@ -1485,11 +1503,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Cast ts + 1 | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Lag Cast ts + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Lag Cast ts + 1 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
   ("Lag Cast ts + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Lag Cast ts + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Lag Cast ts + 1 | subquery", :sqlite) =>
@@ -1503,11 +1521,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Case date col + 1 | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag Case date col + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag Case date col + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag Case date col + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag Case date col + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag Case date col + 1 | subquery", :sqlite) =>
@@ -1521,11 +1539,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Cast interval * 2 | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Cast interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Cast interval * 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
   ("Lag Cast interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Cast interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Cast interval * 2 | subquery", :sqlite) =>
@@ -1539,11 +1557,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Case interval col * grid | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Case interval col * grid | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Case interval col * grid | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("Lag Case interval col * grid | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Case interval col * grid | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag Case interval col * grid | subquery", :sqlite) =>
@@ -1551,23 +1569,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag Case interval col * grid | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("grid * Lag Case interval col | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("grid * Lag Case interval col | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | alone", :sqlite) =>
@@ -1575,11 +1593,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag F ts - ts * 2 | alone", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from LAG over a FExpression argument. Project the window over a field path instead (#685)."),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`*` on an interval that is not a timestamp difference or a DurationField column is not supported on SQLite. An interval "),
   ("Lag F ts - ts * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from LAG over a FExpression argument. Project the window over a field path instead (#685)."),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag F ts - ts * 2 | subquery", :sqlite) =>
@@ -1665,11 +1683,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col + 1 | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | subquery", :sqlite) =>
@@ -1683,11 +1701,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | subquery", :sqlite) =>
@@ -1701,11 +1719,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped zoned col + interval | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | subquery", :sqlite) =>
@@ -1953,11 +1971,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date date | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | subquery", :sqlite) =>
@@ -1971,11 +1989,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce float int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | subquery", :sqlite) =>
@@ -1989,11 +2007,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce int float | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | subquery", :sqlite) =>
@@ -2007,11 +2025,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce bool literal | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | subquery", :sqlite) =>
@@ -2025,11 +2043,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Greatest datetime | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | subquery", :sqlite) =>
@@ -2043,11 +2061,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Least decimal | alone", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | subquery", :sqlite) =>
@@ -2061,11 +2079,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("NullIf date | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | subquery", :sqlite) =>
@@ -2223,11 +2241,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Concat text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat text | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat text | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Concat text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | subquery", :sqlite) =>
@@ -2241,11 +2259,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Upper text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Upper text | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Upper text | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Upper text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | subquery", :sqlite) =>
@@ -2259,11 +2277,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Length text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Length text | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Length text | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Length text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | subquery", :sqlite) =>
@@ -2277,11 +2295,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Round float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | subquery", :sqlite) =>
@@ -2295,11 +2313,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round decimal | alone", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CFloat64()", whole_numeric = nothing),
   ("Round decimal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | subquery", :sqlite) =>
@@ -2313,11 +2331,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Abs float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | subquery", :sqlite) =>
@@ -2331,11 +2349,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs decimal | alone", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | subquery", :sqlite) =>
@@ -2349,11 +2367,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Mod int | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Mod int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | subquery", :sqlite) =>
@@ -2367,11 +2385,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Abs int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | subquery", :sqlite) =>
@@ -2385,11 +2403,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs bigint | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | subquery", :sqlite) =>
@@ -2403,11 +2421,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | subquery", :sqlite) =>
@@ -2421,11 +2439,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Ceil int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Ceil int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | subquery", :sqlite) =>
@@ -2439,11 +2457,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Round int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int | subquery", :sqlite) =>
@@ -2457,11 +2475,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round int places | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int places | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | subquery", :sqlite) =>
@@ -2475,11 +2493,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round bigint | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | subquery", :sqlite) =>
@@ -2493,11 +2511,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round int / 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | subquery", :sqlite) =>
@@ -2511,11 +2529,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor year part | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor year part | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | subquery", :sqlite) =>
@@ -2547,11 +2565,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Floor float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | subquery", :sqlite) =>
@@ -2565,11 +2583,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Ceil float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Ceil float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | subquery", :sqlite) =>
@@ -2583,11 +2601,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor decimal | alone", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | subquery", :sqlite) =>
@@ -2601,11 +2619,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sqrt float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | subquery", :sqlite) =>
@@ -2619,11 +2637,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sqrt int | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sqrt int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | subquery", :sqlite) =>
@@ -2637,11 +2655,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Exp int | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Exp int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | subquery", :sqlite) =>
@@ -2655,11 +2673,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Ln float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Ln float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | subquery", :sqlite) =>
@@ -2673,11 +2691,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Power float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Power float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | subquery", :sqlite) =>
@@ -2691,11 +2709,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Power int | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Power int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | subquery", :sqlite) =>
@@ -2925,11 +2943,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor F int + 1 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | subquery", :sqlite) =>
@@ -2979,11 +2997,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor F int & 3 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | subquery", :sqlite) =>
@@ -3267,11 +3285,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor Subquery int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Floor Subquery int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | subquery", :sqlite) =>
@@ -3321,11 +3339,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce int float / 2 | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | subquery", :sqlite) =>
@@ -3375,11 +3393,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("NullIf int float / 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is NULLIF(…), whose result type PormG does not infer. Name the type the col"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is NULLIF(…), whose result type PormG does not infer. Name the type the col"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is NULLIF(…), whose result type PormG does not infer. Name the type the col"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | subquery", :sqlite) =>
@@ -3699,11 +3717,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce date Date(zoned) | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | subquery", :sqlite) =>
@@ -3717,11 +3735,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce zoned zoned | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | subquery", :sqlite) =>
@@ -5031,11 +5049,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Max hop date | alone", :mysql) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | subquery", :sqlite) =>
@@ -5049,11 +5067,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Avg float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | subquery", :sqlite) =>
@@ -5067,11 +5085,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery path decimal | alone", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | subquery", :sqlite) =>
@@ -5085,11 +5103,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Exists | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Exists | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Exists | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Exists | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | subquery", :sqlite) =>
@@ -5103,11 +5121,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max Q | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | subquery", :sqlite) =>
@@ -5121,11 +5139,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Min Qor | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | subquery", :sqlite) =>
@@ -5139,11 +5157,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce Q false | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | subquery", :sqlite) =>
@@ -5175,11 +5193,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case then Q | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | subquery", :sqlite) =>
@@ -5409,11 +5427,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F time > Time literal | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CTime()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Time, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F time > Time literal | subquery", :sqlite) =>
@@ -5661,11 +5679,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :sqlite) =>
@@ -5931,11 +5949,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract year F hop date + interval | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract year F hop date + interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Extract year F hop date + interval | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract year F hop date + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Extract year F hop date + interval | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year F hop date + interval | subquery", :sqlite) =>
@@ -6003,7 +6021,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F time - time | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("F time - time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F time - time | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("F time - time | cte", :mysql) =>
@@ -6021,7 +6039,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max F time - time | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Max F time - time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Max F time - time | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Max F time - time | cte", :mysql) =>
@@ -6075,7 +6093,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F time - time | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | cte", :mysql) =>
@@ -6219,11 +6237,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce bool comparison | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool comparison | subquery", :sqlite) =>
@@ -6561,11 +6579,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round Extract year | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round Extract year | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Round Extract year | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round Extract year | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sBigIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Round Extract year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round Extract year | subquery", :sqlite) =>
@@ -6723,11 +6741,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("ToChar time HH:MI | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar time HH:MI | subquery", :sqlite) =>
@@ -7184,6 +7202,198 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which SQLite does not support (supported on"),
   ("Cast int integer[][] | subquery", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: a cast to \"integer[][]\" needs array types (`ArrayField`, `integer[]`), which MySQL does not support (supported on "),
+  ("json document | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | after_when", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | after_when", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | after_when", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", cte_field = "sJSONField", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json document | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = "json", kind = "CJSON()", whole_numeric = nothing),
+  ("json key | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | after_when", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | after_when", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | after_when", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("json key | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("F json key + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Sum json key | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum json key | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum json key | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum json key | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Sum json key / 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Sum json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Sum json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Max json key | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Max json key | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+  ("Floor json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Floor json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Floor json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Floor json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
+  ("Floor json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
+  ("Floor json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Floor json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Floor json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Floor json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Cast json key integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast json key integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Concat json key | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat json key | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
@@ -7195,29 +7405,47 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date - date | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | cte", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
   ("F date - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
-  ("grid * Lag Case interval col | alone", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | alone", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
-  ("grid * Lag Case interval col | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:gap, "read=none vs textless=interval")],
+  ("F date - date literal | alone", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | alone", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date - date literal | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | cte", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date - date literal | subquery", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | subquery", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | subquery", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("Case untyped date col - date | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | cte", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
   ("Case untyped date col - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
@@ -7225,6 +7453,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("Extract epoch F interval * 2 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | cte", :mysql) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F time - time | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
   ("Cast text ArrayField(CharField(3)) | alone", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres) =>
@@ -7241,6 +7475,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast decimal numeric(10,2)[] | subquery", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
+  ("Floor json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Floor json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -7269,4 +7507,10 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
+  ("Extract epoch F interval * 2", :postgres) =>
+    ["drops textless: alone=none, cte=decimal, subquery=none"],
+  ("Extract epoch F interval * 2", :mysql) =>
+    ["drops textless: alone=none, cte=decimal, subquery=none"],
+  ("Extract epoch F time - time", :postgres) =>
+    ["drops textless: alone=none, cte=decimal, subquery=none"],
 )

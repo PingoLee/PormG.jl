@@ -183,3 +183,65 @@ end
     @test inspect_query(flagged; connection = conn)[:parameters] == Any[true, 1, 0]
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1460 (#1034 phase 4, D4): a computed CTE column is typed by the walk, whatever function it is
+# Until #1460 only `Count`, `Sum`, `Avg`, `Min`, `Max` and `Case` were typed; every other function was
+# refused ("Error in _set_field_from_sql_function, the function UPPER is not a recognized function"),
+# even where the walk named its type. Expected, on PostgreSQL, SQLite and MySQL: each family below is
+# its type — `Upper`/`Concat` text, `Length` an integer, `Floor`/`Abs`/`Coalesce` of the float a float,
+# `NullIf` of an integer an integer, a duration times 2 a duration, `Exists` a boolean, a `Subquery`
+# its column's type, a window over an expression its value's — and a filter on it from the outer query
+# binds that type. A shape the walk cannot name (text plus a number) is still refused, and the message
+# names `Cast`, not an internal function. Why it matters: the allow-list refused 265 shapes the walk
+# types (measured over the unit suite), one rule instead of two.
+# ─────────────────────────────────────────────────────────────────────────────
+struct CcfMockMySQL <: PormG.PormGMySQL end
+const _CCF_MY = CcfMockMySQL()
+
+@testset "#1460: a computed CTE column is typed by what the walk names it" begin
+  sub = CCF.Ccf_result.objects
+  sub.filter("resultid" => PormG.OuterRef("resultid"))
+  sub.values("points")
+  sub.limit(1)   # one row per correlation, as a scalar `Subquery` should say
+  over = PormG.QueryBuilder.WindowOver(order_by = "resultid")
+  # (projection, expected field, a value the outer filter compares with it)
+  families = (
+    "up"     => (_CCF_Fn.Upper("driverid__surname"), Models.sTextField, "SENNA"),
+    "cat"    => (_CCF_Fn.Concat("driverid__surname", _CCF_Fn.Value("!")), Models.sTextField, "Senna!"),
+    "len"    => (_CCF_Fn.Length("driverid__surname"), Union{Models.sIntegerField,Models.sBigIntegerField}, 5),
+    "fl"     => (_CCF_Fn.Floor("points"), Models.sFloatField, 2.5),
+    "ab"     => (_CCF_Fn.Abs("points"), Models.sFloatField, 2.5),
+    "co"     => (_CCF_Fn.Coalesce("points", 0.0), Models.sFloatField, 2.5),
+    "ni"     => (_CCF_Fn.NullIf("grid", 0), Union{Models.sIntegerField,Models.sBigIntegerField}, 3),
+    "twice"  => (_CCF_F("fastestlaptime") * 2, Models.sDurationField, Minute(1)),
+    "ex"     => (PormG.Exists(sub), Models.sBooleanField, true),
+    "sq"     => (PormG.Subquery(sub), Models.sFloatField, 2.5),
+    "lagpts" => (_CCF_Fn.Lag(_CCF_F("points") * 2, over = over), Models.sFloatField, 2.5),
+  )
+  for conn in (_CCF_PG, _CCF_SL, _CCF_MY), (name, (expr, expected, value)) in families
+    @testset "$(nameof(typeof(conn))): $name" begin
+      body = CCF.Ccf_result.objects
+      body.values("resultid", name => expr)
+      q = CCF.Ccf_result.objects
+      q.with("r" => body, join_field = "resultid" => "resultid")
+      q.values("resultid")
+      # A window cannot be filtered where it is computed (#537), so every column is read through the CTE.
+      @test _ccf_fields(q; conn = conn)[name] isa expected
+      q.filter("r__$(name)" => value)
+      @test inspect_query(q; connection = conn)[:parameters] isa Vector   # binds, no refusal
+    end
+  end
+  # Not named by the walk: refused, naming `Cast`, never `_set_field_from_sql_function`.
+  for conn in (_CCF_PG, _CCF_SL, _CCF_MY)
+    body = CCF.Ccf_result.objects
+    body.values("resultid", "bad" => _CCF_Fn.Upper("driverid__surname") + 1)
+    q = CCF.Ccf_result.objects
+    q.with("r" => body, join_field = "resultid" => "resultid")
+    q.values("resultid")
+    err = try inspect_query(q; connection = conn); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    msg = _ccf_msg(err)
+    @test occursin("CTE column bad", msg) && occursin("Cast", msg) && !occursin("_set_field_from_sql_function", msg)
+  end
+end

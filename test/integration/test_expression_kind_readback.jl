@@ -37,6 +37,27 @@ const _EKR_ENGINE = engine_key()   # no fallback: a backend added later has no r
 const _EKR_ROW = Dict{Symbol,Int}(:Result => 1, :Race => 1, :Constructor_results => 3835)
 const _EKR_MARKER = "ekm-1034"
 
+# The rows the F1 fixture does not seed, per base model: how to remove them, and how to create one
+# (returning its id). A boolean row, and (#1458) a JSON document `{"n": 7}` for the key-lookup shapes.
+function _ekr_purge(model, field)
+  p = model.objects
+  p.filter(field => _EKR_MARKER)
+  p.exists() && p.delete()
+  return nothing
+end
+const _EKR_MARKERS = Dict{Symbol,NamedTuple}(
+  :New_join_position => (
+    purge = () -> _ekr_purge(M.New_join_position, "description"),
+    create = () -> M.New_join_position.objects.create("description" => _EKR_MARKER, "boolean_field" => true,
+                                                      "result" => 1)[:id]),
+  :Field_validation_scratch => (
+    purge = () -> _ekr_purge(M.Field_validation_scratch, "slug"),
+    create = () -> M.Field_validation_scratch.objects.create(
+      "uuid_token" => UUIDs.UUID("10340000-0000-4000-8000-000000001458"),
+      "canonical_url" => "https://example.com/ekm-1034", "slug" => _EKR_MARKER,
+      "payload" => Dict("n" => 7))[:id]),
+)
+
 # The cell's label, shape and context, from its id ("<label> | <context>").
 function _ekr_cell(id::String)
   label, ctx = split(id, " | ")
@@ -96,17 +117,44 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("Case untyped date col - date | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1460 (review): the day count with a date literal, race 1 (2009-03-29) minus 2009-03-01.
+  ("F date - date literal | alone", :postgres) => (type = "Int32", value = "28", read = "CInt32()"),
+  ("F date - date literal | alone", :sqlite) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | alone", :mysql) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :postgres) => (type = "Int32", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :sqlite) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | subquery", :mysql) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | cte", :postgres) => (type = "Int32", value = "28", read = "CInt32()"),
+  ("F date - date literal | cte", :sqlite) => (type = "Int64", value = "28", read = "CInt32()"),
+  ("F date - date literal | cte", :mysql) => (type = "Int64", value = "28", read = "CInt32()"),
+  # #1460: both day counts are CTE columns now (the walk names them `CInt32`), read back as above.
+  ("F date - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("F date - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("F date - date | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1458: `Floor` over a JSON key holding `7`, divided by 2. PostgreSQL renders `FLOOR((x)::numeric)`,
+  # so the quotient keeps its fraction; SQLite's `FLOOR` keeps the integer the JSON holds, so its `/` is
+  # integer division. A different value, not a different spelling: a departure recorded as found, not
+  # fixed here (MySQL already refuses the shape, a side whose type PormG cannot name).
+  ("Floor json key / 2 | alone", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Floor json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  ("Floor json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
+  ("Floor json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  # #1460: `Extract(x, "EPOCH")` (a decimal since #1457) is a CTE column now, typed `DecimalField` from
+  # the walk; it was refused there before. Twice result 1's fastest lap (87.452 s), and a time minus
+  # itself. SQLite has no `EPOCH` part.
+  ("Extract epoch F interval * 2 | cte", :postgres) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F interval * 2 | cte", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F time - time | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)
-  # #1459: a window function over a duration on the RIGHT of `*` is untyped, where the same window on
-  # the left is an interval (and refused on SQLite). Pinned on the first row, whose `Lag` is NULL.
-  ("grid * Lag Case interval col | alone", :postgres) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | alone", :sqlite) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | alone", :mysql) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :postgres) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :sqlite) => (type = "Missing", value = "missing", read = nothing),
-  ("grid * Lag Case interval col | subquery", :mysql) => (type = "Missing", value = "missing", read = nothing),
+  # (#1465: the `grid * Lag Case interval col` rows left this table when a window function on the RIGHT
+  # of `*` was typed as it is on the left: an interval on PostgreSQL and MySQL, refused on SQLite. They
+  # read back `missing` here, on a first row whose `Lag` is NULL; the testset "A duration window on the
+  # right of `*`" below reads a row whose `Lag` is not.)
   # #1439: a cast to an array reads back as the `Vector` an `ArrayField` of its element does. Flagged
   # `:unparsed` only because a PostgreSQL cell asks SQLite's parser table, which has no array parser
   # (SQLite and MySQL refuse the cast, so there is nothing to read back there). Before #1439 LibPQ
@@ -138,6 +186,10 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
   # #1307: the same day count through a `Case` over a date column, so the same two widths.
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
+  "F date - date | cte", "Case untyped date col - date | cte",   # #1460: as CTE columns too
+  "F date - date literal | alone", "F date - date literal | subquery", "F date - date literal | cte",
+  # #1458: a quotient PostgreSQL keeps as a decimal and SQLite divides as integers (above).
+  "Floor json key / 2 | alone", "Floor json key / 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -149,14 +201,13 @@ const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if ba
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression-kind matrix: the disagreeing cells read back (#1034)" begin
   @test !isempty(_EKR_CELLS)
-  # The boolean shapes' row, created only when a disagreeing cell reads one, and always removed.
-  needs_marker = any(id -> _ekr_cell(id)[2] === :New_join_position, _EKR_CELLS)
-  purge() = (p = M.New_join_position.objects; p.filter("description" => _EKR_MARKER); p.exists() && p.delete())
+  # A marker row (`_EKR_MARKERS`), created only when a disagreeing cell reads its model, and always removed.
+  needs_marker = intersect(Set(_ekr_cell(id)[2] for id in _EKR_CELLS), keys(_EKR_MARKERS))
+  purge() = foreach(b -> _EKR_MARKERS[b].purge(), needs_marker)
   try
-    if needs_marker
-      purge()
-      created = M.New_join_position.objects.create("description" => _EKR_MARKER, "boolean_field" => true, "result" => 1)
-      _EKR_ROW[:New_join_position] = created[:id]
+    purge()
+    for b in needs_marker
+      _EKR_ROW[b] = _EKR_MARKERS[b].create()
     end
     for id in _EKR_CELLS
       @testset "$id" begin
@@ -172,7 +223,7 @@ const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if ba
       end
     end
   finally
-    needs_marker && purge()
+    purge()
   end
 end
 
@@ -537,4 +588,36 @@ end
     end
   end
   @test outcome(PormG.Models.EmailField()) == "Hamilton"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A duration window on the right of `*` reads back as the duration it is (#1465)
+# On results 1 and 2 (race 18), ordered by `resultid`: result 2's `F("grid") * Lag("fastestlaptime")` is
+# its grid times result 1's fastest lap (`1:27.452`). Expected: on PostgreSQL and MySQL it reads back a
+# duration equal to that product, as `Lag(…) * F("grid")` does; on SQLite both orders raise
+# `QueryBuildError` (#881: a window over a duration has no millisecond form). Why: before #1465 the
+# right-hand order was untyped, so SQLite multiplied the duration's `HH:MM:SS` text and returned a
+# number, and the read-back rows above could not see it, since their row's `Lag` is NULL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A duration window on the right of `*` reads back as the duration it is (#1465)" begin
+  ns(x) = Dates.tons(x)   # a fixed period or a `CompoundPeriod`, whichever the driver delivers
+  plain(id, field) = (q = M.Result.objects; q.filter("resultid" => id); q.values(field); only(q.list())[Symbol(field)])
+  grid2, lap1 = plain(2, "grid"), plain(1, "fastestlaptime")
+  @test lap1 !== missing   # the premise: the row before has a lap time, so `Lag` is not NULL
+  window() = PormG.Functions.Lag("fastestlaptime", over = PormG.QueryBuilder.WindowOver(order_by = "resultid"))
+  for (side, expr) in (("right", () -> PormG.F("grid") * window()), ("left", () -> window() * PormG.F("grid")))
+    @testset "$side" begin
+      q = M.Result.objects
+      q.filter("resultid__@in" => [1, 2])
+      q.values("resultid", "v" => expr())
+      q.order_by("resultid")
+      if _EKR_ENGINE === :sqlite
+        @test_throws PormG.QueryBuildError q.list()
+      else
+        v = last(q.list())[:v]
+        @test v isa Union{Dates.Period,Dates.CompoundPeriod}
+        @test ns(v) == grid2 * ns(lap1)
+      end
+    end
+  end
 end

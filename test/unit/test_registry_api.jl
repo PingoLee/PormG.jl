@@ -121,7 +121,8 @@ end
 # What it tests: `load` of an offline key raises `InvalidConfigurationError` naming
 #   `unregister_connection`, under the key itself (`load("db"; root)`), with `force = true`, and under
 #   another spelling of the same folder (the absolute path, from the folder's parent). Each refusal
-#   leaves the offline entry in place, same pool object. After `unregister_connection` the same `load`
+#   leaves the offline entry in place, same pool object; an alias whose folder does not exist is refused
+#   the same way, with `scaffold = true`, and writes nothing. After `unregister_connection` the same `load`
 #   registers a live SQLite pool. No SQL is involved; the folder holds a SQLite `:memory:` yml.
 # Why it matters: an application's `__init__` runs `load("db"; env = …)`, and before #1451 that
 #   replaced a golden-SQL suite's offline entry with a live pool with only a reload warning, so the
@@ -149,6 +150,14 @@ end
         @test err !== nothing && occursin("unregister_connection(\"db\")", sprint(showerror, err))
         @test Configuration._is_offline(PormG.config[key])
         @test PormG.config[key].connections === pool
+      end
+
+      # Another spelling whose folder does not exist: refused as offline, and nothing is scaffolded.
+      mktempdir() do elsewhere
+        err = refused(() -> cd(() -> Configuration.load(joinpath(elsewhere, "db"); env = "dev", scaffold = true), elsewhere))
+        @test err isa PormG.InvalidConfigurationError
+        @test err !== nothing && occursin("registered offline", sprint(showerror, err))
+        @test !isdir(joinpath(elsewhere, "db"))
       end
 
       Configuration.unregister_connection(key)

@@ -1611,6 +1611,13 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 
   @pormg_debug false
 
+  # #1451: another spelling of the folder (`abspath("db")`) resolves to the offline entry through its
+  # `db_def_folder`, which is the key. Before the folder, the environment and the driver are checked,
+  # for the reason above: the answer is the same whatever they say, and a missing folder would
+  # otherwise be scaffolded or reported as the thing to create.
+  aliased = _resolve_loaded_key(path, config; folder = folder)
+  aliased !== nothing && _is_offline(config[aliased]) && throw(_offline_load_error(aliased))
+
   db_settings_file = joinpath(folder, PORMG_DB_CONFIG_FILE_NAME)
 
   # Fail loudly on a missing folder/yml (#205). The old behavior — scaffold a skeleton, log an
@@ -1634,11 +1641,6 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       "`PormG.setup(\"$(folder)\")`, or call `PormG.Configuration.load(\"$(path)\"; $(root === nothing ? "" : root_kw * ", ")scaffold=true)` " *
       "to write a skeleton to edit."))
   end
-  # #1451: another spelling of the folder (`abspath("db")`) resolves to the offline entry through its
-  # `db_def_folder`, which is the key. Before the environment and the driver are checked: the answer
-  # is the same whatever either says.
-  aliased = _resolve_loaded_key(path, config; folder = folder)
-  aliased !== nothing && _is_offline(config[aliased]) && throw(_offline_load_error(aliased))
 
   # Resolve the environment with the file's `default_env:` folded into the precedence (#205). The
   # guesses (`default_env:`, `dev`) are a REPL's or an implicit load's only (#1228).

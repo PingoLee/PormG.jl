@@ -23,7 +23,8 @@ end
 # load fails at boot without the driver extension
 # What it tests: in a process that never ran `using SQLite`, `load` of a SQLite configuration raises
 #   `MissingConfigurationError` naming `using SQLite`, and leaves the registry as it was — an entry
-#   already under that key survives; after `using SQLite` the same call loads. `_peek_driver` reads
+#   already under that key survives (a hand-built one: an offline or dynamic key is refused before the
+#   driver is looked at, #1451/#620); after `using SQLite` the same call loads. `_peek_driver` reads
 #   the driver from the file (the Postgres.jl driver included) and `_driver_hint` names its package.
 #   A subprocess, because this process has every driver loaded.
 # Why it matters: the missing driver surfaced on the FIRST QUERY, far from the boot that forgot the
@@ -57,7 +58,10 @@ end
     _boot1232_folder(root)
     script = """
     using PormG
-    PormG.Configuration.register_offline("boot1232_db"; adapter = :sqlite)   # an entry to keep
+    # An entry to keep: hand-built, neither offline nor dynamic, since `load` refuses both kinds of key
+    # before it looks at the driver (#1451, #620).
+    prior = PormG.Configuration.Settings(db_def_folder = "boot1232_db")
+    PormG.config["boot1232_db"] = prior
     err = try
         PormG.Configuration.load("boot1232_db"; root = $(repr(root)), env = "test")
         nothing
@@ -66,7 +70,7 @@ end
     end
     println("ERR_TYPE:", typeof(err))
     println("ERR_HINT:", err === nothing ? "" : occursin("using SQLite", sprint(showerror, err)))
-    println("KEPT_PRIOR:", PormG.Configuration._is_offline(PormG.config["boot1232_db"]))
+    println("KEPT_PRIOR:", PormG.config["boot1232_db"] === prior)
     PormG.Configuration.unregister_connection("boot1232_db")
     using SQLite
     key = PormG.Configuration.load("boot1232_db"; root = $(repr(root)), env = "test")

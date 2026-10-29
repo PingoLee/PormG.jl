@@ -1033,11 +1033,26 @@ end
       @test inspection[:parameters] == Any[1, "Senna"]
     end
 
-    @testset "$backend — an untypeable window argument is a typed refusal" begin
-      # `Lag(F("points"))` carries an FExpression, which names no column the arm can type from. It
-      # must be a QueryBuildError inside the taxonomy, never a MethodError from a missing arm.
+    @testset "$backend — a window over an expression types as the walk names it (#1460)" begin
+      # `Lag(F("points"))` carries an FExpression, which names no column the arm can type from. #685
+      # refused it; since #1460 it is the type the walk names (`Lag` has its operand's, the float
+      # column), so the outer filter binds a number.
       prev = Model_.objects
       prev.values("resultid", "prev" => Lag(F("points"), over = WindowOver(order_by = ["raceid"])))
+      q = Model_.objects
+      q.with("lagged" => prev, join_field = "resultid" => "resultid")
+      q.values("raceid")
+      q.filter("lagged__prev__@gt" => 2.5)
+      @test _window_err(() -> q) === nothing
+      # Bound through the number formatter, as a float column's filter binds it (its text).
+      @test string(last(inspect_query(q)[:parameters])) == "2.5"
+    end
+
+    @testset "$backend — an untypeable window argument is a typed refusal" begin
+      # Text plus a number has no type the walk names, so the window over it is refused: a
+      # QueryBuildError inside the taxonomy naming the window, never a MethodError from a missing arm.
+      prev = Model_.objects
+      prev.values("resultid", "prev" => Lag(F("surname") + 1, over = WindowOver(order_by = ["raceid"])))
       q = Model_.objects
       q.with("lagged" => prev, join_field = "resultid" => "resultid")
       q.values("raceid")
@@ -1167,7 +1182,9 @@ end
       refusals = (
         "all NULL" => Case([When("raceid" => 1, then = missing)]),
         "text arithmetic" => Case([When("raceid" => 1, then = F("surname") + 1)], default = 0),
-        "untyped function" => Case([When("raceid" => 1, then = PormG.Functions.Lower("surname"))], default = "none"),
+        # #1460: a function branch the walk cannot name (`Coalesce` over untyped arithmetic). `Lower`
+        # was refused here until #1460, though it is text; it is typed below.
+        "untyped function" => Case([When("raceid" => 1, then = PormG.Functions.Coalesce(F("surname") + 1, 0))], default = 0),
         # #823: a refusal from an OPERAND of an F branch still names the Case's own fix, not `Cast`.
         "untyped function operand" =>
           Case([When("raceid" => 1, then = F("raceid") + PormG.Functions.Lower("surname"))], default = 0),
@@ -1179,6 +1196,9 @@ end
         # The message names the CTE column and the fix, whatever the reason was.
         @test occursin("CTE column top", msg) && occursin("output_field", msg)
       end
+      # #1460: a function branch the walk names is that type: `Lower` beside a text default is text.
+      @test _cte_case_field(Model_, Case([When("raceid" => 1, then = PormG.Functions.Lower("surname"))],
+                                         default = "none")) isa Union{PormG.Models.sTextField,PormG.Models.sCharField}
       # #1327: a number beside text is refused before the CTE column is typed, on every engine, naming
       # the cast of either operand: an `output_field` would not make the engines agree.
       err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = "none")); nothing catch e; e end
@@ -1263,13 +1283,16 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
       sub = Model_.objects
       sub.filter("raceid" => PormG.OuterRef("raceid"))
       sub.values("points")
+      # A `Subquery` whose one column the walk cannot name (text arithmetic).
+      untyped_sub = Model_.objects
+      untyped_sub.filter("raceid" => PormG.OuterRef("raceid"))
+      untyped_sub.values("t" => F("surname") + 1)
       refusals = (
         "text arithmetic" => (F("surname") + 1, "Cast"),
         "an untyped function operand" => (F("raceid") + PormG.Functions.Lower("surname"), "Cast"),
         "a NULL Value" => (Value(missing), "Cast"),
         # #878: `Cast` takes a `Subquery` now, so the fix it names is the wrap, not the outer query.
-        "a Subquery" => (PormG.Subquery(sub), "Cast(Subquery(…), \"integer\")"),
-        "an Exists" => (PormG.Exists(sub), "outer query"),
+        "a Subquery" => (PormG.Subquery(untyped_sub), "Cast(Subquery(…), \"integer\")"),
       )
       for (label, (expr, fix)) in refusals
         err = _cte_refusal(Model_, expr)
@@ -1279,6 +1302,10 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
         @test occursin("CTE column top", msg) && occursin(fix, msg)
         @test !occursin("Case", msg)
       end
+      # #1460: what the walk names is typed. A `Subquery` over the float column is a float, and an
+      # `Exists` a boolean; both were refused until #1460 (#823 named the wrap or the outer query).
+      @test _cte_case_field(Model_, PormG.Subquery(sub)) isa PormG.Models.sFloatField
+      @test _cte_case_field(Model_, PormG.Exists(sub)) isa PormG.Models.sBooleanField
       # Found in review: PostgreSQL gives `pi` no bind cast, so its bare `$1` makes the column TEXT,
       # which a float type would contradict. (SQLite refuses the value itself when it binds.)
       if backend == "PostgreSQL"
@@ -1395,17 +1422,19 @@ end
       @test !occursin("base column", msg)
     end
 
-    @testset "$backend — a function PormG does not type is refused, not typed by the alias's name" begin
+    @testset "$backend — a function is typed by its operand, not by the alias's name" begin
       # Before #1116 an operand the arm could not read fell back to the field the ALIAS names, so
       # `"points" => Max(Coalesce("points", 0.0))` typed by luck, and `"born" => Max("born__@year")`
-      # typed a year as the DateField `born`. The operand decides now, as it does when the
-      # same function is projected bare: refused, and a declared `output_field` names the type.
+      # typed a year as the DateField `born`. The operand decides now, as it does when the same
+      # function is projected bare. Until #1460 that meant a refusal; since #1460 the walk types the
+      # operand: `Coalesce("grid", 0)` is an integer under the FLOAT column's name `points`.
       body = mod.Result.objects
-      body.values("resultid", "points" => Max(Coalesce("points", 0.0)))
-      err = try PormG.QueryBuilder._build_cte_custom_model(PormG.QueryBuilder.CTEDict(),
-                                                          PormG.QueryBuilder.build(body.object; connection = conn)); nothing
-            catch e; e end
-      @test err isa PormG.QueryBuildError && occursin("COALESCE", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+      body.values("resultid", "points" => Max(Coalesce("grid", 0)))
+      cte = PormG.QueryBuilder.CTEDict()
+      PormG.QueryBuilder._build_cte_custom_model(cte, PormG.QueryBuilder.build(body.object; connection = conn))
+      typed = cte["model"].fields["points"]
+      @test typed isa Union{PormG.Models.sIntegerField,PormG.Models.sBigIntegerField}
+      # A declared `output_field` still names the type.
       @test _cte_aggregate_field(mod, conn, Max(Coalesce("points", 0.0, output_field = FloatField()))) isa
         PormG.Models.sFloatField
     end

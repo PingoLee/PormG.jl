@@ -531,6 +531,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @year | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @year | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("transform @year | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("transform @year | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("transform @year | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM `R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @year | subquery", :postgres, "w__@gt", "10") =>
@@ -549,6 +555,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("transform @date | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
+  ("transform @date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("transform @date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("transform @date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("transform @date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("transform @date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("transform @date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -567,6 +585,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
   ("transform @hour | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in race, that contains the fields: date, raceid, start_at, time, year; and the reverse accessors:"),
+  ("transform @hour | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("transform @hour | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("transform @hour | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("transform @hour | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(HOUR FROM `R2`.`start_at`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("transform @hour | subquery", :postgres, "w__@gt", "10") =>
@@ -585,6 +609,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (yyyy-mm): The value is invalid, it must be in the format YYYY-MM"),
+  ("ToChar YYYY-MM | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("ToChar YYYY-MM | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("ToChar YYYY-MM | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("ToChar YYYY-MM | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("ToChar YYYY-MM | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("ToChar YYYY-MM | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
   ("ToChar YYYY-MM | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (yyyy-mm): The value must be a 6-digit integer in the format YYYYMM or a str"),
   ("ToChar YYYY-MM | subquery", :mysql, "w__@gt", "text pole") =>
@@ -603,6 +639,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM \"Tb\".\"date\")::integer > \$1", params = [("10", "Int64")]),
   ("Extract year | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract year | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract year | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract year | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Extract year | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM `R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year | subquery", :postgres, "w__@gt", "10") =>
@@ -613,6 +655,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "QUARTER(`Tb`.`date`) > ?", params = [("10", "Int64")]),
   ("Extract quarter | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(QUARTER FROM \"Tb\".\"date\")::integer > \$1", params = [("10", "Int64")]),
+  ("Extract quarter | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract quarter | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
   ("Extract quarter | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    QUARTER(`R2`.`date`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract quarter | subquery", :postgres, "w__@gt", "10") =>
@@ -633,6 +679,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(QUARTER(`Tb`.`date`) DIV ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Extract quarter / 2 | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(QUARTER FROM \"Tb\".\"date\")::integer / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Extract quarter / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Extract quarter / 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
   ("Extract quarter / 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (QUARTER(`R2`.`date`) DIV ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract quarter / 2 | subquery", :postgres, "w__@gt", "10") =>
@@ -811,6 +861,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + Day(1) | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "date(\"Tb\".\"date\", '+' || ? || ' days') > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + Day(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + Day(1) | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + Day(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + Day(1) | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + Day(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + Day(1) | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("F date + Day(1) | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + Day(1) | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -835,6 +897,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F datetime - datetime | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER) > ?", params = [("60000", "Int64")]),
+  ("F datetime - datetime | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F datetime - datetime | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("F datetime - datetime | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F datetime - datetime | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("F datetime - datetime | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F datetime - datetime | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("F datetime - datetime | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F datetime - datetime | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -907,6 +981,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F date + Hour(1) | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', \"Tb\".\"date\", '+' || ? || ' hours') > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F date + Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F date + Hour(1) | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F date + Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F date + Hour(1) | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F date + Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F date + Hour(1) | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("F date + Hour(1) | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F date + Hour(1) | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -931,6 +1017,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F datetime - Hour(1) | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', \"Tb\".\"start_at\", '-' || ? || ' hours') > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F datetime - Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F datetime - Hour(1) | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F datetime - Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F datetime - Hour(1) | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F datetime - Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F datetime - Hour(1) | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("F datetime - Hour(1) | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F datetime - Hour(1) | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -955,6 +1053,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + 1 | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "date(\"Tb\".\"date\", '+' || ? || ' days') > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + 1 | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + 1 | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("F date + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + 1 | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("F date + 1 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + 1 | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -979,6 +1089,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + int col | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "date(julianday(\"Tb\".\"date\") + (\"Tb\".\"year\")) > ?", params = [("\"2009-03-29\"", "String")]),
+  ("F date + int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + int col | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
+  ("F date + int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + int col | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("F date + int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date + int col | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("F date + int col | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date + int col | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -1003,6 +1125,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date - int col | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "date(julianday(\"Tb\".\"date\") - (\"Tb\".\"year\")) > ?", params = [("\"2009-03-29\"", "String")]),
+  ("F date - int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date - int col | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
+  ("F date - int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date - int col | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("F date - int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("F date - int col | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("F date - int col | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("F date - int col | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -1027,6 +1161,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval + interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) > ?", params = [("60000", "Int64")]),
+  ("F interval + interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval + interval | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("F interval + interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval + interval | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("F interval + interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval + interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("F interval + interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval + interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -1051,6 +1197,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval * 2 | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("60000", "Int64")]),
+  ("F interval * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval * 2 | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("60000000", "Int64")]),
+  ("F interval * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval * 2 | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F interval * 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval * 2 | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("2", "Int64"), ("60000", "Int64")]),
   ("F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -1075,6 +1233,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval / int col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (\"Tb\".\"grid\")) AS INTEGER) > ?", params = [("60000", "Int64")]),
+  ("F interval / int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval / int col | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("F interval / int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval / int col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("F interval / int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval / int col | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("F interval / int col | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F interval / int col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -1099,6 +1269,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F int col * interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "CAST(round((\"Tb\".\"grid\") * (((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) > ?", params = [("60000", "Int64")]),
+  ("F int col * interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * interval | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("F int col * interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * interval | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("F int col * interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("F int col * interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F int col * interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -1123,6 +1305,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop date + interval | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"Tb_1\".\"date\") + ((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0)) > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop date + interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F hop date + interval | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop date + interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F hop date + interval | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop date + interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("F hop date + interval | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("F hop date + interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop date + interval | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -1147,6 +1341,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop datetime + interval | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"Tb_1\".\"start_at\") + ((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0)) > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop datetime + interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F hop datetime + interval | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop datetime + interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F hop datetime + interval | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F hop datetime + interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("F hop datetime + interval | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("F hop datetime + interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop datetime + interval | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -1183,6 +1389,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Max F datetime - datetime | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :having, sql = "MAX(CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER)) > ?", params = [("60000", "Int64")]),
+  ("Max F datetime - datetime | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Max F datetime - datetime | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("Max F datetime - datetime | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Max F datetime - datetime | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("Max F datetime - datetime | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Max F datetime - datetime | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("Max F datetime - datetime | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Max F datetime - datetime | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -1201,6 +1419,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ABS((\"Tb\".\"date\" - \"Tb\".\"date\")) > \$1", params = [("10", "Int64")]),
   ("Abs F date - date | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ABS(CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Abs F date - date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Abs F date - date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Abs F date - date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Abs F date - date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS((DATEDIFF(`R2`.`date`, `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs F date - date | subquery", :postgres, "w__@gt", "10") =>
@@ -2013,6 +2237,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("NullIf interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
+  ("NullIf interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("NullIf interval | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("60000000", "Int64")]),
+  ("NullIf interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("NullIf interval | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
+  ("NullIf interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("NullIf interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("NullIf interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("NullIf interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -2069,6 +2305,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag Cast ts + 1 | alone", :postgres, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast ts + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("Lag Cast ts + 1 | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Lag Cast ts + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMP): The datetime must be a ZonedDateTime, DateTime, or a string in the format yyy"),
+  ("Lag Cast ts + 1 | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Lag Cast ts + 1 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Lag Cast ts + 1 | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -2089,6 +2333,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag Case date col + 1 | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case date col + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Lag Case date col + 1 | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Lag Case date col + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Lag Case date col + 1 | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Lag Case date col + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Lag Case date col + 1 | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Lag Case date col + 1 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Lag Case date col + 1 | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -2109,6 +2365,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag Cast interval * 2 | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Cast interval * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag Cast interval * 2 | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("2", "Int64"), ("60000000", "Int64")]),
+  ("Lag Cast interval * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag Cast interval * 2 | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("2", "Int64"), ("\"00:01:00\"", "String")]),
   ("Lag Cast interval * 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Lag Cast interval * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -2125,6 +2389,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag Case interval col * grid | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag Case interval col * grid | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag Case interval col * grid | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Lag Case interval col * grid | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag Case interval col * grid | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Lag Case interval col * grid | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Lag Case interval col * grid | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -2141,6 +2413,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("grid * Lag Case interval col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("grid * Lag Case interval col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("grid * Lag Case interval col | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("grid * Lag Case interval col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("grid * Lag Case interval col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("grid * Lag Case interval col | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("grid * Lag Case interval col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -2157,6 +2437,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag F ts - ts * 2 | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
+  ("Lag F ts - ts * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag F ts - ts * 2 | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("2", "Int64"), ("60000000", "Int64")]),
+  ("Lag F ts - ts * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Lag F ts - ts * 2 | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("2", "Int64"), ("\"00:01:00\"", "String")]),
   ("Lag F ts - ts * 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Lag F ts - ts * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
@@ -2193,6 +2481,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Case untyped date col + 1 | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "date(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\"\nELSE NULL\nEND\n, '+' || ? || ' days') > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Case untyped date col + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Case untyped date col + 1 | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Case untyped date col + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Case untyped date col + 1 | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Case untyped date col + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Case untyped date col + 1 | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Case untyped date col + 1 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Case untyped date col + 1 | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -2229,6 +2529,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Case untyped zoned col + interval | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"start_at\"\nELSE NULL\nEND\n) + ((CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER)) / 86400000.0)) > ?", params = [("2009", "Int64"), ("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Case untyped zoned col + interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Case untyped zoned col + interval | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Case untyped zoned col + interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Case untyped zoned col + interval | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Case untyped zoned col + interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Case untyped zoned col + interval | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Case untyped zoned col + interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Case untyped zoned col + interval | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -2685,6 +2997,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Coalesce date date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb_1\".\"date\", \"Tb_2\".\"dob\") > ?", params = [("\"2009-03-29\"", "String")]),
+  ("Coalesce date date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date date | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
+  ("Coalesce date date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("Coalesce date date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("Coalesce date date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Coalesce date date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -2709,6 +3033,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"points\", \"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
   ("Coalesce float int | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"points\", \"Tb\".\"grid\") > ?", params = [("10.5", "Float64")]),
+  ("Coalesce float int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Coalesce float int | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Coalesce float int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Coalesce float int | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Coalesce float int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Coalesce float int | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Coalesce float int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`points`, `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce float int | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -2733,6 +3069,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Coalesce int float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"grid\", \"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Coalesce int float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Coalesce int float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Coalesce int float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Coalesce int float | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Coalesce int float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Coalesce int float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Coalesce int float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(`R2`.`grid`, `R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce int float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -2757,6 +3105,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool literal | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"boolean_field\", ?) > ?", params = [("false", "Bool"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce bool literal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool literal | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce bool literal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool literal | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce bool literal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool literal | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("false", "Bool"), ("true", "Bool")]),
   ("Coalesce bool literal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool literal | subquery", :mysql, "w__@gt", "bool true") =>
@@ -2781,6 +3141,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Greatest datetime | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "MAX(COALESCE(\"Tb\".\"start_at\", \"Tb\".\"start_at\"), COALESCE(\"Tb\".\"start_at\", \"Tb\".\"start_at\")) > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Greatest datetime | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Greatest datetime | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Greatest datetime | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Greatest datetime | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Greatest datetime | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Greatest datetime | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Greatest datetime | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Greatest datetime | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -2805,6 +3177,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "MIN(COALESCE(\"Tb\".\"points\", \"Tb\".\"points\"), COALESCE(\"Tb\".\"points\", \"Tb\".\"points\")) > ?", params = [("10", "Int64")]),
   ("Least decimal | alone", :sqlite, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "MIN(COALESCE(\"Tb\".\"points\", \"Tb\".\"points\"), COALESCE(\"Tb\".\"points\", \"Tb\".\"points\")) > ?", params = [("10.5", "Decimal")]),
+  ("Least decimal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Least decimal | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Least decimal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Least decimal | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Least decimal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Least decimal | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Least decimal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    LEAST(COALESCE(`R2`.`points`, `R2`.`points`), COALESCE(`R2`.`points`, `R2`.`points`)) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Least decimal | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -2829,6 +3213,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("NullIf date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "NULLIF(\"Tb_1\".\"date\", \"Tb_2\".\"dob\") > ?", params = [("\"2009-03-29\"", "String")]),
+  ("NullIf date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("NullIf date | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-29\"", "String")]),
+  ("NullIf date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("NullIf date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"2009-03-29\"", "String")]),
+  ("NullIf date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("NullIf date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-29\"", "String")]),
   ("NullIf date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("NullIf date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -3123,6 +3519,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(\"Tb\".\"positiontext\", '')) > ?", params = [("\"10\"", "String")]),
   ("Concat text | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(\"Tb\".\"positiontext\", '')) > ?", params = [("\"pole\"", "String")]),
+  ("Concat text | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Concat text | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Concat text | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Concat text | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Concat text | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Concat text | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
   ("Concat text | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n`R2`.`positiontext`,\n`R2`.`positiontext`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Concat text | subquery", :mysql, "w__@gt", "text pole") =>
@@ -3147,6 +3555,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "UPPER(\"Tb\".\"positiontext\") > ?", params = [("\"10\"", "String")]),
   ("Upper text | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "UPPER(\"Tb\".\"positiontext\") > ?", params = [("\"pole\"", "String")]),
+  ("Upper text | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("Upper text | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("Upper text | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("Upper text | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("Upper text | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("Upper text | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
   ("Upper text | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    UPPER(`R2`.`positiontext`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Upper text | subquery", :mysql, "w__@gt", "text pole") =>
@@ -3165,6 +3585,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "LENGTH(\"Tb\".\"positiontext\") > \$1", params = [("10", "Int64")]),
   ("Length text | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "LENGTH(\"Tb\".\"positiontext\") > ?", params = [("10", "Int64")]),
+  ("Length text | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Length text | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Length text | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Length text | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CHAR_LENGTH(`R2`.`positiontext`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Length text | subquery", :postgres, "w__@gt", "10") =>
@@ -3183,6 +3609,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"points\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
   ("Round float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"points\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round float | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
   ("Round float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(CAST(`R2`.`points` AS DECIMAL(65,30)), ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round float | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -3207,6 +3645,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"points\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10", "Int64")]),
   ("Round decimal | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "ROUND(\"Tb\".\"points\", ?) > ?", params = [("0", "Int64"), ("0", "Int64"), ("10.5", "Float64")]),
+  ("Round decimal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round decimal | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round decimal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round decimal | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Round decimal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("10", "Int64")]),
+  ("Round decimal | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0", "Int64"), ("\"10.5\"", "String")]),
   ("Round decimal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(`R2`.`points`, ?) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round decimal | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -3231,6 +3681,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Abs float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Abs float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Abs float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Abs float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Abs float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Abs float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Abs float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Abs float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3255,6 +3717,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Abs decimal | alone", :sqlite, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"points\") > ?", params = [("10.5", "Decimal")]),
+  ("Abs decimal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Abs decimal | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Abs decimal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Abs decimal | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Abs decimal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Abs decimal | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Abs decimal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`points`) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs decimal | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -3279,6 +3753,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"grid\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Mod int | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"grid\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Mod int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Mod int | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Mod int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Mod int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Mod int | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Mod int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`grid`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Mod int | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3297,6 +3783,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"grid\") > \$1", params = [("10", "Int64")]),
   ("Abs int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Abs int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Abs int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Abs int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Abs int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs int | subquery", :postgres, "w__@gt", "10") =>
@@ -3309,6 +3801,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"resultid\") > \$1", params = [("10", "Int64")]),
   ("Abs bigint | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "ABS(\"Tb\".\"resultid\") > ?", params = [("10", "Int64")]),
+  ("Abs bigint | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Abs bigint | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Abs bigint | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Abs bigint | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(`R2`.`resultid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Abs bigint | subquery", :postgres, "w__@gt", "10") =>
@@ -3321,6 +3819,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"grid\")::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Floor int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Floor int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Floor int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Floor int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Floor int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor int | subquery", :postgres, "w__@gt", "10") =>
@@ -3333,6 +3837,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "CEIL((\"Tb\".\"grid\")::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Ceil int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CEIL(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Ceil int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Ceil int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Ceil int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Ceil int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Ceil int | subquery", :postgres, "w__@gt", "10") =>
@@ -3345,6 +3855,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"grid\")::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Round int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Round int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Round int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Round int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Round int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round int | subquery", :postgres, "w__@gt", "10") =>
@@ -3357,6 +3873,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"grid\")::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Round int places | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Round int places | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Round int places | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Round int places | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Round int places | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round int places | subquery", :postgres, "w__@gt", "10") =>
@@ -3369,6 +3891,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND((\"Tb\".\"resultid\")::numeric)::bigint > \$1", params = [("10", "Int64")]),
   ("Round bigint | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"resultid\") > ?", params = [("10", "Int64")]),
+  ("Round bigint | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Round bigint | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Round bigint | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Round bigint | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND(`R2`.`resultid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round bigint | subquery", :postgres, "w__@gt", "10") =>
@@ -3381,6 +3909,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(ROUND((\"Tb\".\"grid\")::numeric)::integer / \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Round int / 2 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\") / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Round int / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Round int / 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Round int / 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
   ("Round int / 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (ROUND(`R2`.`grid`) DIV ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round int / 2 | subquery", :postgres, "w__@gt", "10") =>
@@ -3393,6 +3927,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR((EXTRACT(YEAR FROM \"Tb\".\"date\")::integer)::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Floor year part | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR(CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Floor year part | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Floor year part | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Floor year part | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Floor year part | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((EXTRACT(YEAR FROM `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor year part | subquery", :postgres, "w__@gt", "10") =>
@@ -3447,6 +3987,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Floor float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "FLOOR(\"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Floor float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Floor float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Floor float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Floor float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Floor float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Floor float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Floor float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(`R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3471,6 +4023,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "CEIL(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Ceil float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "CEIL(\"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Ceil float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Ceil float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Ceil float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Ceil float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Ceil float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Ceil float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Ceil float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CEIL(`R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Ceil float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3495,6 +4059,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Floor decimal | alone", :sqlite, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "FLOOR(\"Tb\".\"points\") > ?", params = [("10.5", "Decimal")]),
+  ("Floor decimal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Floor decimal | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Floor decimal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Floor decimal | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Floor decimal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Floor decimal | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Floor decimal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(`R2`.`points`) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor decimal | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -3519,6 +4095,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Sqrt float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Sqrt float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sqrt float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Sqrt float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sqrt float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Sqrt float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sqrt float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Sqrt float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(`R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sqrt float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3543,6 +4131,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
   ("Sqrt int | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "SQRT(\"Tb\".\"grid\") > ?", params = [("10.5", "Float64")]),
+  ("Sqrt int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Sqrt int | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Sqrt int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Sqrt int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Sqrt int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Sqrt int | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Sqrt int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    SQRT(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Sqrt int | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3567,6 +4167,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXP(\"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
   ("Exp int | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "EXP(\"Tb\".\"grid\") > ?", params = [("10.5", "Float64")]),
+  ("Exp int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Exp int | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Exp int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Exp int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Exp int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Exp int | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Exp int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXP(`R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Exp int | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3591,6 +4203,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "LN(\"Tb\".\"points\") > ?", params = [("10", "Int64")]),
   ("Ln float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "LN(\"Tb\".\"points\") > ?", params = [("10.5", "Float64")]),
+  ("Ln float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Ln float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Ln float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Ln float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Ln float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Ln float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
   ("Ln float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    LN(`R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Ln float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3615,6 +4239,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"points\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Power float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"points\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Power float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power float | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Power float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`points`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Power float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3639,6 +4275,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"grid\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Power int | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "POWER(\"Tb\".\"grid\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Power int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power int | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Power int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Power int | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Power int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    POWER(`R2`.`grid`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Power int | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -3885,6 +4533,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR(((\"Tb\".\"grid\" + \$2::bigint))::numeric)::bigint > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"grid\" + ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor F int + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Floor F int + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Floor F int + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((`R2`.`grid` + ?) + 0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int + 1 | subquery", :postgres, "w__@gt", "10") =>
@@ -3933,6 +4587,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR(((\"Tb\".\"grid\" & \$2::bigint))::numeric)::bigint > \$3", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((\"Tb\".\"grid\" & ?)) > ?", params = [("3", "Int64"), ("3", "Int64"), ("10", "Int64")]),
+  ("Floor F int & 3 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3", "Int64"), ("10", "Int64")]),
+  ("Floor F int & 3 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("3", "Int64"), ("10", "Int64")]),
+  ("Floor F int & 3 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("3", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR((CAST((`R2`.`grid` & ?) AS SIGNED) + 0)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3", "Int64"), ("1", "Int64"), ("3", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor F int & 3 | subquery", :postgres, "w__@gt", "10") =>
@@ -4251,6 +4911,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "FLOOR(((SELECT\n    \"R2\".\"grid\" as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n))::numeric)::integer > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "FLOOR((SELECT\n    \"R2\".\"grid\" as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Floor Subquery int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Floor Subquery int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Floor Subquery int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    FLOOR(((SELECT\n    `R4`.`grid` as `t`\nFROM `result` as `R4`\nWHERE `R4`.`resultid` = `R3`.`resultid`\nLIMIT ? \n) + 0)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Floor Subquery int | subquery", :postgres, "w__@gt", "10") =>
@@ -4341,6 +5007,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(CAST(COALESCE(\"Tb\".\"grid\", \"Tb\".\"points\") AS REAL) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Coalesce int float / 2 | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(CAST(COALESCE(\"Tb\".\"grid\", \"Tb\".\"points\") AS REAL) / ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Coalesce int float / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce int float / 2 | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce int float / 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce int float / 2 | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce int float / 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Coalesce int float / 2 | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Coalesce int float / 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(`R2`.`grid`, `R2`.`points`) / ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Coalesce int float / 2 | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -4431,6 +5109,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "((NULLIF(\"Tb\".\"grid\", \$3::double precision))::integer / \$4::bigint) > \$5", params = [("0.5", "Float64"), ("2", "Int64"), ("0.5", "Float64"), ("2", "Int64"), ("10", "Int64")]),
   ("NullIf int float / 2 | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(NULLIF(\"Tb\".\"grid\", ?) / ?) > ?", params = [("0.5", "Float64"), ("2", "Int64"), ("0.5", "Float64"), ("2", "Int64"), ("10", "Int64")]),
+  ("NullIf int float / 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("0.5", "Float64"), ("2", "Int64"), ("10", "Int64")]),
+  ("NullIf int float / 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("0.5", "Float64"), ("2", "Int64"), ("10", "Int64")]),
+  ("NullIf int float / 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("0.5", "Float64"), ("2", "Int64"), ("10", "Int64")]),
   ("NullIf int float / 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (NULLIF(`R2`.`grid`, ?) DIV ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("0.5", "Float64"), ("2", "Int64"), ("1", "Int64"), ("0.5", "Float64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("NullIf int float / 2 | subquery", :postgres, "w__@gt", "10") =>
@@ -4569,6 +5253,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Coalesce date Date(zoned) | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"date\", ?) > ?", params = [("\"2021-01-01\"", "String"), ("\"2021-01-01\"", "String"), ("\"2009-03-29\"", "String")]),
+  ("Coalesce date Date(zoned) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date Date(zoned) | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2021-01-01", "Date"), ("\"2009-03-29\"", "String")]),
+  ("Coalesce date Date(zoned) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date Date(zoned) | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2021-01-01", "Date"), ("\"2009-03-29\"", "String")]),
+  ("Coalesce date Date(zoned) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Coalesce date Date(zoned) | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2021-01-01\"", "String"), ("\"2009-03-29\"", "String")]),
   ("Coalesce date Date(zoned) | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Coalesce date Date(zoned) | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -4593,6 +5289,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Coalesce zoned zoned | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"start_at\", ?) > ?", params = [("\"2020-12-31T22:30:00.000+00:00\"", "String"), ("\"2020-12-31T22:30:00.000+00:00\"", "String"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Coalesce zoned zoned | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Coalesce zoned zoned | cte", :mysql, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Coalesce zoned zoned | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Coalesce zoned zoned | cte", :postgres, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2021-01-01T00:30:00+02:00", "ZonedDateTime"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Coalesce zoned zoned | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (TIMESTAMPTZ): The datetime must be a ZonedDateTime, DateTime, or a string in the format y"),
+  ("Coalesce zoned zoned | cte", :sqlite, "g__v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2020-12-31T22:30:00.000+00:00\"", "String"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Coalesce zoned zoned | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Coalesce zoned zoned | subquery", :mysql, "w__@gt", "datetime 2009-03-29T06:00") =>
@@ -6401,6 +7109,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Subquery Max hop date | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(\"R2_1\".\"date\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Subquery Max hop date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Subquery Max hop date | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Subquery Max hop date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Subquery Max hop date | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("Subquery Max hop date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("Subquery Max hop date | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Subquery Max hop date | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Subquery Max hop date | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
@@ -6425,6 +7145,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(\"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Subquery Avg float | alone", :sqlite, "v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    AVG(\"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Subquery Avg float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery Avg float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Subquery Avg float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery Avg float | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Subquery Avg float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery Avg float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
   ("Subquery Avg float | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (SELECT\n    AVG(`R4`.`points`) as `t`\nFROM `result` as `R4`\nWHERE `R4`.`resultid` = `R3`.`resultid`\nLIMIT ? \n) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Subquery Avg float | subquery", :mysql, "w__@gt", "float 10.5") =>
@@ -6449,6 +7181,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"points\" as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Subquery path decimal | alone", :sqlite, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"points\" as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Subquery path decimal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery path decimal | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Subquery path decimal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery path decimal | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Subquery path decimal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Subquery path decimal | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
   ("Subquery path decimal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (SELECT\n    `R4`.`points` as `t`\nFROM `constructor_results` as `R4`\nWHERE `R4`.`constructorresultsid` = `R3`.`constructorresultsid`\nLIMIT ? \n) as `t`\nFROM `constructor_results` as `R3`\nWHERE `R3`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Subquery path decimal | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -6473,6 +7217,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Exists | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "EXISTS (SELECT 1\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT 1) > ?", params = [("true", "Bool")]),
+  ("Exists | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Exists | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("true", "Bool")]),
+  ("Exists | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Exists | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$1", params = [("true", "Bool")]),
+  ("Exists | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Exists | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("true", "Bool")]),
   ("Exists | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Exists | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6497,6 +7253,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Max Q | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"grid\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Max Q | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Max Q | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Max Q | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("true", "Bool")]),
   ("Max Q | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Max Q | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6521,6 +7289,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Min Qor | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :having, sql = "MIN((\"Tb\".\"grid\" = ? OR \"Tb\".\"grid\" = ?)) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
+  ("Min Qor | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Min Qor | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
+  ("Min Qor | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Min Qor | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
+  ("Min Qor | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Min Qor | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
   ("Min Qor | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Min Qor | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6545,6 +7325,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce Q false | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\" > ?), ?) > ?", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce Q false | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce Q false | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce Q false | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce Q false | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce Q false | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce Q false | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
   ("Coalesce Q false | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce Q false | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6569,6 +7361,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN (\"Tb\".\"points\" > ?)\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Case then Q | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Case then Q | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Case then Q | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Case then Q | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Case then Q | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Case then Q | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
   ("Case then Q | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Case then Q | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6601,6 +7405,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F time > Time literal | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" > ?) > ?", params = [("\"12:00:00\"", "String"), ("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"12:00:00\"", "String"), ("true", "Bool")]),
+  ("F time > Time literal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F time > Time literal | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"12:00:00\"", "String"), ("true", "Bool")]),
   ("F time > Time literal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F time > Time literal | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6621,6 +7437,14 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::numeric > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Extract epoch F interval * 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"fastestlaptime\" * \$2::bigint))::numeric > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract epoch F interval * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract epoch F interval * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Extract epoch F interval * 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
   ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(ROUND((`R2`.`fastestlaptime`) * (?)) AS SIGNED) / 1000000) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract epoch F interval * 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
@@ -6635,6 +7459,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(YEAR FROM (\"Tb_1\".\"date\" + \"Tb\".\"fastestlaptime\"))::integer > \$1", params = [("10", "Int64")]),
   ("Extract year F hop date + interval | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(strftime('%Y', strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"Tb_1\".\"date\") + ((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0))) AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract year F hop date + interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract year F hop date + interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract year F hop date + interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Extract year F hop date + interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(YEAR FROM (`R2_1`.`date` + INTERVAL (`R2`.`fastestlaptime`) MICROSECOND)) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract year F hop date + interval | subquery", :postgres, "w__@gt", "10") =>
@@ -6645,6 +7475,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F time - time | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"time\" - \"Tb\".\"time\") > \$1", params = [("\"00:01:00\"", "String")]),
+  ("F time - time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F time - time | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
   ("F time - time | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F time - time | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -6653,6 +7487,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Max F time - time | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"time\" - \"Tb\".\"time\")) > \$1", params = [("\"00:01:00\"", "String")]),
+  ("Max F time - time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Max F time - time | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"00:01:00\"", "String")]),
   ("Max F time - time | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Max F time - time | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -6661,6 +7499,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric > \$1", params = [("10", "Int64")]),
   ("Extract epoch F time - time | alone", :postgres, "v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(EPOCH FROM (\"Tb\".\"time\" - \"Tb\".\"time\"))::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract epoch F time - time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract epoch F time - time | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(EPOCH FROM (\"R2\".\"time\" - \"R2\".\"time\"))::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract epoch F time - time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
@@ -6677,6 +7519,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool comparison | alone", :sqlite, "v__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "COALESCE(\"Tb\".\"boolean_field\", (\"Tb\".\"result\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce bool comparison | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("Coalesce bool comparison | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("true", "Bool")]),
   ("Coalesce bool comparison | subquery", :mysql, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Coalesce bool comparison | subquery", :mysql, "w__@gt", "bool true") =>
@@ -6695,6 +7549,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "ROUND((EXTRACT(YEAR FROM \"Tb\".\"date\")::integer)::numeric)::integer > \$1", params = [("10", "Int64")]),
   ("Round Extract year | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CAST(strftime('%Y', \"Tb\".\"date\") AS INTEGER)) > ?", params = [("10", "Int64")]),
+  ("Round Extract year | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Round Extract year | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Round Extract year | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Round Extract year | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ROUND((EXTRACT(YEAR FROM `R2`.`date`) + 0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round Extract year | subquery", :postgres, "w__@gt", "10") =>
@@ -6809,6 +7669,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "strftime('%H:%M', \"Tb\".\"time\") > ?", params = [("\"10\"", "String")]),
   ("ToChar time HH:MI | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "strftime('%H:%M', \"Tb\".\"time\") > ?", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"pole\"", "String")]),
+  ("ToChar time HH:MI | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+  ("ToChar time HH:MI | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"pole\"", "String")]),
   ("ToChar time HH:MI | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    DATE_FORMAT(`R2`.`time`, '%H:%i') as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("ToChar time HH:MI | subquery", :mysql, "w__@gt", "text pole") =>
@@ -7297,6 +8169,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(json_extract(\"Tb\".\"payload\", '\$.n'), '')) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"10\"", "String")]),
   ("Concat json key | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(COALESCE(?, '') ||\nCOALESCE(json_extract(\"Tb\".\"payload\", '\$.n'), '')) > ?", params = [("\"n=\"", "String"), ("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | cte", :mysql, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | cte", :postgres, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"n=\"", "String"), ("\"pole\"", "String")]),
+  ("Concat json key | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"n=\"", "String"), ("\"10\"", "String")]),
+  ("Concat json key | cte", :sqlite, "g__v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"n=\"", "String"), ("\"pole\"", "String")]),
   ("Concat json key | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n?,\n(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Concat json key | subquery", :mysql, "w__@gt", "text pole") =>

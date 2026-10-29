@@ -793,12 +793,13 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #812. The same section: a function outside the table, with no declared type, raises.
+        # #812, #1460. The same section: a function over a value PormG cannot name, with no declared
+        # type, raises. (A function outside the old allow-list, `Lower`, is typed since #1460.)
         "read/subqueries_and_ctes.md — a CTE column from an untyped function is refused (#812)",
         QueryBuildError,
         () -> begin
             body = DOCERR_RESULT_PG.objects
-            body.values("resultid", "nm" => Lower("driverid__surname"))
+            body.values("resultid", "nm" => PormG.Functions.Abs(F("payload") + 1))
             q = DOCERR_RESULT_PG.objects
             q.with("c" => body, join_field = "resultid" => "resultid")
             q.values("resultid", "c__nm")

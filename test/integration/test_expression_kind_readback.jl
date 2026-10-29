@@ -125,6 +125,12 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor json key / 2 | alone", :sqlite) => (type = "Int64", value = "3", read = nothing),
   ("Floor json key / 2 | subquery", :postgres) => (type = "Decimal", value = "3.5", read = nothing),
   ("Floor json key / 2 | subquery", :sqlite) => (type = "Int64", value = "3", read = nothing),
+  # #1460: `Extract(x, "EPOCH")` (a decimal since #1457) is a CTE column now, typed `DecimalField` from
+  # the walk; it was refused there before. Twice result 1's fastest lap (87.452 s), and a time minus
+  # itself. SQLite has no `EPOCH` part.
+  ("Extract epoch F interval * 2 | cte", :postgres) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F interval * 2 | cte", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
+  ("Extract epoch F time - time | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)

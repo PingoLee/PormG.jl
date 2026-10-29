@@ -135,8 +135,11 @@ end
     write(joinpath(db_dir, "connection.yml"),
           "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: false\n    change_data: false\n")
     key = "db"
+    # Alone in `config`: in the suite, other files leave hand-built entries whose default folder is
+    # "db" too, and an alias spelling resolves to whichever the folder lookup meets first — not
+    # necessarily the offline one (#550 keeps one entry per folder; the suite breaks that by hand).
     saved = copy(PormG.config)
-    delete!(PormG.config, key)   # another file's hand-built "db" entry would answer the folder lookup
+    empty!(PormG.config)
     try
       Configuration.register_offline(key)
       pool = PormG.config[key].connections
@@ -167,9 +170,8 @@ end
       @test PormG.config[key].connections isa PormG.PormGSQLite
     finally
       haskey(PormG.config, key) && Configuration.unregister_connection(key)
-      for (k, v) in saved
-        haskey(PormG.config, k) || (PormG.config[k] = v)
-      end
+      empty!(PormG.config)
+      merge!(PormG.config, saved)
     end
   end
 end

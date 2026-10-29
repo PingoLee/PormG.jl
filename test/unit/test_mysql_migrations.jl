@@ -225,7 +225,7 @@ _mm_stat(tbl, idx, non_unique, col, coll = "A"; sub_part = missing, comment = ""
     @test (name, live.columns[String(name)]) == (name, _MM.column_spec(field, _mm_my; name = String(name)))
   end
   # The key's own index is not `db_index`'s; the declared index is.
-  @test live.indexes == Dict{String, Union{String, Nothing}}("circuitid" => "result_circuitid_cd_idx")
+  @test live.indexes == Dict{String, Vector{String}}("circuitid" => ["result_circuitid_cd_idx"])
   @test isempty(live.composites) && isempty(live.checks)
 
   # An inline UNIQUE is the column's; a descending composite and a named unique index are model-level.

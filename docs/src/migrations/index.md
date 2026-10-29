@@ -65,6 +65,7 @@ database falls into one of the groups below. "Destructive" means `dry_run()` lis
 | Tables of [unmanaged models](../models.md#Unmanaged-models) | **Never creates, alters, renames or drops them.** They are still read, so that the plan's index names and SQLite views can be checked against them. |
 | A table no model declares | Plans `DROP TABLE`, **destructive**. Refused with `InvalidMigrationError` while a view or trigger still reads it (see [Deleting a Model](#Deleting-a-Model)). |
 | A column, a plain index or a `UNIQUE` constraint the model does not declare | Plans its removal, **destructive**. See [Changing composites on an existing table](../models.md#Changing-composites-on-an-existing-table) for indexes. |
+| The same plain one-column index more than once on a column, under several names | Plans the removal of every copy but one when the field declares `db_index = true`, and of every copy when it does not; **destructive**. See [Index names and duplicate indexes](#Index-names-and-duplicate-indexes). |
 | A non-unique index with an access method (GIN, GiST, BRIN, hash, SP-GiST), a `DESC` column or an operator class — the shapes [`Models.Index`](../models.md#Methods,-operator-classes-and-descending-columns) can declare — or an expression, an explicit collation, a `NULLS` placement other than the direction's default or a `WHERE` clause, which it declares as [SQL text](../models.md#Expression-and-partial-indexes) | Reads it. **Plans its removal only when it carries PormG's `pormg:index` marker**, i.e. PormG created it; one written by hand is never planned away, and a declaration of the same shape adopts it — for an expression or partial one, a declaration of its own text as the database spells it. A method or an operator class is PostgreSQL-only. On MySQL a declaration of the same shape adopts a hand-made index without marking it, and a hand-made expression index matches no declaration, since MySQL re-prints it with backtick-quoted names ([Changing composites](../models.md#Changing-composites-on-an-existing-table)). |
 | A `CHECK` you wrote by hand | Reads it but **never plans it away**. On SQLite, a rebuild of the table loses it, with a warning (see below). A [`CheckConstraint`](../models.md#Check-Constraints) the model no longer declares *is* planned away. |
 | An index that a model cannot declare, over several columns or a non-unique one over one column: an extension's access method (`bloom`), on SQLite a collation declared on the column rather than in the index (any but `BINARY`), or a unique index with a method, direction, operator class or `INCLUDE` (a unique expression or `WHERE` clause is a declarable `UniqueConstraint`, and is read). On PostgreSQL, also any **invalid** index, whatever its shape (a failed `CREATE INDEX CONCURRENTLY`). On MySQL, a `FULLTEXT` or `SPATIAL` index, one with a prefix length (`surname(10)`) and one mixing columns and expressions ([#1369](https://github.com/PingoLee/PormG.jl/issues/1369)) | **Never reads it, so never drops it.** An invalid one is reported by `check("db"; kinds = [:invalid_index])` (see [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)), and dropping or rebuilding it is left to you. On MySQL, `inspectdb` leaves such an index out of the model with a warning naming it. On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. A field that declares `db_index = true` on a column carrying only such an index gets PormG's own index beside it on PostgreSQL, and on MySQL. On SQLite, a non-unique index that lists the column itself is taken as satisfying it and nothing is created, unless that index is partial, has an expression member or carries PormG's `pormg:index` marker; otherwise PormG's own index is created there too. |
@@ -90,6 +91,51 @@ that names the table is not one of them (see [Deleting a Model](#Deleting-a-Mode
 To change an object outside this scope, such as a view, a trigger or a function, use your own SQL
 outside the migration plan. To keep `makemigrations` away from a table you manage that way, list it
 in `ignore_tables:`.
+
+### Index names and duplicate indexes
+
+A field with `db_index = true` gets an index named `<table>_<column>_idx`, from the physical table and
+column (`result_driverid_idx`), the one-column spelling of the name a
+[`Models.Index`](../models.md#Composite-Indexes-(Meta.indexes)) derives. A name longer than the engine allows (63
+bytes on PostgreSQL, 64 characters on MySQL) is cut and ends in 8 hex digits of its own hash, so two
+long names never meet. When another index already holds the name — one a renamed column or table left
+behind, since PormG never renames an existing index — the new index takes `<table>_<column>_<8 hex>_idx`
+instead. Every one of these names is the same on every run, so on PostgreSQL and SQLite a plan
+applied twice hits `CREATE INDEX IF NOT EXISTS` and creates nothing the second time.
+
+The planner checks the name against the indexes it reads. It does not read an invalid PostgreSQL
+index or an index on an ignored table, so one of those holding the name makes the `CREATE INDEX IF
+NOT EXISTS` a no-op, and the next plan proposes it again. An invalid index is reported by
+`check("db"; kinds = [:invalid_index])`; drop it and the plan creates the index.
+
+A `Models.Index` without `name=` can derive the same name as a `db_index` index: an `Index` over
+`driverid` and `raceid` and a column named `driverid_raceid` both derive `result_driverid_raceid_idx`.
+When neither exists yet, the `Index` keeps that name and the `db_index` index takes the hashed one. When
+the `db_index` index already holds it, `makemigrations` raises `InvalidMigrationError`: give the `Index`
+an explicit `name=`.
+
+Indexes created before this naming carry a random suffix (`result_driverid_a1b2c3d4_idx`). They keep
+it: nothing reads an index name, so PormG does not rename them.
+
+A column can end up carrying the same index more than once, under several names. A plan that read a
+column as unindexed created one more copy each time it ran, because a random name never matched
+`IF NOT EXISTS`. `makemigrations` reads every copy, and a copy here means a plain, non-unique
+one-column index with no `WHERE`, expression, direction, operator class or collation of its own:
+
+- **The field declares `db_index = true`** — every copy but one is planned away, each as its own
+  `Remove duplicate index <index> on <column>` step. The one kept is the copy named
+  `<table>_<column>_idx` if there is one, otherwise the first by name.
+- **The field does not declare it** — every copy is planned away in one plan: `Remove index on
+  <column>` for one of them, `Remove duplicate index …` for the rest.
+
+```sql
+-- result.driverid declares db_index = true and carries three copies of its index:
+DROP INDEX IF EXISTS "result_driverid_s21bkzlw_idx";
+DROP INDEX IF EXISTS "result_driverid_zndqsv7m_idx";
+```
+
+Each is a `DROP INDEX`, so `migrate()` needs `destructive = true`. No data is lost: the copy kept
+indexes the same rows.
 
 ---
 
@@ -165,12 +211,11 @@ ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
 MySQL renames in one `ALTER TABLE` that also renames the column's own unique index, and drops and re-adds the CHECKs MySQL will not let a column take along (error 3959). That drop makes the rename destructive ([MySQL Guide](../mysql.md#Migrations)). That is all, on PostgreSQL and SQLite, and it holds for a plain field, an indexed field
 (`ForeignKey` sets `db_index = true` by default), a `unique = true` field, and one that is both.
 
-The **index keeps its old name**. PormG names indexes with a random suffix it cannot re-derive, so an
-index created for `statusid` stays `result_statusid_a1b2c3d4_idx` while covering `racestatusid`. That
-is cosmetic: nothing reads the name — PormG matches an index by its real column membership — and
-`makemigrations` sees the column as indexed on both sides afterwards, so it plans nothing further.
-The alternative would be dropping and re-creating the index on every rename, which rebuilds it from
-scratch on a large table to change a string nobody reads.
+The **index keeps its old name**. An index created for `statusid` stays `result_statusid_idx` while
+covering `racestatusid`. That is cosmetic: nothing reads the name — PormG matches an index by its real
+column membership — and `makemigrations` sees the column as indexed on both sides afterwards, so it
+plans nothing further. The alternative would be dropping and re-creating the index on every rename,
+which rebuilds it from scratch on a large table to change a string nobody reads.
 
 The **foreign key** likewise keeps its pre-rename name, and that too is harmless: PormG looks a key
 up by its table and column, never by a name convention, so a later drop or re-point finds it.

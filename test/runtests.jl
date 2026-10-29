@@ -72,6 +72,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
     @testset "Composite Indexes (Meta.indexes #347)" include("unit/test_indexes.jl")
     @testset "Composite Index Diff (#161)" include("unit/test_composite_diff.jl")
+    @testset "Duplicate One-Column Indexes and Derived Names (#1341)" include("unit/test_duplicate_one_column_indexes.jl")
     @testset "Unmanaged Models (managed = false #741)" include("unit/test_managed_models.jl")
     @testset "Check Constraints (CheckConstraint #742)" include("unit/test_check_constraints.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")

@@ -135,7 +135,7 @@ _probe522(races) = Models.Model("probe";
       # stamped `db_index = true` on them.
       expected_ix = Set(Models.field_db_column(f, k) for (k, f) in probe.fields if f.db_index && !f.primary_key)
       @test Set(keys(probe_live.indexes)) == expected_ix
-      @test all(v -> v !== nothing, values(probe_live.indexes))
+      @test all(v -> !isempty(v), values(probe_live.indexes))
 
       # THE convergence assertion, through the production entry point: nothing to plan.
       plan = get_migration_plan(live, _schema522(races, probe), pool, _settings522(); interactive = false)
@@ -246,7 +246,7 @@ end
   for (col, field) in declared
     @test (col, column_delta(field, live.columns[col], PG522; name = col).changed) == (col, Symbol[])
   end
-  @test live.indexes == Dict("race_id" => "probe_race_id_idx")
+  @test live.indexes == Dict("race_id" => ["probe_race_id_idx"])
   @test live.columns["id"].identity == ColumnIdentity(true, false, false)
   @test live.columns["race_id"].reference == ForeignKeyRef("races", "races", "id", "CASCADE")
   # inspectdb's struct choices on THIS engine: `bigint` is a BigIntegerField, the naive timestamp
@@ -257,7 +257,7 @@ end
   @test m.fields["d_naive"].type == "TIMESTAMP" && m.fields["d_tz"].type == "TIMESTAMPTZ"
   @test m.fields["n_int"].default == 7 && m.fields["d_date"].default == Date(2024, 1, 2)
   @test m.fields["b_bool"].default === true
-  @test m.cache["index"] == Dict{String, Any}("race_id" => "probe_race_id_idx")
+  @test m.cache["index"] == Dict{String, Any}("race_id" => ["probe_race_id_idx"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -506,7 +506,7 @@ end
   @test collect(keys(t.columns)) == ["id", "name", "race", "tag"]
   # `name` has a known index name; `race` is indexed by constructor default with no name known;
   # `tag` declares none; the key is never listed.
-  @test t.indexes == Dict{String, Union{String, Nothing}}("name" => "car_name_idx", "race" => nothing)
+  @test t.indexes == Dict{String, Vector{String}}("name" => ["car_name_idx"], "race" => String[])
   @test t.columns["name"] == column_spec(m.fields["name"], PG522; name = "name")
   @test t.columns["race"].reference == ForeignKeyRef("races", "races", "id", "NO ACTION")
   # The two entry points agree on a converged pair — the diff is empty either way.

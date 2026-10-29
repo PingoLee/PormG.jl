@@ -742,7 +742,8 @@ LiveCheck(name::AbstractString, sql::AbstractString, marker::Union{AbstractStrin
 
 One table as the introspection readers describe it (#522): its catalog `name`, its `columns` as
 [`ColumnSpec`](@ref)s in physical order, the single-column non-unique `indexes` it carries
-(physical column ⇒ live index name, or `nothing` when only the fact of an index is known), and its
+(physical column ⇒ EVERY live index name over it, sorted — empty when only the fact of an index is
+known), and its
 model-level `composites` ([`LiveComposite`](@ref)), which `inspectdb` reproduces as `Models.Index` /
 `Models.UniqueConstraint` and the planner diffs against the declared ones (#161).
 
@@ -753,13 +754,19 @@ reconstructed on the way to a plan. It is also the one input `inspectdb` needs �
 
 `db_index` lives here and not in `ColumnSpec` for the reason recorded on that struct: an index is
 not part of the column, and on SQLite a non-empty column delta means a rebuild that re-emits every
-index (#82/#325). Read `haskey(indexes, col)` for the flag and the value for the name the planner's
-`DROP INDEX` needs; `nothing` routes that lookup through `get_constraints_index`, as before.
+index (#82/#325). Read `haskey(indexes, col)` for the flag and the value for the names the planner's
+`DROP INDEX` needs; an empty vector routes that lookup through `get_constraints_index`, as before.
+
+A vector because a column can carry the same index more than once (#1341): the readers' filter
+admits only a plain, non-unique, non-partial, non-expression b-tree over one column with the default
+order, operator class and collation, so two names under one column ARE two copies of one
+definition. A map holding one name per column hid every copy but one — the planner never reported
+them, and removing `db_index` dropped only the copy it happened to hold.
 """
 struct LiveTable
   name::String
   columns::OrderedDict{String, ColumnSpec}
-  indexes::Dict{String, Union{String, Nothing}}
+  indexes::Dict{String, Vector{String}}
   composites::Vector{LiveComposite}
   # #742: the table's named CHECKs other than PormG's own column CHECKs — see [`LiveCheck`](@ref).
   # Every rebuild of a `LiveTable` must carry it (`_retarget_references` does): one that dropped it
@@ -769,7 +776,7 @@ struct LiveTable
 end
 
 LiveTable(name::AbstractString, columns::OrderedDict{String, ColumnSpec},
-          indexes::Dict{String, Union{String, Nothing}}) =
+          indexes::Dict{String, Vector{String}}) =
   LiveTable(String(name), columns, indexes, LiveComposite[], LiveCheck[])
 
 """
@@ -932,6 +939,12 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
   return out
 end
 
+# `cache["index"]` holds a column's live index names: a vector since #1341 (`model_from_live`), a single
+# name in a cache written by hand, nothing when only the fact of an index is known.
+_index_name_list(::Nothing)::Vector{String} = String[]
+_index_name_list(name::AbstractString)::Vector{String} = String[String(name)]
+_index_name_list(names::AbstractVector)::Vector{String} = sort!(String[string(n) for n in names])
+
 """
     live_table(model::PormGModel, conn) -> LiveTable
 
@@ -956,7 +969,7 @@ declaration carries.
 """
 function live_table(model::PormGModel, conn::_SQLEngine)::LiveTable
   columns = OrderedDict{String, ColumnSpec}()
-  indexes = Dict{String, Union{String, Nothing}}()
+  indexes = Dict{String, Vector{String}}()
   live_index_names = get(model.cache, "index", Dict{String, Any}())
   for (key, field) in model.fields
     Models.is_many_to_many_field(field) && continue
@@ -967,8 +980,8 @@ function live_table(model::PormGModel, conn::_SQLEngine)::LiveTable
     # primary key is not recorded here — `IDField` defaults `db_index = true` and would otherwise
     # read as an index the catalog does not list separately.
     if _slot(field, :db_index, false) === true && _slot(field, :primary_key, false) !== true
-      name = get(live_index_names, field_key, get(live_index_names, col, nothing))
-      indexes[col] = name === nothing ? nothing : string(name)
+      names = get(live_index_names, field_key, get(live_index_names, col, nothing))
+      indexes[col] = _index_name_list(names)
     end
   end
   # #29: an advanced declaration reads back as PormG created it — marked, with each named class
@@ -1987,7 +2000,7 @@ function model_from_live(table::LiveTable, conn::_SQLEngine)::PormGModel
     fields[col] = field_from_spec(spec, table, conn)
   end
   model = Models.Model(table.name, fields)
-  named = Dict{String, Any}(col => name for (col, name) in table.indexes if name !== nothing)
+  named = Dict{String, Any}(col => copy(names) for (col, names) in table.indexes if !isempty(names))
   isempty(named) || (model.cache["index"] = named)
   _attach_composite_indexes!(model, table.composites)
   _attach_check_constraints!(model, table.checks)   # #742

@@ -351,8 +351,14 @@ function _schema_table_fingerprint(t::Union{LiveTable, Nothing})::String
   for name in sort!(collect(keys(t.columns)))
     print(io, "column "); _fp_term(io, t.columns[name]); println(io)
   end
+  # One line per (column, index name), the names sorted (#1341). A column with one index — or only the
+  # fact of one (`~`) — writes the line it wrote when the map held one name per column, so the
+  # digest of every table without a duplicate is unchanged and no plan in flight is refused.
   for name in sort!(collect(keys(t.indexes)))
-    print(io, "index "); _fp_term(io, name); print(io, ' '); _fp_term(io, t.indexes[name]); println(io)
+    names = t.indexes[name]
+    for ix in (isempty(names) ? Union{String, Nothing}[nothing] : sort(names))
+      print(io, "index "); _fp_term(io, name); print(io, ' '); _fp_term(io, ix); println(io)
+    end
   end
   for c in sort(t.composites; by = c -> c.name)
     print(io, "composite "); _fp_term(io, c); println(io)

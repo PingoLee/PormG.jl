@@ -170,11 +170,11 @@ const GOLDEN_CASES = Pair{String, NTuple{4, Any}}[
   "rename_fk_unchanged"  => (_g_declared_fk(), _g_live_fk(), "col2", "col"),
 ]
 
-# `_hash_field_name` ends in `randstring(8)`, so constraint and index names differ on every run.
-# Normalizing those two suffixes is what makes a plan comparable at all; everything else is
-# compared verbatim.
+# `_hash_field_name` ends in `randstring(8)`, so constraint names differ on every run. Normalizing
+# that suffix is what makes a plan comparable at all; everything else is compared verbatim. A
+# `db_index` index name is derived from table and column since #1341, so it is compared as written.
 golden_normalize(sql::String) =
-  replace(sql, r"_[a-z0-9]{8}_fk" => "_HASH_fk", r"_[a-z0-9]{8}_idx" => "_HASH_idx")
+  replace(sql, r"_[a-z0-9]{8}_fk" => "_HASH_fk")
 
 # `get_migration_plan` takes the LIVE models positionally and the DECLARED ones in `current_schema` —
 # the planner's own (deliberately confusing) argument order.
@@ -487,13 +487,13 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "New foreign key: col" =>
       "ALTER TABLE \"child_t\" ADD CONSTRAINT \"child_t_col_HASH_fk\" FOREIGN KEY (\"col\") REFERENCES \"parent_t\" (\"id\") ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;",
     "Create index on col" =>
-      "CREATE INDEX IF NOT EXISTS \"child_t_col_HASH_idx\" ON \"child_t\" (\"col\");",
+      "CREATE INDEX IF NOT EXISTS \"child_t_col_idx\" ON \"child_t\" (\"col\");",
   ],
   "fk_add/SL" => [
     "Alter table: child_t" =>
       "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
     "Create index on col" =>
-      "CREATE INDEX IF NOT EXISTS \"child_t_col_HASH_idx\" ON \"child_t\" (\"col\");",
+      "CREATE INDEX IF NOT EXISTS \"child_t_col_idx\" ON \"child_t\" (\"col\");",
   ],
   "fk_drop/PG" => [
     "Remove foreign key: col" =>

@@ -381,7 +381,7 @@ end
       @test collect(keys(idx)) == ["ix"]
       # The index NAME is carried too — the planner needs it to DROP the index when a model stops
       # declaring `db_index`, and SQLite's reader never populated `cache["index"]` before.
-      @test idx["ix"] == "ix_t325_ix"
+      @test idx["ix"] == ["ix_t325_ix"]
 
       # Spelled out individually so a failure names the filter that broke:
       @test haskey(idx, "ix")         # drop `origin = 'c'` and the UNIQUE auto-index leaks in
@@ -398,7 +398,7 @@ end
 
       # An unknown table yields an empty dict rather than throwing — convert_schema_to_models calls
       # this per table and must survive a race with a concurrent DROP.
-      @test _sqlite_single_column_indexed_columns(pool, :nonexistent) == Dict{String, String}()
+      @test _sqlite_single_column_indexed_columns(pool, :nonexistent) == Dict{String, Vector{String}}()
 
       # END TO END: the dict is only useful if convertSQLToModel applies it. Without this the whole
       # fix could be inert and every assertion above would still pass.
@@ -408,7 +408,7 @@ end
       @test !m.fields["plain"].db_index
       @test !m.fields["a"].db_index
       @test !m.fields["part"].db_index
-      @test m.cache["index"]["ix"] == "ix_t325_ix"
+      @test m.cache["index"]["ix"] == ["ix_t325_ix"]
 
       # ── The other half of #325 on SQLite: a bare TEXT column must not invent a max_length ──
       # SQLite renders CharField as `TEXT(n)` and UUIDField/JSONField/ImageField/TextField all as
@@ -576,7 +576,7 @@ end
       @test !m.fields["b"].db_index
       @test m.fields["uc"].unique
       @test !m.fields["g"].unique
-      @test m.cache["index"]["solo"] == "ix_solo" # and every cache key coexists — one must not
+      @test m.cache["index"]["solo"] == ["ix_solo"] # and every cache key coexists — one must not
                                                   #   overwrite another on the way in
 
       # A table with no composite index carries no entry at all, so nothing changes for the
@@ -1223,13 +1223,13 @@ end
       @test !haskey(idx, "coll")      # an explicit COLLATE: a different comparison, so a different index
       # The relative half of the decision: xinfo reports NOCASE for this plain index too (the
       # column's collation), and refusing it would re-propose its CREATE on every makemigrations.
-      @test idx["nocase"] == "ix847_nocase"
+      @test idx["nocase"] == ["ix847_nocase"]
       # Quoted identifiers are columns, not syntax — the same confusion `_SQLITE_INDEX_SYNTAX_WORDS`
       # guards against for the rebuild path.
-      @test idx["desc"] == "ix847_qdesc"
-      @test idx["collate"] == "ix847_qcoll"
-      @test idx["up"] == "ix847_up"
-      @test idx["plain"] == "ix847_plain"
+      @test idx["desc"] == ["ix847_qdesc"]
+      @test idx["collate"] == ["ix847_qcoll"]
+      @test idx["up"] == ["ix847_up"]
+      @test idx["plain"] == ["ix847_plain"]
       @test length(idx) == 5
 
       # The helper on its own, so a tokenizer regression names itself rather than surfacing as a
@@ -1301,7 +1301,7 @@ end
       fetch(pool, ddl("t29_c_idx", ["c"], [false]))                # marked, yet plain: still not db_index
       fetch(pool, "CREATE INDEX t29_plain_b ON t29(b);")
 
-      @test _sqlite_single_column_indexed_columns(pool, :t29) == Dict("b" => "t29_plain_b")
+      @test _sqlite_single_column_indexed_columns(pool, :t29) == Dict("b" => ["t29_plain_b"])
       comps = Dict(c.name => c for c in _sqlite_composite_indexes(pool, :t29))
       @test sort(collect(keys(comps))) == ["t29_a_desc_b_idx", "t29_c_idx"]
       @test comps["t29_a_desc_b_idx"].descending == [true, false]

@@ -699,8 +699,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
     default_val = ismissing(col_row.dflt_value) ? nothing : col_row.dflt_value
     columns[col_name] = _finish_column_spec(table_name, probe, default_val, db)
   end
-  indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in indexed_cols)
-  return LiveTable(table_name, columns, indexes, composite, table_checks)
+  return LiveTable(table_name, columns, indexed_cols, composite, table_checks)
 end
 
 # #1393: whether the table's key is a ROWID ALIAS, the one key SQLite fills itself when an insert
@@ -2235,8 +2234,8 @@ definition text), unparameterized, and unordered under a `result[1, …]`.
 
 THE FOURTH CALLER is not a drop at all, and the narrowing changed it — deliberately, and for the
 better. `_alter_table_fields`' `index_actions` `:create` flush probes this function to avoid queuing
-a `CREATE INDEX` beside one a SQLite rebuild is about to re-create (the random name suffix defeats
-`IF NOT EXISTS`). It is asking "does a plain index already cover this column?", which is what this
+a `CREATE INDEX` beside one a SQLite rebuild is about to re-create (a hand-made index under another
+name defeats `IF NOT EXISTS`). It is asking "does a plain index already cover this column?", which is what this
 function now answers and is not what it answered before: a column carrying only a UNIQUE index and
 newly declared `db_index = true` used to see that index, skip the CREATE, and be re-proposed on
 every `makemigrations` forever, because the rebuild renders `UNIQUE` inline rather than as the
@@ -2480,9 +2479,9 @@ function _sqlite_canonical_table_name(conn::PormGSQLite, name)::String
 end
 
 """
-    _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name) -> Dict{String, String}
+    _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name) -> Dict{String, Vector{String}}
 
-Physical column ⇒ index name, for every SINGLE-column non-unique secondary index on `table_name` —
+Physical column ⇒ index names, for every SINGLE-column non-unique secondary index on `table_name` —
 exactly the set for which `field.db_index` must introspect back as `true` (#325).
 
 The `unique` sibling above and this one are the same shape for the same reason: `PRAGMA table_info`
@@ -2538,11 +2537,13 @@ collated index satisfies the declaration there. An index with an expression memb
 `pormg:index`-marked one (#934) or a unique one does not, and PormG's own index is created as on
 PostgreSQL. Both converge.
 
-Returns the index NAME as well as the column because the planner needs it to drop an index the model
-no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from its
-`indexes` CTE. ONE query per table; an unknown table yields an empty dict rather than throwing.
+Returns the index NAMES as well as the column because the planner needs them to drop an index the
+model no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from
+its `indexes` CTE. Every name, sorted (#1341): the filters above make two names under one column two
+copies of one definition, and the planner drops the extras. ONE query per table; an unknown table
+yields an empty dict rather than throwing.
 """
-function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::Dict{String, String}
+function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::Dict{String, Vector{String}}
   rows = fetch(conn, """
     SELECT MIN(ii.name) AS col, il.name AS idx, MAX(ii."desc") AS is_desc, MIN(sm.sql) AS ddl
     FROM pragma_index_list(?) AS il
@@ -2553,8 +2554,8 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
     HAVING COUNT(*) = 1
     """, [string(table_name)]) |> DataFrame
   # An empty frame's columns are eltype Missing, so guard before touching them.
-  nrow(rows) == 0 && return Dict{String, String}()
-  out = Dict{String, String}()
+  nrow(rows) == 0 && return Dict{String, Vector{String}}()
+  out = Dict{String, Vector{String}}()
   for r in eachrow(rows)
     (r.col === missing || r.idx === missing) && continue
     # #847 (see the docstring). Both default to REFUSED on a NULL: an `origin = 'c'` index always has
@@ -2565,10 +2566,11 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
     # #29: an index PormG marked is the composite reader's, whatever its shape — the partition that
     # keeps one index from having two owners.
     _sqlite_index_marker(string(r.ddl)) === nothing || continue
-    # First index wins if two single-column indexes cover the same column — the duplicate is
-    # redundant, and `db_index` is a boolean either way.
-    get!(out, string(r.col), string(r.idx))
+    # Every copy (#1341). This used to keep the first one the unordered query yielded, so a duplicate
+    # was invisible to the planner and survived the model dropping `db_index`.
+    push!(get!(Vector{String}, out, string(r.col)), string(r.idx))
   end
+  foreach(sort!, values(out))
   return out
 end
 
@@ -4836,12 +4838,14 @@ function _pg_live_table(row::DataFrameRow)::LiveTable
       (table = String(fk["table"]), pk = String(fk["pk"]),
        on_delete = _pg_confdeltype_to_on_delete(something(get(fk, "on_delete", ""), "")))
   end
-  # Physical column ⇒ index name, for the single-column secondary indexes the `indexes` CTE keeps;
-  # the value is what `_drop_index` needs (#325, #455).
-  indexes = Dict{String, Union{String, Nothing}}()
+  # Physical column ⇒ index names, for the single-column secondary indexes the `indexes` CTE keeps;
+  # the names are what `_drop_index` needs (#325, #455). Every one of them (#1341): the CTE's filter
+  # makes two names under one column two copies of one definition, and the planner drops the extras.
+  indexes = Dict{String, Vector{String}}()
   for ix in something(_pg_json(row, :indexes), Any[])
-    indexes[String(ix["column"])] = String(ix["name"])
+    push!(get!(Vector{String}, indexes, String(ix["column"])), String(ix["name"]))
   end
+  foreach(sort!, values(indexes))
 
   # Ordered (#544): `columns` is aggregated `ORDER BY a.attnum`, i.e. in physical column order.
   columns = OrderedDict{String, ColumnSpec}()
@@ -5455,7 +5459,7 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
     push!(get!(groups, _mysql_str(r.idx), Any[]), r)
   end
   unique_cols = Set{String}()
-  indexes = Dict{String, Union{String, Nothing}}()
+  indexes = Dict{String, Vector{String}}()
   composites = LiveComposite[]
   for (idx, members) in groups
     idx == "PRIMARY" && continue
@@ -5496,7 +5500,8 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
         push!(unique_cols, cols[1])
         continue
       elseif !unique
-        lowercase(idx) in fk_names || (indexes[cols[1]] = idx)
+        # Every copy (#1341), not the last one the loop reached.
+        lowercase(idx) in fk_names || push!(get!(Vector{String}, indexes, cols[1]), idx)
         continue
       end
     end
@@ -5540,5 +5545,6 @@ function _mysql_live_table(db::PormGMySQL, table_name::String, col_rows, stat_ro
       _with_default(probe, ExpressionDefault(canonical_db_default(_mysql_catalog_sql(dflt; reserved = _MYSQL_RESERVED_WORDS)), owner)) :
       _finish_column_spec(table_name, probe, raw_default, db)
   end
+  foreach(sort!, values(indexes))
   return LiveTable(table_name, columns, indexes, composites, table_checks)
 end

@@ -7433,19 +7433,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integer type; SQLite"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integer type; SQLite"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integer type; SQLite"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key | alone", :postgres) =>
@@ -7469,19 +7469,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `SUM(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `SUM(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `SUM(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Max json key | alone", :postgres) =>
@@ -7505,55 +7505,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `FLOOR(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Floor json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
   ("Floor json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `FLOOR(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Floor json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `FLOOR(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Ceil json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `CEIL(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integ"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Ceil json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Ceil json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is CEIL(…), whose result type PormG cannot name. Name the type the column h"),
   ("Ceil json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `CEIL(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integ"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Ceil json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Ceil json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `CEIL(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no integ"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Ceil json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Abs json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `ABS(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Abs json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Abs json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ABS(…), whose result type PormG cannot name. Name the type the column ho"),
   ("Abs json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `ABS(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Abs json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Abs json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `ABS(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Abs json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Round json key / 2 | alone", :postgres) =>
@@ -7577,55 +7577,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Max json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `MAX(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Max json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Max json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("Max json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `MAX(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Max json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Max json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Max json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `MAX(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no intege"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Max json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Coalesce json key 0 / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Coalesce json key 0 / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `COALESCE(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no i"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
   ("Coalesce json key 0 / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Coalesce json key 0 / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG cannot name. Name the type the colu"),
   ("Coalesce json key 0 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `COALESCE(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no i"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
   ("Coalesce json key 0 / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Coalesce json key 0 / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Coalesce json key 0 / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `COALESCE(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no i"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
   ("Coalesce json key 0 / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key + 1 / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key + 1 / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("F json key + 1 / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key + 1 / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F json key + 1 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("F json key + 1 / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key + 1 / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key + 1 / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("F json key + 1 / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Cast json key numeric / 2 | alone", :postgres) =>
@@ -7649,55 +7649,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case json key branch / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Case json key branch / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Case json key branch / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Case json key branch / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (JSONField and IntegerField)"),
   ("Case json key branch / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (JSONField and IntegerField)"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Case json key branch / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Case json key branch / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Case json key branch / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
   ("Case json key branch / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key * 1.0 / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
   ("F json key * 1.0 / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
   ("F json key * 1.0 / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key * 1.0 / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F json key * 1.0 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F json key * 1.0 / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key * 1.0 / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
   ("F json key * 1.0 / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of arithmetic over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no inte"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
   ("F json key * 1.0 / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("NullIf id json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `NULLIF(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no int"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `NULLIF(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no int"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "/ of `NULLIF(…)` over the JSON key `payload__n` means a quotient that keeps its fraction, since a JSON number has no int"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Cast json key integer | alone", :postgres) =>

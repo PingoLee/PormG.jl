@@ -1349,8 +1349,9 @@ end
 # `output_field` round to a whole number on PostgreSQL and MySQL, which write the integer (`15`, `14`).
 # SQLite's cast to NUMERIC keeps a REAL as it is (`14.0`), and writes `14` only over an integer
 # (measured on PostgreSQL 18.6, MySQL 8.4 and SQLite 3.54.0). Expected: `Concat` over one built on every
-# engine over an integer column; over a whole float (`Floor("points")`) built on PostgreSQL, refused on
-# SQLite naming the integer cast that writes `14` everywhere; in a CTE column the same. Before, every
+# engine over an integer column (`CONCAT($1::text, ("Tb"."number")::numeric(2,0))` on PostgreSQL); over
+# a whole float (`Floor("points")`) built on PostgreSQL, refused on SQLite naming the integer cast that
+# writes `14` everywhere; in a CTE column the same. Before, every
 # such `Concat` was refused on every engine as a decimal's text (#1027). Why it matters: one rule for
 # a declared scale, whether column or cast, and SQLite's `14.0` is not let through as the integer.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1738,6 +1739,27 @@ end
                  _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Coalesce(Fn.Max("laptime"), Fn.Max("laptime")), Models.IntegerField()); conn = _CCD_SL)))
   # A typed dividend divides as its type on every engine, on whichever side.
   @test _ccd_builds(Fn.Cast(mx() * (Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")), Models.BigIntegerField()) / 2), "text"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1305: `_division_first` decides an integer quotient beside another answer by the engine fact
+# The testset above reaches the SQLite half only through a JSON key, which #1471 now refuses first, so
+# this pins the rule itself on answers built by hand (no SQL): an integer quotient (`_DIVISION_KINDS`)
+# answers wherever it sits on the engine whose untyped sum departs (PostgreSQL), and beside another
+# answer the other answer decides where it does not (SQLite) — an interval stays an interval (#1259),
+# a fraction a fraction (#1028). Alone it answers on both. Why it matters: a regression in the SQLite
+# branch would otherwise pass the suite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1305: _division_first answers by the untyped-sum engine fact, on each side" begin
+  QB = PormG.QueryBuilder
+  q, iv, fl = (:numeric_whole_division, "a quotient"), (:interval, "an interval"), (:float, "a float")
+  for answers in ((q, iv), (iv, q), (nothing, q, fl), (fl, nothing, q))
+    @test QB._division_first(answers, _CCD_PG) == q
+    @test QB._division_first(answers, _CCD_SL) == something(first(a for a in answers if a !== nothing && a !== q))
+  end
+  @test QB._division_first((nothing, q), _CCD_SL) == q
+  @test QB._division_first((iv, fl), _CCD_SL) == iv          # no quotient: the first answer
+  @test QB._division_first((nothing, nothing), _CCD_PG) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

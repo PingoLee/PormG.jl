@@ -1935,10 +1935,11 @@ function _division_sql(conn::PormGSQLite, v::FExpression, left::AbstractString, 
     # document holds, where the quotient means its fraction (`_MEANING_DEPARTURES`, `:division`). A
     # float or a decimal side makes the division REAL below, which keeps the fraction (`x / 2.0`).
     # Refused rather than cast: the query does not say whether the key holds an integer or a float.
-    json = something(_json_number_side(v.field_name, instruc), _json_number_side(v.operand, instruc), Some(nothing))
+    json = _json_number_side(v.field_name, instruc)
+    json === nothing && (json = _json_number_side(v.operand, instruc))
     if json !== nothing
       row = _departure(conn, :division, :json_number)
-      row === nothing || throw(_meaning_refusal("/", json[1], row, conn; flag = json[2]))
+      row === nothing || throw(_meaning_refusal("A quotient", json[1], row, conn; flag = json[2]))
     end
     return "($(left) / $(right))"
   end

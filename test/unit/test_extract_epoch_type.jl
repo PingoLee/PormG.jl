@@ -108,7 +108,9 @@ end
 # CTE column (a `DecimalField` since #1460) was a decimal: `Concat` over it built alone and was refused
 # under a CTE. The classifier's leaf reads the walk now. Expected on PostgreSQL and MySQL: the class is
 # `:decimal` alone and as a CTE column; `Concat(Value("t="), Extract("start_at", "EPOCH"))` raises the
-# #1027 explicit-intent refusal, naming `Cast(…, "text")`; with the cast it builds. An integer part
+# #1027 explicit-intent refusal, naming `Cast(…, "text")`; with the cast it builds
+# (`CONCAT($1::text, (EXTRACT(EPOCH FROM "Tb"."start_at")::numeric)::text)` on PostgreSQL, `CONCAT_WS`
+# on MySQL). An integer part
 # (`YEAR`) still passes. Why it matters: one answer in every context, and a decimal's text is the
 # engine's own (its places differ), which `Concat` does not choose for the caller.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +133,9 @@ end
       @test err isa PormG.QueryBuildError
       msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
       @test occursin("(#1027)", msg) && occursin("Cast(", msg)
-      @test occursin(r"CONCAT(_WS)?\(", _epoch_sql(m, Fn.Concat(Fn.Value("t="), Fn.Cast(Extract("start_at", "EPOCH"), "text")), conn))   # MySQL: `CONCAT_WS`
+      cast_sql = _epoch_sql(m, Fn.Concat(Fn.Value("t="), Fn.Cast(Extract("start_at", "EPOCH"), "text")), conn)
+      @test occursin(r"CONCAT(_WS)?\(", cast_sql)   # MySQL: `CONCAT_WS`
+      conn isa PormG.PormGPostgres && @test occursin("(EXTRACT(EPOCH FROM \"Tb\".\"start_at\")::numeric)::text)", cast_sql)
       @test occursin(r"CONCAT(_WS)?\(", _epoch_sql(m, Fn.Concat(Fn.Value("y="), Extract("start_at", "YEAR")), conn))
     end
   end

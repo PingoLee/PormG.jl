@@ -595,7 +595,9 @@ end
 # was `3`). Expected: each such side refused on SQLite (`_MEANING_DEPARTURES`, `:division`), the message
 # naming SQLite only, the side, and the explicit spelling on the key; PostgreSQL builds
 # `FLOOR((… #>> '{n}')::numeric) / $1::bigint`, which keeps the fraction. A side that names its number —
-# `Round` (a REAL on SQLite, cast by `_division_sql`), `Cast(key, "numeric")` — builds on SQLite.
+# `Round` (a REAL on SQLite, cast by `_division_sql`), `Cast(key, "numeric")`, which renders
+# `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` — builds on SQLite, and so does arithmetic beside
+# a float (`(json_extract(…) * ?) / ?`, a REAL) and `NullIf("id", key)`, whose value is the integer `id`.
 # Why it matters: the SQLite answer was a different value with nothing to say so.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1471: a quotient over a JSON key is refused on SQLite, built on PostgreSQL" begin
@@ -611,6 +613,8 @@ end
       ("Sum", () -> FN.Sum("payload__n") / 2),
       ("Coalesce", () -> FN.Coalesce("payload__n", 0) / 2),
       ("arithmetic", () -> (PormG.QueryBuilder.F("payload__n") + 1) / 2),
+      ("a Case branch", () -> PormG.QueryBuilder.Case([PormG.QueryBuilder.When("id" => 1, then = PormG.QueryBuilder.F("payload__n"))], default = 0) / 2),
+      ("Coalesce beside a float", () -> FN.Coalesce("payload__n", 0.5) / 2),
       ("the divisor", () -> PormG.QueryBuilder.F("id") / FN.Floor("payload__n")))
     @testset "$label" begin
       e = try _sql(quotient(expr()); conn = _JL_SL); nothing catch err; err end
@@ -619,6 +623,7 @@ end
       @test occursin("JSON key `payload__n`", msg)
       @test occursin("SQLite computes an integer quotient", msg)
       @test occursin("PormG refuses it on SQLite (#1471)", msg)
+      @test startswith(msg, "A quotient of ")
       @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
       @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
     end
@@ -629,5 +634,12 @@ end
   # divides by a float as REAL, which keeps the fraction.
   @test occursin("json_extract(\"Tb\".\"payload\", '\$.n') / ?", _sql(quotient(PormG.QueryBuilder.F("payload__n") / 2.0); conn = _JL_SL)[:sql_text])
   @test occursin("CAST(ROUND(", _sql(quotient(FN.Round("payload__n") / 2); conn = _JL_SL)[:sql_text])
-  @test occursin("AS NUMERIC)", _sql(quotient(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
+  @test occursin("(CAST(CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS NUMERIC) AS REAL) / ?)",
+                 _sql(quotient(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
+  # Arithmetic beside a float is a REAL on SQLite, which keeps the fraction (`F(key) * 1.0`), and
+  # `NullIf`'s value is its first operand, here the integer `id`, whose integer quotient is the meaning.
+  @test occursin("((json_extract(\"Tb\".\"payload\", '\$.n') * ?) / ?)",
+                 _sql(quotient((PormG.QueryBuilder.F("payload__n") * 1.0) / 2); conn = _JL_SL)[:sql_text])
+  @test occursin("(NULLIF(\"Tb\".\"id\", json_extract(\"Tb\".\"payload\", '\$.n')) / ?)",
+                 _sql(quotient(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
 end

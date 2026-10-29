@@ -155,7 +155,7 @@ const _MEANING_DEPARTURES = (
   # to raise. MySQL's `/` keeps the fraction (it refuses a side PormG cannot type before this row
   # is read, #1130). The operand decides nothing beyond holding a key, so the one kind is `:json_number`.
   (targets = (:division,), kinds = (:json_number,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1471",
-   meaning = _ -> "a quotient that keeps its fraction, since a JSON number has no integer type",
+   meaning = _ -> "one that keeps its fraction, since a JSON number has no integer type",
    computes = (PormGSQLite => _ -> "an integer quotient when the key holds a whole number (`7 / 2` is `3`)",),
    fix = (flag, _) -> "Say the number type you mean: \e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and \e[32mCast(\"$(flag)\", BigIntegerField())\e[0m divides as integers."),
   # D5 (#1034): a zero-scale cast (`numeric(p,0)`) is a whole number, and its text is the integer's:

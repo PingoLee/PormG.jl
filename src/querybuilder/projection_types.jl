@@ -839,17 +839,21 @@ _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
 # #1471 — a side of `/` whose value is the number a JSON key holds: the key itself, or a value that
 # carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
-# `Max`, `Coalesce`, a `Case` branch, `Lag`), a `Sum` of it. A JSON number has no integer type, so its
-# quotient keeps the fraction (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over
-# the integer the document holds, and these keep it, so `/` there divides as integers. A declared type
-# (`Cast`, an `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the
-# number and carry no key. `(what, flag)`: the side as a refusal names it, and the key's path for the
-# explicit spelling; or `nothing`.
+# `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag`), a `Case` branch, `NullIf`'s first operand, a
+# `Sum` of it. A JSON number has no integer type, so its quotient keeps the fraction
+# (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over the integer the document
+# holds, and these keep it, so `/` there divides as integers. A declared type (`Cast`, an
+# `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the number and carry
+# no key, and so does arithmetic beside a REAL on every row (`F(key) * 1.0`, `_real_on_every_row`):
+# SQLite computes it as a REAL. `(what, flag)`: the side as a refusal names it, and the key's path for
+# the explicit spelling; or `nothing`.
 _json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
 function _json_number_side(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _json_number_side(p.field_name, instruc)
   p.operation in ("+", "-", "*") || return nothing
-  side = something(_json_number_side(p.field_name, instruc), _json_number_side(p.operand, instruc), Some(nothing))
+  (_real_on_every_row(p.field_name, instruc) || _real_on_every_row(p.operand, instruc)) && return nothing
+  side = _json_number_side(p.field_name, instruc)
+  side === nothing && (side = _json_number_side(p.operand, instruc))
   return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
 end
 _json_number_side(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
@@ -858,8 +862,13 @@ function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruc
   name = p.function_name
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   declared isa AbstractString && !isempty(declared) && return nothing
-  name == "SUM" || _result_rule(p) in _OPERAND_TYPED_RULES || return nothing
-  values = _undeclared_case(p) ? _case_values(p) : (p.column isa AbstractVector ? p.column : (p.column,))
+  if _undeclared_case(p)
+    values = _case_values(p)
+  else
+    rule = _result_rule(p)
+    rule in _OPERAND_TYPED_RULES || return nothing   # `SUM` is `:promoting`
+    values = rule === :first_operand ? (_first_operand(p),) : p.column isa AbstractVector ? p.column : (p.column,)
+  end
   for value in values
     side = _json_number_side(value, instruc)
     side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
@@ -1616,8 +1625,12 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
 end
 # #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
 # names it (`_expression_kind`); any other kind has one text, `nothing`. A zero-scale decimal is whole,
-# as D5 decides for a declared one.
+# as D5 decides for a declared one. A `Case` with no `output_field` is not this leaf's: its branches
+# are read one by one where it is an operand (`_case_textless_branch`), and the walk's unified kind
+# would lose a zero-scale branch's places (`Case(…, then = "grid") + 1` is whole). Inside arithmetic it
+# answers `nothing`, as before this leaf.
 function _textless_walk_leaf(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  _undeclared_case(p) && return nothing
   k = _expression_kind(p, instruc)
   k isa CFloat64 && return (:float, "`$(p.function_name)(…)`")
   k isa CDecimal && !_whole_kind(k) && return (:decimal, "`$(p.function_name)(…)`")

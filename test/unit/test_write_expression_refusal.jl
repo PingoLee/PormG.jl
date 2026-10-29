@@ -26,9 +26,9 @@ import PormG: InvalidValueError
 # The SQLite bulk writers need the driver extension even under `show_query` (they reserve ids).
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
-for (key, adapter) in (("wer1283_pg", :postgres), ("wer1283_sl", :sqlite))
-  PormG.Configuration.register_offline(key; adapter = adapter)
-end
+# The SQLite key states the version it renders for (#1452): a bulk statement is chunked by its bind limit.
+PormG.Configuration.register_offline("wer1283_pg"; adapter = :postgres)
+PormG.Configuration.register_offline("wer1283_sl"; adapter = :sqlite, server_version = 3_045_000)
 
 # The F1 results table, one column of each formatter the refusal used to reach.
 const _WER_MODEL_EXPR = quote

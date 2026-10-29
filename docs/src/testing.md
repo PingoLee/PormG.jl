@@ -45,7 +45,8 @@ PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3
 ```
 
 Without `server_version`, a query that needs the version raises `InvalidConfigurationError` naming
-it, `using SQLite` or not. Every other query renders. State the version your production SQLite runs.
+it, `using SQLite` or not. A bulk write always needs it, whatever its row count, since it is chunked by
+the bind limit. Every other query renders. State the version your production SQLite runs.
 
 ### Load the model files after it
 

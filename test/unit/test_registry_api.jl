@@ -13,6 +13,7 @@ using PormG
 import PormG: Configuration, Models
 import JSON
 using SQLite   # the #1451 testset's last `load` builds a live SQLite pool, which needs the extension
+using DataFrames: DataFrame
 
 # A throwaway models module with one F1 model, exactly what `@import_models` would evaluate.
 function _reg1229_models(name::Symbol)
@@ -251,9 +252,10 @@ end
 #     3.29.0  order_by("-points") → ORDER BY ("Tb"."points" IS NULL) DESC, "Tb"."points" DESC
 #     3.30.0  order_by("-points") → ORDER BY "Tb"."points" DESC NULLS FIRST
 #     3.24.0  ROW_NUMBER() OVER (…) → BackendCapabilityError naming 3.25.0 and 3.24.0
-#   and a bulk statement chunks by the stated version's bind limit (999 below 3.32.0). With no
-#   `server_version`, a gated clause raises `InvalidConfigurationError` naming `server_version`, and an
-#   ungated query renders. `server_version` with `:postgres`, or not positive, is refused at registration.
+#   and `bulk_insert(show_query = :dict)` of 1000 one-parameter rows is two statements at 3.24.0 (the
+#   999 bind limit below 3.32.0) and one at 3.45.0. With no `server_version`, a gated clause, and a
+#   one-row bulk insert, raise `InvalidConfigurationError` naming `server_version`; an ungated query
+#   renders. `server_version` with `:postgres`, or not positive, is refused at registration.
 # Why it matters: an offline SQLite key asked the host's SQLite library (#1452), so it raised without
 #   `using SQLite` and, with it, pinned SQL that differs between two CI images for the same query.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,12 +287,20 @@ end
     @test err isa PormG.BackendCapabilityError
     @test err !== nothing && occursin("3.25.0", sprint(showerror, err)) && occursin("3.24.0", sprint(showerror, err))
     @test PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections) == 999
+    # The public path: 1000 one-parameter rows are two statements under 3.32.0's 999 limit, one from it.
+    rows = DataFrame(points = Float64.(1:1000))
+    statements(r) = r isa Vector ? length(r) : 1   # one statement comes back as its Dict, not a vector
+    @test statements(PormG.QueryBuilder.bulk_insert(old.objects, rows; show_query = :dict)) == 2
+    push!(keys, "reg1452_v3045000")
+    @test statements(PormG.QueryBuilder.bulk_insert(offline_result(last(keys); server_version = 3_045_000).objects, rows;
+                                                    show_query = :dict)) == 1
 
     push!(keys, "reg1452_unset")
     unset = offline_result(last(keys))
     @test squash(PormG.inspect_query(unset.objects.filter("points" => 1.0))[:sql_text]) ==
           "SELECT * FROM \"result\" as \"Tb\" WHERE \"Tb\".\"points\" = ?"
     for f in (() -> ordered(unset), () -> PormG.inspect_query(windowed(unset)),
+              () -> PormG.QueryBuilder.bulk_insert(unset.objects, DataFrame(points = [1.0]); show_query = :dict),
               () -> PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections))
       err = refused(f)
       @test err isa PormG.InvalidConfigurationError

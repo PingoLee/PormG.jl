@@ -2082,8 +2082,8 @@ offline key raises `InvalidConfigurationError` (#1451).
 and the bind-parameter limit a bulk statement is chunked by). An offline key renders them for
 `server_version`, in SQLite's packed form (`3_045_000` for 3.45.0), never for the library of the
 machine that runs it, so a pinned SQL text is the same on every machine and needs no driver. Without
-`server_version`, a query that needs the version raises `InvalidConfigurationError` naming it; every
-other query renders. PostgreSQL's query SQL depends on no server version, and `server_version` with
+`server_version`, a query that needs the version raises `InvalidConfigurationError` naming it (a bulk
+write always does, whatever its row count); every other query renders. PostgreSQL's query SQL depends on no server version, and `server_version` with
 `adapter = :postgres` raises `InvalidConfigurationError`.
 
 ```julia

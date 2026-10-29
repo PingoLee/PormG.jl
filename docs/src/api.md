@@ -826,7 +826,8 @@ An offline key needs no driver package. `NULLS FIRST`/`LAST`, window functions, 
 joins and the bind-parameter limit of a bulk statement depend on the SQLite version, and an offline
 SQLite key renders them for its `server_version` (`3_045_000` for 3.45.0), never for the library of
 the machine that renders it. Without it, a query that needs the version raises
-`InvalidConfigurationError` naming `server_version`; `server_version` with `adapter = :postgres`
+`InvalidConfigurationError` naming `server_version` (a bulk write always does, whatever its row
+count); `server_version` with `adapter = :postgres`
 raises the same error, since PostgreSQL's SQL depends on no server version (#1452). A `delete(show_query = …)` of a model that others reference
 renders its cascade without reading anything: the statements after the root-key read are scoped by
 an empty key list, and a `PROTECT` or `RESTRICT` relation raises `ProtectedError` as if related rows existed

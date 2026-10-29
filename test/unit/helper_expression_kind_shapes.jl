@@ -448,6 +448,9 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Extract year F time - time", :Race,             m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "year")),
   ("Extract hour F time - time", :Race,             m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "hour")),
   ("Extract epoch F time - time", :Race,            m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "epoch")),
+  # The #1457 leftover (#1034): `EPOCH` is a decimal to the walk, so `Concat` over it is a decimal's text.
+  ("Concat Extract epoch start_at", :Race,          m -> _EKM_FN.Concat(_EKM_FN.Value("t="), _EKM_FN.Extract("start_at", "epoch"))),
+  ("Concat Extract year start_at", :Race,           m -> _EKM_FN.Concat(_EKM_FN.Value("y="), _EKM_FN.Extract("start_at", "year"))),
   ("Round F time - time",     :Race,                m -> _EKM_FN.Round(_EKM_Q.F("time") - _EKM_Q.F("time"))),
   ("Coalesce F time - time int", :Race,             m -> _EKM_FN.Coalesce(_EKM_Q.F("time") - _EKM_Q.F("time"), "year")),
   # ── #1386: a boolean beside another type in a conditional ───────────────────────────────────────

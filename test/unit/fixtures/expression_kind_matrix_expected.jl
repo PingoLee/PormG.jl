@@ -6230,6 +6230,42 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Concat Extract epoch start_at | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract epoch start_at | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract epoch start_at | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract epoch start_at | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract epoch start_at | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract epoch start_at | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Round F time - time | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F time - time | alone", :sqlite) =>

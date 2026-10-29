@@ -46,7 +46,8 @@ For each match in a file that calls `register_offline`, check whether it expects
 # ✗ before — the dry run of a race with results raised; now it returns the plan (#1453)
 @test_throws InvalidConfigurationError M.Race.objects.filter("year" => 1991).delete(show_query = :dict)
 
-# ✓ pin the plan: which statements run, in which order
+# ✓ pin the plan: which statements run, in which order (PostgreSQL; on SQLite the first step is
+#   `(:select, "race")`, a key read without `FOR UPDATE`)
 steps = M.Race.objects.filter("year" => 1991).delete(show_query = :dict)
 @test [(s[:operation], s[:model]) for s in steps] == [(:lock, "race"), (:delete, "result"), (:delete, "race")]
 

@@ -945,6 +945,12 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(\"Tb\".\"date\" - \$2::date) > \$3", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("10", "Int64")]),
   ("F date - date literal | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(julianday(\"Tb\".\"date\") - julianday(?) AS INTEGER) > ?", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("\"2009-03-01\"", "String"), ("10", "Int64")]),
+  ("F date - date literal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-01\"", "String"), ("10", "Int64")]),
   ("F date - date literal | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    DATEDIFF(`R2`.`date`, ?) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("\"2009-03-01\"", "String"), ("1", "Int64"), ("\"2009-03-01\"", "String"), ("1", "Int64"), ("10", "Int64")]),
   ("F date - date literal | subquery", :postgres, "w__@gt", "10") =>

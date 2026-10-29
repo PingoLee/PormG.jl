@@ -639,11 +639,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date literal | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date literal | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Date, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date literal | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Date, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date literal | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Date, whose type PormG does not infer. Name the type the column holds "),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F date - date literal | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date literal | subquery", :sqlite) =>
@@ -7422,6 +7422,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("F date - date literal | alone", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date literal | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date - date literal | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date literal | cte", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
   ("F date - date literal | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],

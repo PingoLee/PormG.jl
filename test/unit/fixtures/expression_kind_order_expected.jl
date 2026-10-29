@@ -729,6 +729,18 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
   ("F date - date literal | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date - date literal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
   ("F date - date literal | subquery", :mysql, "w") =>
     (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("\"2009-03-01\"", "String"), ("1", "Int64")]),
   ("F date - date literal | subquery", :postgres, "w") =>

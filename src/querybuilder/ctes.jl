@@ -767,26 +767,29 @@ end
 # too, so a refusal nested inside a top-level `F` never reports itself as a Case.
 function _f_expression_field(v::FExpression, field::String, instruct::SQLInstruction, refuse)
   if v.operation === nothing
-    v.column isa String || refuse(field, "it is an F(…) over more than one column")
+    v.column isa String || return refuse(field, "it is an F(…) over more than one column")
     return _set_field_from_sql_function(v.column, v.column, instruct)
   end
   # #1460: arithmetic whose value is not a number (a date shifted, an interval, a comparison) is the
   # type the walk names it, before its operands are asked as numbers: `F("date") + Day(1)` is a date.
   meant = _infer_kind(v, instruct, _MeaningKinds())
-  if meant !== nothing && _numeric_rank(meant) === nothing
-    typed = _kind_field(meant)
-    typed === nothing || return typed
-  end
-  left = _f_operand_field(v.field_name, field, instruct, refuse)
-  right = _f_operand_field(v.operand, field, instruct, refuse)
-  if _is_number_field(left) && _is_number_field(right)
+  walked = meant === nothing ? nothing : _kind_field(meant)
+  walked !== nothing && _numeric_rank(meant) === nothing && return walked
+  # The operands as numbers. Where the walk names the value, an operand the number rule cannot type
+  # (the `Date` of `F("date") - Date(2009, 3, 1)`) is no refusal: it answers `nothing`, and the walk's
+  # field types the number the operands are not (a day count). Where it names nothing, the operand's
+  # own refusal stands.
+  operand_refuse = walked === nothing ? refuse : _no_refusal
+  left = _f_operand_field(v.field_name, field, instruct, operand_refuse)
+  right = _f_operand_field(v.operand, field, instruct, operand_refuse)
+  if left isa PormGField && right isa PormGField && _is_number_field(left) && _is_number_field(right)
     return _is_integral_field(left) && _is_integral_field(right) ? Models.IntegerField() : Models.FloatField()
   end
-  # A number from operands that are not (`F("date") - F("date")`, a day count) is the walk's too.
-  typed = meant === nothing ? nothing : _kind_field(meant)
-  typed === nothing || return typed
+  walked === nothing || return walked
   refuse(field, "it is F(…) arithmetic ($(v.operation)) on a value that is not a number")
 end
+# A refusal that is not one, for an operand whose expression the walk types (above).
+_no_refusal(::String, ::String) = nothing
 
 # Inside `F` arithmetic a `String` is a column path, not a text literal. A number, a window, a joined
 # column and a function the CTE typing knows type as a `Case` branch does; anything else is refused.

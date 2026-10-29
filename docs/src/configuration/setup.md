@@ -20,7 +20,27 @@ PormG.setup("db_bs")
 - Creates the configuration folder (e.g., `db/` or `db_bs/`).
 - Generates a template `connection.yml` with `dev`, `test`, and `prod` sections.
 - Creates a **customizable models file** (e.g., `models.jl` or `my_models.jl`) with the correct module boilerplate.
-- Optionally installs AI-assisted developer skills (`pormg-usage`).
+- Optionally installs AI-assisted developer skills (`pormg-usage`) into the project, under
+  `.github/skills/` and `.claude/skills/`. The prompt names the folder it will write to.
+
+### Setting up another project's folder
+Without `root`, both the folder and the skills are relative to the working directory, so
+`PormG.setup("db")` is meant to be run from the project root. An absolute path without `root`
+puts the configuration there and still offers the skills to the working directory; the prompt
+names that folder. A script that scaffolds a project
+somewhere else passes that project's root instead of changing directory. `root` has the same meaning it has for
+[`load`](#Loading-from-a-project-root):
+
+```julia
+const APP_ROOT = "/srv/race_control"
+
+PormG.setup("db"; root = APP_ROOT)
+# APP_ROOT/db/connection.yml, APP_ROOT/db/models.jl
+# APP_ROOT/.github/skills/pormg-usage/ and APP_ROOT/.claude/skills/pormg-usage/SKILL.md
+```
+
+The folder is `joinpath(root, "db")` and the skills go into `root`, whatever the working directory
+is. As with `load`, the path must be relative when `root` is given.
 
 ---
 

@@ -35,14 +35,36 @@ function import_models(path::AbstractString; into::Module = Main)::Module
 end
 
 """
-    setup(path::String = DB_PATH)
+    setup(path::String = DB_PATH; root = nothing)
 
 Interactively setup the `connection.yml` file for PormG.
 This will prompt for database adapter, name, and connection details.
+
+`root` means what it means for `Configuration.load`: the project root `path` is relative to. With
+it, the folder is `joinpath(root, path)` and the AI skills (if you accept them) go into `root`, from
+any working directory. Without it, a relative `path` is resolved against `pwd()`, and the skills go
+into `pwd()` even when `path` is absolute; the prompt names the folder before writing to it. An
+absolute `path` with `root` is refused, since `joinpath` would discard the root (#1294).
+
+```julia
+const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+PormG.setup("db"; root = APP_ROOT)   # APP_ROOT/db/connection.yml, APP_ROOT/.github/skills/…
+```
 """
-function setup(path::String = DB_PATH)
+function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = nothing)
+    # #1294: the same rule as `load(path; root)`. Before `root`, the skills went into `pwd()` whatever
+    # `path` was, so a caller scaffolding another project had to `cd` the whole process into it.
+    if root !== nothing && isabspath(path)
+        throw(InvalidConfigurationError(
+            "Cannot set up \"$(path)\" with `root = \"$(root)\"`: the path is absolute, so `joinpath` " *
+            "would discard the root. Pass the folder relative to the root (e.g. `setup(\"db\"; root = …)`), " *
+            "or drop `root` to set up an absolute path as is."))
+    end
+    folder = root === nothing ? path : joinpath(String(root), path)
+    skills_dir = root === nothing ? pwd() : String(root)
+
     println(_emsg("\e[34m--- PormG Database Setup ---\e[0m"))
-    println(_emsg("Setting up configuration in folder: \e[32m$path\e[0m"))
+    println(_emsg("Setting up configuration in folder: \e[32m$folder\e[0m"))
 
     read_input() = String(strip(readline()))
     
@@ -86,7 +108,7 @@ function setup(path::String = DB_PATH)
     if isempty(time_zone); time_zone = "UTC"; end
 
     Generator.create_db_folder_and_yml(
-        path = path,
+        path = folder,
         adapter = adapter,
         database = database,
         host = host,
@@ -100,20 +122,23 @@ function setup(path::String = DB_PATH)
     models_filename = readline() |> strip
     if isempty(models_filename); models_filename = "models.jl"; end
 
-    Generator.create_models_jl(path, models_filename)
+    Generator.create_models_jl(folder, models_filename)
 
-    println(_emsg("\e[32mConfiguration saved successfully to $(joinpath(path, "connection.yml"))\e[0m"))
-    println(_emsg("You can now load it using: \e[36mPormG.Configuration.load(\"$path\")\e[0m"))
+    # `repr`, not `"…"` around the raw text: a Windows path (`C:\Users`) is an invalid escape in a
+    # Julia string literal, and the hint is meant to be pasted.
+    root_kw = root === nothing ? "" : "; root = $(repr(String(root)))"
+    println(_emsg("\e[32mConfiguration saved successfully to $(joinpath(folder, "connection.yml"))\e[0m"))
+    println(_emsg("You can now load it using: \e[36mPormG.Configuration.load($(repr(path))$root_kw)\e[0m"))
 
     println()
     println(_emsg("\e[34m--- AI Assistant Setup ---\e[0m"))
     println("PormG can install 'AI skills' (.github/skills) to help coding assistants")
     println("(GitHub Copilot, Claude, Cursor, and other agents) understand the PormG API in your project.")
-    print("Do you want to install PormG AI skills? (Y/n) [Default Y]: ")
-    
+    print("Do you want to install PormG AI skills into $(abspath(skills_dir))? (Y/n) [Default Y]: ")
+
     choice = readline() |> strip |> lowercase
     if isempty(choice) || choice == "y"
-        install_ai_skills()
+        install_ai_skills(skills_dir)
     end
 end
 

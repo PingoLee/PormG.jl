@@ -1019,7 +1019,7 @@ function DataFrames.DataFrame(objct::SQLObjectHandler)
   parsers === nothing && return df          # nothing to coerce — PostgreSQL unless an INTERVAL is projected (#581)
   for (name, parser) in parsers
     # The wildcard recorder registers both a field's name and its `db_column`, and only one of them
-    # is in any given result — same guard as `_list_raw`'s `haskey`. `map` widens the column from
+    # is in any given result — same guard as `_rows_from_result`'s lookup. `map` widens the column from
     # `Union{Missing,String}` to `Union{Missing,T}`; the parsers pass `missing` through untouched.
     hasproperty(df, name) && (df[!, name] = map(parser, df[!, name]))
   end
@@ -1051,15 +1051,6 @@ end
 
 function _list_raw(objct::SQLObjectHandler)
   result, built, connection = _execute_select(objct)
-
-  # `Dict{Symbol,Any}` EXPLICITLY, and it is an ENABLING change rather than a style choice. The
-  # un-annotated comprehension this replaces NARROWS: a projection whose columns are all TEXT infers
-  # `Dict{Symbol,String}`, and `setindex!`ing a `ZonedDateTime` into one throws. That narrowing is
-  # the entire reason the old code rebuilt every `Dict` from scratch to coerce a single column.
-  # Annotating it is what makes in-place coercion possible — and it makes `list(:dict)` finally
-  # return what its own docstring promises.
-  rows = [Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row)) for row in Tables.rowtable(result)]
-
   # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
   # plain column.
   #
@@ -1072,13 +1063,66 @@ function _list_raw(objct::SQLObjectHandler)
   #
   # The parser selection lives in `_projection_parsers` (above), shared with `DataFrame(query)`
   # since #582 so the row and tabular terminals coerce the same columns.
-  parsers = _projection_parsers(built, connection)
-  parsers === nothing && return rows
+  return _rows_from_result(result, _projection_parsers(built, connection))
+end
 
+# #1073 — a driver result as `Dict{Symbol,Any}` rows, read COLUMN-WISE, the way `DataFrame(query)`
+# reads it. This used to be `Tables.rowtable(result)` and a `Dict` per row, and on LibPQ the row walk
+# was about 40% of a `list()` call — 2.57 ms and 16 636 allocations for 361 two-column rows, against
+# 0.12 ms and 4 733 read by column (`test/performance/read_path_list.jl`): iterating a `LibPQ.Result`
+# by row resolves each cell's type at run time, while a column has one element type.
+# `_fill_column!` is the function barrier — one dynamic dispatch per column, then a loop typed on
+# the column — and it applies the #564 parser to the column it fills, once per column.
+#
+# `Dict{Symbol,Any}` EXPLICITLY, and it is an ENABLING choice rather than a style one: a `Dict`
+# narrowed to its values' type (`Dict{Symbol,String}` for an all-TEXT projection) throws when a
+# parser writes a `ZonedDateTime` into it, and it makes `list(:dict)` return what its docstring
+# promises. Each `Dict` is sized and filled exactly as `Dict{Symbol,Any}(generator)` sized and
+# filled it before (a `sizehint!` to the column count, keys in column order), so its key iteration
+# order — and the key order `list(:json)` writes — is unchanged.
+#
+# A parser whose name is not a result column never fires: the wildcard recorder registers both a
+# field's name and its `db_column`, and only one of them is in any given result.
+function _rows_from_result(result, parsers::Union{Nothing,Dict{Symbol,Function}})::Vector{Dict{Symbol,Any}}
+  columns = Tables.columntable(result)
+  names = keys(columns)
+  rows = Vector{Dict{Symbol,Any}}(undef, Tables.rowcount(columns))
+  for i in eachindex(rows)
+    row = Dict{Symbol,Any}()
+    sizehint!(row, length(names))
+    rows[i] = row
+  end
+  for name in names
+    parser = parsers === nothing ? nothing : Base.get(parsers, name, nothing)
+    _fill_column!(rows, name, columns[name], parser)
+  end
+  return rows
+end
+
+# A result that is already rows — the SQLite extension's (`_sqlite_execute_materialized`) — is walked
+# as rows. SQLite types each cell, so its `Vector` has an abstract element type (every row its own
+# `NamedTuple` type) and reading it by column re-derives each column's type by widening: 1 026
+# four-column rows took 922 µs that way against 625 µs as rows. The body is the row walk `_list_raw`
+# did before #1073, so a SQLite read is unchanged.
+function _rows_from_result(result::AbstractVector{<:NamedTuple}, parsers::Union{Nothing,Dict{Symbol,Function}})::Vector{Dict{Symbol,Any}}
+  rows = [Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row)) for row in result]
+  parsers === nothing && return rows
   for row in rows, (name, parser) in parsers
-    # A key the row does not carry is skipped rather than added: the wildcard recorder registers
-    # both a field's name and its `db_column`, and only one of them is in any given result.
     haskey(row, name) && (row[name] = parser(row[name]))
+  end
+  return rows
+end
+
+function _fill_column!(rows::Vector{Dict{Symbol,Any}}, name::Symbol, column, ::Nothing)
+  for (row, value) in zip(rows, column)
+    row[name] = value
+  end
+  return rows
+end
+
+function _fill_column!(rows::Vector{Dict{Symbol,Any}}, name::Symbol, column, parser::Function)
+  for (row, value) in zip(rows, column)
+    row[name] = parser(value)
   end
   return rows
 end

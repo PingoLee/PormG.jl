@@ -50,6 +50,23 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 # catch-all methods in `operators.jl` — six per family, `F`, `Joined` and, since #895, a function on the
 # left (`Lower(…) == x`) — which is what earns it a funnel: one wording, one fix, and the accepted
 # list is read LIVE from `_CompareLiteral` so the text cannot drift from the union it describes.
+# #1476 — an operand `+ - * /` does not take, named rather than left to Julia's `MethodError`. A
+# `Decimal` has no literal here (a comparison and a function take none either), so the spelling is a
+# `Float64` or a cast of its digits; a `Rational` has no SQL literal at all. The value is never printed.
+function _unsupported_arithmetic_operand(op::AbstractString, operand)
+  T = typeof(operand)
+  spelling = operand isa Decimals.Decimal ?
+      "Write it as a float, \e[4m\e[32mFloat64(x)\e[0m, or keep its digits with a cast, " *
+      "\e[4m\e[32mCast(Value(string(x)), \"numeric\")\e[0m." :
+    operand isa Rational ? "Write it as a float, \e[4m\e[32mFloat64(x)\e[0m." :
+      "Wrap a literal of another type in a cast, or compute it in Julia first."
+  return QueryBuildError(
+    "\e[4m\e[31m$(T)\e[0m is not an operand of \e[4m\e[31m$(op)\e[0m (#1476). Arithmetic takes a number " *
+    "(an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m expression, " *
+    "a function, or \e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an " *
+    "Interval. " * spelling)
+end
+
 function _unsupported_compare_operand(op::AbstractString, operand)
   accepted = join(string.(Base.uniontypes(_CompareLiteral)), ", ")
   hint = (operand === nothing || operand === missing) ?

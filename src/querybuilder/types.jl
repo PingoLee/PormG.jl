@@ -1303,7 +1303,8 @@ const _SubqueryOperand = SubqueryObject
   # seam a `String` field_name uses.
   # #533: `FExpression`, not the abstract `SQLTypeF` — see the operand-vocabulary note above. The
   # abstract spelling also admitted `OuterRefObject`, which no renderer arm handles.
-  field_name::Union{String,Integer,FExpression,SQLTypeFunction,SQLTypeJoined}
+  # #1476: a number on the LEFT of `-` or `/` (`10 - F("grid")`) is the node's left side.
+  field_name::Union{String,Integer,Float64,FExpression,SQLTypeFunction,SQLTypeJoined}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
   # drift apart: widening one widens both, by construction rather than by a test that checks.

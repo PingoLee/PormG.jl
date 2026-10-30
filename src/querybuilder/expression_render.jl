@@ -1539,6 +1539,9 @@ function _set_update_query_left(value::Any, operation::String, instruc::SQLInstr
   elseif value isa Integer
     sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(value, instruc)
     return add_parameter!(instruc, value; sql_type=sql_type)
+  elseif value isa Float64
+    # #1476: a float on the left of `-` or `/` (`10.5 - F("points")`), bound as one.
+    return add_parameter!(instruc, value; sql_type=_infer_parameter_sql_type(value, instruc))
   elseif value isa FExpression
     return _set_update_query(value, instruc)
   elseif value isa SQLTypeFunction

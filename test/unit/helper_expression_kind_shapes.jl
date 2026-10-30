@@ -77,6 +77,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # #1460 (review): the day count with a date literal on the right
   ("F date - date literal",   :Race,                m -> _EKM_Q.F("date") - Date(2009, 3, 1)),
   ("F comparison",            :Result,              m -> _EKM_Q.F("grid") > _EKM_Q.F("points")),
+  # #1476: operands that raised a `MethodError` before any query existed
+  ("F int + Value(1)",        :Result,              m -> _EKM_Q.F("grid") + _EKM_FN.Value(1)),
+  ("F float * Float32",       :Result,              m -> _EKM_Q.F("points") * Float32(2.5)),
+  ("10 - F int",              :Result,              m -> 10 - _EKM_Q.F("grid")),
+  ("10 / F int",              :Result,              m -> 10 / _EKM_Q.F("grid")),
+  ("10.5 - F float",          :Result,              m -> 10.5 - _EKM_Q.F("points")),
   # #1034 step 5a: each arm of the render's F temporal arithmetic, so the walk's answer for it is a cell
   ("F date + Hour(1)",        :Race,                m -> _EKM_Q.F("date") + Hour(1)),
   ("F datetime - Hour(1)",    :Race,                m -> _EKM_Q.F("start_at") - Hour(1)),

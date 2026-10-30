@@ -993,6 +993,132 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F comparison | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" > \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F int + Value(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`grid` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`grid` + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" + \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int + Value(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F float * Float32 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`points` * ?) > ?", params = [("2.5", "Float64"), ("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`points` * ?) > ?", params = [("2.5", "Float64"), ("2.5", "Float64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" * \$2::double precision) > \$3", params = [("2.5", "Float64"), ("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" * \$2::double precision) > \$3", params = [("2.5", "Float64"), ("2.5", "Float64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" * ?) > ?", params = [("2.5", "Float64"), ("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" * ?) > ?", params = [("2.5", "Float64"), ("2.5", "Float64"), ("10.5", "Float64")]),
+  ("F float * Float32 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2.5", "Float64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2.5", "Float64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2.5", "Float64"), ("10", "Int64")]),
+  ("F float * Float32 | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2.5", "Float64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`points` * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F float * Float32 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`points` * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" * \$3::double precision) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F float * Float32 | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" * \$3::double precision) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F float * Float32 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F float * Float32 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2.5", "Float64"), ("1", "Int64"), ("2.5", "Float64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("10 - F int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - `Tb`.`grid`) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::bigint - \"Tb\".\"grid\") > \$3", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - \"Tb\".\"grid\") > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - F int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 - F int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::bigint - \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 - F int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 / F int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? DIV `Tb`.`grid`) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::bigint / \"Tb\".\"grid\") > \$3", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? / \"Tb\".\"grid\") > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 / F int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? DIV `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 / F int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::bigint / \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 / F int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? / \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10.5 - F float | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - `Tb`.`points`) > ?", params = [("10.5", "Float64"), ("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(? - `Tb`.`points`) > ?", params = [("10.5", "Float64"), ("10.5", "Float64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::double precision - \"Tb\".\"points\") > \$3", params = [("10.5", "Float64"), ("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(\$2::double precision - \"Tb\".\"points\") > \$3", params = [("10.5", "Float64"), ("10.5", "Float64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - \"Tb\".\"points\") > ?", params = [("10.5", "Float64"), ("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(? - \"Tb\".\"points\") > ?", params = [("10.5", "Float64"), ("10.5", "Float64"), ("10.5", "Float64")]),
+  ("10.5 - F float | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10.5", "Float64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("10.5", "Float64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10.5", "Float64"), ("10", "Int64")]),
+  ("10.5 - F float | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10.5", "Float64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - `R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10.5 - F float | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - `R2`.`points`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::double precision - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10.5 - F float | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\$3::double precision - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("10.5 - F float | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10.5 - F float | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64")]),
   ("F date + Hour(1) | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F date + Hour(1) | alone", :mysql, "v__@gt", "datetime 2009-03-29T06:00") =>

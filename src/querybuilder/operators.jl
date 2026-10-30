@@ -9,44 +9,51 @@
 # they compose from (`_CompareLiteral`, `_ColumnHandle`, `_DurationOperand`) and `OP()` stay in
 # `types.jl`; the refusal builder `_unsupported_compare_operand` is in `error_funnels.jl`.
 
-function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+# #1476 — a number an arithmetic operator takes as a literal. `Float16` and `Float32` widen to the
+# `Float64` they hold exactly (as a comparison literal does, `_literal_exact_value`), so one literal
+# type binds on every engine and the node's operand is the number the SQL computes with.
+const _ArithmeticNumber = Union{Integer,Float16,Float32,Float64}
+_arith_number(x::Union{Float16,Float32}) = Float64(x)
+_arith_number(x) = x
+
+function Base.:+(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="+",
-    operand=operand,
+    operand=_arith_number(operand),
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
     aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
-function Base.:-(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+function Base.:-(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="-",
-    operand=operand,
+    operand=_arith_number(operand),
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
     aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
-function Base.:*(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+function Base.:*(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="*",
-    operand=operand,
+    operand=_arith_number(operand),
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
     aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
-function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+function Base.:/(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="/",
-    operand=operand,
+    operand=_arith_number(operand),
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
     aggregate=f.aggregate || _is_agg(operand)
@@ -246,8 +253,14 @@ Base.isequal(::FExpression, ::Missing) = false
 # overloads above. #884: these used to build the node from `f.field_name` themselves. For a bare
 # `F("x")` that is the column, but for an expression it is only the left-most column, so
 # `2 * (F("a") - F("b"))` rendered `"a" * 2` on both engines, silently.
-Base.:+(operand::Union{Integer,Float64}, f::FExpression) = f + operand
-Base.:*(operand::Union{Integer,Float64}, f::FExpression) = f * operand
+Base.:+(operand::_ArithmeticNumber, f::FExpression) = f + operand
+Base.:*(operand::_ArithmeticNumber, f::FExpression) = f * operand
+# #1476: `-` and `/` do not commute, so the number stays on the LEFT of its own node (`10 - F("grid")`
+# is `(? - "grid")`), never delegated to `f - n` — the #884 shape of getting it wrong silently.
+Base.:-(operand::_ArithmeticNumber, f::FExpression) = _number_left(operand, "-", f)
+Base.:/(operand::_ArithmeticNumber, f::FExpression) = _number_left(operand, "/", f)
+_number_left(n::_ArithmeticNumber, op::String, f::Union{FExpression,SQLTypeFunction}) =
+  FExpression(field_name=_arith_number(n), operation=op, operand=f, function_name="F", column="", aggregate=_is_agg(f))
 
 # #481 — the six comparisons with a JOINED-COPY reference on the LEFT, which is the spelling a
 # `cjoin_on` ON clause is written in: `Joined("d","driverid") == F("driverid")`.
@@ -290,61 +303,88 @@ Base.:(==)(::JoinedReference, operand::Missing) = throw(_unsupported_compare_ope
 Base.:(==)(::JoinedReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
 Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
-function Base.:+(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
+function Base.:+(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
-function Base.:-(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
+function Base.:-(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="-", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
 # #814: `Lag("date", …) - Date(2009, 3, 1)`, the window-function twin of the `F` method above.
 function Base.:-(f::WindowFunction, operand::_TemporalLiteral)
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=false)
 end
-function Base.:*(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
+function Base.:*(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
-function Base.:/(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
-end
-
-function Base.:+(operand::Union{Integer,Float64}, f::WindowFunction)
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=false)
+function Base.:/(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="/", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
 
-function Base.:*(operand::Union{Integer,Float64}, f::WindowFunction)
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=false)
+function Base.:+(operand::_ArithmeticNumber, f::WindowFunction)
+  return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=false)
 end
+
+function Base.:*(operand::_ArithmeticNumber, f::WindowFunction)
+  return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=false)
+end
+Base.:-(operand::_ArithmeticNumber, f::WindowFunction) = _number_left(operand, "-", f)   # #1476
+Base.:/(operand::_ArithmeticNumber, f::WindowFunction) = _number_left(operand, "/", f)
 
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
 # Enable expressions like Sum("points") / Count("resultid")
-function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+function Base.:+(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
   # #1021: `SearchVector + SearchVector` is one document, not arithmetic.
   (_is_fts_operand(f) || _is_fts_operand(operand)) && return _combine_search_vectors(f, operand)
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+  return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
-function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+function Base.:-(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="-", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 # #814: `Max("date") - Date(2009, 3, 1)`, the function twin of the `F` method above.
 function Base.:-(f::FObject, operand::_TemporalLiteral)
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
-function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+function Base.:*(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
-function Base.:/(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+function Base.:/(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="/", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 
 
 # Commutative: scalar op FObject
-function Base.:+(operand::Union{Integer,Float64}, f::FObject)
+function Base.:+(operand::_ArithmeticNumber, f::FObject)
   _is_fts_operand(f) && return _combine_search_vectors(operand, f)   # refuses: a number is no vector
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate)
+  return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate)
 end
 
-function Base.:*(operand::Union{Integer,Float64}, f::FObject)
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate)
+function Base.:*(operand::_ArithmeticNumber, f::FObject)
+  return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate)
+end
+Base.:-(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "-", f)   # #1476
+Base.:/(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "/", f)
+
+# #1476 — the other operands of `+ - * /` on the three node families. `Value(x)` is the literal it
+# wraps, as `Coalesce("points", 0)` reads its `0` as `Value(0)`: `F("grid") + Value(1)` is
+# `F("grid") + 1`, and the literal is then dispatched as if written bare (a `Decimal` inside is refused
+# as a bare one is). Anything else — a `Decimal`, a `Rational`, a type no operator takes — raises a
+# `QueryBuildError` naming the spelling, not Julia's `MethodError`. A number on the left is caught as
+# `::Number`, not `::Any`, so it cannot overlap the right-hand catch-all of another family (Aqua's
+# ambiguity check). `JoinedReference` takes no arithmetic: it is a comparison handle (#481).
+for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject)
+  @eval Base.$op(f::$T, v::SQLText) = $op(f, _arith_value(v, $(string(op))))
+  @eval Base.$op(v::SQLText, f::$T) = $op(_arith_value(v, $(string(op))), f)
+  @eval Base.$op(::$T, x::Any) = throw(_unsupported_arithmetic_operand($(string(op)), x))
+  @eval Base.$op(x::Number, ::$T) = throw(_unsupported_arithmetic_operand($(string(op)), x))
+end
+# Text in `Value` is refused: unwrapped, a String is a column path, so `F("grid") + Value("10")` would
+# read a column named `10`.
+function _arith_value(v::SQLText, op::String)
+  v.field isa AbstractString && throw(QueryBuildError(
+    "\e[4m\e[31mValue(\"…\")\e[0m is text, and `$(op)` computes on a number (#1476). Pass the number itself " *
+    "(\e[4m\e[32mF(\"grid\") $(op) 10\e[0m), or cast the text to the number it holds " *
+    "(\e[4m\e[32mCast(Value(\"10\"), \"numeric\")\e[0m)."))
+  return v.field
 end
 
 # Comparison operations for FObject — the `F` comparisons above, with a function on the left (#895).

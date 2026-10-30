@@ -668,6 +668,96 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int + Value(1) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int + Value(1) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F float * Float32 | alone", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | alone", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | cte", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | cte", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | subquery", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * Float32 | subquery", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10 - F int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - F int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 / F int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10.5 - F float | alone", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | alone", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | cte", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | cte", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | subquery", :postgres) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("10.5 - F float | subquery", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :sqlite) =>

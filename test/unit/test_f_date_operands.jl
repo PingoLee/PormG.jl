@@ -51,14 +51,17 @@ using PormG: Joined
 using PormG: Interval   # #527 — the `Interval("HH:MM:SS")` spelling of a sub-day duration
 using Dates
 import TimeZones   # #536 — the `ZonedDateTime` oracle row; a direct dep of test/integration
+import Decimals    # #1476 — the refused `Decimal` operand
 import PormG.QueryBuilder as QB
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a
 # shared key would let another file's settings decide this file's dialect.
 struct FdMockSQLite <: PormG.PormGSQLite end
 struct FdMockPostgres <: PormG.PormGPostgres end
+struct FdMockMySQL <: PormG.PormGMySQL end   # #1476: the arithmetic operands on the third engine
 const _FD_SL = FdMockSQLite()
 const _FD_PG = FdMockPostgres()
+const _FD_MY = FdMockMySQL()
 PormG.backend_sqlite_version(::FdMockSQLite) = 3045000
 
 PormG.config["fd_mock"] = PormG.Configuration.Settings(
@@ -1812,6 +1815,79 @@ end
   @test outer.field_name === inner
   @test outer.operation == "*" && outer.operand == 2
   @test inner.operation == "-"   # the operand is not written on
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1476 — every numeric operand of F arithmetic builds or is refused by name, never a MethodError
+# `+ - * /` took only `Integer`, `Float64`, a path, an `F` and a function, and a number on the left
+# only for `+` and `*`, so `F("points") + Value(1)`, `F("points") * Float32(2.5)`, `10 - F("points")`
+# and `10 / F("points")` raised Julia's `MethodError` before any query existed. Expected:
+# - `Value(n)` is the literal it wraps: `F("points") + Value(1)` renders `("Tb"."points" + ?)` with `1`
+#   (`$1::bigint` on PostgreSQL), as `F("points") + 1` does, and `Value(1) + F(...)` the same;
+# - a `Float32`/`Float16` binds as the `Float64` it holds (`$1::double precision`, `2.5`);
+# - a number on the left of `-`/`/` stays on the left: `(? - "Tb"."points")`, `(? / "Tb"."points")`
+#   (`DIV` on MySQL, two integers), with a float left `(? - "Tb"."points")` binding `10.5`;
+# - a `Decimal`, a `Rational`, text in `Value`, and any other type raise `QueryBuildError` naming the
+#   spelling (`Float64(x)`, `Cast(...)`), on `F`, a function and a window function alike.
+# Why it matters: the docs promise numeric operands, and a raw `MethodError` names no way out.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1476: F arithmetic operands build or are refused by name" begin
+  Fn = PormG.Functions
+  proj(expr) = (q = FD.Fd_result.objects; q.values("x" => expr); q)
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  # (label, expression, SQLite, PostgreSQL, MySQL, parameters)
+  for (label, expr, sl, pg, my, params) in (
+      ("F + Value(1)", () -> F("points") + Fn.Value(1),
+       "(\"Tb\".\"points\" + ?)", "(\"Tb\".\"points\" + \$1::bigint)", "(`Tb`.`points` + ?)", Any[1]),
+      ("Value(1) + F", () -> Fn.Value(1) + F("points"),
+       "(\"Tb\".\"points\" + ?)", "(\"Tb\".\"points\" + \$1::bigint)", "(`Tb`.`points` + ?)", Any[1]),
+      ("F * Value(2.5)", () -> F("points") * Fn.Value(2.5),
+       "(\"Tb\".\"points\" * ?)", "(\"Tb\".\"points\" * \$1::double precision)", "(`Tb`.`points` * ?)", Any[2.5]),
+      ("F * Float32", () -> F("points") * Float32(2.5),
+       "(\"Tb\".\"points\" * ?)", "(\"Tb\".\"points\" * \$1::double precision)", "(`Tb`.`points` * ?)", Any[2.5]),
+      ("F + Float16", () -> F("points") + Float16(0.5),
+       "(\"Tb\".\"points\" + ?)", "(\"Tb\".\"points\" + \$1::double precision)", "(`Tb`.`points` + ?)", Any[0.5]),
+      ("10 - F", () -> 10 - F("points"),
+       "(? - \"Tb\".\"points\")", "(\$1::bigint - \"Tb\".\"points\")", "(? - `Tb`.`points`)", Any[10]),
+      ("10 / F", () -> 10 / F("points"),
+       "(? / \"Tb\".\"points\")", "(\$1::bigint / \"Tb\".\"points\")", "(? DIV `Tb`.`points`)", Any[10]),
+      ("10.5 - F", () -> 10.5 - F("points"),
+       "(? - \"Tb\".\"points\")", "(\$1::double precision - \"Tb\".\"points\")", "(? - `Tb`.`points`)", Any[10.5]),
+      ("10 - (F + 1)", () -> 10 - (F("points") + 1),
+       "(? - (\"Tb\".\"points\" + ?))", "(\$1::bigint - (\"Tb\".\"points\" + \$2::bigint))", "(? - (`Tb`.`points` + ?))", Any[10, 1]),
+      ("10 - Max", () -> 10 - Fn.Max("points"),
+       "(? - MAX(\"Tb\".\"points\"))", "(\$1::bigint - MAX(\"Tb\".\"points\"))", "(? - MAX(`Tb`.`points`))", Any[10]))
+    @testset "$label" begin
+      for (conn, want) in ((_FD_SL, sl), (_FD_PG, pg), (_FD_MY, my))
+        @test occursin(want, _fd_sql(proj(expr()); conn = conn))
+        @test _fd_params(proj(expr()); conn = conn) == params
+      end
+    end
+  end
+  # The node keeps the order it was written in: the number is the left side.
+  n = 10 - F("points")
+  @test n.field_name == 10 && n.operation == "-" && n.operand isa QB.FExpression
+  @test (F("points") * Float32(2.5)).operand === 2.5
+  # The refusals: at construction, so on every engine.
+  dec = Decimals.Decimal
+  lag = QB.Lag("points"; over = QB.WindowOver(order_by = ["id"]))
+  for (label, mk, needle) in (
+      ("F * Decimal", () -> F("points") * dec(2.5), "Cast(Value(string(x)), \"numeric\")"),
+      ("Max - Decimal", () -> Fn.Max("points") - dec(1), "Float64(x)"),
+      ("Decimal - F", () -> dec(1) - F("points"), "Float64(x)"),
+      ("F * 1//2", () -> F("points") * (1 // 2), "Float64(x)"),
+      ("Lag / Rational", () -> lag / (1 // 2), "Float64(x)"),
+      ("F + :sym", () -> F("points") + :sym, "Symbol is not an operand of +"))
+    e = try mk(); nothing catch err; err end
+    @test e isa PormG.QueryBuildError
+    @test occursin("(#1476)", e === nothing ? "" : plain(e))
+    @test occursin(needle, e === nothing ? "" : plain(e))
+  end
+  e = try F("points") + Fn.Value("10"); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("Value(\"…\") is text", plain(e))
+  # A Dates period still reaches date arithmetic, and a date literal still reaches `-` (#25, #814).
+  @test (F("seen") + Day(1)).operand == Day(1)
+  @test (F("seen") - Fn.Value(Date(2009, 3, 1))).operand == Date(2009, 3, 1)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

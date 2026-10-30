@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1471, #1482, #1483, #1491 ; `src/querybuilder/projection_types.jl` (`_json_number_side`, `_refuse_json_key_arithmetic`), `src/querybuilder/ctes.jl` (`CTEDivision.json_key`), `src/querybuilder/expression_render.jl` (`_render_expr_node`), `src/querybuilder/select_nodes.jl` (`Sum`/`Avg`/`Max`/`Min`)
 - **Recorded**: 2026-10-29
-- **Severity**: behavior change on every engine. A query that built now raises `QueryBuildError` when it is built. On SQLite and MySQL some of these returned a value. On PostgreSQL most raised a server error when the query ran, and `Floor(key) / 2` returned a value. A `Max` or `Min` of a key returned a value on every engine: text ordered as text on PostgreSQL and MySQL, a number on SQLite.
+- **Severity**: behavior change on every engine. A query that built now raises `QueryBuildError` when it is built. On SQLite and MySQL some of these returned a value. On PostgreSQL most raised a server error when the query ran, and `Floor(key) / 2` returned a value. A `Max` or `Min` of a key returned a value on every engine: the text's order on PostgreSQL, the number's on SQLite.
 
 ### What changed
 
@@ -31,9 +31,13 @@ A `Max` or a `Min` over an uncast key (or over a value that carries one, as abov
 (#1491). It computes nothing, but it orders the value, and the query does not say whether as numbers or
 as text. PostgreSQL extracts the key as text, so over `{"wins": 9}` and `{"wins": 10}`,
 `Max("metadata__wins")` returned `"9"` (`'9' > '10'`) and `Min` returned `"10"`, while SQLite's
-`json_extract` returned the numbers `10` and `9`. MySQL unquotes the key to text, as PostgreSQL does.
-The message names both spellings: `Cast(key, "numeric")` orders numbers
-and `Cast(key, "text")` orders text.
+`json_extract` returned the numbers `10` and `9`. MySQL renders the key unquoted to text, as
+PostgreSQL does (read from its SQL; not measured on a server). The message names both spellings:
+`Cast(key, "numeric")` orders numbers, and `Cast(key, "text")` orders text in each engine's own
+collation.
+
+An ordering over a key (`order_by("metadata__wins")`) and `Greatest`/`Least` over one have the same
+split and still build in this release; they are tracked in #1497.
 
 Earlier in this train (#1471), only SQLite refused, and only a `/`; a float divisor (`/ 2.0`) and
 arithmetic beside a float literal (`F("metadata__wins") * 1.0`) built there. Those are refused now
@@ -58,7 +62,7 @@ too: on PostgreSQL they reach the same server error.
 Code that computes on a value taken from a JSON key, or takes its `Max` or `Min`, directly or
 through one of the functions above, wherever the arithmetic or the extremum appears: a projection, a filter value
 (`"constructorid__@gt" => F("metadata__wins") / 2`), an `update()` value, an ordering, a CTE body, a
-`Subquery`.
+`Subquery`. An `order_by` over a key itself is not refused (#1497).
 
 ### How to find the calls to migrate
 

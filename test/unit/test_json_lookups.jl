@@ -909,6 +909,12 @@ end
     r = sql("w__@gt" => 100, conn)
     @test occursin(r"\) > \?$", where(r)) && r[:parameters] == [100]
   end
+  # `@in`, which a key lookup refuses, binds its values as given, as on an `F` alias over the key (#1382);
+  # it bound the text `"9"`, which SQLite's number never equals. (`@range` on PostgreSQL is #1499.)
+  # PostgreSQL binds one array (`= ANY($1)`); SQLite and MySQL one marker per value.
+  @test sql("w__@in" => [9, 10], _JL_PG)[:parameters] == [[9, 10]]
+  @test sql("w__@in" => [9, 10], _JL_SL)[:parameters] == [9, 10]
+  @test sql("w__@in" => [9, 10], _JL_MY)[:parameters] == [9, 10]
   # An equality with a number: text on PostgreSQL and MySQL, the native number on SQLite.
   @test sql("w" => 100, _JL_PG)[:parameters] == ["100"]
   @test sql("w" => 100, _JL_SL)[:parameters] == [100]

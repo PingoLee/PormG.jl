@@ -496,8 +496,12 @@ extracts the key as text, so over `{"wins": 9}` and `{"wins": 10}` its `Max` wou
 ```julia
 q = M.Constructor.objects
 q.values("most" => Max(Cast("metadata__wins", "numeric")))    # 10 on every engine
-q.values("last" => Max(Cast("metadata__principal", "text")))  # the greatest text
+q.values("last" => Max(Cast("metadata__principal", "text")))  # the greatest text, in the engine's collation
 ```
+
+An `order_by` over a key and `Greatest`/`Least` over keys still build, and order the key's text on
+PostgreSQL and MySQL (#1497): order by a projected cast (`values("w" => Cast("metadata__wins",
+"numeric")); order_by("-w")`) to order numbers on every engine.
 
 A function over the key with nothing computed on it builds (`Floor("metadata__wins")`), and so does a
 comparison (`"metadata__wins__@gte" => 100`, above).

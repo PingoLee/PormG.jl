@@ -274,6 +274,10 @@ end
             @test length(sub_filtered("payload__points", "w__@gt" => 20).list()) == 0
             @test length(sub_filtered("payload__driver", "w" => "hamilton").list()) == 1
             @test length(sub_filtered("payload__driver", "w" => "norris").list()) == 0
+            # `@in` binds its values as given, as on an `F` alias over the key: it bound the text "15",
+            # which SQLite's number never equals.
+            @test length(sub_filtered("payload__points", "w__@in" => [15, 99]).list()) == 1
+            @test length(sub_filtered("payload__points", "w__@in" => [16, 99]).list()) == 0
         end
 
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────

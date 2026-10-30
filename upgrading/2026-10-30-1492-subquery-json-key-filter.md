@@ -17,17 +17,23 @@ before #1472 (in this train):
 - equality with a number bound it as text (`"121"`), which SQLite's integer never equals;
 - equality on plain text raised `InvalidValueError` ("The text is not valid JSON").
 
-The filter now binds as `filter("metadata__wins" => …)` does (#1382): a numeric comparison for an
-ordering (`((SELECT …))::numeric > $1` on PostgreSQL, the number bound as it is on SQLite and MySQL),
-and plain text for an equality on PostgreSQL and MySQL, the native value on SQLite. A `When` condition
-on the alias compares the same way. A `Subquery` over the whole document keeps the JSON formatter.
+For the comparisons a key lookup takes (`=`, `!=`, `<`, `<=`, `>`, `>=`, `@isnull`), the filter now
+binds as `filter("metadata__wins" => …)` does (#1382): a numeric comparison for an ordering
+(`((SELECT …))::numeric > $1` on PostgreSQL, the number bound as it is on SQLite and MySQL), and plain
+text for an equality on PostgreSQL and MySQL, the native value on SQLite. A `When` condition on the
+alias compares the same way. A `Subquery` over the whole document keeps the JSON formatter.
+
+`@in` and `@range`, which a key lookup refuses, now bind their values as given, as they already did on
+an alias over `F("metadata__wins")`. `@in` matched no row on SQLite (`"15"` against the number `15`)
+and now matches. `@range` is still a text comparison on PostgreSQL, on both kinds of alias: #1499.
 
 | filter on an alias `wins => Subquery(… values("w" => "metadata__wins"))` | before | now |
 |---|---|---|
 | `filter("wins__@gt" => 100)` on PostgreSQL, a row holding `99` | matched (text `'99' > '100'`) | not matched |
 | `filter("wins__@gt" => 100)` on SQLite, a row holding `121` | not matched | matched |
 | `filter("wins" => 121)` on SQLite, a row holding `121` | not matched | matched |
-| `filter("principal" => "Toto Wolff")` over `metadata__principal` | `InvalidValueError` | matches the row |
+| `filter("wins__@in" => [121, 99])` on SQLite, a row holding `121` | not matched | matched |
+| `filter("principal" => "Toto Wolff")`, an alias `principal => Subquery(… values("p" => "metadata__principal"))` | `InvalidValueError` | matches the row |
 
 ### Who this affects
 

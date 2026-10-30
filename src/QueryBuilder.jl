@@ -1,10 +1,9 @@
 module QueryBuilder
 
 import DataFrames, Tables, JSON, CSV, OrderedCollections
-# `DataFrame` by name, not just the module: `query |> DataFrame` has its docstring attached here, and
-# the `public DataFrame` below (#289) needs a BINDING to mark — `public` on a name this module cannot
-# resolve creates a public-but-undefined entry, which Aqua's `test_undefined_exports` rightly fails.
-import DataFrames: DataFrame
+# No `import DataFrames: DataFrame`: since #1344 a query is a Tables.jl source and DataFrames' own
+# `DataFrame(table)` reads it, so PormG defines no `DataFrame` method and marks no `DataFrame` binding.
+# The module import stays for the bulk writes, which still take a `DataFrame` (#1344 phase 3).
 using Dates, TimeZones, Decimals, UUIDs
 import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 import Printf   # #1087: PostgreSQL's `float8` → `numeric` conversion is `%.15g`
@@ -208,7 +207,7 @@ export validate_value  # #1239: the write path's per-field checks, for test doub
 # `public` (Julia 1.11+) — user-facing but deliberately NOT exported (#289).
 #
 # These are real API: `docs/src/api.md` gives them tables and headings, and users reach them through
-# the fluent surface (`query.delete()`, `query.list()`, `q |> DataFrame`) rather than by importing a
+# the fluent surface (`query.delete()`, `query.list()`) rather than by importing a
 # name, which is why exporting them would only pollute a bare `using`. `public` says "this is API"
 # without changing what `using` dumps into scope.
 #
@@ -219,10 +218,11 @@ export validate_value  # #1239: the write path's per-field checks, for test doub
 # exported from `PormG`, but defined here, so only this declaration keeps them on the page.
 public delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query, explain_query
 
-# Foreign bindings whose docstrings live in this module's meta: the `.first()` / `.last()` terminals
-# and `query |> DataFrame`. `public` works on an imported name (it marks the binding in THIS module),
-# and does not touch `Base`/`DataFrames`.
-public first, last, DataFrame
+# Foreign bindings whose docstrings live in this module's meta: the `.first()` / `.last()` terminals.
+# `public` works on an imported name (it marks the binding in THIS module), and does not touch `Base`.
+# `DataFrame` was here until #1344: `query |> DataFrame` is now DataFrames' own constructor reading a
+# Tables.jl source, documented on `SQLObjectHandler`.
+public first, last
 
 
 end

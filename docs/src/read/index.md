@@ -29,7 +29,7 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations. |
 | `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
-| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on every engine. |
+| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` (after `using DataFrames`) for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on every engine. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
 | `.last()` | `PormGRow` or `nothing` | Returns the last matching row (inverts `order_by`; falls back to primary-key descending when no ordering is set). |
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
@@ -80,6 +80,27 @@ driver.save()
 ```
 
 For framework integrations that require plain dictionaries, use `.list(:dict)`. For tabular analysis, pipe the query to `DataFrame`.
+
+### A query is a Tables.jl table
+
+A query implements the [Tables.jl](https://github.com/JuliaData/Tables.jl) interface, so `DataFrame` is
+one sink among many: anything that reads a Tables.jl table reads a query, with no PormG method
+involved. Each read executes the query once, and the columns hold the same typed values as `.list()`:
+
+```julia
+using DataFrames, CSV   # each sink is your own dependency: `Pkg.add(["DataFrames", "CSV", "Tables"])`
+import Tables
+
+query = M.Result.objects.filter("raceid__year" => 2009, "position" => 1).
+    values("raceid__date", "driverid__surname", "points").
+    order_by("raceid__date")
+
+df   = query |> DataFrame           # DataFrames' own constructor
+rows = Tables.rowtable(query)       # a Vector of NamedTuples
+CSV.write("winners_2009.csv", query)
+```
+
+`raceid__date` is a `Date` in the `DataFrame` and in the row table, on every engine, as it is in `.list()`; `CSV.write` writes it as ISO text (`2009-03-29`).
 
 ### The type of a computed number
 

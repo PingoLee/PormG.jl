@@ -355,6 +355,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Upgrade Guide Emitter (#216)" include("unit/test_upgrade_guide.jl")
     @testset "Upgrade Entries Carry No App Details (#1089)" include("unit/test_upgrading_privacy.jl")
     @testset "AI Skill Installer (#206)" include("unit/test_install_ai_skills.jl")
+    @testset "Models File Name Is A Module Name (#1486)" include("unit/test_models_file_name.jl")
     @testset "Usage Skill Coverage Drift Guard (#253)" include("unit/test_usage_skill_coverage.jl")
     @testset "Claude Code Skill Stubs" include("unit/test_skill_stubs.jl")
     @testset "Skill GraphQL Pagination (#625)" include("unit/test_skill_graphql_pagination.jl")

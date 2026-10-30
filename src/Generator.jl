@@ -1,7 +1,7 @@
 module Generator
 
 import PormG
-import PormG: MODEL_PATH, PormGSettings, DB_PATH, GENERATED_MODULE_RESERVED_BINDINGS
+import PormG: MODEL_PATH, PormGSettings, DB_PATH, GENERATED_MODULE_RESERVED_BINDINGS, ModelDefinitionError
 import OrderedCollections: OrderedDict
 
 """
@@ -91,9 +91,10 @@ function generate_models_from_db(file::String, Instructions::Vector{Any}, settin
   # #338: built from the same list Model_to_str's caller seeds its binding-collision `taken` set
   # with, so the boilerplate this file actually imports and the collision guard can never drift.
   reserved_import = join(filter(!=("Models"), GENERATED_MODULE_RESERVED_BINDINGS), ", ")
+  module_name = _models_module_name(file)   # #1486: before `open`, so a refused name writes nothing
 
   open(joinpath(path, file), "w") do f
-    write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
+    write(f, """module $(module_name)\n
     import PormG.Models
     import PormG.Models: $(reserved_import)
 
@@ -168,6 +169,32 @@ function _plan_binds_bare(name::AbstractString)::Bool
   all(==('_'), name) && return false
   ex = Meta.parse(string(name, " = 1"); raise = false)
   return ex isa Expr && ex.head === :(=) && ex.args[1] === Symbol(name)
+end
+
+# #1486: a generated models file is `module <stem> … end`, the stem being the file name without
+# `.jl`. A stem that is not a bare binding wrote a file that could not be loaded (`f1-models.jl`
+# parsed as `module f1` with `-models` for a body, `1975.jl` was a TypeError, `module.jl` a
+# ParseError), and the error surfaced only at `include`, far from where the name was chosen. Both
+# writers derive the name here, so the two derivations cannot drift. `splitext`, not
+# `replace(…, ".jl" => "")`, which also removed a `.jl` in the middle of the name. NFC first: the
+# parser normalizes an identifier to NFC and `Symbol` does not, so a decomposed `é` (a name listed
+# by an older macOS filesystem) would fail `_plan_binds_bare`'s comparison although it loads.
+function _models_module_name(filename::AbstractString)::String
+  stem = Base.Unicode.normalize(first(splitext(basename(String(filename)))), :NFC)
+  # A module named after a binding the file imports shadows it: `Models.jl` cannot reach
+  # `Models.IDField`, and `CASCADE.jl` hands the module itself to `on_delete`.
+  if stem in GENERATED_MODULE_RESERVED_BINDINGS
+    throw(ModelDefinitionError(
+      "Cannot write the models file \"$(filename)\": its module is named after the file, and " *
+      "\"$(stem)\" is a name the file imports from `PormG.Models`, so the module would hide it. " *
+      "Use another name, for example \"f1_models.jl\"."))
+  end
+  _plan_binds_bare(stem) && return stem
+  throw(ModelDefinitionError(
+    "Cannot write the models file \"$(filename)\": its module is named after the file, and " *
+    "\"$(stem)\" is not a Julia identifier, so the file could not be loaded. Use a name made of " *
+    "letters, digits and underscores that does not start with a digit and is not a Julia keyword, " *
+    "for example \"f1_models.jl\"."))
 end
 
 function _plan_binding(key)::String
@@ -266,15 +293,21 @@ end
     create_models_jl(path::String, filename::String = "models.jl")::Nothing
 
 Creates a boilerplate models file in the specified configuration folder with a matching module name.
+The file name without `.jl` becomes that module's name, so it must be a Julia identifier
+(`f1_models.jl`, not `f1-models.jl`, `1975.jl` or `module.jl`) and not a name the file imports
+(`Models.jl`, `CASCADE.jl`); otherwise the call raises
+[`ModelDefinitionError`](@ref PormG.ModelDefinitionError) and writes nothing. A file that already
+exists is left as it is.
 """
 function create_models_jl(path::String, filename::String = "models.jl")::Nothing
     models_file = joinpath(path, filename)
-    module_name = replace(filename, ".jl" => "")
-    
-    # Don't overwrite if it already exists
+
+    # Don't overwrite if it already exists. A file already there is the user's: it can declare any
+    # module and load with `@import_models … as`, so its name is not checked (#1486).
     if isfile(models_file)
         return nothing
     end
+    module_name = _models_module_name(filename)
 
     reserved_import = join(filter(!=("Models"), GENERATED_MODULE_RESERVED_BINDINGS), ", ")
 

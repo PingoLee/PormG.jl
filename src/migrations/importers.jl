@@ -170,6 +170,9 @@ Import models from a SQLite database and generate a Julia file with model defini
   (#767). A view has no primary key and none is guessed, so the model is keyless and carries a
   `# PormG:` marker saying so. `include_table` and `ignore_schema` filter views by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
+  Its name without `.jl` becomes the module's name, so it must be a Julia identifier
+  (`f1_models.jl`, not `f1-models.jl`) and not a name the file imports (`Models`, `CASCADE`, …);
+  otherwise the call raises `ModelDefinitionError` and writes no models file (#1486).
 
 # Description
 Symmetric with [`import_models_from_postgres`](@ref): the database **key** resolves to its settings
@@ -253,6 +256,9 @@ Import models from a PostgreSQL database and generate a Julia file with model de
   keyless and carries a `# PormG:` marker saying so. `include_table` and `ignore_table` filter views
   by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
+  Its name without `.jl` becomes the module's name, so it must be a Julia identifier
+  (`f1_models.jl`, not `f1-models.jl`) and not a name the file imports (`Models`, `CASCADE`, …);
+  otherwise the call raises `ModelDefinitionError` and writes no models file (#1486).
 
 # Description
 This function retrieves the database schema from PostgreSQL, converts each table to a PormG model,
@@ -365,6 +371,9 @@ a models file for them, as `import_models_from_postgres` and `import_models_from
 - `include_table`: read only these tables.
 - `include_views`: also write each view, as an unmanaged model with no key.
 - `file`: the file name, in the connection's folder.
+  Its name without `.jl` becomes the module's name, so it must be a Julia identifier
+  (`f1_models.jl`, not `f1-models.jl`) and not a name the file imports (`Models`, `CASCADE`, …);
+  otherwise the call raises `ModelDefinitionError` and writes no models file (#1486).
 
 A column reads as the field whose values it holds: a type MySQL has that PormG does not write as itself (an
 integer's display width, any `datetime(n)` or `time(n)`, a `timestamp`, `text`) reads as that field, and one
@@ -3169,6 +3178,9 @@ pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django
 - `db::String`: The configuration key used to resolve settings (usually the db folder path). The generated file is written to that configuration's `db_def_folder` unless `output_path` overrides it, and the table-name prefix comes from that configuration's `django_prefix` unless `django_prefix` overrides it. Defaults to `DB_PATH`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.
+  Its name without `.jl` becomes the module's name, so it must be a Julia identifier
+  (`f1_models.jl`, not `f1-models.jl`) and not a name the file imports (`Models`, `CASCADE`, …);
+  otherwise the call raises `ModelDefinitionError` and writes no models file (#1486).
 - `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_gal"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
 - `django_prefix::Union{Nothing, String, Missing}`: The Django **app label** whose tables are being imported — in practice, the prefix Django puts on them. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
 

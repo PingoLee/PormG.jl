@@ -186,17 +186,17 @@ function _m2m_in_one_transaction(f, settings, statements::Int)
 end
 
 # Insert each (owner, target) pair that is not there yet, one method per engine and one statement per
-# add, or per group of targets where the engine's bind limit splits it (#1413). PostgreSQL and MySQL
-# insert with `INSERT … SELECT … WHERE NOT EXISTS`, idempotent whether or not the through table has a
-# unique constraint (auto-generated through tables have one; explicit through models typically do
-# not). Groups run in one transaction, the caller's if one is open, so a target that fails (an id with
-# no row) leaves none of them linked (#1399).
+# add, or per group of targets where the engine's bind limit splits it (#1413). Every engine inserts
+# with `INSERT … SELECT … WHERE NOT EXISTS`, idempotent whether or not the through table has a unique
+# constraint (auto-generated through tables have one; explicit through models typically do not).
+# SQLite's `INSERT OR IGNORE` skipped a link only on that unique key, so an explicit through model
+# without one got a row per repeat (#1473). Groups run in one transaction, the caller's if one is open,
+# so a target that fails (an id with no row) leaves none of them linked (#1399).
 #
 # One statement does not see the rows it inserts itself, so a target repeated within one add would
 # pass `NOT EXISTS` twice: two rows on a through table without a unique key, an `IntegrityError` on
 # one with it. The per-target statements this replaced each saw the one before, so repeats linked
-# once; `_m2m_distinct_ids` keeps that. SQLite needs no dedupe: `INSERT OR IGNORE` drops a repeat on
-# the through table's unique key, and its #1355 split relies on receiving the targets as given.
+# once; `_m2m_distinct_ids` keeps that, before the targets are split into groups.
 #
 # An integer key's integer text is bound as its integer. The formatter keeps `"5"` as text, which the
 # column compares as its number (`"5.0"` stays text, as before): two spellings of one target would otherwise both pass the dedupe, and
@@ -267,10 +267,13 @@ function _m2m_add!(connection::PormGMySQL, settings, table_name, owner_column, r
   return nothing
 end
 
-# SQLite: one `INSERT OR IGNORE … VALUES (?, ?), …` per group of targets, two parameters each (#1355).
+# SQLite: one statement per group of targets, two parameters a target, the groups split under the bind
+# limit (#1355) and run in one transaction. The pairs are a CTE with named columns, as SQLite's
+# `bulk_update` names its `source` (#1473). SQLite serializes writers, so nothing links a pair between
+# the `NOT EXISTS` and the insert.
 function _m2m_add!(connection::PormGSQLite, settings, table_name, owner_column, related_column, owner_value,
                    target_ids, related_pk_field::PormGField)
-  chunks = _m2m_id_chunks(connection, target_ids, 2, 0, :many_to_many_add)
+  chunks = _m2m_id_chunks(connection, _m2m_distinct_ids(target_ids, related_pk_field), 2, 0, :many_to_many_add)
   _m2m_in_one_transaction(settings, length(chunks)) do
     for chunk in chunks
       parameters = get_parameter(connection)
@@ -281,7 +284,11 @@ function _m2m_add!(connection::PormGSQLite, settings, table_name, owner_column, 
         target_placeholder = add_parameter!(parameters, target_id)
         push!(groups, "($owner_placeholder, $target_placeholder)")
       end
-      sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+      sql = "WITH \"v\"(\"o\", \"r\") AS (VALUES $(join(groups, ", "))) " *
+            "INSERT INTO $table_name ($owner_column, $related_column) SELECT \"v\".\"o\", \"v\".\"r\" FROM \"v\" " *
+            "WHERE NOT EXISTS (" *
+              "SELECT 1 FROM $table_name AS \"e\" WHERE \"e\".$owner_column = \"v\".\"o\" AND \"e\".$related_column = \"v\".\"r\"" *
+            ");"
       fetch(settings, sql, parameters)
     end
   end

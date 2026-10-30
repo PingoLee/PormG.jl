@@ -169,11 +169,25 @@ Load the driver package as you would LibPQ — `using PormG, Postgres` — so it
 
 PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=ISO,YMD` and `TimeZone=UTC` — and decodes results to the same types (`Decimals.Decimal`, `ZonedDateTime` in UTC, `DateTime`). Server notices go to `@debug` rather than the log. Known gaps while it is experimental:
 
-- **A hand-written string holding several statements fails** when you send it yourself, for example two `ALTER TABLE`s in one `fetch` call. Postgres.jl runs every statement over the extended protocol; see [JuliaDatabases/Postgres.jl#23](https://github.com/JuliaDatabases/Postgres.jl/issues/23). Send one statement per call. Migrations are not affected: `migrate` sends a plan one statement at a time under either driver.
+- **A hand-written string holding several statements fails** when you send it yourself, for example two `ALTER TABLE`s in one `fetch` call. PormG's `fetch` runs every statement over the extended protocol. Postgres.jl 2.3 added `Postgres.execute_script` for several statements in one call ([JuliaDatabases/Postgres.jl#23](https://github.com/JuliaDatabases/Postgres.jl/issues/23)), but `fetch` does not use it, so send one statement per call. Migrations are not affected: `migrate` sends a plan one statement at a time under either driver.
 - `passfile`, `hostaddr`, `service`, multiple hosts and Unix-socket hosts are not supported, nor is a `client_encoding` other than UTF-8 or a `target_session_attrs` other than `any`; `reconnect=true` in a connection string is refused (the pool renews connections itself). `sslmode` takes only `disable`, `prefer`, `require` or `verify-full`, and `gssencmode` only `disable`, `prefer` or `require`, whether from the connection string, `connection.yml` or `PGSSLMODE`/`PGGSSENCMODE`. libpq's `allow` and `verify-ca`, and an empty value, are refused before PormG connects, by name, without echoing the value. Under `gssencmode=require` the driver never reads `sslmode`, so PormG does not check it there. Postgres.jl decides which connection strings it accepts. When it refuses one, PormG reads the string itself to name the parameter at fault. A refusal never shows a value, and it names a parameter only when that is a real parameter keyword. Any other word is referred to by its position: in `password=abc def=ghi` the word `def`, which is part of the password, is `parameter 2`.
 - **A statement binds at most 32767 parameters**, where LibPQ binds 65535: Postgres.jl writes the count as a signed 16-bit integer ([JuliaDatabases/Postgres.jl#34](https://github.com/JuliaDatabases/Postgres.jl/issues/34)). PormG splits a many-to-many `remove` of more ids than that under this limit. A `__@in` filter is not affected, since PostgreSQL binds its list as one array parameter, but a hand-written statement sent through `fetch` with more values than that fails at the driver.
 - `fetch_copy` reports the number of CSV records it sent rather than the server's `COPY n` count. That is exact for PormG's own `bulk_copy`, but can differ for a hand-written `COPY` with `HEADER true`, `FORMAT text` or `binary`, or a custom `QUOTE`.
 - `interval` values cast to text render in PostgreSQL's default style rather than ISO 8601.
+
+### Where the two drivers return different values
+
+The rows `list()`, `list(:dict)`, `list(:json)`, `first` and `get` return hold the same Julia types under both drivers: every field of `Race`, `Driver`, `Result`, `Pit_stops` and `Constructor_results` was read under each. Where the drivers decode a value differently, the read path converts it to one type. A `DataFrame(query)` column and a raw `fetch` result are where the differences remain:
+
+| Value | LibPQ | Postgres.jl | What PormG returns |
+|---|---|---|---|
+| A `DataFrame(query)` column, or a raw `fetch` column | `Union{Missing,T}` for every column | `T` when no returned row holds a NULL in that column, `Union{Missing,T}` when one does. This depends on the rows returned, not on the field's `null=` | Left as the driver gives it. Under Postgres.jl, `df[i, :points] = missing` raises unless the column already held a NULL; `allowmissing!(df)` widens every column |
+| An `interval` | `Dates.CompoundPeriod` | A bare `Period` when the interval has one component (`Minute(5)`; `Millisecond(0)` for zero), `CompoundPeriod` otherwise | `CompoundPeriod` under both drivers for a projected `DurationField` or interval expression. A raw `fetch` keeps the driver's value |
+| An `interval` cast to text | ISO 8601 (`"PT5M"`) | PostgreSQL's default style (`"00:05:00"`) | Left as the driver gives it: the same duration in different text |
+| A text array (`text[]`, `varchar[]`) | The array literal as a `String` (`"{a,b}"`) | `Vector{String}` | `Vector{String}` under both drivers for an `ArrayField` |
+| An integer array | `Vector{Union{Missing,Int32}}` | `Vector{Int32}` | `Vector{Int32}` under both drivers for an `ArrayField` |
+
+The two drivers decode every other column type PormG maps to the same Julia type: integers, floats, `numeric` (`Decimals.Decimal`), `boolean`, text, `date`, `time`, `timestamp`, `timestamptz` (`ZonedDateTime` in UTC), `json`/`jsonb`, `uuid`, `inet` (`String`) and `bytea` (`Vector{UInt8}`).
 
 ## Tables PormG leaves alone
 

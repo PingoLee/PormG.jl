@@ -1747,15 +1747,6 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1305: `_division_first` decides an integer quotient beside another answer by the engine fact
-# The testset above reaches the SQLite half only through a JSON key, which #1471 now refuses first, so
-# this pins the rule itself on answers built by hand (no SQL): an integer quotient (`_DIVISION_KINDS`)
-# answers wherever it sits on the engine whose untyped sum departs (PostgreSQL), and beside another
-# answer the other answer decides where it does not (SQLite) — an interval stays an interval (#1259),
-# a fraction a fraction (#1028). Alone it answers on both. Why it matters: a regression in the SQLite
-# branch would otherwise pass the suite.
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
 # #1471: a window function's `default` holding a JSON key is one of its values
 # `Lag("number"; default = F("payload__n"))` takes the key's integer on the rows where the default
 # applies, so `… / 2` divides it as an integer on SQLite, as `Coalesce("number", key) / 2` does. Expected:
@@ -1772,6 +1763,15 @@ end
   @test _ccd_builds(lagd(0) / 2)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #1305: `_division_first` decides an integer quotient beside another answer by the engine fact
+# The testset above reaches the SQLite half only through a JSON key, which #1471 now refuses first, so
+# this pins the rule itself on answers built by hand (no SQL): an integer quotient (`_DIVISION_KINDS`)
+# answers wherever it sits on the engine whose untyped sum departs (PostgreSQL), and beside another
+# answer the other answer decides where it does not (SQLite) — an interval stays an interval (#1259),
+# a fraction a fraction (#1028). Alone it answers on both. Why it matters: a regression in the SQLite
+# branch would otherwise pass the suite.
+# ─────────────────────────────────────────────────────────────────────────────
 @testset "#1305: _division_first answers by the untyped-sum engine fact, on each side" begin
   QB = PormG.QueryBuilder
   q, iv, fl = (:numeric_whole_division, "a quotient"), (:interval, "an interval"), (:float, "a float")

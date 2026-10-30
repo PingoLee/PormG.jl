@@ -118,11 +118,22 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
         time_zone = time_zone
     )
 
-    print("Models file name [Default: models.jl]: ")
-    models_filename = read_input()
-    if isempty(models_filename); models_filename = "models.jl"; end
-
-    Generator.create_models_jl(folder, models_filename)
+    # #1486: a name that cannot become the file's module is refused by the writer, and asked again
+    # here: `connection.yml` is already written, so a throw would leave the wizard half done. The
+    # writer is the check, so the prompt cannot accept a name it refuses. At end of input
+    # `readline` returns "", the default, so a scripted run cannot loop.
+    while true
+        print("Models file name [Default: models.jl]: ")
+        models_filename = read_input()
+        if isempty(models_filename); models_filename = "models.jl"; end
+        try
+            Generator.create_models_jl(folder, models_filename)
+            break
+        catch e
+            e isa ModelDefinitionError || rethrow()
+            println(e.msg)
+        end
+    end
 
     # `repr`, not `"…"` around the raw text: a Windows path (`C:\Users`) is an invalid escape in a
     # Julia string literal, and the hint is meant to be pasted.

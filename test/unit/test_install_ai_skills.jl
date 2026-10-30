@@ -470,3 +470,23 @@ end
         @test startswith(read(models_file, String), "module f1_models\n")
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# setup: a models-file name that cannot be a module name is asked again (#1486)
+# `create_models_jl` now refuses a name whose stem is not a Julia identifier, with
+# `ModelDefinitionError`. `connection.yml` is already written when the models prompt runs, so a throw
+# there would leave the wizard half done; the prompt prints the refusal and asks again instead. Before
+# #1486 it wrote `module f1-models`, a file `include` could not load. No SQL: `setup` only writes files.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "setup asks again for a models-file name that cannot be a module name (#1486)" begin
+    mktempdir() do project
+        # SQLite, database.sqlite, UTC, `f1-models.jl` (refused), `f1_models.jl`, no skills.
+        _, out = _ai1294_setup("2\n\n\nf1-models.jl\nf1_models.jl\nn\n", "db"; root = project)
+        db = joinpath(project, "db")
+        @test count("Models file name [Default: models.jl]: ", out) == 2   # asked again
+        @test occursin("\"f1-models\" is not a Julia identifier", out)     # and told why
+        @test !isfile(joinpath(db, "f1-models.jl"))                        # the refused name: no file
+        @test startswith(read(joinpath(db, "f1_models.jl"), String), "module f1_models\n")
+        @test occursin("Configuration saved successfully", out)            # the wizard finished
+    end
+end

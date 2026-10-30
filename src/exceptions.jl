@@ -620,8 +620,10 @@ end
 A model or schema definition is invalid — more than one primary key, a duplicate `related_name`,
 a reverse accessor that shadows a field or contains `__` / `@`, an illegal field
 name, a `UniqueConstraint` that names an unknown or many-to-many field, an unresolvable
-`ForeignKey` / `ManyToManyField` target, or a `Model(...)` call given something that is not a
-`PormGField`.
+`ForeignKey` / `ManyToManyField` target, a `Model(...)` call given something that is not a
+`PormGField`, or a generated models file whose name cannot be its module's name (`f1-models.jl`,
+`1975.jl`, `Models.jl`: the name without `.jl` must be a Julia identifier and not one the file
+imports, #1486).
 """
 struct ModelDefinitionError <: DefinitionError
   msg::String

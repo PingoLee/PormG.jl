@@ -4297,8 +4297,8 @@ from core.models import Base
 class Pedido(Base):
     total = models.IntegerField()
 """
-    for (label, pairs) in (("enums-first", ["enums" => enums_app, "core" => core, "shop" => shop]),
-                           ("shop-first",  ["shop" => shop, "core" => core, "enums" => enums_app]))
+    for (label, pairs) in (("enums_first", ["enums" => enums_app, "core" => core, "shop" => shop]),
+                           ("shop_first",  ["shop" => shop, "core" => core, "enums" => enums_app]))
         generated, key, existed = import_project(pairs; output_file = "enum_order_$(label).jl")
         try
             @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",

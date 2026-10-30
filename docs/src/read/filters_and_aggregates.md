@@ -434,6 +434,17 @@ q.values("name", "m__wins")
 q.filter("m__wins__@gt" => 100)            # a numeric comparison, as "metadata__wins__@gt" => 100
 ```
 
+So does a projection alias over a `Subquery` that projects a key (#1492):
+
+```julia
+wins = M.Constructor.objects
+wins.filter("constructorid" => OuterRef("constructorid"))
+wins.values("w" => "metadata__wins")
+q = M.Constructor.objects
+q.values("name", "wins" => Subquery(wins))
+q.filter("wins__@gt" => 100)               # a numeric comparison, as "metadata__wins__@gt" => 100
+```
+
 A path lookup compares the extracted value against a **value**. A column expression on the right
 (`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison

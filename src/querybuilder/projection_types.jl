@@ -833,7 +833,10 @@ _json_document_operand(::Any, ::SQLInstruction) = false
 _json_key_lookup_operand(p::SQLField, instruc::SQLInstruction) = _json_key_lookup_operand(p.field, instruc)
 _json_key_lookup_operand(p::FExpression, instruc::SQLInstruction) =
   p.operation === nothing && _json_key_lookup_operand(p.field_name, instruc)
-_json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+# #1492: a `Subquery` is its one projected column (#888), so one that projects a key lookup holds the
+# key's value, as the walk names it from the inner build's record. An alias over it compared through the
+# document's JSON formatter, which bound `100` as the text `"100"`.
+_json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference,SubqueryObject}, instruc::SQLInstruction) =
   _expression_kind(p, instruc) isa CJSONValue
 _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 

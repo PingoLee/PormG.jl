@@ -258,6 +258,24 @@ end
             @test length(cte_filtered("payload__points", "g__k__@gt" => 20).list()) == 0
         end
 
+        # #1492: a filter on a projection alias over a `Subquery` that projects a key lookup compares as
+        # the key lookup does. It bound through the document's JSON formatter, so `points` (15) `> 9`
+        # bound the text "9": a text comparison on PostgreSQL ('15' > '9' is false), and never true on
+        # SQLite, where a number is never greater than text. Expected: the seeded row matches each
+        # filter, and a non-matching value matches none.
+        @testset "a filter on a Subquery alias over a JSON key matches as the key lookup does (#1492)" begin
+            function sub_filtered(col, filt)
+                s = M.Field_validation_scratch.objects
+                s.filter("id" => OuterRef("id")); s.values("k" => col)
+                q = base(); q.values("id", "w" => Subquery(s)); q.filter(filt)
+                return q
+            end
+            @test length(sub_filtered("payload__points", "w__@gt" => 9).list()) == 1
+            @test length(sub_filtered("payload__points", "w__@gt" => 20).list()) == 0
+            @test length(sub_filtered("payload__driver", "w" => "hamilton").list()) == 1
+            @test length(sub_filtered("payload__driver", "w" => "norris").list()) == 0
+        end
+
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────
         if requires(:jsonb_operators)
             @testset "containment and key operators" begin

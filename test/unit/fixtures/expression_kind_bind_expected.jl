@@ -8444,11 +8444,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("json key | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("json key | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("json key | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"payload\" #>> '{\"n\"}' as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "((SELECT\n    \"R2\".\"payload\" #>> '{\"n\"}' as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n))::numeric > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("json key | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    json_extract(\"R2\".\"payload\", '\$.n') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    json_extract(\"R2\".\"payload\", '\$.n') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Round json key / 2 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(ROUND(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS DECIMAL(65,30)), ?) / ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Round json key / 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>

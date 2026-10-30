@@ -877,3 +877,55 @@ end
     @test_throws PormG.InvalidValueError _sql(filtered("payload", "g__k" => "hamilton"); conn = conn)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1492: a filter on a Subquery alias over a JSON key binds as the key lookup does
+# A `Subquery` is its one projected column (#888), so one that projects `payload__n` holds the key's
+# value, which the walk names `CJSONValue`. A filter on its projection alias bound through the
+# document's JSON formatter: `w__@gt => 100` bound the text `"100"` on every engine, a text comparison
+# on PostgreSQL (`'99' > '100'` is true) and never true on SQLite, where a number is never greater than
+# text. #1472 fixed the same defect for a CTE column. Expected, as `filter("payload__n" => …)` binds
+# (#1382): PostgreSQL `((SELECT … #>> '{"n"}' …))::numeric > $1` with `100`, SQLite and MySQL
+# `(SELECT …) > ?` with `100`; an equality binds `"100"` on PostgreSQL and MySQL and `100` on SQLite;
+# text equality binds the text; a `When` condition on the alias compares the same way. A `Subquery`
+# over the whole document keeps the JSON formatter, and one over a typed column binds as it did.
+# Why it matters: the ordering returned the rows a text comparison picks, with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1492: a filter on a Subquery alias over a JSON key binds as the key lookup does" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub(col) = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => col); s)
+  withsub(filt; col = "payload__n") =
+    (q = JL.Json_scratch.objects; q.values("name", "w" => QB.Subquery(sub(col))); q.filter(filt); q)
+  # The whole statement, one line: the outer WHERE is its tail (the subquery has a WHERE of its own).
+  where(r) = rstrip(replace(r[:sql_text], r"\s+" => " "))
+  # The subquery's projection warns that it may match more than one row; that is not under test.
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  sql(filt, conn; col = "payload__n") = quiet(() -> _sql(withsub(filt; col); conn = conn))
+  # An ordering: a numeric comparison, the number bound as a number.
+  r = sql("w__@gt" => 100, _JL_PG)
+  @test occursin(r"\)\)::numeric > \$1$", where(r)) && r[:parameters] == [100]
+  for conn in (_JL_SL, _JL_MY)
+    r = sql("w__@gt" => 100, conn)
+    @test occursin(r"\) > \?$", where(r)) && r[:parameters] == [100]
+  end
+  # An equality with a number: text on PostgreSQL and MySQL, the native number on SQLite.
+  @test sql("w" => 100, _JL_PG)[:parameters] == ["100"]
+  @test sql("w" => 100, _JL_SL)[:parameters] == [100]
+  @test sql("w" => 100, _JL_MY)[:parameters] == ["100"]
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    # An equality on text binds the text.
+    @test sql("w" => "hamilton", conn; col = "payload__driver")[:parameters] == ["hamilton"]
+    # A `When` condition on the alias compares as the alias's filter does.
+    q = JL.Json_scratch.objects
+    q.values("name", "w" => QB.Subquery(sub("payload__n")))
+    q.filter(QB.Case([QB.When("w__@gt" => 100, then = 1)], default = 0) == 1)
+    @test quiet(() -> _sql(q; conn = conn))[:parameters] == [100, 1, 0, 1]
+    # Controls: the whole document keeps the JSON formatter, a typed column binds its number.
+    @test sql("w" => """{"a": 1}""", conn; col = "payload") isa AbstractDict
+    @test_throws PormG.InvalidValueError sql("w" => "hamilton", conn; col = "payload")
+    @test sql("w__@gt" => 100, conn; col = "id")[:parameters] == [100]
+  end
+  @test occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG))) &&
+        !occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG; col = "id")))
+end

@@ -10,39 +10,40 @@ changing models, choosing a field type, or running migrations**. Full detail:
 
 `PormG.setup()` (first time only, interactive) writes `db/connection.yml` and `db/models.jl`.
 
-**In a package or a service** — the bootstrap to write by default. The configuration is loaded
-with an explicit `root` and `env`, in the module body **and** again from `__init__`, through one
-helper:
+**In a package or a service**, write this bootstrap by default. The module body only `include`s
+the models file. `__init__` loads the configuration, with an explicit `root` and `env`, and binds
+the models:
 
 ```julia
 module RaceControl
 
 using PormG, LibPQ   # or SQLite — a driver package is required, PormG does not bundle one
 
-const DB_DIRS  = ["db"]
-const APP_ROOT = normpath(joinpath(@__DIR__, ".."))   # the project root, whatever the pwd()
+const DB_DIRS     = ["db"]
+const APP_ROOT    = normpath(joinpath(@__DIR__, ".."))   # the project root, whatever the pwd()
+const MODELS_FILE = joinpath(APP_ROOT, "db", "models.jl")
 
-_load_configs() =
-    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
-
-_load_configs()                                   # module body: @import_models binds to it
-PormG.@import_models "../db/models.jl" models     # registers every model; hot-reload-aware (Revise)
+include(MODELS_FILE)                              # defines `module models … end`; reads no configuration
 import .models as M
 
-__init__() = _load_configs()                      # runtime: the image's configuration does not survive
+function __init__()
+    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+    PormG.Models.set_models(models, "db"; source = MODELS_FILE)   # binds; Revise reload when loaded
+end
 
 end
 ```
 
 Why each piece is there:
 
-- **`env`** — outside a REPL, `load` takes the environment from `env=` or `PORMG_ENV` and nothing
+- **`env`**: outside a REPL, `load` takes the environment from `env=` or `PORMG_ENV` and nothing
   else. It never falls back to the file's `default_env:`, which is often production.
-- **`root`** — keeps the key short (`"db"`) and the folder independent of the working directory.
-- **both loads** — the module body runs at precompile time and is what lets `@import_models` bind
-  the models and record their key. `__init__` runs in the session, and the first `.objects` binds
-  to the key it loaded, or raises naming the missing `load` call. Repeating `load` with the same
-  environment is free.
+- **`root`**: keeps the key short (`"db"`) and the folder independent of the working directory.
+- **the bind in `__init__`**: precompiling reads no `connection.yml`, and each session binds its
+  own models. The boot is the same in development and production.
+- **`source`**: with Revise loaded, an edit to the models file is applied before the next REPL
+  command. Without Revise it does nothing. Do not switch to `@import_models` for development:
+  in a package body it runs at precompile time and gets no reload.
 
 **In a REPL or a one-off script** the short form is fine:
 
@@ -64,8 +65,8 @@ A = PormG.import_models("db_archive/models.jl"; into = Module(:Archive))   # `mo
 ```
 
 `@import_models` resolves its path relative to the file that calls it. It evaluates the models
-module and registers every model with PormG. Prefer it to `include` — it is what makes a model
-edit reload cleanly under Revise.
+module and registers every model with PormG, with the same Revise reload `source =` gives the
+run-time bind. Use it in a script or the REPL; in a package, use the run-time bind above.
 
 To define a few models inline — a script, a test — `@models_module` builds and registers the
 module in one step:

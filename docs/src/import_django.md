@@ -1330,29 +1330,29 @@ This will generate Julia models compatible with PormG that maintain the same str
 
 ## Using Converted Models with `@import_models`
 
-After converting your Django models to PormG format, you can load them in your application using the `@import_models` macro for automatic registration and hot-reloading support:
+After converting your Django models to PormG format, load them in a script or the REPL with the
+`@import_models` macro:
 
 ```julia
-# In your main Julia package:
-module MyApp
-    using PormG
-    
-    # The configuration first: registering models never loads it for you
-    PormG.Configuration.load("db"; root = normpath(joinpath(@__DIR__, "..")), env = "dev")
+using PormG, LibPQ
 
-    # Load the converted models
-    PormG.@import_models "db/models.jl" models
-    import .models as M
-    
-    # Now you can use queries like:
-    # M.Product.objects.filter("price__@gt" => 100) |> DataFrame
-end
+# The configuration first: registering models never loads it for you
+PormG.Configuration.load("db"; env = "dev")
+
+# Load the converted models
+PormG.@import_models "db/models.jl" models
+import .models as M
+
+# Now you can use queries like:
+# M.Product.objects.filter("price__@gt" => 100) |> DataFrame
 ```
 
 This approach provides:
-- **Automatic registration** of all converted models
-- **Hot-reloading** during interactive development (with Revise.jl)
-- **Post-precompilation support** so models work in packaged code
-- **No manual `set_models()` calls** required
+- **Automatic registration** of all converted models, with no manual `set_models()` call
+- **Hot-reloading** during interactive development (with Revise.jl loaded)
+
+In a package, `include` the models file in the module body and bind it from `__init__` with
+`PormG.Models.set_models(models, "db"; source = MODELS_FILE)`, as in
+[The Bootstrap Sequence](configuration/setup.md#The-Bootstrap-Sequence).
 
 For more details on using models in your application, see [Defining Models in PormG](models.md).

@@ -175,8 +175,9 @@ end
 
 ## The Boot-Time Hazard
 
-`@import_models` eventually calls `Models.set_models(...)`, which binds every model to a
-`connect_key` by matching its models folder against the configurations already loaded. Everything
+`@import_models` eventually calls `Models.set_models(...)`, and a package's `__init__` calls it
+directly (the run-time bind). Either way, it binds every model to a `connect_key` by matching its
+models folder against the configurations already loaded. Everything
 below is about that match: what it does when it finds nothing, and what it does when it finds more
 than one thing.
 
@@ -250,7 +251,37 @@ candidate, and picks the lexicographically first so that at least the same confi
 the same way on every boot. Give the folders distinct final components and the ambiguity
 disappears.
 
+### One boot for development and production
+
+A package binds its models at run time: the module body `include`s the models file, and `__init__`
+loads the configuration and calls `set_models(models, "db"; source = MODELS_FILE)`. The full
+snippet is under [The Bootstrap Sequence](setup.md#The-Bootstrap-Sequence). Precompiling then reads
+no `connection.yml`, so the image holds no connection detail, and every process binds in its own
+session. A Revise reload is the only difference between development and production, and it is
+decided at run time: with Revise loaded, `source` registers it; without Revise, `source` does
+nothing (#1487).
+
+Using `@import_models` in development and the run-time bind in production looks tempting, but it
+does not work:
+
+- **`@import_models` in a package body runs at precompile time, in development too.** The precompile
+  worker is never interactive, so the folder has to be loaded right there in the module body (next
+  section). The reload it registers is skipped there, and the restored session never runs that code
+  again. So in a package, `@import_models` gives no reload even in development.
+- **A module-body choice is frozen into the cache.** An `if` on the environment in the module body
+  runs once, in the precompile worker. Changing `RACECONTROL_ENV` or `PORMG_ENV` later does not
+  invalidate the cache, so the package silently keeps the other shape.
+- **Tests and services run the production shape.** They are not interactive, so a
+  development-only shape is a path that no test exercises. #1226 surfaced this way: the documented
+  boot broke only outside a REPL.
+
+Django draws the same line. `models.py` is the same file in development and production, importing
+it never reads `DATABASES`, and `runserver`'s autoreload is a choice made at run time.
+
 ### Loading before `@import_models` is not enough for a package
+
+This section is for a package that keeps `@import_models` in its module body. The boot above
+avoids the problem it describes.
 
 !!! warning "Module-body configuration does not survive precompilation"
     The obvious fix — call `Configuration.load(path; env = ...)` above `@import_models` — is

@@ -30,8 +30,9 @@ task needs.
    `PormG.Configuration.load("db"; env = "dev")` first, then
    `PormG.@import_models "db/models.jl" models`. Outside a REPL, `load` needs `env=` or `PORMG_ENV`
    (it never falls back to `default_env:`), and registering models never loads their folder: with
-   none loaded it raises `InvalidConfigurationError`. In a package, load it again in `__init__`;
-   repeating `load` with the same environment is free. A test that only renders SQL loads nothing:
+   none loaded it raises `InvalidConfigurationError`. In a package, `include` the models file and
+   bind it from `__init__`: `load`, then `Models.set_models(models, "db"; source = MODELS_FILE)`
+   (see [`models.md`](models.md)). A test that only renders SQL loads nothing:
    it calls `Configuration.register_offline("db")` instead (see [`debugging.md`](debugging.md)).
 4. **Load a driver package.** `LibPQ` (PostgreSQL) and `SQLite` are weak dependencies:
    `using PormG, LibPQ`. Without one `Configuration.load` raises `MissingConfigurationError`

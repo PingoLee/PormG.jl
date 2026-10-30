@@ -767,35 +767,54 @@ If you already have a database, the importers read its tables and write the mode
 
 ## Loading Models in Your Application
 
-### Using `@import_models` (Recommended)
-The `@import_models` macro is the recommended way to load models in your application:
+### Using `@import_models` in a script or the REPL
+`@import_models` includes a models file and registers its models in one step:
 
 ```julia
-# In your main module (e.g., mypkg.jl):
-module MyApp
-    using PormG
-    
-    # The configuration first: registering models never loads it for you
-    PormG.Configuration.load("db"; root = normpath(joinpath(@__DIR__, "..")), env = "dev")
+using PormG, SQLite
 
-    # Load models from external file with hot-reload support
-    PormG.@import_models "db/models.jl" my_models
-    import .my_models as M
-    
-    # Now use M.Driver, M.Race, M.Result, etc.
-    # Models automatically update when you edit db/models.jl and save
-end
+# The configuration first: registering models never loads it for you
+PormG.Configuration.load("db"; env = "dev")
+
+PormG.@import_models "db/models.jl" my_models
+import .my_models as M
+
+M.Driver.objects.filter("surname" => "Senna").count()
 ```
 
 #### What `@import_models` Does
 1. **Resolves the model file path** relative to your source file
-2. **Tracks the file with Revise** (if available) for hot-reloading in interactive sessions
+2. **Tracks the file with Revise** (if it is loaded)
 3. **Registers models** with PormG so fields and metadata are indexed, binding them to the
    configuration loaded for the folder. With none loaded it raises `InvalidConfigurationError`
    (see [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard))
 4. **Injects `__init__()`**, which re-binds the models after package precompilation when their
    configuration is already loaded
-5. **Enables hot-reloading**: Edit your `models.jl`, save, and model changes appear instantly in the REPL
+5. **Registers the Revise reload** (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions))
+
+### The run-time bind in a package
+A package `include`s its models file in the module body and binds it from `__init__`, so
+precompiling reads no configuration:
+
+```julia
+module RaceControl
+using PormG, LibPQ
+
+const APP_ROOT    = normpath(joinpath(@__DIR__, ".."))
+const MODELS_FILE = joinpath(APP_ROOT, "db", "models.jl")
+
+include(MODELS_FILE)                  # defines `module models … end`
+import .models as M
+
+function __init__()
+    PormG.Configuration.load("db"; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+    PormG.Models.set_models(models, "db"; source = MODELS_FILE)
+end
+end
+```
+
+See [The Bootstrap Sequence](configuration/setup.md#The-Bootstrap-Sequence) for why this is the
+package boot in development and in production alike.
 
 ### Inline Models (without a separate file)
 If you define models directly in code rather than a separate file, use the `@models_module` macro:
@@ -819,25 +838,35 @@ import .my_models as M
 
 ## Hot-Reloading Model Definitions
 
-When using `@import_models` with `Revise.jl`, model changes are automatically detected and applied:
+With [Revise.jl](https://github.com/timholy/Revise.jl) loaded, an edit to a models file is applied
+before the next REPL command. That holds for a file bound by `@import_models` in the session, or by
+`set_models(models, folder; source = file)` (a package's `__init__`):
 
 ```julia
-# Your REPL session (with Revise.jl loaded):
-julia> using MyApp
-julia> M.Driver.fields  # Shows current fields: id, name
+julia> using Revise, RaceControl
+julia> RaceControl.M.Driver.fields   # current fields
 
 # Edit db/models.jl to add a field, save the file...
 
-julia> M.Driver.fields  # Automatically updated with new field!
+julia> RaceControl.M.Driver.fields   # includes the new field
 ```
 
-This enables rapid development and testing without restarting Julia. When you modify models:
-- Add new fields
-- Remove fields
-- Change field types
-- Adjust field parameters
+Revise alone does not reload a model. In a file loaded with `includet` it re-evaluates only
+method definitions, and where it does re-evaluate an assignment (`Driver = Models.Model(...)` in a
+package's own files), the new model is unbound until `set_models` runs. So PormG registers its own
+callback for the file. It re-evaluates the module body into the same module, which keeps
+`import .models as M` valid, and then calls `set_models` again, which rebinds the models and
+rebuilds the reverse relations. Adding, removing
+and changing fields and models all take effect.
 
-All changes are automatically reloaded and available in the next REPL command.
+If an expression in the edited file fails, a typo in a field for example, PormG logs a warning
+naming the file and line, and that model keeps its previous definition until the file is fixed and
+saved again. A file that no longer parses is not reloaded at all, and the warning names the file. Without Revise loaded, nothing is registered and the bind is unchanged. That is why the
+same boot runs in production.
+
+`@import_models` in a **package's** module body gets no reload. That code runs in the precompile
+worker, where no file is watched, and the restored session does not run it again. Use the run-time
+bind above in a package.
 
 ## Supported Field Types
 
@@ -860,11 +889,16 @@ For detailed documentation on each field type, including parameters, examples, a
 
 ## Post-Precompilation Behavior
 
-When your package is precompiled (e.g., after `import MyPkg`), the models are re-registered on the first `Model.objects` access, against the configuration loaded in the running session. This means:
+A package that follows [the run-time bind](#The-run-time-bind-in-a-package) binds its models in
+`__init__`, so each session binds them once it has loaded its configuration. Nothing is carried over
+from precompilation.
+
+A package that keeps `@import_models` in its module body has its models re-registered on the first
+`Model.objects` access, against the configuration loaded in the running session. This means:
 
 - Models are available in package code without manual registration
-- Hot-reloading continues to work in interactive sessions
 - The configuration must be loaded in the session too: call `PormG.Configuration.load` from your package's `__init__` as well as its module body. Otherwise the first `.objects` raises `InvalidConfigurationError`. See [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard)
+- No Revise reload: the module body ran in the precompile worker, so the run-time bind is the shape for hot reload
 
 ---
 For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/integration/` folder.

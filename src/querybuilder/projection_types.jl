@@ -1977,12 +1977,12 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # #1382: an alias over a JSON key lookup compares as the key lookup does — text on PostgreSQL and
   # MySQL, the native value on SQLite, a number ordered as a number — against a value. #1499: under
   # every operator, so the ones the key lookup refuses (a membership list, a range, a pattern) are
-  # refused here too; `@range` compared text on PostgreSQL. An expression or a queryset on the right
-  # (`_expression_operand`) renders as it did. #1506: an alias that carries a key without being it is
-  # refused, ahead of the bind.
+  # refused here too; `@range` compared text on PostgreSQL. #1507: and whatever is on the right, so a
+  # column expression is refused as on the key (#811); it rendered as a column comparison, `text >
+  # bigint` on PostgreSQL. #1506: an alias that carries a key without being it is refused, ahead of the
+  # bind.
   if _alias_projects_json_key(having_key, instruc)
-    _expression_operand(v.values) ||
-      return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
+    return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
   else
     _refuse_json_key_carrier_filter(v, _projected_source(having_key, instruc), having_key[2], instruc)
   end

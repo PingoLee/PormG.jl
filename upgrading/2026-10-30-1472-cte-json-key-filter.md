@@ -7,8 +7,8 @@
 
 ### What changed
 
-A CTE column whose body projects a JSON key lookup (`"wins" => "metadata__wins"`, or `Max` of one)
-holds the key's value, not a document. A filter on it from the outer query bound the value through
+A CTE column whose body projects a JSON key lookup (`"wins" => "metadata__wins"`) holds the key's
+value, not a document. (A body `Max` or `Min` of a key raises since #1491, in this train.) A filter on it from the outer query bound the value through
 the document's JSON formatter:
 
 - equality on plain text raised `InvalidValueError` ("The text is not valid JSON");
@@ -31,7 +31,7 @@ as it is on SQLite and MySQL). A CTE column over the whole document keeps the JS
 
 ### Who this affects
 
-Code that filters on a CTE column whose body projects a JSON key lookup or an extremum of one: with
+Code that filters on a CTE column whose body projects a JSON key lookup: with
 an ordering comparison on any engine, or with a number for equality on SQLite. Equality filters on
 text that raised before now run.
 
@@ -41,8 +41,7 @@ text that raised before now run.
 grep -rnE '\.with\(' --include=*.jl src/ test/
 ```
 
-For each CTE, check whether a body column is a JSONField path (`"x" => "metadata__wins"`) or `Max`/`Min`
-of one, and whether the outer query filters that column with `@gt`, `@gte`, `@lt` or `@lte`, or
+For each CTE, check whether a body column is a JSONField path (`"x" => "metadata__wins"`), and whether the outer query filters that column with `@gt`, `@gte`, `@lt` or `@lte`, or
 compares it with a number.
 
 ### Migrate your app

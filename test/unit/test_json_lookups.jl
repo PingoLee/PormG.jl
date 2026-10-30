@@ -563,16 +563,17 @@ end
 
       # Under a CTE: the body records each column's kind, so the outer query reads the same answers.
       body = JL.Json_scratch.objects
-      body.values("id", "d" => "payload", "k" => "payload__n", "m" => QB.Max("payload__n"))
+      body.values("id", "d" => "payload", "k" => "payload__n", "m" => QB.NullIf("payload__n", 0))
       outer = JL.Json_scratch.objects
       outer.with("g" => body, join_field = "id" => "id", join_type = "INNER")
       outer.values("id", "gd" => "g__d", "gk" => "g__k", "gm" => "g__m")
       ctek = asked(outer, i -> Tuple(QB._expression_kind(node(i, n), i) for n in ("gd", "gk", "gm")))
       @test ctek == (PormG.CJSON(), QB.CJSONValue(), QB.CJSONValue())
 
-      # `Max` over a key, through a CTE, is the key's value: it joins text and sits beside it.
+      # A function whose value is the key's (`NullIf`'s first operand), through a CTE, is the key's value:
+      # it joins text and sits beside it. (`Max` was the seed until #1491 refused it over an uncast key.)
       lifted(expr) = (o = JL.Json_scratch.objects;
-        o.with("g" => JL.Json_scratch.objects.values("id", "v" => QB.Max("payload__n")), join_field = "id" => "id", join_type = "INNER");
+        o.with("g" => JL.Json_scratch.objects.values("id", "v" => QB.NullIf("payload__n", 0)), join_field = "id" => "id", join_type = "INNER");
         o.values("id", "w" => expr); o)
       @test occursin("\"v\"", replace(_sql(lifted(PormG.Functions.Concat(PormG.Functions.Value("n="), "g__v")); conn = conn)[:sql_text], "`" => "\""))
       @test occursin("COALESCE(", _sql(lifted(PormG.Functions.Coalesce("g__v", PormG.Functions.Value("x"))); conn = conn)[:sql_text])
@@ -599,7 +600,7 @@ end
 # renders `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` on SQLite and
 # `((… #>> '{"n"}')::decimal / $1::bigint)` on PostgreSQL; `Round` (a `numeric` function) and
 # `NullIf("id", key)`, whose value is the integer `id`, build too, and so does a function over the key
-# with nothing computed on it (`Floor(key)`, `Max(key)`).
+# with nothing computed on it (`Floor(key)`). An extremum over the key is #1491's, below.
 # Why it matters: the SQLite answer was a different value with nothing to say so, and PostgreSQL's
 # error, raised only when the query ran, named neither the key nor the cast to write.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -620,7 +621,6 @@ end
       ("Floor", "`/`", () -> FN.Floor("payload__n") / 2),
       ("Ceil", "`/`", () -> FN.Ceil("payload__n") / 2),
       ("Abs", "`/`", () -> FN.Abs("payload__n") / 2),
-      ("Max", "`/`", () -> FN.Max("payload__n") / 2),
       ("Coalesce", "`/`", () -> FN.Coalesce("payload__n", 0) / 2),
       ("Coalesce beside a float", "`/`", () -> FN.Coalesce("payload__n", 0.5) / 2),
       ("a Case branch", "`/`", () -> QB.Case([QB.When("id" => 1, then = QB.F("payload__n"))], default = 0) / 2),
@@ -652,7 +652,6 @@ end
     @test _sql(proj(FN.Round("payload__n") / 2); conn = conn) isa AbstractDict
     # A function over the key with nothing computed on it is the key's own value.
     @test _sql(proj(FN.Floor("payload__n")); conn = conn) isa AbstractDict
-    @test _sql(proj(FN.Max("payload__n")); conn = conn) isa AbstractDict
   end
   # `NullIf`'s value is its first operand, here the integer `id`, whose quotient is the meaning.
   @test occursin("(NULLIF(\"Tb\".\"id\", json_extract(\"Tb\".\"payload\", '\$.n')) / ?)",
@@ -678,6 +677,65 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1491: a Max or a Min over an uncast JSON key is refused on every engine
+# An extremum computes nothing on the key's value, but it orders it, and the document decides whether
+# that value is a number or text. PostgreSQL's `#>>` extracts text, so over `{"n": 9}` and `{"n": 10}`
+# `MAX("Tb"."payload" #>> '{"n"}')` was `"9"` (`'9' > '10'`) and `MIN` was `"10"`; SQLite's
+# `json_extract` hands over the number, so it answered `10` and `9`. Same query, different values,
+# nothing reported. Expected: `Max`/`Min` over the key, or over a value that carries it (`Floor`, a
+# `Case` branch, `NullIf`'s first operand, a CTE column projecting it), raises `QueryBuildError` on PostgreSQL,
+# SQLite and MySQL alike (explicit intent, as #1483), naming the key and both spellings:
+# `Cast(key, "numeric")` orders numbers, `Cast(key, "text")` orders text. Each spelling builds
+# (PostgreSQL `MAX(("Tb"."payload" #>> '{"n"}')::decimal)`), and so does `Max` over a typed column.
+# Why it matters: the PostgreSQL answer was another row's value, as a `String`, with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1491: Max or Min over an uncast JSON key is refused on every engine" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  proj(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  refusal(q, conn) = try _sql(q; conn = conn); nothing catch err; err end
+  withcte(colexpr, outer) = (q = JL.Json_scratch.objects;
+    q.with("c" => JL.Json_scratch.objects.values("id", "w" => colexpr), join_field = "id" => "id");
+    q.values("v" => outer); q)
+  for (label, op, expr) in (
+      ("Max", "Max", () -> FN.Max("payload__n")),
+      ("Min", "Min", () -> FN.Min("payload__n")),
+      ("Max over Floor", "Max", () -> FN.Max(FN.Floor("payload__n"))),
+      ("Min over a Case branch", "Min", () -> FN.Min(QB.Case([QB.When("id" => 1, then = QB.F("payload__n"))], default = QB.F("payload__n")))),
+      ("Max over NullIf", "Max", () -> FN.Max(FN.NullIf("payload__n", 0))),
+      ("Max / 2", "Max", () -> FN.Max("payload__n") / 2))
+    @testset "$label on $(nameof(typeof(conn)))" for conn in (_JL_PG, _JL_SL, _JL_MY)
+      e = refusal(proj(expr()), conn)
+      @test e isa PormG.QueryBuildError
+      msg = e === nothing ? "" : plain(e)
+      @test startswith(msg, "$(op) over ")
+      @test occursin("JSON key `payload__n`", msg)
+      @test occursin("whether it orders numbers or text (#1491)", msg)
+      @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
+      @test occursin("Cast(\"payload__n\", \"text\")", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg) && !occursin("MySQL", msg)
+    end
+  end
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @testset "the CTE column and the spellings on $(nameof(typeof(conn)))" begin
+      # Over a CTE column that is the key's value, in the outer query.
+      e = refusal(withcte("payload__n", FN.Max(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError
+      @test e !== nothing && startswith(plain(e), "Max over the CTE column") && occursin("(#1491)", plain(e))
+      # Each spelling builds, as does an extremum over a typed column.
+      for expr in (FN.Max(FN.Cast("payload__n", "numeric")), FN.Min(FN.Cast("payload__n", "text")), FN.Max("id"))
+        @test _sql(proj(expr); conn = conn) isa AbstractDict
+      end
+      @test _sql(withcte(FN.Cast("payload__n", "numeric"), FN.Max(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
+    end
+  end
+  # The spelled SQL: PostgreSQL orders the numeric cast, not the text.
+  @test occursin("MAX((\"Tb\".\"payload\" #>> '{\"n\"}')::decimal)",
+                 _sql(proj(FN.Max(FN.Cast("payload__n", "numeric"))); conn = _JL_PG)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1482: arithmetic over a CTE column or a Subquery that carries an uncast JSON key is refused
 # A CTE body or a `Subquery` projection can carry a key's value with no arithmetic of its own, and its
 # column's kind need not say so: `Lag("id"; default = F(key))` is typed by `id`, an integer, though the
@@ -686,8 +744,8 @@ end
 # the document holds as one (`7 / 2` was `3`). Expected: the body records the key
 # (`CTEDivision.json_key`, `subquery_json_key`), and arithmetic over the column refuses as over the key
 # (#1483) on every engine, naming the CTE column or the Subquery, what its body is, and the key's cast.
-# The other routes in: a body column that IS the key's value (`Max(key)`, `NullIf(key, 0)`) refuses
-# through its kind (`CJSONValue`); a body that sums the key refuses itself (#1483); one that mixes the
+# The other routes in: a body column that IS the key's value (`NullIf(key, 0)`) refuses through its
+# kind (`CJSONValue`); a body that sums or orders the key refuses itself (#1483, #1491); one that mixes the
 # key with a literal (`Coalesce(key, 0)`) is refused while the column is typed (#823). A body that casts
 # the key, or declares its number (`output_field`), builds outside.
 # Why it matters: the SQLite answer was a different value with nothing to say so.
@@ -744,12 +802,13 @@ end
       end
       @test _sql(proj(half(sub(FN.Cast("payload__n", "numeric")))); conn = conn) isa AbstractDict
       # Through the column's kind: a body column that is the key's value.
-      for body in (FN.Max("payload__n"), FN.NullIf("payload__n", 0))
-        refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "JSON key")
-      end
-      # A body that sums the key refuses itself; one that mixes it with a literal is refused as untyped.
+      refused_1483(withcte(FN.NullIf("payload__n", 0), half(PormG.CTE("c", "w"))), conn, "JSON key")
+      # A body that sums or orders the key refuses itself; one that mixes it with a literal is refused
+      # as untyped.
       e = refusal(withcte(FN.Sum("payload__n"), half(PormG.CTE("c", "w"))), conn)
       @test e isa PormG.QueryBuildError && startswith(plain(e), "Sum over the JSON key `payload__n`")
+      e = refusal(withcte(FN.Max("payload__n"), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && startswith(plain(e), "Max over the JSON key `payload__n`")
       e = refusal(withcte(FN.Coalesce("payload__n", 0), half(PormG.CTE("c", "w"))), conn)
       @test e isa PormG.QueryBuildError && occursin("(#823)", plain(e))
       # A body that names the number builds outside, as does one with no key.
@@ -758,7 +817,7 @@ end
       end
       # The spelling names the body's key path, where the cast goes, whether the body computed over the
       # key or projected it bare (never a `"<flag>"` placeholder); the spelled body then builds outside.
-      for body in (FN.Max("payload__n"), "payload__n")
+      for body in (FN.NullIf("payload__n", 0), "payload__n")
         msg = refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "the CTE column")
         @test occursin("Cast(\"payload__n\", \"numeric\")", msg) && !occursin("<flag>", msg)
       end
@@ -769,7 +828,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1472: a filter on a CTE column over a JSON key lookup compares as the key lookup does
-# A CTE column whose body projects `payload__driver` (or `Max` of it) holds the key's value, which the
+# A CTE column whose body projects `payload__driver` (or `NullIf` of it) holds the key's value, which the
 # walk names `CJSONValue` (#1458). The outer filter bound through the column's field, the document's
 # JSONField: equality ran the JSON formatter and refused plain text ("The text is not valid JSON"), and
 # an ordering bound the number as text (`"R1_1"."k" > $1` with `'5'` on PostgreSQL, a text comparison;
@@ -792,7 +851,7 @@ end
     return q
   end
   where(r) = replace(r[:sql_text], r"\s+" => " ")
-  for col in ("payload__driver", FN.Max("payload__driver"))
+  for col in ("payload__driver", FN.NullIf("payload__driver", "name"))
     r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_PG)
     @test occursin("WHERE \"R1_1\".\"k\" = \$1", where(r)) && r[:parameters] == ["hamilton"]
     r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_SL)
@@ -817,4 +876,62 @@ end
     @test _sql(filtered("payload", "g__k" => """{"a": 1}"""); conn = conn) isa AbstractDict
     @test_throws PormG.InvalidValueError _sql(filtered("payload", "g__k" => "hamilton"); conn = conn)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1492: a filter on a Subquery alias over a JSON key binds as the key lookup does
+# A `Subquery` is its one projected column (#888), so one that projects `payload__n` holds the key's
+# value, which the walk names `CJSONValue`. A filter on its projection alias bound through the
+# document's JSON formatter: `w__@gt => 100` bound the text `"100"` on every engine, a text comparison
+# on PostgreSQL (`'99' > '100'` is true) and never true on SQLite, where a number is never greater than
+# text. #1472 fixed the same defect for a CTE column. Expected, as `filter("payload__n" => …)` binds
+# (#1382): PostgreSQL `((SELECT … #>> '{"n"}' …))::numeric > $1` with `100`, SQLite and MySQL
+# `(SELECT …) > ?` with `100`; an equality binds `"100"` on PostgreSQL and MySQL and `100` on SQLite;
+# text equality binds the text; a `When` condition on the alias compares the same way. A `Subquery`
+# over the whole document keeps the JSON formatter, and one over a typed column binds as it did.
+# Why it matters: the ordering returned the rows a text comparison picks, with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1492: a filter on a Subquery alias over a JSON key binds as the key lookup does" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub(col) = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => col); s)
+  withsub(filt; col = "payload__n") =
+    (q = JL.Json_scratch.objects; q.values("name", "w" => QB.Subquery(sub(col))); q.filter(filt); q)
+  # The whole statement, one line: the outer WHERE is its tail (the subquery has a WHERE of its own).
+  where(r) = rstrip(replace(r[:sql_text], r"\s+" => " "))
+  # The subquery's projection warns that it may match more than one row; that is not under test.
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  sql(filt, conn; col = "payload__n") = quiet(() -> _sql(withsub(filt; col); conn = conn))
+  # An ordering: a numeric comparison, the number bound as a number.
+  r = sql("w__@gt" => 100, _JL_PG)
+  @test occursin(r"\)\)::numeric > \$1$", where(r)) && r[:parameters] == [100]
+  for conn in (_JL_SL, _JL_MY)
+    r = sql("w__@gt" => 100, conn)
+    @test occursin(r"\) > \?$", where(r)) && r[:parameters] == [100]
+  end
+  # `@in`, which a key lookup refuses, binds its values as given, as on an `F` alias over the key (#1382);
+  # it bound the text `"9"`, which SQLite's number never equals. (`@range` on PostgreSQL is #1499.)
+  # PostgreSQL binds one array (`= ANY($1)`); SQLite and MySQL one marker per value.
+  @test sql("w__@in" => [9, 10], _JL_PG)[:parameters] == [[9, 10]]
+  @test sql("w__@in" => [9, 10], _JL_SL)[:parameters] == [9, 10]
+  @test sql("w__@in" => [9, 10], _JL_MY)[:parameters] == [9, 10]
+  # An equality with a number: text on PostgreSQL and MySQL, the native number on SQLite.
+  @test sql("w" => 100, _JL_PG)[:parameters] == ["100"]
+  @test sql("w" => 100, _JL_SL)[:parameters] == [100]
+  @test sql("w" => 100, _JL_MY)[:parameters] == ["100"]
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    # An equality on text binds the text.
+    @test sql("w" => "hamilton", conn; col = "payload__driver")[:parameters] == ["hamilton"]
+    # A `When` condition on the alias compares as the alias's filter does.
+    q = JL.Json_scratch.objects
+    q.values("name", "w" => QB.Subquery(sub("payload__n")))
+    q.filter(QB.Case([QB.When("w__@gt" => 100, then = 1)], default = 0) == 1)
+    @test quiet(() -> _sql(q; conn = conn))[:parameters] == [100, 1, 0, 1]
+    # Controls: the whole document keeps the JSON formatter, a typed column binds its number.
+    @test sql("w" => """{"a": 1}""", conn; col = "payload") isa AbstractDict
+    @test_throws PormG.InvalidValueError sql("w" => "hamilton", conn; col = "payload")
+    @test sql("w__@gt" => 100, conn; col = "id")[:parameters] == [100]
+  end
+  @test occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG))) &&
+        !occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG; col = "id")))
 end

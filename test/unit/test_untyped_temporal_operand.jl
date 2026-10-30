@@ -167,7 +167,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: a value the walk cannot name holding a date or a duration" begin
   # #1483: each of these computes on a value that carries the JSON key, so it is refused on every
-  # engine as explicit intent, naming the key, before this rule reads the temporal side.
+  # engine as explicit intent, naming the key, before this rule reads the temporal side. The `Max`
+  # shape refuses one step earlier, at the extremum over the key (#1491), which renders first.
   for (label, expr) in (
       ("Case(key | duration) * 2",  _utt_case_lap() * 2),
       ("Case(key | date) + 1",      _utt_case_date() + 1),
@@ -177,16 +178,17 @@ end
       ("Lag(key, default = date) + 1",
        PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1))
     @testset "$label" begin
+      issue = startswith(label, "Max(") ? "(#1491)" : "(#1483)"
       for conn in (_UTT_PG, _UTT_SL)
         e = _utt_refusal(expr; conn = conn)
-        @test e isa QueryBuildError && occursin("(#1483)", e.msg) && occursin("`meta__round`", e.msg)
+        @test e isa QueryBuildError && occursin(issue, e.msg) && occursin("`meta__round`", e.msg)
       end
       # MySQL refuses a conditional over a duration and another type when the conditional renders, which
       # is before the arithmetic over it is asked (#1130); every other shape reaches #1483 there too.
       m = _utt_refusal(expr; conn = _UTT_MY)
       @test m isa QueryBuildError
       occursin("dur", label) || occursin("duration", label) ||
-        @test occursin("(#1483)", m.msg)
+        @test occursin(issue, m.msg)
     end
   end
   for (label, expr, filter, op, named) in (

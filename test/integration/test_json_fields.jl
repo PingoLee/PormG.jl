@@ -220,6 +220,27 @@ end
             @test only(q.list())["v"] == 15
         end
 
+        # #1491: a `Max` or a `Min` over an uncast key orders a value the query does not type. On
+        # PostgreSQL `#>>` is text, so over 9 and 10 `Max` was `"9"`; SQLite's `json_extract` orders the
+        # numbers and gave 10. Expected: `QueryBuildError` on every engine when the query is built, naming
+        # both spellings, and no SQL sent. Each spelling reads back on every engine as what it names:
+        # `Cast(key, "numeric")` the number 15, `Cast(key, "text")` the text "15".
+        @testset "Max and Min over an uncast JSON key are refused on every engine (#1491)" begin
+            plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+            for expr in (Max("payload__points"), Min("payload__driver"))
+                q = base(); q.values("v" => expr)
+                e = try q.list(); nothing catch err; err end
+                @test e isa PormG.QueryBuildError
+                @test e !== nothing && occursin("(#1491)", plain(e)) && occursin("\"text\")", plain(e))
+            end
+            q = base(); q.values("v" => Max(Cast("payload__points", "numeric")))
+            @test only(q.list())["v"] == 15
+            q = base(); q.values("v" => Max(Cast("payload__points", "text")))
+            @test only(q.list())["v"] == "15"
+            q = base(); q.values("v" => Min(Cast("payload__driver", "text")))
+            @test only(q.list())["v"] == "hamilton"
+        end
+
         # #1472: a filter on a CTE column whose body projects a key lookup compares as the key lookup
         # does. Equality on text was refused by the document's JSON formatter, and an ordering bound
         # the number as text, so `points` (15) `> 9` compared `'15' > '9'` on PostgreSQL, false.
@@ -235,6 +256,28 @@ end
             @test length(cte_filtered("payload__driver", "g__k" => "norris").list()) == 0
             @test length(cte_filtered("payload__points", "g__k__@gt" => 9).list()) == 1
             @test length(cte_filtered("payload__points", "g__k__@gt" => 20).list()) == 0
+        end
+
+        # #1492: a filter on a projection alias over a `Subquery` that projects a key lookup compares as
+        # the key lookup does. It bound through the document's JSON formatter, so `points` (15) `> 9`
+        # bound the text "9": a text comparison on PostgreSQL ('15' > '9' is false), and never true on
+        # SQLite, where a number is never greater than text. Expected: the seeded row matches each
+        # filter, and a non-matching value matches none.
+        @testset "a filter on a Subquery alias over a JSON key matches as the key lookup does (#1492)" begin
+            function sub_filtered(col, filt)
+                s = M.Field_validation_scratch.objects
+                s.filter("id" => OuterRef("id")); s.values("k" => col)
+                q = base(); q.values("id", "w" => Subquery(s)); q.filter(filt)
+                return q
+            end
+            @test length(sub_filtered("payload__points", "w__@gt" => 9).list()) == 1
+            @test length(sub_filtered("payload__points", "w__@gt" => 20).list()) == 0
+            @test length(sub_filtered("payload__driver", "w" => "hamilton").list()) == 1
+            @test length(sub_filtered("payload__driver", "w" => "norris").list()) == 0
+            # `@in` binds its values as given, as on an `F` alias over the key: it bound the text "15",
+            # which SQLite's number never equals.
+            @test length(sub_filtered("payload__points", "w__@in" => [15, 99]).list()) == 1
+            @test length(sub_filtered("payload__points", "w__@in" => [16, 99]).list()) == 0
         end
 
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────

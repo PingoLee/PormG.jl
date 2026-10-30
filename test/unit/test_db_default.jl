@@ -293,6 +293,10 @@ end
     # A bare non-vocabulary string: PormG cannot know which engine it is valid on, and guessing is
     # the thing #496 refuses to do.
     @test_throws PormG.FieldValidationError Models.DateTimeField(db_default = "now()")
+    # #1469: the refusal names `default` for TEXT. Its pin advice alone sent `db_default = "Finished"`
+    # to `(postgres = "Finished",)`, which renders `DEFAULT Finished`: a column reference, not the text.
+    msg = sprint(showerror, (try Models.CharField(max_length = 20, db_default = "Finished") catch e; e end))
+    @test occursin("If the value is text rather than SQL, declare it as `default` instead", msg)
     # Both slots set. A departure from Django, for a PormG-specific reason: PormG's `default` is
     # BOTH rendered into the column definition and filled in Julia on the insert path, so a field
     # carrying both would have its `db_default` exercised by no PormG-written INSERT.

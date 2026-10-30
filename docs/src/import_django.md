@@ -125,7 +125,9 @@ import_models_from_django("/path/to/your/models.py")
   `# PormG:` marker saying why. If every column of a class is dropped this way the import raises,
   naming the list you passed — a model with no column cannot be emitted.
 
-- **`parameters_ignore::Vector{String}`**: Field parameters to ignore (default: `["help_text"]`)
+- **`parameters_ignore::Vector{String}`**: Field parameters to ignore (default: `["help_text"]`).
+  The list you pass **replaces** the default rather than adding to it, so repeat `"help_text"` if you
+  still want it ignored:
   ```julia
   import_models_from_django(content, parameters_ignore=["help_text", "verbose_name"])
   ```
@@ -640,6 +642,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `blank=True` | `blank=true` | Boolean conversion |
 | `unique=True` | `unique=true` | Boolean conversion |
 | `default=value` | `default=value` | Value conversion — `True`/`False`/`None`, numbers, and one quoted string literal, including one written across a line continuation. A value written as a string but not readable as one (a concatenation, an f-string, a raw or triple-quoted literal), and a **call** (`uuid.uuid4()`, `Decimal('0.00')`), are kept verbatim as text and reported. See [String defaults](#String-defaults). |
+| `db_default=value` | `default=value` or `db_default="CURRENT_TIMESTAMP"` | A literal becomes `default`, `Now()` becomes `CURRENT_TIMESTAMP`, anything else is reported and not imported — see [Database defaults](#Database-defaults) |
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
 | `choices=[…]` | `choices=(…)` | List to tuple; also resolves `TextChoices`/`IntegerChoices` — see [Choices](#Choices) |
 | `max_length=MAX_LEN` | `max_length=10` | A **name** is read as the constant it holds — see [Options written as a name](#Options-written-as-a-name) |
@@ -1180,6 +1183,58 @@ no such translation, so it is reported like any other call.
     SQL**: it reads the same text as two adjacent literals concatenated, meaning `its`. PormG applies
     Python's rule when reading a `models.py` and SQL's rule when reading a live schema. Write
     `'it\'s'` — or `"it's"` — for an apostrophe in a Django default.
+
+### Database defaults
+
+Django's `db_default` takes either a literal, which Django wraps in `Value()`, or an expression.
+PormG's `db_default` takes only an expression, rendered verbatim into the DDL. A literal belongs in
+`default`, which PormG renders as the same `DEFAULT` clause. So the importer translates the option
+instead of copying it:
+
+| Django | PormG | Why |
+|--------|-------|-----|
+| `db_default=0`, `db_default=False`, `db_default=Value(0)` | `default=0`, `default=false` | A literal is a value. `default` renders the same `DEFAULT 0`. |
+| `db_default="Retired"` | `default="Retired"` | A Python string is **text**: Django's `DEFAULT 'Retired'`. |
+| `db_default="CURRENT_DATE"` on a text field | `default="CURRENT_DATE"` | Still text. Read as SQL it would be today's date. |
+| `db_default="CURRENT_DATE"` on a `DateField` or `DateTimeField` | no default | The text is not a date, so the field refuses it, and a `# PormG:` comment says so. For the function, Django's spelling is `Now()`. |
+| `db_default=Now()` on a `DateTimeField` | `db_default="CURRENT_TIMESTAMP"` | One of the two expressions every engine renders. |
+| `db_default=Now()` on a `DateField` | `db_default="CURRENT_DATE"` | The date part of `Now()`. |
+| `db_default=None` | no default | `DEFAULT NULL` is no default at all. |
+| anything else (`Lower("x")`, `Pi()`, `Decimal("0.00")`, …) | not imported | Reported with a `# PormG:` comment telling you to declare a value as `default`, or to pin an SQL expression per engine. The rest of the file imports. |
+
+```python
+class Lap(models.Model):
+    position  = models.IntegerField(default=0, db_default=0)
+    status    = models.CharField(max_length=20, db_default="Finished")
+    timestamp = models.DateTimeField(db_default=Now())
+```
+
+```julia
+position  = Models.IntegerField(default=0)
+status    = Models.CharField(max_length=20, default="Finished")
+timestamp = Models.DateTimeField(db_default="CURRENT_TIMESTAMP")
+```
+
+**When `default` and `db_default` differ, `db_default` wins.** PormG takes one default per column,
+because its `default` is both rendered into the column and written by PormG's inserts. In Django,
+`default` is applied only in Python, while `db_default` is what the database holds. PormG's
+migrations compare your models with that database, so the importer keeps `db_default` and so
+converges with the column Django built. Django's `default` is dropped and a `# PormG:` comment names
+it:
+
+```python
+points = models.IntegerField(default=1, db_default=0)
+```
+
+```julia
+# PormG: field 'points' on 'Result' declares both `default=1` and `db_default=0`; PormG takes one default, so `db_default` was kept and `default` dropped. Django applies its `default` only in Python, so rows PormG writes get the database's value.
+points = Models.IntegerField(default=0)
+```
+
+A row the Django ORM inserts without `points` gets `1`; one PormG inserts gets `0`. The two values
+match in the common case (`default=0, db_default=0`), and then nothing is reported.
+`default=timezone.now` beside `db_default=Now()` means the same thing twice and imports as
+`auto_now_add=true` with `db_default="CURRENT_TIMESTAMP"`.
 
 ### Automatic Additions
 

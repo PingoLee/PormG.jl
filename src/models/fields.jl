@@ -404,7 +404,9 @@ function _db_default_kwarg(field_type::AbstractString, value; probe_kwargs::Name
       "engine it is valid on. Name the engine: " *
       "db_default = (postgres = $(repr(String(value))),). A pinned expression renders on that " *
       "engine and raises on the others, so a models file can never emit DDL the database will " *
-      "reject. Add an entry for each other engine (`sqlite = …`, `mysql = …`, or `= nothing`) to cover them."))
+      "reject. Add an entry for each other engine (`sqlite = …`, `mysql = …`, or `= nothing`) to cover them. " *
+      "If the value is text rather than SQL, declare it as `default` instead: `db_default` renders " *
+      "its String unquoted, as an expression (#1469)."))
     return canonical_db_default(value)
   end
 

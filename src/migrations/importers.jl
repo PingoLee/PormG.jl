@@ -5676,7 +5676,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                     field_name = field_name,
                                     markers = unsupported_type ? String[] : markers,
                                     consts = consts, const_owner = stmt_owner, lineno = stmt.lineno)
-    options, related_model, resolved_from_name =
+    options, related_model, resolved_from_name, default_from_db_default =
       unsupported_type ? with_logger(parse_args, NullLogger()) : parse_args()
 
     # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
@@ -5853,16 +5853,19 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # #410 skipped never reports on its element.
     element_type, element_options = nothing, nothing
     element_resolved = Tuple{String, String}[]
+    element_default_from_db_default = false
     if array_element !== nothing
       element_type = django_field_type(array_element.type)
-      element_options, _, element_resolved = parse_field_args(array_element.args, array_element.type, parameters_ignore;
+      element_options, _, element_resolved, element_default_from_db_default =
+        parse_field_args(array_element.args, array_element.type, parameters_ignore;
                                             enums = enums, enum_aliases = enum_aliases,
                                             class_name = class_name, enum_scopes = stmt_scopes,
                                             class_label = class_label, field_name = field_name,
                                             markers = markers,
                                             consts = consts, const_owner = stmt_owner,
                                             lineno = stmt.lineno)
-      _drop_array_element_column_kwargs!(element_options, field_name, class_label, array_element.type, markers)
+      _drop_array_element_column_kwargs!(element_options, field_name, class_label, array_element.type, markers;
+                                         default_from_db_default = element_default_from_db_default)
       _drop_unaccepted_django_options!(element_options, element_type, field_name, class_label, markers;
                                        element_of = field_type)
     end
@@ -5920,7 +5923,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
           # Name only what was actually there. The blanket "choices and default … the enumeration
           # is not enforced" claimed an enumeration on fields that had none — an over-long `default`
           # on a plain CharField recovers through this same path.
-          dropped = join(("`$(k)`" for k in (:choices, :default) if haskey(options, k)), " and ")
+          dropped = join(("`$(_django_option_name(k, default_from_db_default))`"
+                          for k in (:choices, :default) if haskey(options, k)), " and ")
           tail = haskey(options, :choices) ? " The column is real; the enumeration is not enforced." :
                                              " The column is real, but its default is now unset here" *
                                              " while Django still declares one."
@@ -5960,9 +5964,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         recovered = cleared !== nothing
         if recovered
           reason = _one_line(sprint(showerror, e), 160)
-          dropped = join(vcat(["`$(k)` (from `$(n)`)" for (k, n) in resolved_from_name],
-                              ["the element's `$(k)` (from `$(n)`)" for (k, n) in element_resolved],
-                              ["`$(k)`" for k in (:choices, :default)
+          dropped = join(vcat(["`$(_django_option_name(k, default_from_db_default))` (from `$(n)`)"
+                               for (k, n) in resolved_from_name],
+                              ["the element's `$(_django_option_name(k, element_default_from_db_default))` (from `$(n)`)"
+                               for (k, n) in element_resolved],
+                              ["`$(_django_option_name(k, default_from_db_default))`" for k in (:choices, :default)
                                if k in cleared && haskey(options, k) && !(k in from_constants)]),
                          ", ")
           @warn "import: field option rejected; field imported without it" class=class_label field=field_name dropped=dropped reason=reason
@@ -6121,11 +6127,12 @@ end
 # the column over something Django never acted on. Dropped, and said so: the declaration still reads
 # as if it meant something.
 function _drop_array_element_column_kwargs!(element_options::Dict{Symbol, Any}, field_name, class_label,
-                                            element_type, markers::Vector{String})
+                                            element_type, markers::Vector{String};
+                                            default_from_db_default::Bool = false)
   dropped = [k for k in Models.ARRAY_ELEMENT_COLUMN_KWARGS if haskey(element_options, k)]
   isempty(dropped) && return element_options
   foreach(k -> delete!(element_options, k), dropped)
-  names = join(("`$(k)`" for k in dropped), ", ")
+  names = join(("`$(_django_option_name(k, default_from_db_default))`" for k in dropped), ", ")
   @warn "import: an ArrayField element declares a column option, which Django ignores there; dropped" class=class_label field=field_name element=element_type options=dropped
   push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' is an ArrayField whose " *
                  "$(element_type) element declares $(names) — a column option, which Django " *
@@ -6190,7 +6197,8 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
                          const_owner::Tuple{Int, String} = (1, String(class_name)),
                          lineno::Int = typemax(Int))
   # This function parses field arguments handling nested parentheses and commas
-  # and returns the options, the related model, and the options whose value came from a constant.
+  # and returns the options, the related model, the options whose value came from a constant, and
+  # whether `default` was imported from Django's `db_default` (#1469).
   options = Dict{Symbol, Any}()
   # `(option, constant)` for every option whose value was read through a constant (#948). Returned so
   # a construction failure can drop exactly these and say which constant it came from.
@@ -6205,11 +6213,14 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
   # naming every option it lost and why.
   unresolved_enums = Tuple{String, String}[]
   through_fields_read = false          # #1198: pins taken from `through_fields`, checked after the loop
+  django_db_default = nothing          # #1469: the raw `db_default`, translated after the loop
+  django_default_text = ""             # #1469: `default=` as written, for the marker that drops it
   for option_str in options_list
       key_value = split(option_str, "=", limit=2)
       if length(key_value) == 2
           key = strip(key_value[1])
           value = strip(key_value[2])
+          key == "default" && (django_default_text = _one_line(value))
           field_type == "ManyToManyField" && key == "blank" && continue
           key in parameters_ignore && continue
           # Django's `through_fields = ("team", "driver")` names the through model's key to each end,
@@ -6292,6 +6303,15 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
           # otherwise hand the literal text through and let CharField reject the pair.
           resolved = _resolve_enum_reference(value, enums, enum_aliases, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
+          # Django's `db_default` (#1469) is held back, not stored: Django wraps a non-expression in
+          # `Value()`, so `db_default="x"` is the TEXT x, while PormG's slot reads a String as SQL.
+          # Only the raw source can tell the string `"Now()"` from the call `Now()`, so the text (or
+          # the enum member's value) is kept and translated after the loop, once `default` is known.
+          if key == "db_default"
+            resolved === _ENUM_DROP && continue
+            django_db_default = resolved === _ENUM_NOT_A_REFERENCE ? String(value) : Some(resolved)
+            continue
+          end
           # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
           # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
           # "dropped" — the option vanished with no warn and no marker, which is the one thing this
@@ -6434,8 +6454,139 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
                    "to name keys on (Django refuses it too: fields.E337), so it is dropped.")
   end
 
-  return options, related_model, resolved_from_name
+  # After the loop because `default=` may come after `db_default=` in the source (#1469).
+  default_from_db_default = false
+  if django_db_default !== nothing
+    had_default = haskey(options, :default)
+    landed = _translate_django_db_default!(options, django_db_default, field_type, field_name,
+                                           class_label, markers, django_default_text)
+    # #948's retry filters and names options by the constant they were read through, so that record
+    # follows the translation: a replaced `default` is gone, and a `db_default` read through a
+    # constant is now the option it landed in.
+    default_replaced = landed == "default" || (had_default && !haskey(options, :default))
+    filter!(p -> !(p[1] == "default" && default_replaced), resolved_from_name)
+    for (i, (k, n)) in pairs(resolved_from_name)
+      k == "db_default" && (resolved_from_name[i] = (something(landed, ""), n))
+    end
+    filter!(p -> !isempty(p[1]), resolved_from_name)
+    default_from_db_default = landed == "default"
+  end
+
+  # The fourth value says the `default` in `options` is Django's `db_default` (#1469), so a later
+  # report names the option the reader will find in their models.py.
+  return options, related_model, resolved_from_name, default_from_db_default
 end
+
+# The Django keyword a PormG option came from: `default` is `db_default` when it was imported from one.
+_django_option_name(k, default_from_db_default::Bool)::String =
+  Symbol(k) === :default && default_from_db_default ? "db_default" : String(Symbol(k))
+
+# Django's `Now()` under every import spelling of it.
+const _DJANGO_NOW_RE = r"^(?:(?:django\.db\.)?models\.(?:functions\.)?|functions\.)?Now\(\s*\)$"
+# Django's `Value(<x>)` (#1469), what a non-expression `db_default` means: the capture is the argument
+# list, which may carry an `output_field=` beside the value.
+const _DJANGO_VALUE_RE = r"^(?:(?:django\.db\.)?models\.(?:expressions\.)?|expressions\.)?Value\((.*)\)$"s
+
+# The literal a Django `db_default` source text denotes, wrapped in `Some` (`Some(nothing)` for
+# `None`), or `nothing` when the text is an expression rather than a literal.
+function _django_db_default_literal(text::AbstractString)::Union{Some, Nothing}
+  t = strip(text)
+  m = match(_DJANGO_VALUE_RE, t)
+  if m !== nothing
+    # `Value(value, output_field=None)`: the second argument, by keyword or by position, types the
+    # value and does not change it.
+    args = filter(!isempty, strip.(_py_split_top(m.captures[1], ',')))
+    (isempty(args) || length(args) > 2) && return nothing
+    t = args[1]
+  end
+  _is_py_literal(t) || return nothing
+  # The value `default=<same text>` imports as, so the two spellings generate the same line; an
+  # integer is read through `_py_number` so `-1` and `1_000` are numbers, as Django stores them. A
+  # float stays text, which a `DecimalField` reads without a binary round trip.
+  n = _py_number(t)
+  return Some(n isa Int ? n : parse_value(t))
+end
+
+# Two `default` values that denote the same thing, however each was spelled: `0` read as an `Int`
+# by one path and as the text "0" by `parse_value` on the other.
+_same_django_default(a, b)::Bool =
+  isequal(a, b) || (!(a isa Bool) && !(b isa Bool) &&
+                    (n = _py_number(string(a)); n !== nothing && isequal(n, _py_number(string(b)))))
+
+"""
+    _translate_django_db_default!(options, raw, field_type, field_name, class_label, markers) -> Union{String, Nothing}
+
+Translate a Django `db_default` (#1469) into what PormG declares for the same column, and return the
+option it landed in (`"default"`, `"db_default"`) or `nothing` when it was not imported. `raw` is the
+source text, or `Some(value)` for an enum member already resolved to its value.
+
+Django's `db_default` takes a literal (wrapped in `Value()`) or an expression; PormG's slot takes only
+an expression, and a literal belongs in `default=` (#1033), which renders the same `DEFAULT` clause.
+So a literal becomes `default`, `Now()` becomes the portable `CURRENT_TIMESTAMP` (`CURRENT_DATE` on a
+`DateField`), and any other expression is dropped with a marker rather than aborting the import. A
+Django string is never handed to `db_default`: it is data there, and SQL here.
+
+When Django also declares a different `default`, the `db_default` wins and the `default` is dropped
+with a marker. PormG takes one default per column, and Django's `default` is Python-side only, while
+its `db_default` is the column the database holds — the one PormG's migrations compare against.
+"""
+function _translate_django_db_default!(options::Dict{Symbol, Any}, raw::Union{String, Some},
+                                       field_type::AbstractString, field_name::AbstractString,
+                                       class_label::AbstractString, markers::Vector{String},
+                                       default_text::AbstractString = "")::Union{String, Nothing}
+  text = raw isa Some ? nothing : String(strip(raw))
+  literal = raw isa Some ? raw : _django_db_default_literal(text)
+  # The markers quote both options as the source spells them, so the reader can grep for them.
+  spelled = raw isa Some ? _py_spelling(something(raw)) : _one_line(text)
+  default_spelled = isempty(default_text) ? _py_spelling(get(options, :default, nothing)) : default_text
+  if literal !== nothing
+    value = something(literal)
+    if haskey(options, :default) && !_same_django_default(options[:default], value)
+      _report_dropped_django_default!(markers, field_name, class_label, default_spelled,
+                                      "db_default=$(spelled)", value === nothing)
+      delete!(options, :default)
+    end
+    value === nothing && return nothing       # `None`: DEFAULT NULL is no default at all
+    options[:default] = value
+    return "default"
+  end
+  if occursin(_DJANGO_NOW_RE, text) && field_type in ("DateTimeField", "DateField")
+    if haskey(options, :default)
+      _report_dropped_django_default!(markers, field_name, class_label, default_spelled,
+                                      "db_default=$(spelled)", false)
+      delete!(options, :default)
+    end
+    options[:db_default] = field_type == "DateField" ? "CURRENT_DATE" : "CURRENT_TIMESTAMP"
+    return "db_default"
+  end
+  @warn "import: db_default is neither one literal nor Now(); not imported" class=class_label field=field_name value=_one_line(text)
+  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
+                 "`db_default=$(_one_line(text))`, which is neither one literal the importer can read " *
+                 "nor `Now()` on a date or datetime field — not imported. If it is a value, declare " *
+                 "it by hand as `default = …`; if it is SQL, pin it per engine: " *
+                 "`db_default = (postgres = \"…\",)`.")
+  return nothing
+end
+
+function _report_dropped_django_default!(markers::Vector{String}, field_name::AbstractString,
+                                         class_label::AbstractString, default_spelled::AbstractString,
+                                         db_default_spelled::AbstractString, none_wins::Bool)
+  @warn "import: Django declares both default and db_default; the default was dropped" class=class_label field=field_name
+  outcome = none_wins ?
+    "`db_default=None` declares no database default, and it wins: `default` was dropped, so the " *
+    "column has no default. Django applies its `default` only in Python, so rows PormG writes get NULL." :
+    "PormG takes one default, so `db_default` was kept and `default` dropped. Django applies its " *
+    "`default` only in Python, so rows PormG writes get the database's value."
+  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' declares both " *
+                 "`default=$(default_spelled)` and `$(db_default_spelled)`; $(outcome)")
+  return nothing
+end
+
+# A value the importer read, spelled back as the Python literal the reader wrote: `None`, `True`,
+# `0`, `"Finished"`. The marker quotes the source, so a Julia spelling (`nothing`) would not grep.
+_py_spelling(v)::String =
+  v === nothing ? "None" : v isa Bool ? (v ? "True" : "False") :
+  v isa Number ? string(v) : _one_line(repr(string(v)))
 
 # Option values that are SYMBOLS by design, not constants: `on_delete=CASCADE` (imported from
 # `django.db.models`), and a relation's `to=`/`through=` model name. A bare name there is the

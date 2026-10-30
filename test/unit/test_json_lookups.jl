@@ -246,7 +246,11 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     # A string/LIKE operator on a JSON path is not a supported comparison → clear error, naming the
     # lookup as written (#1499: `@startswith`, not the internal `startswith`).
     q = JL.Json_scratch.objects; q.filter("payload__nome__@startswith" => "ham"); q.values("id")
-    @test_throws "The @startswith lookup is not supported on payload__nome, a JSON key's value" inspect_query(q)
+    e = try inspect_query(q); nothing catch err; err end
+    @test e isa PormG.FilterError
+    # CI renders with color, so the message is read without its ANSI codes.
+    e isa PormG.FilterError && @test occursin("The @startswith lookup is not supported on payload__nome, a JSON key's value",
+      PormG._emsg(sprint(showerror, e); color = false))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -967,20 +971,22 @@ end
   # The `Subquery` projection warns that it may match more than one row; that is not under test.
   quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
   refusal(mk, filt, conn) = quiet(() -> try _sql(mk(filt); conn = conn); nothing catch e; e end)
+  # CI renders with color, so a message is read without its ANSI codes.
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
   for conn in (_JL_PG, _JL_SL, _JL_MY),
       (suffix, value) in (("@range", (9, 100)), ("@in", [9, 15]), ("@nin", [9, 15]), ("@startswith", "1"))
     @testset "$suffix on $(nameof(typeof(conn)))" begin
       # The key lookup itself: the reference refusal.
       e = refusal(key, "payload__n__$suffix" => value, conn)
-      @test e isa PormG.FilterError && occursin("The $suffix lookup is not supported on payload__n", e.msg)
+      @test e isa PormG.FilterError && occursin("The $suffix lookup is not supported on payload__n", plain(e))
       for (mk, name) in ((aliased, "w"), (subquery, "w"), (cte, "g__w"))
         e = refusal(mk, "$(name)__$suffix" => value, conn)
         @test e isa PormG.FilterError
         e isa PormG.FilterError &&
-          @test occursin("The $suffix lookup is not supported on $name, a JSON key's value", e.msg)
+          @test occursin("The $suffix lookup is not supported on $name, a JSON key's value", plain(e))
         # Both casts: a pattern lookup or a list of text needs the text one (review of #1499).
-        e isa PormG.FilterError && @test occursin("Cast(<the key path>, \"numeric\")", e.msg) &&
-          occursin("Cast(<the key path>, \"text\")", e.msg)
+        e isa PormG.FilterError && @test occursin("Cast(<the key path>, \"numeric\")", plain(e)) &&
+          occursin("Cast(<the key path>, \"text\")", plain(e))
       end
       # A `When` condition on the alias refuses as the alias's filter does.
       q = JL.Json_scratch.objects

@@ -876,7 +876,7 @@ end
 _json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
   instruc.outer === nothing ? nothing :
   (side = _json_number_side(p.field_name, instruc.outer); side === nothing ? nothing :
-   ("the outer query's $(side[1]) (an `OuterRef`)", side[2]))
+   ("$(side[1]) of the outer query (an `OuterRef`)", side[2]))
 # #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
 function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
   instruc.subquery_json_key === nothing && return nothing
@@ -915,19 +915,36 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 # Read after the operands render, so a joined path's column is resolved (#568's order). `what` opens the
 # message with the operation as the caller wrote it. #1491: a `Max` or a `Min` (`ordering = true`)
 # computes nothing, but orders the value, and the query does not say whether as numbers or as text.
-function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false)
+# #1497: so does an ordering term or a `Greatest`/`Least`, which name their own `issue`; an `order_by`
+# term takes a path or a projected name, not an expression, so it adds the `projected` spelling.
+function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false,
+                                  issue::AbstractString = "#1491", projected::Bool = false)
   flag = side[2]
   ordering && throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
-    "so the query does not say whether it orders numbers or text (#1491). Say the type you mean: " *
+    "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *
     "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m orders numbers on every engine, and " *
-    "\e[32mCast(\"$(flag)\", \"text\")\e[0m orders text."))
+    "\e[32mCast(\"$(flag)\", \"text\")\e[0m orders text." *
+    (projected ? " Project it and order by its name: \e[32mvalues(\"n\" => Cast(\"$(flag)\", \"numeric\"))\e[0m, " *
+                 "then \e[32morder_by(\"n\")\e[0m." : "")))
   throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say which number it computes on (#1483). Say the number type you mean: " *
     "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and " *
     "\e[32mCast(\"$(flag)\", BigIntegerField())\e[0m computes on integers."))
 end
+# #1497 — an ordering over an uncast JSON key, or over a value that carries one (`Coalesce(key, 0)`, a
+# `Case` branch, a CTE column or a `Subquery` over the key), orders a value the query does not type:
+# PostgreSQL's `#>>` and MySQL's `JSON_UNQUOTE` are text, so `9` sorts after `10` descending, while
+# SQLite's `json_extract` orders the numbers. EXPLICIT INTENT, refused on every engine, as `Max` is
+# (#1491). `node` is the term as it orders: for a term printed as a projection's name, the projection.
+# Read after the term renders, as the #1491 check is.
+function _refuse_json_key_ordering(node, instruc::SQLInstruction, what::AbstractString; projected::Bool = false)
+  side = _json_number_side(node, instruc)
+  side === nothing || _refuse_json_key_operand(what, side; ordering = true, issue = "#1497", projected = projected)
+  return nothing
+end
+
 function _refuse_json_key_arithmetic(v::FExpression, instruc::SQLInstruction)
   v.operation in _ARITHMETIC_OPERATIONS || return nothing
   side = _json_number_side(v.field_name, instruc)

@@ -837,27 +837,49 @@ _json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference}, instruc:
   _expression_kind(p, instruc) isa CJSONValue
 _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
-# #1471 — a side of `/` whose value is the number a JSON key holds: the key itself, or a value that
+# #1471, #1483 — an operand whose value is a JSON key's value, uncast: the key itself, or a value that
 # carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
 # `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case` branch, `NullIf`'s
-# first operand, a `Sum` of it. A JSON number has no integer type, so its quotient keeps the fraction
-# (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over the integer the document
-# holds, and these keep it, so `/` there divides as integers. A declared type (`Cast`, an
-# `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the number and carry
-# no key, and so does arithmetic beside a float literal or a `FloatField` column (`F(key) * 1.0`,
-# `_real_on_every_row`): SQLite computes it as a REAL. `(what, flag)`: the side as a refusal names it, and the key's path for
-# the explicit spelling; or `nothing`.
+# first operand. A key's value has no declared type: the document decides, row by row, whether it is
+# an integer, a float or text, so arithmetic on it (`_refuse_json_key_arithmetic`) and a `Sum`/`Avg` of
+# it do not say which number they compute on. EXPLICIT INTENT, refused on every engine: SQLite divides
+# the integer `json_extract` hands over as an integer (`7 / 2` is `3`), and PostgreSQL's `#>>` is text,
+# which `+`, `/` and `sum` reject at the server. A declared type (`Cast`, an `output_field`) and a
+# `numeric` function (`Round`, `Avg`) name the number and carry no key. `(what, flag)`: the operand as
+# a refusal names it, and the key's path for the explicit spelling; or `nothing`.
 _json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
 function _json_number_side(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _json_number_side(p.field_name, instruc)
   p.operation in ("+", "-", "*") || return nothing
-  (_real_on_every_row(p.field_name, instruc) || _real_on_every_row(p.operand, instruc)) && return nothing
   side = _json_number_side(p.field_name, instruc)
   side === nothing && (side = _json_number_side(p.operand, instruc))
   return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
 end
-_json_number_side(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+_json_number_side(p::Union{String,JoinedReference}, instruc::SQLInstruction) =
   _json_key_lookup_operand(p, instruc) ? ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p)) : nothing
+# #1482: a CTE column is the key when it projects one (its kind is `CJSONValue`), and carries it when
+# its body's expression does (`Coalesce(key, 0)`, a `Case` branch), which its kind cannot say: the body
+# records that (`CTEDivision.json_key`).
+function _json_number_side(p::CTEReference, instruc::SQLInstruction)
+  # The body's record first: it names the key path a cast in the body takes (`Max(key)` and a bare
+  # `"payload__n"` column both record `payload__n`). The kind answers for a column with no record.
+  side = _cte_division(p, instruc, :json_key)
+  side === nothing || return ("the CTE column `$(_concat_operand_label(p))` ($(side[1]))", side[2])
+  _json_key_lookup_operand(p, instruc) || return nothing
+  return ("the CTE column `$(_concat_operand_label(p))`, a JSON key's value", _concat_flag(p))
+end
+# An `OuterRef` is the outer query's column, typed on the outer instruction (as `_side_walk_kind` reads
+# it), so `Coalesce(OuterRef("payload__n"), 0) / 2` inside a `Subquery` carries the outer key.
+_json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
+  instruc.outer === nothing ? nothing :
+  (side = _json_number_side(p.field_name, instruc.outer); side === nothing ? nothing :
+   ("the outer query's $(side[1]) (an `OuterRef`)", side[2]))
+# #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
+function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
+  instruc.subquery_json_key === nothing && return nothing
+  side = get(instruc.subquery_json_key, p, nothing)
+  return side === nothing ? nothing : ("a Subquery projecting $(side[1])", side[2])
+end
 function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
@@ -885,6 +907,25 @@ function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruc
   return nothing
 end
 _json_number_side(::Any, ::SQLInstruction) = nothing
+
+# #1483 — the one refusal for arithmetic, a `Sum` or an `Avg` over an uncast JSON key, on every engine.
+# Read after the operands render, so a joined path's column is resolved (#568's order). `what` opens the
+# message with the operation as the caller wrote it.
+function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String})
+  flag = side[2]
+  throw(QueryBuildError(
+    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+    "so the query does not say which number it computes on (#1483). Say the number type you mean: " *
+    "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and " *
+    "\e[32mCast(\"$(flag)\", BigIntegerField())\e[0m computes on integers."))
+end
+function _refuse_json_key_arithmetic(v::FExpression, instruc::SQLInstruction)
+  v.operation in _ARITHMETIC_OPERATIONS || return nothing
+  side = _json_number_side(v.field_name, instruc)
+  side === nothing && (side = _json_number_side(v.operand, instruc))
+  side === nothing || _refuse_json_key_operand("`$(v.operation)`", side)
+  return nothing
+end
 
 # #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`
 # compares, through `_render_json_lookup_comparison`, for the operators that renders.
@@ -1718,6 +1759,19 @@ function _subquery_projection_whole_numeric(handler::SQLObjectHandler, inner::SQ
   length(vals) == 1 || return nothing
   v = only(vals)
   return _whole_numeric_operand(v isa SQLText ? v : v.field, inner)
+end
+# #1482 — and whether the same expression carries an uncast JSON key (`_json_number_side`).
+function _subquery_projection_json_key(handler::SQLObjectHandler, inner::SQLInstruction)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  v = only(vals)
+  return _json_number_side(v isa SQLText ? v : v.field, inner)
+end
+function _record_subquery_json_key!(instruc::SQLInstruction, p::SubqueryObject, side)
+  side isa Tuple{String,String} || return nothing
+  instruc.subquery_json_key === nothing && (instruc.subquery_json_key = IdDict{SubqueryObject,Tuple{String,String}}())
+  instruc.subquery_json_key[p] = side
+  return nothing
 end
 function _record_subquery_whole_numeric!(instruc::SQLInstruction, p::SubqueryObject, side)
   side isa Tuple{Symbol,String} || return nothing

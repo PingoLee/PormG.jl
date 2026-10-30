@@ -77,6 +77,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # #1460 (review): the day count with a date literal on the right
   ("F date - date literal",   :Race,                m -> _EKM_Q.F("date") - Date(2009, 3, 1)),
   ("F comparison",            :Result,              m -> _EKM_Q.F("grid") > _EKM_Q.F("points")),
+  # #1476: operands that raised a `MethodError` before any query existed
+  ("F int + Value(1)",        :Result,              m -> _EKM_Q.F("grid") + _EKM_FN.Value(1)),
+  ("F float * Float32",       :Result,              m -> _EKM_Q.F("points") * Float32(2.5)),
+  ("10 - F int",              :Result,              m -> 10 - _EKM_Q.F("grid")),
+  ("10 / F int",              :Result,              m -> 10 / _EKM_Q.F("grid")),
+  ("10.5 - F float",          :Result,              m -> 10.5 - _EKM_Q.F("points")),
   # #1034 step 5a: each arm of the render's F temporal arithmetic, so the walk's answer for it is a cell
   ("F date + Hour(1)",        :Race,                m -> _EKM_Q.F("date") + Hour(1)),
   ("F datetime - Hour(1)",    :Race,                m -> _EKM_Q.F("start_at") - Hour(1)),
@@ -558,6 +564,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("NullIf id json key / 2",  :Field_validation_scratch, m -> _EKM_FN.NullIf("id", "payload__n") / 2),
   ("Cast json key integer",   :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "integer")),
   ("Concat json key",         :Field_validation_scratch, m -> _EKM_FN.Concat(_EKM_FN.Value("n="), "payload__n")),
+  # #1482: outer arithmetic over a value that carries a key its kind does not name: a CTE column whose
+  # body is `Lag("id"; default = key)`, typed by `id` (`EKM_PREP`), and a `Subquery` projecting the key.
+  ("Coalesce CTE json lag col / 2", :Field_validation_scratch, m -> _EKM_FN.Coalesce(PormG.CTE("c", "w"), 0) / 2),
+  ("Coalesce Subquery json key / 2", :Field_validation_scratch,
+   m -> _EKM_FN.Coalesce(_EKM_Q.Subquery((s = m.Field_validation_scratch.objects; s.filter("id" => 1);
+                                          s.values("v" => _EKM_FN.Coalesce("payload__n", 0)); s)), 0) / 2),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names
@@ -576,7 +588,12 @@ _ekm_cte_decimal!(q, mod) = q.with("c" => mod.Constructor_results.objects.values
 # #1388: a CTE `c` whose column `d` is a duration expression.
 _ekm_cte_interval!(q, mod) = q.with("c" => mod.Result.objects.values("resultid", "d" => _EKM_FN.Cast(_EKM_Q.F("fastestlaptime") * 2, "interval")),
                                     join_field = "resultid" => "resultid")
+# #1482: a CTE `c` whose column `w` carries a JSON key with an integer kind.
+_ekm_cte_json_lag!(q, mod) = q.with("c" => mod.Field_validation_scratch.objects.values("id",
+                                      "w" => _EKM_Q.Lag("id"; default = _EKM_Q.F("payload__n"), over = _EKM_Q.WindowOver(order_by = ["id"]))),
+                                    join_field = "id" => "id")
 const EKM_PREP = Dict{String,Function}(
+  "Coalesce CTE json lag col / 2" => _ekm_cte_json_lag!,
   "DATE CTE interval col" => _ekm_cte_interval!,
   "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!,
   "Cast CTE scale 1 col to scale 2" => _ekm_cte_scaled!, "Cast CTE scale 3 col to scale 2" => _ekm_cte_scaled!,

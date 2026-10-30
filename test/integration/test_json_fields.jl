@@ -199,26 +199,42 @@ end
             @test q.count() == 1
         end
 
-        # #1471: a JSON number has no integer type, so a quotient over a key keeps its fraction.
-        # `points` holds 15. PostgreSQL renders `FLOOR((x #>> '{points}')::numeric) / $1::bigint`, 7.5.
-        # SQLite's `json_extract` hands over the integer 15, and `FLOOR(…) / ?` divided it as integers
-        # (`7`) with nothing to say so: it refuses the quotient now, naming the explicit spelling.
-        # MySQL already refused it (a side whose type PormG cannot name). The explicit spelling,
-        # `Cast(key, "numeric") / 2`, is 7.5 on every engine.
-        @testset "a quotient over a JSON key keeps its fraction or is refused (#1471)" begin
-            floor_half = () -> (q = base(); q.values("v" => Floor("payload__points") / 2); only(q.list())["v"])
-            by_engine(
-                postgres = () -> (@test floor_half() == 7.5),
-                sqlite = () -> begin
-                    e = try floor_half(); nothing catch err; err end
-                    @test e isa PormG.QueryBuildError
-                    @test occursin("#1471", sprint(showerror, e))
-                    @test occursin("Cast(\"payload__points\", \"numeric\")", replace(sprint(showerror, e), r"\e\[[0-9;]*m" => ""))
-                end,
-                mysql = () -> (@test_throws PormG.QueryBuildError floor_half()),
-            )()
+        # #1483 (was #1471): a JSON key's value has no declared type, so arithmetic on it, and a `Sum`
+        # of it, do not say which number they compute on. `points` holds 15. SQLite's `json_extract`
+        # handed over the integer and `FLOOR(…) / ?` divided it as one (`7`, #1471); PostgreSQL's `#>>`
+        # is text, which `+` and `sum` reject at the server (#1483). Expected: `QueryBuildError` on every
+        # engine when the query is built, naming the explicit spelling, and no SQL sent. The explicit
+        # spelling, `Cast(key, "numeric") / 2`, is 7.5 on every engine, and its sum is 15.
+        @testset "arithmetic and Sum over an uncast JSON key are refused on every engine (#1483)" begin
+            plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+            for expr in (Floor("payload__points") / 2, F("payload__points") + 1, Sum("payload__points"))
+                q = base(); q.values("v" => expr)
+                e = try q.list(); nothing catch err; err end
+                @test e isa PormG.QueryBuildError
+                @test occursin("(#1483)", plain(e))
+                @test occursin("Cast(\"payload__points\", \"numeric\")", plain(e))
+            end
             q = base(); q.values("v" => Cast("payload__points", "numeric") / 2)
             @test only(q.list())["v"] == 7.5
+            q = base(); q.values("v" => Sum(Cast("payload__points", "numeric")))
+            @test only(q.list())["v"] == 15
+        end
+
+        # #1472: a filter on a CTE column whose body projects a key lookup compares as the key lookup
+        # does. Equality on text was refused by the document's JSON formatter, and an ordering bound
+        # the number as text, so `points` (15) `> 9` compared `'15' > '9'` on PostgreSQL, false.
+        # Expected: the seeded row matches each filter, and a non-matching value matches none.
+        @testset "a filter on a CTE column over a JSON key matches as the key lookup does (#1472)" begin
+            function cte_filtered(col, filt)
+                body = base(); body.values("id", "k" => col)
+                q = base(); q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+                q.values("id", "g__k"); q.filter(filt)
+                return q
+            end
+            @test length(cte_filtered("payload__driver", "g__k" => "hamilton").list()) == 1
+            @test length(cte_filtered("payload__driver", "g__k" => "norris").list()) == 0
+            @test length(cte_filtered("payload__points", "g__k__@gt" => 9).list()) == 1
+            @test length(cte_filtered("payload__points", "g__k__@gt" => 20).list()) == 0
         end
 
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────

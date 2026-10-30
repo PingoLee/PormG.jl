@@ -588,58 +588,233 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1471: a quotient over a JSON key's number keeps its fraction, so SQLite refuses it
-# A JSON number has no integer type, so `/` over one means a quotient that keeps its fraction.
-# SQLite's `json_extract` hands over the integer the document holds, and `FLOOR`, `CEIL`, `ABS`, `MAX`,
-# `COALESCE`, `SUM` and arithmetic keep it, so `FLOOR(json_extract(…)) / ?` divided as integers (`7 / 2`
-# was `3`). Expected: each such side refused on SQLite (`_MEANING_DEPARTURES`, `:division`), the message
-# naming SQLite only, the side, and the explicit spelling on the key; PostgreSQL builds
-# `FLOOR((… #>> '{n}')::numeric) / $1::bigint`, which keeps the fraction. A side that names its number —
-# `Round` (a REAL on SQLite, cast by `_division_sql`), `Cast(key, "numeric")`, which renders
-# `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` — builds on SQLite, and so does arithmetic beside
-# a float (`(json_extract(…) * ?) / ?`, a REAL) and `NullIf("id", key)`, whose value is the integer `id`.
-# Why it matters: the SQLite answer was a different value with nothing to say so.
+# #1483 (was #1471): arithmetic, a Sum or an Avg over an uncast JSON key is refused on every engine
+# A JSON key's value has no declared type: the document decides, row by row, whether it is an integer,
+# a float or text. Arithmetic on it does not say which number it computes on, and the engines answer
+# differently: SQLite's `json_extract` hands over the integer the document holds, so `FLOOR(…) / ?`
+# divided as integers (`7 / 2` was `3`); PostgreSQL's `#>>` is text, which `+`, `/` and `sum` reject at
+# the server. Expected: every shape below raises `QueryBuildError` on PostgreSQL, SQLite and MySQL
+# alike, naming the key, the operation, and the explicit spelling (`Cast("payload__n", "numeric")`),
+# and no engine. A value that names its number builds on every engine: `Cast(key, "numeric") / 2`
+# renders `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` on SQLite and
+# `((… #>> '{"n"}')::decimal / $1::bigint)` on PostgreSQL; `Round` (a `numeric` function) and
+# `NullIf("id", key)`, whose value is the integer `id`, build too, and so does a function over the key
+# with nothing computed on it (`Floor(key)`, `Max(key)`).
+# Why it matters: the SQLite answer was a different value with nothing to say so, and PostgreSQL's
+# error, raised only when the query ran, named neither the key nor the cast to write.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1471: a quotient over a JSON key is refused on SQLite, built on PostgreSQL" begin
+@testset "#1483: arithmetic, Sum or Avg over an uncast JSON key is refused on every engine" begin
   FN = PormG.Functions
-  quotient(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  QB = PormG.QueryBuilder
+  proj(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
   plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
-  for (label, expr) in (
-      ("the key", () -> PormG.QueryBuilder.F("payload__n") / 2),
-      ("Floor", () -> FN.Floor("payload__n") / 2),
-      ("Ceil", () -> FN.Ceil("payload__n") / 2),
-      ("Abs", () -> FN.Abs("payload__n") / 2),
-      ("Max", () -> FN.Max("payload__n") / 2),
-      ("Sum", () -> FN.Sum("payload__n") / 2),
-      ("Coalesce", () -> FN.Coalesce("payload__n", 0) / 2),
-      ("arithmetic", () -> (PormG.QueryBuilder.F("payload__n") + 1) / 2),
-      ("a Case branch", () -> PormG.QueryBuilder.Case([PormG.QueryBuilder.When("id" => 1, then = PormG.QueryBuilder.F("payload__n"))], default = 0) / 2),
-      ("Coalesce beside a float", () -> FN.Coalesce("payload__n", 0.5) / 2),
-      ("the divisor", () -> PormG.QueryBuilder.F("id") / FN.Floor("payload__n")))
-    @testset "$label" begin
-      e = try _sql(quotient(expr()); conn = _JL_SL); nothing catch err; err end
+  for (label, op, expr) in (
+      ("the key / 2", "`/`", () -> QB.F("payload__n") / 2),
+      ("the key + 1", "`+`", () -> QB.F("payload__n") + 1),
+      ("the key - 1", "`-`", () -> QB.F("payload__n") - 1),
+      ("the key * 2", "`*`", () -> QB.F("payload__n") * 2),
+      ("the key * 1.0", "`*`", () -> QB.F("payload__n") * 1.0),
+      ("the key / 2.0", "`/`", () -> QB.F("payload__n") / 2.0),
+      ("a column + the key", "`+`", () -> QB.F("id") + QB.F("payload__n")),
+      ("the divisor", "`/`", () -> QB.F("id") / FN.Floor("payload__n")),
+      ("Floor", "`/`", () -> FN.Floor("payload__n") / 2),
+      ("Ceil", "`/`", () -> FN.Ceil("payload__n") / 2),
+      ("Abs", "`/`", () -> FN.Abs("payload__n") / 2),
+      ("Max", "`/`", () -> FN.Max("payload__n") / 2),
+      ("Coalesce", "`/`", () -> FN.Coalesce("payload__n", 0) / 2),
+      ("Coalesce beside a float", "`/`", () -> FN.Coalesce("payload__n", 0.5) / 2),
+      ("a Case branch", "`/`", () -> QB.Case([QB.When("id" => 1, then = QB.F("payload__n"))], default = 0) / 2),
+      ("Sum", "Sum", () -> FN.Sum("payload__n")),
+      ("Avg", "Avg", () -> FN.Avg("payload__n")),
+      ("Sum / 2", "Sum", () -> FN.Sum("payload__n") / 2),
+      ("Sum of Coalesce", "Sum", () -> FN.Sum(FN.Coalesce("payload__n", 0))))
+    @testset "$label on $(nameof(typeof(conn)))" for conn in (_JL_PG, _JL_SL, _JL_MY)
+      e = try _sql(proj(expr()); conn = conn); nothing catch err; err end
       @test e isa PormG.QueryBuildError
-      msg = plain(e)
+      msg = e === nothing ? "" : plain(e)
+      @test startswith(msg, "$(op) over ")
       @test occursin("JSON key `payload__n`", msg)
-      @test occursin("SQLite computes an integer quotient", msg)
-      @test occursin("PormG refuses it on SQLite (#1471)", msg)
-      @test startswith(msg, "A quotient of ")
+      @test occursin("has no declared type", msg)
+      @test occursin("(#1483)", msg)
       @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
-      @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
+      @test occursin("Cast(\"payload__n\", BigIntegerField())", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg) && !occursin("MySQL", msg)
     end
   end
-  @test occursin("FLOOR((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric) / \$1::bigint",
-                 _sql(quotient(FN.Floor("payload__n") / 2); conn = _JL_PG)[:sql_text])
-  # The sides that name their number build on SQLite, and so does a fractional divisor: SQLite
-  # divides by a float as REAL, which keeps the fraction.
-  @test occursin("json_extract(\"Tb\".\"payload\", '\$.n') / ?", _sql(quotient(PormG.QueryBuilder.F("payload__n") / 2.0); conn = _JL_SL)[:sql_text])
-  @test occursin("CAST(ROUND(", _sql(quotient(FN.Round("payload__n") / 2); conn = _JL_SL)[:sql_text])
+  # A value that names its number builds on every engine, with the SQL it always had.
   @test occursin("(CAST(CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS NUMERIC) AS REAL) / ?)",
-                 _sql(quotient(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
-  # Arithmetic beside a float is a REAL on SQLite, which keeps the fraction (`F(key) * 1.0`), and
-  # `NullIf`'s value is its first operand, here the integer `id`, whose integer quotient is the meaning.
-  @test occursin("((json_extract(\"Tb\".\"payload\", '\$.n') * ?) / ?)",
-                 _sql(quotient((PormG.QueryBuilder.F("payload__n") * 1.0) / 2); conn = _JL_SL)[:sql_text])
+                 _sql(proj(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
+  @test occursin("((\"Tb\".\"payload\" #>> '{\"n\"}')::decimal / \$1::bigint)",
+                 _sql(proj(FN.Cast("payload__n", "numeric") / 2); conn = _JL_PG)[:sql_text])
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test _sql(proj(FN.Cast("payload__n", "numeric") + 1); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Sum(FN.Cast("payload__n", "numeric"))); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Round("payload__n") / 2); conn = conn) isa AbstractDict
+    # A function over the key with nothing computed on it is the key's own value.
+    @test _sql(proj(FN.Floor("payload__n")); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Max("payload__n")); conn = conn) isa AbstractDict
+  end
+  # `NullIf`'s value is its first operand, here the integer `id`, whose quotient is the meaning.
   @test occursin("(NULLIF(\"Tb\".\"id\", json_extract(\"Tb\".\"payload\", '\$.n')) / ?)",
-                 _sql(quotient(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
+                 _sql(proj(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
+  # A comparison is not arithmetic: the key lookup's own filter binds it (#1382).
+  @test _sql((q = JL.Json_scratch.objects; q.filter("payload__n__@gt" => 5); q); conn = _JL_PG) isa AbstractDict
+  # Wherever the arithmetic renders: a filter value, a CTE body, an `update()` value. (`order_by` takes
+  # no expression; ordering by a projected alias goes through the projection, refused above.)
+  arith() = QB.F("payload__n") + 1
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    for (label, run) in (
+        ("filter value", () -> _sql((q = JL.Json_scratch.objects; q.filter("id__@gt" => arith()); q); conn = conn)),
+        ("CTE body",     () -> _sql((b = JL.Json_scratch.objects; b.values("id", "w" => arith());
+                                     q = JL.Json_scratch.objects; q.with("c" => b, join_field = "id" => "id");
+                                     q.values("id", "c__w"); q); conn = conn)))
+      e = try run(); nothing catch err; err end
+      @test e isa PormG.QueryBuildError && occursin("(#1483)", plain(e))
+    end
+  end
+  # `update()` builds on the model's own connection (the mock SQLite here): the SET value refuses too.
+  e = try (q = JL.Json_scratch.objects; q.filter("id" => 1); q.update("name" => arith(); show_query = :sql)); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("(#1483)", plain(e))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1482: arithmetic over a CTE column or a Subquery that carries an uncast JSON key is refused
+# A CTE body or a `Subquery` projection can carry a key's value with no arithmetic of its own, and its
+# column's kind need not say so: `Lag("id"; default = F(key))` is typed by `id`, an integer, though the
+# key is its value on the rows the default applies to; a `Subquery` is typed by its inner build. Outer
+# arithmetic over it computed on the key: on SQLite `(COALESCE("R1_1"."w", ?) / ?)` divided the integer
+# the document holds as one (`7 / 2` was `3`). Expected: the body records the key
+# (`CTEDivision.json_key`, `subquery_json_key`), and arithmetic over the column refuses as over the key
+# (#1483) on every engine, naming the CTE column or the Subquery, what its body is, and the key's cast.
+# The other routes in: a body column that IS the key's value (`Max(key)`, `NullIf(key, 0)`) refuses
+# through its kind (`CJSONValue`); a body that sums the key refuses itself (#1483); one that mixes the
+# key with a literal (`Coalesce(key, 0)`) is refused while the column is typed (#823). A body that casts
+# the key, or declares its number (`output_field`), builds outside.
+# Why it matters: the SQLite answer was a different value with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1482: arithmetic over a CTE column or a Subquery carrying a JSON key is refused" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  function withcte(colexpr, outer)
+    q = JL.Json_scratch.objects
+    body = JL.Json_scratch.objects
+    body.values("id", "w" => colexpr)
+    q.with("c" => body, join_field = "id" => "id")
+    q.values("v" => outer)
+    return q
+  end
+  sub(expr) = QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => 1); s.values("v" => expr); s))
+  proj(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  refusal(q, conn) = try _sql(q; conn = conn); nothing catch err; err end
+  lag_default_key() = QB.Lag("id"; default = QB.F("payload__n"), over = QB.WindowOver(order_by = ["id"]))
+  half(col) = FN.Coalesce(col, 0) / 2
+  function refused_1483(q, conn, named)
+    e = refusal(q, conn)
+    @test e isa PormG.QueryBuildError
+    msg = e === nothing ? "" : plain(e)
+    @test occursin("(#1483)", msg)
+    @test occursin(named, msg)
+    @test occursin("Cast(\"", msg)
+    return msg
+  end
+  # The record: a window body whose kind is its integer column. (SQLite's mock renders no window
+  # function without its driver, so this route is pinned on PostgreSQL and MySQL.)
+  for conn in (_JL_PG, _JL_MY)
+    msg = refused_1483(withcte(lag_default_key(), half(PormG.CTE("c", "w"))), conn, "the CTE column `CTE(\"c\", \"w\")`")
+    @test occursin("`LAG(…)` over the JSON key `payload__n`", msg)
+    refused_1483(withcte(lag_default_key(), FN.Floor(PormG.CTE("c", "w")) + 1), conn, "the CTE column")
+    @test _sql(withcte(lag_default_key(), PormG.CTE("c", "w")); conn = conn) isa AbstractDict
+  end
+  # An `OuterRef` to the outer query's key carries it into a `Subquery`, typed on the outer query.
+  outer_sub(expr) = QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("v" => expr); s))
+  for conn in (_JL_PG, _JL_MY)
+    msg = refused_1483(proj(outer_sub(FN.Coalesce(QB.OuterRef("payload__n"), 0) / 2)), conn, "the outer query's")
+    @test occursin("`OuterRef`", msg)
+  end
+  # The control (MySQL refuses an `OuterRef` side it cannot type in `/`, #1130, so PostgreSQL only).
+  @test _sql(proj(outer_sub(FN.Coalesce(QB.OuterRef("id"), 0) / 2)); conn = _JL_PG) isa AbstractDict
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @testset "$(nameof(typeof(conn)))" begin
+      # The Subquery record: a projection carrying the key, or the key itself.
+      for inner in (FN.Coalesce("payload__n", 0), QB.F("payload__n"))
+        msg = refused_1483(proj(half(sub(inner))), conn, "a Subquery projecting")
+        @test occursin("JSON key `payload__n`", msg)
+        @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
+      end
+      @test _sql(proj(half(sub(FN.Cast("payload__n", "numeric")))); conn = conn) isa AbstractDict
+      # Through the column's kind: a body column that is the key's value.
+      for body in (FN.Max("payload__n"), FN.NullIf("payload__n", 0))
+        refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "JSON key")
+      end
+      # A body that sums the key refuses itself; one that mixes it with a literal is refused as untyped.
+      e = refusal(withcte(FN.Sum("payload__n"), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && startswith(plain(e), "Sum over the JSON key `payload__n`")
+      e = refusal(withcte(FN.Coalesce("payload__n", 0), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && occursin("(#823)", plain(e))
+      # A body that names the number builds outside, as does one with no key.
+      for body in (FN.Cast("payload__n", "numeric"), FN.Coalesce("payload__n", 0; output_field = "integer"), FN.Coalesce("id", 0))
+        @test _sql(withcte(body, half(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
+      end
+      # The spelling names the body's key path, where the cast goes, whether the body computed over the
+      # key or projected it bare (never a `"<flag>"` placeholder); the spelled body then builds outside.
+      for body in (FN.Max("payload__n"), "payload__n")
+        msg = refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "the CTE column")
+        @test occursin("Cast(\"payload__n\", \"numeric\")", msg) && !occursin("<flag>", msg)
+      end
+      @test _sql(withcte(FN.Cast("payload__n", "numeric"), half(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1472: a filter on a CTE column over a JSON key lookup compares as the key lookup does
+# A CTE column whose body projects `payload__driver` (or `Max` of it) holds the key's value, which the
+# walk names `CJSONValue` (#1458). The outer filter bound through the column's field, the document's
+# JSONField: equality ran the JSON formatter and refused plain text ("The text is not valid JSON"), and
+# an ordering bound the number as text (`"R1_1"."k" > $1` with `'5'` on PostgreSQL, a text comparison;
+# `CAST(? AS JSON)` on MySQL). Expected, as `filter("payload__driver" => …)` binds (#1382):
+# PostgreSQL `"R1_1"."k" = $1` with `"hamilton"` and `("R1_1"."k")::numeric > $1` with `5`; SQLite
+# `"R1_1"."k" = ?` and `"R1_1"."k" > ?` with the native values; MySQL `` `R1_1`.`k` = ? `` and
+# `` `R1_1`.`k` > ? ``. A whole-document column keeps the JSON formatter (#1360): a document binds,
+# plain text is refused.
+# Why it matters: the equality was unusable, and the ordering returned the rows a text comparison picks.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1472: a filter on a CTE column over a JSON key binds as the key lookup does" begin
+  FN = PormG.Functions
+  function filtered(col, filt)
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => col)
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__k")
+    q.filter(filt)
+    return q
+  end
+  where(r) = replace(r[:sql_text], r"\s+" => " ")
+  for col in ("payload__driver", FN.Max("payload__driver"))
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_PG)
+    @test occursin("WHERE \"R1_1\".\"k\" = \$1", where(r)) && r[:parameters] == ["hamilton"]
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_SL)
+    @test occursin("WHERE \"R1_1\".\"k\" = ?", where(r)) && r[:parameters] == ["hamilton"]
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_MY)
+    @test occursin("WHERE `R1_1`.`k` = ?", where(r)) && r[:parameters] == ["hamilton"]
+  end
+  # A number for an equality binds as the key lookup binds it: text on PostgreSQL and MySQL, the native
+  # number on SQLite (where it bound the text `"121"` before, which an integer never equals there).
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_PG)[:parameters] == ["121"]
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_SL)[:parameters] == [121]
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_MY)[:parameters] == ["121"]
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_PG)
+  @test occursin("WHERE (\"R1_1\".\"k\")::numeric > \$1", where(r)) && r[:parameters] == [5]
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_SL)
+  @test occursin("WHERE \"R1_1\".\"k\" > ?", where(r)) && r[:parameters] == [5]
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_MY)
+  @test occursin("WHERE `R1_1`.`k` > ?", where(r)) && r[:parameters] == [5]
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test occursin("\"k\" IS NULL", replace(where(_sql(filtered("payload__driver", "g__k__@isnull" => true); conn = conn)), "`" => "\""))
+    # A whole-document column keeps the JSON formatter: a document binds, plain text is refused.
+    @test _sql(filtered("payload", "g__k" => """{"a": 1}"""); conn = conn) isa AbstractDict
+    @test_throws PormG.InvalidValueError _sql(filtered("payload", "g__k" => "hamilton"); conn = conn)
+  end
 end

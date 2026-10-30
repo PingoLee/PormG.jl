@@ -41,6 +41,17 @@ Sum("points") / Count("resultid") # Aggregate ratios
 
 **Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic).
 
+A numeric operand is an `Integer`, a `Float64`, a `Float32` or a `Float16` (the last two bind as the
+`Float64` they hold), or `Value(n)` of one, which is the same literal: `F("grid") + Value(1)` is
+`F("grid") + 1`. A number goes on either side, `10 - F("grid")` and `100 / F("laps")` included, and
+keeps its place. A `Decimal` or a `Rational` raises a `QueryBuildError` naming the spelling to use:
+`Float64(x)`, or a cast that keeps a decimal's digits, `Cast(Value("2.5"), "numeric")` (#1476).
+
+```julia
+q = M.Result.objects
+q.values("resultid", "behind" => 20 - F("positionorder"))   # (? - "Tb"."positionorder")
+```
+
 **Division keeps the type of its operands, on every engine.** Two integers divide as integers: on
 `M.Result`, `F("grid") / 2` is `7` for a grid of 15, as in Django, PostgreSQL and SQLite. MySQL's own
 `/` keeps the fraction, so PormG renders `DIV` there. A float or

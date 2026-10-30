@@ -51,7 +51,7 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
   @test all(row -> !isempty(row.departs), rows)
   @test _md_unclassified(rows, PormG._BACKENDS) == []
   # The decisions themselves, stated rather than recomputed. Every row is SQLite's departure (#1028,
-  # #1040, #1087, #1215, #1259, #1260, #1319, #1325, #1471, D5 on #1034), as the single `engine` field said before #1170. MySQL's were
+  # #1040, #1087, #1215, #1259, #1260, #1319, #1325, D5 on #1034; #1471's was replaced by the #1483 explicit-intent refusal), as the single `engine` field said before #1170. MySQL's were
   # measured on 8.4.11 with literal casts (#1130 phase 2b): it departs where it reads a boolean as
   # `1`, a temporal value as the number its digits spell (`20090329`) and an overflow as the largest
   # value the type holds (`99.99`); it keeps a rounding cast to an integer, a cast to a scale and
@@ -72,7 +72,6 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
     ("#1087", (:precision,), (Sl, My), (Pg,)),
     ("#1215", (:single_precision,), (Sl,), (Pg, My)),
     ("#1252", (:sized_text,), (Sl,), (Pg, My)),
-    ("#1471", (:division,), (Sl,), (Pg, My)),
     ("#1034", (:concat,), (Sl,), (Pg, My)),
   ]
 end

@@ -226,8 +226,11 @@ const ConnType = Union{_SQLEngine,Nothing}
 # kind of `_concat_textless_operand`, or D5's `:zero_scale_decimal`, a zero-scale cast SQLite does not
 # round). Each is a `(kind, what)` or `nothing`. The type walk cannot carry either: they hold where it
 # names no kind (a `Sum` it cannot type), and a sum and its quotient have that same no-kind; a
-# zero-scale cast's kind is the whole `CDecimal(p, 0)` whatever its operand.
-const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing}}
+# zero-scale cast's kind is the whole `CDecimal(p, 0)` whatever its operand. #1482: `json_key`, the
+# column carries an uncast JSON key's value (`_json_number_side`: `(what, flag)`), so arithmetic over
+# it outside is refused as over the key itself (#1483); its kind can be an integer (`Coalesce(key, 0)`).
+const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing},
+                                json_key::Union{Tuple{String,String},Nothing}}
 # #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3 step
 # 2c: `"divisions"` the division answers of each computed column that has one; #1110: `"unapplied"`
 # the columns whose read kind is a declared decimal the engine left unapplied. All are per build
@@ -662,6 +665,9 @@ end
   # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
   # text; only the division splits it.
   subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
+  # #1482 — and whether the expression carries an uncast JSON key's value (`_json_number_side`), so
+  # arithmetic over `Coalesce(Subquery(…), 0)` is refused as over the key (#1483). Same keying.
+  subquery_json_key::Union{Nothing,IdDict{SubqueryObject,Tuple{String,String}}} = nothing
   # #1153 — and its kind under EVERY policy (`_expression_kind` over the inner instruction, in the
   # same window): `subquery_kinds` is the READ kind, which names no integer or float, so
   # `Floor(Subquery(<integer>))` was `numeric` on PostgreSQL. Same keying and laziness as above.
@@ -1297,7 +1303,8 @@ const _SubqueryOperand = SubqueryObject
   # seam a `String` field_name uses.
   # #533: `FExpression`, not the abstract `SQLTypeF` — see the operand-vocabulary note above. The
   # abstract spelling also admitted `OuterRefObject`, which no renderer arm handles.
-  field_name::Union{String,Integer,FExpression,SQLTypeFunction,SQLTypeJoined}
+  # #1476: a number on the LEFT of `-` or `/` (`10 - F("grid")`) is the node's left side.
+  field_name::Union{String,Integer,Float64,FExpression,SQLTypeFunction,SQLTypeJoined}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
   # drift apart: widening one widens both, by construction rather than by a test that checks.

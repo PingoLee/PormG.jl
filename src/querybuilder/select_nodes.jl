@@ -952,6 +952,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     v.function_name in ("SUM", "AVG") && throw(_boolean_sum_refusal(v))
     resolved_kwargs["boolean"] = true
   end
+  # #1483: a sum or a mean of an uncast JSON key computes on a number the query does not name, as
+  # arithmetic over one does (`_refuse_json_key_arithmetic`): explicit intent, refused on every engine.
+  if v.function_name in ("SUM", "AVG") && !(v.column isa AbstractVector)
+    side = _json_number_side(v.column, instruc)
+    side === nothing || _refuse_json_key_operand(v.function_name == "SUM" ? "Sum" : "Avg", side)
+  end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's
   # `_computed_kind` answers the same kind from the same operand walk, so the SQL and the type agree.

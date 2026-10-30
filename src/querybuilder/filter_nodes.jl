@@ -1157,8 +1157,9 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # projects `payload__driver` or `Max` of it, which the walk names `CJSONValue` (#1458) — compares as
   # the key lookup does. Through the column's own field it ran the document's JSON formatter, which
   # refused plain text, and bound a number as text (`"R1_1"."k" > '5'` on PostgreSQL, no `::numeric`).
-  # A whole-document column (`CJSON`) keeps the formatter (#1360).
-  isa(v.column, SQLTypeField) && !_expression_operand(v.values) && v.operator in _JSON_KEY_COMPARISON_OPERATORS &&
+  # A whole-document column (`CJSON`) keeps the formatter (#1360). #1499: under every operator, as the
+  # key lookup above is: the ones it refuses (a membership list, a range, a pattern) are refused here.
+  isa(v.column, SQLTypeField) && !_expression_operand(v.values) &&
     _json_key_lookup_operand(v.column.field, instruc) && return _render_json_lookup_comparison(v, column, instruc)
   # #1381: a `When` condition on a projection alias — every filter on one takes `_render_alias_predicate`
   # first, so only a `When` gets here. `alias_key` is set when the alias is projected; its value binds
@@ -1167,7 +1168,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   alias_key = (alias !== nothing && _projected_source(memo_key(:base, alias), instruc) !== nothing) ?
               memo_key(:base, alias) : nothing
   alias_key !== nothing && _alias_projects_json_key(alias_key, instruc) && !_expression_operand(v.values) &&
-    v.operator in _JSON_KEY_COMPARISON_OPERATORS && return _render_json_lookup_comparison(v, column, instruc)
+    return _render_json_lookup_comparison(v, column, instruc)
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
   # all get it. #903: a `When` condition on a projection alias renders here too, and has no field —
   # the alias's formatter is what says it projects a network column.

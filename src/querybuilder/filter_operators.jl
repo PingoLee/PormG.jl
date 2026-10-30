@@ -41,8 +41,8 @@ _json_finite(value::AbstractFloat) = isfinite(value) ? value :
 #     (a JSON number stays a number → `5 = 5`, not `5 = '5'`) and comparisons need no cast.
 #   - MySQL reads text, as PostgreSQL does, and compares that text with a bound number as a double,
 #     so `<`/`>` need no cast there (`_json_numeric_operand`).
-# The operators `_render_json_lookup_comparison` renders; it refuses every other one.
-const _JSON_KEY_COMPARISON_OPERATORS = ("ISNULL", "=", "!=", "<>", ">", ">=", "<", "<=")
+# It renders `ISNULL`, `=`, `!=`/`<>` and the four orderings, and refuses every other operator
+# (`_json_key_operator_refusal`) — for the key and for everything that holds its value (#1499).
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   op = v.operator
   # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at
@@ -84,9 +84,30 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
     ph = add_parameter!(instruc, rhs)
     return string(lhs, " ", op, " ", ph)
   else
-    throw(FilterError("The operator \e[31m$(op)\e[0m is not supported on a JSON path lookup. Use =, !=, <, <=, >, >=, or __@isnull."))
+    throw(_json_key_operator_refusal(op, _filter_path_label(v)))
   end
 end
+
+# The lookup a caller wrote for an internal operator (`"BETWEEN"` → `"@range"`), for a refusal.
+function _operator_spelling(op::AbstractString)::String
+  for (suffix, internal) in PormGsuffix
+    internal == op && return "@" * suffix
+  end
+  return String(op)
+end
+
+# #1499: the one refusal for an operator a JSON key lookup has no comparison for — a membership list,
+# a range, a pattern — on the key itself and on everything that holds its value (a projection alias, a
+# CTE column, a `Subquery`), so the two cannot answer differently. A key's value has no declared type,
+# and a range or a pattern over it compared text on PostgreSQL, where `'15'` is not between `'9'` and
+# `'100'`. EXPLICIT INTENT, refused on every engine: a cast in a projection names the type.
+_json_key_operator_refusal(op::AbstractString, label::AbstractString) = FilterError(
+  "The \e[31m$(_operator_spelling(op))\e[0m lookup is not supported on \e[31m$(label)\e[0m, a JSON " *
+  "key's value: it has no declared type, so it compares only with =, @ne, @gt, @gte, @lt, @lte and " *
+  "@isnull (#1499). Project the key with the type you mean and filter that name: " *
+  "\e[32mvalues(\"n\" => Cast(<the key path>, \"numeric\"))\e[0m for numbers or " *
+  "\e[32mCast(<the key path>, \"text\")\e[0m for text, then " *
+  "\e[32mfilter(\"n__$(_operator_spelling(op))\" => …)\e[0m.")
 
 # #27: render a JSONB containment/overlap operator (@>, ?, ?|, ?&). The LHS must be a JSON COLUMN
 # (terminal), not a nested key path. Binds the RHS per operator (jsonb document / text key /

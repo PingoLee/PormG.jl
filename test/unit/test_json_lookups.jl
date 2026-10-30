@@ -151,8 +151,8 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test occursin("'\$.\"null\"'", _sql(mk(q -> q.filter("payload__null" => "x")); conn = _JL_MY)[:sql_text])
     @test PormG.Dialect._json_extract_expr(_JL_MY, "`c`", ["a", "0", "b"]) ==
           "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`c`, '\$.\"a\"[0].\"b\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
-    # The projection and the ordering read the same text.
-    q = JL.Json_scratch.objects; q.values("id", "payload__nome"); q.order_by("payload__nome")
+    # The projection reads the key's text. (An ordering over the uncast key is refused, #1497.)
+    q = JL.Json_scratch.objects; q.values("id", "payload__nome")
     sql = _sql(q; conn = _JL_MY)[:sql_text]
     @test occursin("$(x("\$.\"nome\"")) as `payload__nome`", sql)
   end
@@ -200,11 +200,12 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test occursin("json_extract(\"Tb\".\"payload\", '\$.nome') as \"payload__nome\"", _sql(q)[:sql_text])
   end
 
-  @testset "order_by on a JSON path resolves the extraction (PG)" begin
+  # An ordering over a key states its type (#1497); the cast resolves the extraction inside ORDER BY.
+  @testset "order_by over a cast JSON path resolves the extraction (PG)" begin
     q = JL.Json_scratch.objects
     q.values("id")
-    q.order_by("payload__nome")
-    @test occursin(r"ORDER BY\s+\"Tb\".\"payload\" #>> '\{\"nome\"\}'", _sql(q; conn = _JL_PG)[:sql_text])
+    q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(PormG.Functions.Cast("payload__nome", "text"), "o")))
+    @test occursin(r"ORDER BY\s+\(?\"Tb\".\"payload\" #>> '\{\"nome\"\}'", _sql(q; conn = _JL_PG)[:sql_text])
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -242,9 +243,14 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test sl[:parameters] == [5]                          # SQLite: native
     @test _sql(mkq(); conn = _JL_PG)[:parameters] == ["5"]   # PG: text
 
-    # A string/LIKE operator on a JSON path is not a supported comparison → clear error.
+    # A string/LIKE operator on a JSON path is not a supported comparison → clear error, naming the
+    # lookup as written (#1499: `@startswith`, not the internal `startswith`).
     q = JL.Json_scratch.objects; q.filter("payload__nome__@startswith" => "ham"); q.values("id")
-    @test_throws "not supported on a JSON path lookup" inspect_query(q)
+    e = try inspect_query(q); nothing catch err; err end
+    @test e isa PormG.FilterError
+    # CI renders with color, so the message is read without its ANSI codes.
+    e isa PormG.FilterError && @test occursin("The @startswith lookup is not supported on payload__nome, a JSON key's value",
+      PormG._emsg(sprint(showerror, e); color = false))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -411,9 +417,9 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test occursin("(\"Tb\".\"payload\" #>> '{\"driver\"}')::numeric > \$1", _sql(keyed("d__@gt", 5); conn = _JL_PG)[:sql_text])
     @test _sql(keyed("d", 5); conn = _JL_SL)[:parameters] == Any[5]
     @test _sql(keyed("d", 5); conn = _JL_PG)[:parameters] == Any["5"]
-    # A pattern lookup and a membership list bind as given, as they did: the key's text, unchecked.
-    @test _sql(keyed("d__@contains", "ham"); conn = _JL_PG)[:parameters] == Any["%ham%"]
-    @test _sql(keyed("d__@in", ["a", "b"]); conn = _JL_SL)[:parameters] == Any["a", "b"]
+    # A pattern lookup and a membership list are refused, as on the key lookup (#1499).
+    @test_throws PormG.FilterError _sql(keyed("d__@contains", "ham"); conn = _JL_PG)
+    @test_throws PormG.FilterError _sql(keyed("d__@in", ["a", "b"]); conn = _JL_SL)
     # An alias over the whole document keeps the JSON formatter and the #1360 marker.
     whole = (q = JL.Json_scratch.objects; q.values("id", "p" => F("payload")); q.filter("p" => "notjson"); q)
     @test_throws PormG.InvalidValueError _sql(whole; conn = _JL_PG)
@@ -787,7 +793,7 @@ end
   # An `OuterRef` to the outer query's key carries it into a `Subquery`, typed on the outer query.
   outer_sub(expr) = QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("v" => expr); s))
   for conn in (_JL_PG, _JL_MY)
-    msg = refused_1483(proj(outer_sub(FN.Coalesce(QB.OuterRef("payload__n"), 0) / 2)), conn, "the outer query's")
+    msg = refused_1483(proj(outer_sub(FN.Coalesce(QB.OuterRef("payload__n"), 0) / 2)), conn, "of the outer query")
     @test occursin("`OuterRef`", msg)
   end
   # The control (MySQL refuses an `OuterRef` side it cannot type in `/`, #1130, so PostgreSQL only).
@@ -909,12 +915,10 @@ end
     r = sql("w__@gt" => 100, conn)
     @test occursin(r"\) > \?$", where(r)) && r[:parameters] == [100]
   end
-  # `@in`, which a key lookup refuses, binds its values as given, as on an `F` alias over the key (#1382);
-  # it bound the text `"9"`, which SQLite's number never equals. (`@range` on PostgreSQL is #1499.)
-  # PostgreSQL binds one array (`= ANY($1)`); SQLite and MySQL one marker per value.
-  @test sql("w__@in" => [9, 10], _JL_PG)[:parameters] == [[9, 10]]
-  @test sql("w__@in" => [9, 10], _JL_SL)[:parameters] == [9, 10]
-  @test sql("w__@in" => [9, 10], _JL_MY)[:parameters] == [9, 10]
+  # `@in`, which a key lookup refuses, is refused here too (#1499).
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test_throws PormG.FilterError sql("w__@in" => [9, 10], conn)
+  end
   # An equality with a number: text on PostgreSQL and MySQL, the native number on SQLite.
   @test sql("w" => 100, _JL_PG)[:parameters] == ["100"]
   @test sql("w" => 100, _JL_SL)[:parameters] == [100]
@@ -934,4 +938,162 @@ end
   end
   @test occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG))) &&
         !occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG; col = "id")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1499: a filter on anything that holds a JSON key's value refuses what the key lookup refuses
+# A filter on a projection alias over a key (`F("payload__n")`), a CTE column over one and a `Subquery`
+# alias projecting one compared as the key lookup does for `=`, `@ne`, the orderings and `@isnull`
+# (#1382, #1472, #1492), but the other operators fell through and bound their values raw. On PostgreSQL
+# the alias is text, so `w__@range => (9, 100)` rendered `#>> '{"n"}' BETWEEN $1 AND $2`, where `'15'`
+# is not between `'9'` and `'100'`: the row dropped without a word. Expected, on every engine and for
+# every handle: `@in`, `@nin`, `@range` and a pattern lookup raise the `FilterError` the key lookup
+# raises, naming the lookup as the caller wrote it and the cast spelling; a cast alias takes the range.
+# Why it matters: a filter on the alias returned fewer rows, silently, where the same filter on the key
+# refused to run.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1499: an alias, CTE column or Subquery over a JSON key refuses what the key lookup refuses" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub() = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => "payload__n"); s)
+  aliased(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => F("payload__n")); q.filter(filt); q)
+  subquery(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => QB.Subquery(sub())); q.filter(filt); q)
+  function cte(filt)
+    body = JL.Json_scratch.objects
+    body.values("id", "w" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__w")
+    q.filter(filt)
+    return q
+  end
+  key(filt) = (q = JL.Json_scratch.objects; q.values("name"); q.filter(filt); q)
+  # The `Subquery` projection warns that it may match more than one row; that is not under test.
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(mk, filt, conn) = quiet(() -> try _sql(mk(filt); conn = conn); nothing catch e; e end)
+  # CI renders with color, so a message is read without its ANSI codes.
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  for conn in (_JL_PG, _JL_SL, _JL_MY),
+      (suffix, value) in (("@range", (9, 100)), ("@in", [9, 15]), ("@nin", [9, 15]), ("@startswith", "1"))
+    @testset "$suffix on $(nameof(typeof(conn)))" begin
+      # The key lookup itself: the reference refusal.
+      e = refusal(key, "payload__n__$suffix" => value, conn)
+      @test e isa PormG.FilterError && occursin("The $suffix lookup is not supported on payload__n", plain(e))
+      for (mk, name) in ((aliased, "w"), (subquery, "w"), (cte, "g__w"))
+        e = refusal(mk, "$(name)__$suffix" => value, conn)
+        @test e isa PormG.FilterError
+        e isa PormG.FilterError &&
+          @test occursin("The $suffix lookup is not supported on $name, a JSON key's value", plain(e))
+        # Both casts: a pattern lookup or a list of text needs the text one (review of #1499).
+        e isa PormG.FilterError && @test occursin("Cast(<the key path>, \"numeric\")", plain(e)) &&
+          occursin("Cast(<the key path>, \"text\")", plain(e))
+      end
+      # A `When` condition on the alias refuses as the alias's filter does.
+      q = JL.Json_scratch.objects
+      q.values("name", "w" => F("payload__n"))
+      q.filter(QB.Case([QB.When("w__$suffix" => value, then = 1)], default = 0) == 1)
+      @test_throws PormG.FilterError _sql(q; conn = conn)
+    end
+  end
+  # The explicit spelling: a cast alias takes the range, two numbers bound on every engine.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    q = JL.Json_scratch.objects
+    q.values("name", "w" => FN.Cast("payload__n", "numeric"))
+    q.filter("w__@range" => (9, 100))
+    r = _sql(q; conn = conn)
+    @test occursin("BETWEEN", r[:sql_text]) && r[:parameters] == [9, 100]
+  end
+  # Controls: the comparisons the key lookup renders still build on the alias.
+  @test _sql(aliased("w__@gte" => 9); conn = _JL_PG)[:parameters] == [9]
+  @test isempty(_sql(aliased("w__@isnull" => true); conn = _JL_SL)[:parameters])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1497: an ordering over an uncast JSON key is refused on every engine
+# #1491 refuses `Max`/`Min` over a key because they order a value the query does not type; an
+# ordering term and `Greatest`/`Least` asked the same question and still built. PostgreSQL rendered
+# `ORDER BY "Tb"."payload" #>> '{"n"}' DESC` and MySQL `JSON_UNQUOTE(…) COLLATE utf8mb4_0900_bin DESC`,
+# both text, so over 9 and 10 descending `9` came first, while SQLite's `json_extract` ordered the
+# numbers; `GREATEST(#>> '{"n"}', "id")` compared text with a bigint. Expected: `QueryBuildError` on
+# every engine when the query is built, naming `(#1497)` and both cast spellings, for an `order_by` path,
+# a projection alias over the key or over a carrier (`Coalesce(key, 0)`), a CTE column, a `Subquery`
+# alias, a labelled expression, a window's ordering and `Greatest`/`Least`; each cast spelling builds.
+# (The SQLite mock cannot render ORDER BY, the #75 version probe; its cells are the integration test's.)
+# Why it matters: the rows came back in a different order on each engine, and nothing said so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1497: an ordering over an uncast JSON key is refused on every engine" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub() = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => "payload__n"); s)
+  ordered(proj, order) = (q = JL.Json_scratch.objects; q.values(proj...); q.order_by(order); q)
+  function cte(order)
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__k")
+    q.order_by(order)
+    return q
+  end
+  window(order) = (q = JL.Json_scratch.objects; q.values("name", "r" => FN.Rank(over = FN.WindowOver(order_by = [order]))); q)
+  function cte_window()
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "r" => FN.Rank(over = FN.WindowOver(order_by = [QB.CTE("g", "k"; desc = true)])))
+    return q
+  end
+  projected(expr) = (q = JL.Json_scratch.objects; q.values("name", "g" => expr); q)
+  labelled(expr) = QB.SQLOrder(QB.SQLField(expr, "o"); orientation = "DESC")
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  refused = (
+    ("an order_by path", () -> ordered(("name",), "-payload__n"), "`order_by`"),
+    ("a projected path", () -> ordered(("id", "payload__nome"), "payload__nome"), "`order_by`"),
+    ("an F alias", () -> ordered(("name", "w" => F("payload__n")), "-w"), "`order_by`"),
+    ("a Coalesce alias", () -> ordered(("name", "w" => FN.Coalesce("payload__n", 0)), "-w"), "`order_by`"),
+    ("a CTE column", () -> cte("-g__k"), "`order_by`"),
+    ("a Subquery alias", () -> ordered(("name", "w" => QB.Subquery(sub())), "-w"), "`order_by`"),
+    ("a labelled expression", () -> ordered(("name",), labelled(F("payload__n"))), "`order_by`"),
+    ("a window path", () -> window("-payload__n"), "A window's `order_by`"),
+    ("a window SQLOrder", () -> window(labelled(F("payload__n"))), "A window's `order_by`"),
+    ("a window over a CTE handle", () -> cte_window(), "A window's `order_by`"),
+    ("a Case alias", () -> ordered(("name", "w" => QB.Case([QB.When("id__@gt" => 1, then = F("payload__n"))], default = 0)), "-w"), "`order_by`"),
+    ("Greatest", () -> projected(FN.Greatest("payload__n", "id")), "`Greatest`"),
+    ("Least", () -> projected(FN.Least("id", "payload__n")), "`Least`"),
+    # An `output_field` casts the result after the operands are compared, so it states no order.
+    ("Greatest with an output_field", () -> projected(FN.Greatest("payload__n", "id"; output_field = "integer")), "`Greatest`"),
+  )
+  builds = (
+    ("a cast alias", () -> ordered(("name", "w" => FN.Cast("payload__n", "numeric")), "-w")),
+    ("a labelled cast", () -> ordered(("name",), labelled(FN.Cast("payload__n", "text")))),
+    ("a window over a cast", () -> window(labelled(FN.Cast("payload__n", "numeric")))),
+    ("Greatest over a cast", () -> projected(FN.Greatest(FN.Cast("payload__n", "numeric"), "id"))),
+    ("a typed column", () -> ordered(("name",), "-id")),
+  )
+  for conn in (_JL_PG, _JL_MY)
+    @testset "$label on $(nameof(typeof(conn)))" for (label, mk, what) in refused
+      e = quiet(() -> try _sql(mk(); conn = conn); nothing catch err; err end)
+      @test e isa PormG.QueryBuildError
+      e isa PormG.QueryBuildError && @test startswith(plain(e), what) && occursin("(#1497)", plain(e)) &&
+        occursin("\", \"numeric\")", plain(e)) && occursin("\", \"text\")", plain(e))
+    end
+    @testset "$label builds on $(nameof(typeof(conn)))" for (label, mk) in builds
+      @test quiet(() -> _sql(mk(); conn = conn)) isa AbstractDict
+    end
+  end
+  # An `order_by` term takes a path or a name, so its message adds the projected spelling.
+  e = try _sql(ordered(("name",), "-payload__n"); conn = _JL_PG) catch err; err end
+  @test occursin("values(\"n\" => Cast(\"payload__n\", \"numeric\")), then order_by(\"n\")", plain(e))
+  # `last()` inverts the ordering and renders it through the same path, on the configured (SQLite)
+  # mock. The refusal comes before the mock's driver probe; a cast term gets past it to that probe
+  # (`InvalidConfigurationError`, no driver loaded), which is the discrimination here.
+  lasted(proj, order) = try (q = ordered(proj, order); q.last(show_query = :sql)); nothing catch err; err end
+  e = lasted(("name",), "-payload__n")
+  @test e isa PormG.QueryBuildError && occursin("(#1497)", plain(e))
+  @test !(lasted(("name", "w" => FN.Cast("payload__n", "numeric")), "-w") isa PormG.QueryBuildError)
+  # Greatest/Least render with no ORDER BY, so SQLite's mock reaches them too.
+  @test_throws PormG.QueryBuildError _sql(projected(FN.Greatest("payload__n", "id")); conn = _JL_SL)
+  @test _sql(projected(FN.Greatest(FN.Cast("payload__n", "numeric"), "id")); conn = _JL_SL) isa AbstractDict
 end

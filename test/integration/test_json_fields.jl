@@ -101,13 +101,13 @@ end
             row = q.list() |> first
             @test string(row[:payload__driver]) == "hamilton"
 
-            # order_by on a JSON path executes on BOTH backends (the DB-free unit test cannot reach
-            # the SQLite ORDER BY path — it trips the #75 version probe on a mock — so a real
-            # connection covers that clause-path here).
-            q = base(); q.values("id", "payload__driver"); q.order_by("payload__driver")
+            # An ordering over a key states its type (#1497): a projected cast executes on every
+            # backend (the DB-free unit test cannot reach the SQLite ORDER BY path — it trips the #75
+            # version probe on a mock — so a real connection covers that clause-path here).
+            q = base(); q.values("id", "d" => Cast("payload__driver", "text")); q.order_by("d")
             ordered = q.list()
             @test length(ordered) == 1
-            @test string(ordered[1][:payload__driver]) == "hamilton"
+            @test string(ordered[1][:d]) == "hamilton"
         end
 
         # ── get_or_create by a whole JSON document (both backends, #717) ─────
@@ -274,10 +274,54 @@ end
             @test length(sub_filtered("payload__points", "w__@gt" => 20).list()) == 0
             @test length(sub_filtered("payload__driver", "w" => "hamilton").list()) == 1
             @test length(sub_filtered("payload__driver", "w" => "norris").list()) == 0
-            # `@in` binds its values as given, as on an `F` alias over the key: it bound the text "15",
-            # which SQLite's number never equals.
-            @test length(sub_filtered("payload__points", "w__@in" => [15, 99]).list()) == 1
-            @test length(sub_filtered("payload__points", "w__@in" => [16, 99]).list()) == 0
+        end
+
+        # #1497: an ordering over an uncast key does not say whether it orders numbers or text. Over
+        # `points` 9 and 10, a descending `order_by("-payload__points")` put 9 first on PostgreSQL and
+        # MySQL (text) and 10 first on SQLite (numbers). Expected: `QueryBuildError` on every engine
+        # before any SQL is sent; the projected cast orders 10 before 9 on every engine. Two rows of
+        # their own, removed after.
+        @testset "an ordering over an uncast JSON key is refused; the cast orders numbers (#1497)" begin
+            slugs = ("json1497-nine", "json1497-ten")
+            pair() = (q = M.Field_validation_scratch.objects; q.filter("slug__@in" => collect(slugs)); q)
+            stale = pair(); stale.exists() && stale.delete()
+            try
+                for (slug, points) in zip(slugs, (9, 10))
+                    M.Field_validation_scratch.objects.create(
+                        "uuid_token" => string(UUIDs.uuid4()), "canonical_url" => "https://example.com/$(slug)",
+                        "slug" => slug, "payload" => Dict("points" => points))
+                end
+                q = pair(); q.values("slug"); q.order_by("-payload__points")
+                @test_throws PormG.QueryBuildError q.list()
+                q = pair(); q.values("slug", "g" => Greatest("payload__points", "id"))
+                @test_throws PormG.QueryBuildError q.list()
+                q = pair(); q.values("slug", "w" => Cast("payload__points", "numeric")); q.order_by("-w")
+                @test [r[:slug] for r in q.list()] == ["json1497-ten", "json1497-nine"]
+            finally
+                cleanup1497 = pair(); cleanup1497.exists() && cleanup1497.delete()
+            end
+        end
+
+        # #1499: the lookups a key lookup refuses are refused on everything that holds its value. On
+        # PostgreSQL `@range` on an alias over `payload__points` (15) compared text, so `(9, 100)` matched
+        # no row ('15' is not between '9' and '100'), while SQLite matched it. Expected: `FilterError` on
+        # every engine for `@range` and `@in` through an `F` alias and a `Subquery` alias, before any
+        # SQL is sent; the cast spelling matches the row on every engine.
+        @testset "an alias over a JSON key refuses @in and @range (#1499)" begin
+            via_f(filt) = (q = base(); q.values("id", "w" => F("payload__points")); q.filter(filt); q)
+            function via_sub(filt)
+                s = M.Field_validation_scratch.objects
+                s.filter("id" => OuterRef("id")); s.values("k" => "payload__points")
+                q = base(); q.values("id", "w" => Subquery(s)); q.filter(filt)
+                return q
+            end
+            for mk in (via_f, via_sub), filt in ("w__@range" => (9, 100), "w__@in" => [15, 99])
+                @test_throws PormG.FilterError mk(filt).list()
+            end
+            q = base(); q.values("id", "w" => Cast("payload__points", "numeric")); q.filter("w__@range" => (9, 100))
+            @test length(q.list()) == 1
+            q = base(); q.values("id", "w" => Cast("payload__points", "numeric")); q.filter("w__@in" => [15, 99])
+            @test length(q.list()) == 1
         end
 
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────

@@ -411,7 +411,7 @@ M.Constructor.objects.values("name", "metadata__principal")
 ```
 
 Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
-`@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
+`@isnull`. Path lookups also work in `.values(...)`; an ordering over one names its type (below).
 
 A projection alias over a path lookup holds the key's value, and a filter on it compares as the path
 lookup itself does, with the same comparisons:
@@ -443,6 +443,18 @@ wins.values("w" => "metadata__wins")
 q = M.Constructor.objects
 q.values("name", "wins" => Subquery(wins))
 q.filter("wins__@gt" => 100)               # a numeric comparison, as "metadata__wins__@gt" => 100
+```
+
+All three take exactly the path lookup's comparisons. `@in`, `@nin`, `@range`, `@nrange` and the
+pattern lookups (`@contains`, `@startswith`, …) raise a `FilterError` on every engine, on the path
+lookup and on an alias, CTE column or `Subquery` over it (#1499). A key's value has no declared type,
+and PostgreSQL extracts it as text, so `@range` over `9` and `100` would compare text there and skip a
+row holding `15`. Project the key with the type you mean and filter that name:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "wins" => Cast("metadata__wins", "numeric"))
+q.filter("wins__@range" => (9, 100))       # numbers on every engine
 ```
 
 A path lookup compares the extracted value against a **value**. A column expression on the right
@@ -499,9 +511,20 @@ q.values("most" => Max(Cast("metadata__wins", "numeric")))    # 10 on every engi
 q.values("last" => Max(Cast("metadata__principal", "text")))  # the greatest text, in the engine's collation
 ```
 
-An `order_by` over a key and `Greatest`/`Least` over keys still build, and order the key's text on
-PostgreSQL and MySQL (#1497): order by a projected cast (`values("w" => Cast("metadata__wins",
-"numeric")); order_by("-w")`) to order numbers on every engine.
+An ordering over an uncast key raises `QueryBuildError` on every engine for the same reason (#1497).
+That covers an `order_by` term, an `order_by` on an alias, CTE column or `Subquery` that holds the key,
+a window's `order_by`, and `Greatest`/`Least` over a key. PostgreSQL and MySQL would order the key's
+text, putting `9` above `10` in descending order, where SQLite orders the numbers. `order_by` takes a
+path or a projected name, so project the cast and order by its name:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "wins" => Cast("metadata__wins", "numeric"))
+q.order_by("-wins")                                                   # 10 before 9 on every engine
+
+q = M.Constructor.objects
+q.values("name", "most" => Greatest(Cast("metadata__wins", "numeric"), "constructorid"))
+```
 
 A function over the key with nothing computed on it builds (`Floor("metadata__wins")`), and so does a
 comparison (`"metadata__wins__@gte" => 100`, above).

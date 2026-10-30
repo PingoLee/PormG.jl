@@ -37,7 +37,7 @@ PostgreSQL does (read from its SQL; not measured on a server). The message names
 collation.
 
 An ordering over a key (`order_by("metadata__wins")`) and `Greatest`/`Least` over one have the same
-split and still build in this release; they are tracked in #1497.
+split, and are refused in this train too (#1497): see `2026-10-30-1497-json-key-ordering-refused.md`.
 
 Earlier in this train (#1471), only SQLite refused, and only a `/`; a float divisor (`/ 2.0`) and
 arithmetic beside a float literal (`F("metadata__wins") * 1.0`) built there. Those are refused now
@@ -62,7 +62,7 @@ too: on PostgreSQL they reach the same server error.
 Code that computes on a value taken from a JSON key, or takes its `Max` or `Min`, directly or
 through one of the functions above, wherever the arithmetic or the extremum appears: a projection, a filter value
 (`"constructorid__@gt" => F("metadata__wins") / 2`), an `update()` value, an ordering, a CTE body, a
-`Subquery`. An `order_by` over a key itself is not refused (#1497).
+`Subquery`. An `order_by` over a key itself is #1497's entry.
 
 ### How to find the calls to migrate
 

@@ -1421,6 +1421,11 @@ a filter on it, and a CTE column typed by it all agree. On SQLite a `date` rende
 other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
 integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
 (`Floor("points")`). So does a scaled `numeric(p, s)` one (#1040).
+
+Over an uncast JSON key (`Greatest("metadata__wins", "constructorid")`) it raises `QueryBuildError` on every engine (#1497), as
+[`Max`](@ref) does: the key's value has no declared type, so the query does not say whether it compares
+numbers or text. Cast the key, `Cast("metadata__wins", "numeric")`; an `output_field` casts the result
+after the comparison, so it does not say it.
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -1452,6 +1457,11 @@ a filter on it, and a CTE column typed by it all agree. On SQLite a `date` rende
 other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
 integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
 (`Floor("points")`). So does a scaled `numeric(p, s)` one (#1040).
+
+Over an uncast JSON key (`Least("metadata__wins", "constructorid")`) it raises `QueryBuildError` on every engine (#1497), as
+[`Max`](@ref) does: the key's value has no declared type, so the query does not say whether it compares
+numbers or text. Cast the key, `Cast("metadata__wins", "numeric")`; an `output_field` casts the result
+after the comparison, so it does not say it.
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696

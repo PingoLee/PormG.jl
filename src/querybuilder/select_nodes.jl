@@ -80,6 +80,7 @@ function _resolve_window_order(v::String, instruc::SQLInstruction)::Tuple{String
   field = startswith(v, "-") ? v[2:end] : v
   isempty(field) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
   expr = string(_resolve_window_expression(field, instruc))
+  _refuse_json_key_ordering(field, instruc, "A window's `order_by`")   # #1497
   return (expr, string(expr, " ", orientation))
 end
 
@@ -254,6 +255,7 @@ end
 
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))
+  _refuse_json_key_ordering(v.field, instruc, "A window's `order_by`")   # #1497
   orientation = _normalize_window_orientation(v.orientation)
   v.nulls === nothing && return (expr, string(expr, " ", orientation))
   return (expr, _order_term_sql(expr, orientation, _nulls_placement(orientation, v.nulls), instruc.connection))
@@ -264,13 +266,17 @@ end
 # which is what keeps the emitted OVER (...) clause identical to the pre-#444 `"-<cte>__col"` string.
 function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::Tuple{String,String}
   orientation = v.desc ? "DESC" : "ASC"
-  expr = string(_get_select_query(CTEReference(name=v.name, path=v.path), instruc))
+  handle = CTEReference(name=v.name, path=v.path)
+  expr = string(_get_select_query(handle, instruc))
+  _refuse_json_key_ordering(handle, instruc, "A window's `order_by`")   # #1497
   return (expr, string(expr, " ", orientation))
 end
 # #481 — the joined-copy twin: consume `desc` here, then render through the same resolver.
 function _resolve_window_order(v::JoinedReference, instruc::SQLInstruction)::Tuple{String,String}
   orientation = v.desc ? "DESC" : "ASC"
-  expr = string(_get_select_query(JoinedReference(v.alias, v.path, false), instruc))
+  handle = JoinedReference(v.alias, v.path, false)
+  expr = string(_get_select_query(handle, instruc))
+  _refuse_json_key_ordering(handle, instruc, "A window's `order_by`")   # #1497
   return (expr, string(expr, " ", orientation))
 end
 
@@ -960,6 +966,14 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     side = _json_number_side(v.column, instruc)
     side === nothing || _refuse_json_key_operand(titlecase(v.function_name), side;
                                                  ordering = v.function_name in ("MAX", "MIN"))
+  end
+  # #1497: `Greatest`/`Least` order their operands as `Max`/`Min` order rows; PostgreSQL's `GREATEST`
+  # over a key compared its text with the other operands. An `output_field` casts the RESULT, after the
+  # operands are compared, so it does not state the order: each operand states its own (`Cast`).
+  if v.function_name in ("GREATEST", "LEAST")
+    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+      _refuse_json_key_ordering(operand, instruc, "`$(_ONE_OF_NAMES[v.function_name])`")
+    end
   end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's

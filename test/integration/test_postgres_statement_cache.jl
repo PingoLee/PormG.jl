@@ -6,8 +6,10 @@ every call; it now goes through `DBInterface.prepare`, which serves a statement 
 seen from the driver's LRU (`statement_cache_maxsize`, default 100). A cached statement whose result
 columns change under it — an `ADD COLUMN` on the table of a cached `SELECT *` or `RETURNING *`, run
 by another connection or process — is refused by PostgreSQL with `cached plan must not change result
-type` (SQLSTATE 0A000). Outside a transaction the extension clears the cache and runs the statement
-again; inside one the transaction is already aborted, so the error propagates.
+type` (SQLSTATE 0A000), and one the server deallocated (`DEALLOCATE ALL`, `DISCARD ALL`) with
+26000. Either way the extension clears the cache. Outside a transaction it runs the statement again;
+inside one the transaction is already aborted, so the error propagates and a retried transaction
+prepares afresh.
 
 The statements here are raw SQL on purpose: the feature is the statement cache under a concurrent
 schema change, which no ORM call can stage. The meaning testsets run on both PostgreSQL drivers, so
@@ -83,9 +85,10 @@ end
       # Meaning departure (driver): inside a transaction, a stale cached statement raises 0A000 under Postgres.jl
       # The statement is cached outside the transaction; after `BEGIN` another connection adds a
       # column, and the cached `SELECT *` is refused by the server. The transaction is already aborted,
-      # so the extension does not try again (a retry could only raise 25P02 and hide the cause).
-      # LibPQ sends the statement unnamed and reads the new column. The refusal must carry the routine
-      # the extension recognises the error by, `RevalidateCachedQuery`, on this server.
+      # so the extension does not try again (a retry could only raise 25P02 and hide the cause), but it
+      # drops the stale statement, so the caller's retried transaction reads. LibPQ sends the
+      # statement unnamed and reads the new column. The refusal must carry the routine the extension
+      # recognises the error by, `RevalidateCachedQuery`, on this server.
       # ─────────────────────────────────────────────────────────────────────────────
       sc1479_reset!()
       @testset "inside a transaction the stale statement $(SC1479_DRIVER === :postgres ? "raises 0A000" : "reads the new column")" begin
@@ -113,8 +116,49 @@ end
           if SC1479_DRIVER === :postgres
             @test !(@lock conn.lock conn.server_in_transaction)
           end
-          # After the rollback the same statement reads again, prepared afresh.
-          @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
+          # The caller's retry of the transaction, on the same connection, reads the new column: the
+          # failure dropped the stale statement, which PostgreSQL would otherwise refuse on every
+          # Bind, inside a transaction where no retry clears it.
+          sc1479_run(conn, "BEGIN")
+          try
+            @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
+          finally
+            sc1479_run(conn, "ROLLBACK")
+          end
+        end
+      end
+
+      if SC1479_DRIVER === :postgres
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Postgres.jl: a cached statement the server deallocated (26000) is prepared again
+        # `DEALLOCATE ALL`, sent unnamed on the connection, drops every named statement behind the
+        # driver's cache; the next `SELECT * … WHERE "id" = $1` is refused with SQLSTATE 26000
+        # (`prepared statement … does not exist`). Outside a transaction it is prepared again and
+        # reads; inside one it raises and the retried transaction reads. Without this a connection
+        # that met a `DISCARD ALL` would refuse every cached statement until it was renewed.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "a deallocated cached statement is prepared again (26000)" begin
+          sc1479_with_two_connections() do conn, _
+            sc1479_run(conn, SC1479_SELECT, [1])
+            DBInterface.execute(conn, "DEALLOCATE ALL")
+            @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
+
+            DBInterface.execute(conn, "DEALLOCATE ALL")
+            sc1479_run(conn, "BEGIN")
+            try
+              e = sc1479_raised(() -> sc1479_run(conn, SC1479_SELECT, [1]))
+              @test e isa Postgres.Error
+              @test e.code == "26000"
+            finally
+              sc1479_run(conn, "ROLLBACK")
+            end
+            sc1479_run(conn, "BEGIN")
+            try
+              @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
+            finally
+              sc1479_run(conn, "ROLLBACK")
+            end
+          end
         end
       end
 
@@ -140,6 +184,11 @@ end
             # No named statement on the server either.
             n = sc1479_run(conn, "SELECT count(*) AS n FROM pg_prepared_statements")
             @test only(Tables.rowtable(n)).n == 0
+            # What tells the unnamed path apart: a prepared statement would refuse two values for one
+            # marker client-side (`PostgresInterfaceError`); unnamed, the server refuses it (08P01).
+            e = sc1479_raised(() -> sc1479_run(conn, SC1479_SELECT, [1, 2]))
+            @test e isa Postgres.Error
+            @test e.code == "08P01"
           finally
             close(conn)
           end

@@ -681,12 +681,17 @@ end
 # #1479: a statement runs through the driver's per-connection cache of named prepared statements
 # (`statement_cache_maxsize`, an LRU of 100 by default), so a query shape the connection has seen
 # skips the Parse and Describe round trip; ~26% off a two-join read. A statement the connection has
-# not seen costs two extra round trips, once. `statement_cache_maxsize=0` in the connection string
-# keeps the unnamed statement on every call (a PgBouncer in transaction mode before 1.21 needs it):
-# `prepare` with no cache would make an uncached server statement per call instead.
+# not seen costs two extra round trips, three when the cache is full (the LRU entry's Close), so a
+# connection that cycles through more distinct statements than the cache holds pays that on every
+# call. `statement_cache_maxsize=0` in the connection string keeps the unnamed statement on every
+# call (a transaction-mode PgBouncer without `max_prepared_statements` needs it): `prepare` with no
+# cache would make an uncached server statement per call instead.
 #
 # `close!` releases a handle the driver re-prepared outside the cache (an entry evicted between
-# `prepare` and `execute`); on a cached handle it is a no-op.
+# `prepare` and `execute`); on a cached handle it is a no-op. On a miss the connection lock is let go
+# between the Parse, the Describe and the Execute, so a cancel (#315, #1277) that lands in a gap finds
+# the backend idle and does nothing; core's settle wait then renews the connection. A hit does no I/O
+# before the Execute.
 function _execute_prepared(conn::Postgres.Connection, sql::String, params)
   stmt = DBInterface.prepare(conn, sql)
   try
@@ -696,21 +701,31 @@ function _execute_prepared(conn::Postgres.Connection, sql::String, params)
   end
 end
 
-# A cached statement whose result columns changed under it — an `ADD COLUMN` on the table of a
-# cached `RETURNING *`, run by any process — is refused at Bind with `cached plan must not change
-# result type`. Recognised by its SQLSTATE and the server routine that raises it, as pgjdbc does
-# (`willHealViaReparse`): `0A000` alone is every `feature_not_supported`. The routine is a C
-# function name, never translated by `lc_messages`.
-_is_stale_cached_plan(e::Postgres.Error)::Bool = e.code == "0A000" && e.routine == "RevalidateCachedQuery"
-_is_stale_cached_plan(e)::Bool = false
+# A cached statement the server will not run again as it is, which preparing it afresh heals — the
+# two cases pgjdbc's `willHealViaReparse` names:
+#   * its result columns changed under it (an `ADD COLUMN` on the table of a cached `RETURNING *`,
+#     by any connection, this one included): `cached plan must not change result type`, recognised
+#     by SQLSTATE `0A000` and the server routine that raises it, since `0A000` alone is every
+#     `feature_not_supported`. The routine is a C function name, never translated by `lc_messages`;
+#   * it is gone from the server (`DEALLOCATE ALL` or `DISCARD ALL` on the connection): `26000`.
+# Both are raised at Bind, before the statement runs.
+_is_stale_cached_statement(e::Postgres.Error)::Bool =
+  (e.code == "0A000" && e.routine == "RevalidateCachedQuery") || e.code == "26000"
+_is_stale_cached_statement(e)::Bool = false
 
-# Outside a transaction nothing ran, so the cache is cleared and the statement prepared again, once
-# (asyncpg's rule for `InvalidCachedStatementError`). Inside one the server has already aborted the
-# transaction, so a second attempt could only raise 25P02 and hide the cause: the error propagates.
+# The cache is cleared either way: PostgreSQL keeps refusing a stale statement on every Bind, so an
+# entry left behind would fail each later use on this connection (asyncpg also drops its cache
+# before deciding). Outside a transaction nothing ran, so the statement is prepared again and run
+# once more (asyncpg's rule for `InvalidCachedStatementError`). Inside one the server has already
+# aborted the transaction, so a second attempt could only raise 25P02 and hide the cause: the error
+# propagates, and the caller's retry of the transaction prepares afresh. A Close is accepted in an
+# aborted transaction; if the clear fails anyway, the original error propagates.
+#
 # PormG opens its transactions with a raw `BEGIN`, which the driver's `in_transaction` flag does not
-# see, so the server's ReadyForQuery status is read instead — `server_in_transaction`, a field of
+# see, so `server_in_transaction` is read instead: the status the last ReadyForQuery reported (a
+# Bind error skips the update, but cannot open or close a transaction block either), a field of
 # `Postgres.Connection` from 2.2.2 through 2.4.0 that Postgres.jl's own pool reset reads the same
-# way. `test_postgresjl_statement_cache.jl` pins it.
+# way. `test_postgres_statement_cache.jl` pins it.
 function _execute(conn::Postgres.Connection, sql::String, params)
   if conn.statement_cache_maxsize == 0
     return params === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, params)
@@ -718,8 +733,15 @@ function _execute(conn::Postgres.Connection, sql::String, params)
   try
     return _execute_prepared(conn, sql, params)
   catch e
-    (_is_stale_cached_plan(e) && !(@lock conn.lock conn.server_in_transaction)) || rethrow()
-    Postgres.clear_statement_cache!(conn)
+    _is_stale_cached_statement(e) || rethrow()
+    in_transaction = @lock conn.lock conn.server_in_transaction
+    cleared = try
+      Postgres.clear_statement_cache!(conn)
+      true
+    catch
+      false
+    end
+    (in_transaction || !cleared) && rethrow()
     return _execute_prepared(conn, sql, params)
   end
 end

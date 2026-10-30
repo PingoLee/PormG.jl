@@ -33,8 +33,9 @@ const PgConn = Postgres.Connection
 
 # A server error with the given SQLSTATE and text. Built by field name so a field added upstream
 # cannot shift the others.
-_pg_error(code; message = "boom", detail = nothing) = Postgres.Error((
-  f === :severity ? "ERROR" : f === :code ? code : f === :message ? message : f === :detail ? detail : nothing
+_pg_error(code; message = "boom", detail = nothing, routine = nothing) = Postgres.Error((
+  f === :severity ? "ERROR" : f === :code ? code : f === :message ? message : f === :detail ? detail :
+  f === :routine ? routine : nothing
   for f in fieldnames(Postgres.Error))...)
 
 # An exception that carries another in `.cause`, as the TLS layer's error does…
@@ -784,4 +785,25 @@ end
   @test PGExt._copy_payload([Vector{UInt8}("1,a\n"), "2,b\n"]) == Vector{UInt8}("1,a\n2,b\n")
   @test PGExt._copy_payload("1,a\n") == Vector{UInt8}("1,a\n")
   @test_throws ArgumentError PGExt._copy_payload([1, 2])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1479: which errors make the statement cache prepare a statement again
+# A cached statement is healed by preparing it afresh only for the two refusals pgjdbc's
+# `willHealViaReparse` names: SQLSTATE 0A000 raised by the server routine `RevalidateCachedQuery`
+# (`cached plan must not change result type`) and 26000 (the statement was deallocated). Any other
+# `feature_not_supported` (0A000 from another routine, or with no routine) must propagate untouched,
+# since re-running it could only fail again. Hermetic, so CI checks the match the integration file
+# can only check under `PORMG_POSTGRES_DRIVER=Postgres`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1479: a stale cached statement is recognised by SQLSTATE and routine" begin
+  stale = PGExt._is_stale_cached_statement
+  @test stale(_pg_error("0A000"; routine = "RevalidateCachedQuery"))
+  @test stale(_pg_error("26000"; routine = "FetchPreparedStatement"))
+  @test stale(_pg_error("26000"))
+  @test !stale(_pg_error("0A000"))                                       # no routine reported
+  @test !stale(_pg_error("0A000"; routine = "transformLockingClause"))    # another feature_not_supported
+  @test !stale(_pg_error("42P01"; routine = "RevalidateCachedQuery"))    # the routine alone is not enough
+  @test !stale(Postgres.PostgresInterfaceError("number of parameters provided (2) does not match"))
+  @test !stale(EOFError())
 end

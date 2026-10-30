@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1479 ; `ext/PormGPostgresExt.jl` (`_execute`, `_execute_prepared`)
 - **Recorded**: 2026-10-29
-- **Severity**: behavior change. Under `postgres_driver: Postgres` only. A statement inside a transaction that another connection's schema change made stale now raises a `StatementError`, and a hand-written `fetch` with the wrong number of parameters raises a `StatementError` where it raised an `OperationalError`. LibPQ is unchanged.
+- **Severity**: behavior change. Under `postgres_driver: Postgres` only. Inside a transaction, a cached statement that a schema change or a `DEALLOCATE ALL` made stale now raises a `StatementError`. A hand-written `fetch` with the wrong number of parameters raises a `StatementError` where it raised an `OperationalError`. LibPQ is unchanged.
 
 ### What changed
 
@@ -11,22 +11,25 @@ The Postgres.jl extension used to send every statement unnamed, so the server pa
 on every call. Each connection now keeps the statements it runs prepared, in the driver's
 `statement_cache_maxsize` cache (100 by default). A two-join read on the F1 data took about a
 quarter less time. A statement the connection has not seen yet costs two extra round trips the
-first time.
+first time (three once the cache is full).
 
-Two calls now end differently:
+What a call now does:
 
 | Call | before | now |
 |---|---|---|
-| Another connection or process changes the columns of a table (`ADD COLUMN`), then a statement this connection cached for it (`SELECT *`, or `create()`'s `RETURNING *`) runs **outside** a transaction | the statement ran | the statement runs (the cache is cleared and the statement prepared again) |
-| The same, **inside** a transaction | the statement ran | `StatementError` caused by SQLSTATE `0A000`, `cached plan must not change result type`. The transaction is aborted |
+| Any connection or process, this one included, changes the columns of a table (`ADD COLUMN`), then a statement this connection cached for it (`SELECT *`, or `create()`'s `RETURNING *`) runs **outside** a transaction | the statement ran | unchanged: the statement runs (the cache is cleared and the statement prepared again) |
+| The same, **inside** a transaction | the statement ran | `StatementError` caused by SQLSTATE `0A000`, `cached plan must not change result type`. The transaction is aborted; the cache is cleared, so running the transaction again succeeds |
+| `DEALLOCATE ALL` or `DISCARD ALL` sent on the connection, then a cached statement runs inside a transaction | the statement ran | `StatementError` caused by SQLSTATE `26000`; the cache is cleared, so running the transaction again succeeds. Outside a transaction the statement runs |
 | `fetch` of a hand-written statement with more or fewer values than its `$n` markers | `OperationalError` (the server's protocol error `08P01`) | `StatementError`: the driver refuses the call before sending it |
 
 ### Who this affects
 
 Apps that set `postgres_driver: Postgres` (or `PORMG_POSTGRES_DRIVER=Postgres`) and either migrate
 a table while other processes are writing to it inside transactions, or connect through a PgBouncer
-in transaction-pooling mode older than 1.21, which cannot route a prepared statement to the server
-connection that holds it.
+in transaction-pooling mode without `max_prepared_statements`, which cannot route a prepared
+statement to the server connection that holds it. A query that turns slower after its fifth call
+may have been given a generic plan; `docs/src/configuration/connection_yml.md` → *Prepared
+statements under Postgres.jl* has the `plan_cache_mode` setting that avoids it.
 
 ### How to find the calls to migrate
 
@@ -36,7 +39,8 @@ grep -rnE 'postgres_driver|PORMG_POSTGRES_DRIVER' --include=*.yml --include=*.jl
 
 ### Migrate your app
 
-Behind a PgBouncer in transaction mode before 1.21, turn the cache off in the connection string:
+Behind a PgBouncer in transaction mode whose `max_prepared_statements` is 0 or absent (it arrived
+in 1.21), turn the cache off in the connection string:
 
 ```yaml
 # ✗ before: prepared statements reach whichever server connection PgBouncer picks
@@ -53,5 +57,6 @@ dev:
 ```
 
 A transaction that can meet a concurrent deploy's schema change should be retried as a whole
-when it raises the `0A000` above. A `catch e isa OperationalError` around a hand-written `fetch` that
-counted on the old type should catch `PormG.DatabaseError`, the umbrella both types are under.
+when it raises the `0A000` or `26000` above. A `catch e isa OperationalError` around a hand-written
+`fetch` that counted on the old type should catch `PormG.DatabaseError`, the umbrella both types are
+under.

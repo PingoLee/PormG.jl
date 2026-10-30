@@ -274,6 +274,8 @@ const _EKM_TEXTLESS_FAMILY = Dict(
   "bool" => :bool, "float" => :float, "decimal" => :decimal, "numeric" => :numeric,
   # #1111: a whole number PostgreSQL types `numeric`, divided — an engine-dependent number too.
   "numeric_whole_division" => :numeric,
+  # D5 (#1034): a zero-scale cast SQLite does not round, a decimal there and a whole decimal elsewhere.
+  "zero_scale_decimal" => :decimal,
   "timestamp" => :datetime, "interval" => :interval, "json" => :json, "json_value" => :json)
 const _EKM_FIELD_FAMILY = Dict(
   "sIntegerField" => :int, "sBigIntegerField" => :int, "sSmallIntegerField" => :int, "sFloatField" => :float,

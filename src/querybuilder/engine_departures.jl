@@ -27,7 +27,7 @@
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
 # (a declared cast to one), `:number` (a cast to any number type, #1259, #1260; to a float or a `numeric`, #1319), `:date` (a cast to a date, #1325, #1417), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
-# hold), `:single_precision` (`real`, #1215), `:sized_text` (a text type of a declared length, #1252) and `:concat` (a `Concat` operand). `kinds` are the
+# hold), `:single_precision` (`real`, #1215), `:sized_text` (a text type of a declared length, #1252), `:concat` (a `Concat` operand) and `:division` (a side of `/`, #1471). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
 # text`), since two engines can depart from one meaning with different values; `_computes` picks the
@@ -43,7 +43,9 @@ const _MEANING_DEPARTURES = (
   # #1028: a fractional number cast to an integer is the nearest one; SQLite's cast truncates. MySQL's
   # `CAST(… AS SIGNED)` rounds (measured: `1.5` → `2`, `-1.5` → `-2`; a double's tie to even, `2.5E0` →
   # `2`, as PostgreSQL's `float8`), so it keeps the meaning.
-  (targets = (:integer,), kinds = (:float, :decimal, :numeric), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1028",
+  # D5 (#1034): a zero-scale cast over a value that is not an integer is that value on SQLite, which
+  # does not round it (`:zero_scale_decimal`), so the same truncation reaches it there.
+  (targets = (:integer,), kinds = (:float, :decimal, :numeric, :zero_scale_decimal), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1028",
    meaning = _ -> "the nearest integer (`1.5` → `2`)",
    computes = (PormGSQLite => _ -> "the truncated one (`1`)",),
    fix = (_, _) -> "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m."),
@@ -112,7 +114,9 @@ const _MEANING_DEPARTURES = (
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite. MySQL's
   # `DECIMAL(p, s)` rounds a decimal, a double and text alike (measured: `1.235` → `1.24`).
-  (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1040",
+  # D5 (#1034): so is a zero-scale cast SQLite did not round (`:zero_scale_decimal`), wherever the walk
+  # does not carry its scale (a `Subquery`'s record).
+  (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text, :zero_scale_decimal), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1040",
    meaning = declared -> "the value rounded to the scale of $(declared)",
    computes = (PormGSQLite => _ -> "every digit of it",),
    fix = (_, declared) -> "Round it to the scale first (\e[32mCast(Round(x, $(something(_numeric_cast_scale(declared), 0))), \"$(declared)\")\e[0m, #1061), or cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value."),
@@ -143,6 +147,25 @@ const _MEANING_DEPARTURES = (
    meaning = declared -> "the text cut to $(something(_sized_text_length(declared), 0)) characters",
    computes = (PormGSQLite => _ -> "every character of it, since it enforces no length",),
    fix = (_, _) -> "Cast to text of no declared length, \e[32mCast(x, \"text\")\e[0m or \e[32mCast(x, CharField())\e[0m, and cut the fetched value in Julia (\e[32mfirst(s, n)\e[0m)."),
+  # #1471: a JSON number has no integer type, so its quotient keeps the fraction. SQLite's
+  # `json_extract` hands over the integer the document holds, and `FLOOR`, `ABS`, `SUM`, `MAX` keep
+  # it, so `/` divides as integers there (measured on 3.54.0: `{"n": 7}` gives `3`). PostgreSQL
+  # computes the fraction where it builds (`FLOOR((x)::numeric) / 2` is `3.5`), and raises at the
+  # server where it reads the key as text (`#>>` over `+` or `SUM`), an error the tie-breaker leaves
+  # to raise. MySQL's `/` keeps the fraction (it refuses a side PormG cannot type before this row
+  # is read, #1130). The operand decides nothing beyond holding a key, so the one kind is `:json_number`.
+  (targets = (:division,), kinds = (:json_number,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1471",
+   meaning = _ -> "one that keeps its fraction, since a JSON number has no integer type",
+   computes = (PormGSQLite => _ -> "an integer quotient when the key holds a whole number (`7 / 2` is `3`)",),
+   fix = (flag, _) -> "Say the number type you mean: \e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and \e[32mCast(\"$(flag)\", BigIntegerField())\e[0m divides as integers."),
+  # D5 (#1034): a zero-scale cast (`numeric(p,0)`) is a whole number, and its text is the integer's:
+  # PostgreSQL and MySQL round the value and write `15`, or `14` for a whole float (measured on 18.6 and
+  # 8.4). SQLite's cast to NUMERIC keeps a REAL as it is, so it writes `14.0` (measured on 3.54.0); over
+  # an integer it writes `14` too, and the classifier names no kind there (`_zero_scale_cast_textless`).
+  (targets = (:concat,), kinds = (:zero_scale_decimal,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1034",
+   meaning = _ -> "the whole number it rounds to, written as an integer (`14`)",
+   computes = (PormGSQLite => _ -> "the operand's own text, since its cast to NUMERIC keeps a REAL as it is (`14.0`)",),
+   fix = (_, _) -> "Cast it to an integer, which writes `14` on every engine: \e[32mCast(x, IntegerField())\e[0m over the zero-scale cast."),
 )
 
 # #1260 — the spelling of a temporal part for the operand a refusal names: a path takes the transform

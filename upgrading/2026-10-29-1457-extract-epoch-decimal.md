@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1457 ; `src/Dialect.jl` (`EXTRACT`), `src/querybuilder/projection_types.jl` (`_epoch_extract`), `src/querybuilder/expression_kind.jl`
 - **Recorded**: 2026-10-29
-- **Severity**: behavior change on PostgreSQL and MySQL. Queries over `EPOCH` that raised `QueryBuildError` now build. PostgreSQL renders `EXTRACT(EPOCH FROM x)::numeric`. On a PostgreSQL server older than 14, the value reads back as a `Decimal` instead of a `Float64`.
+- **Severity**: behavior change on PostgreSQL and MySQL. Queries over `EPOCH` that raised `QueryBuildError` now build, and `Concat` over `EPOCH`, which built, now raises it. PostgreSQL renders `EXTRACT(EPOCH FROM x)::numeric`. On a PostgreSQL server older than 14, the value reads back as a `Decimal` instead of a `Float64`.
 
 ### What changed
 
@@ -26,6 +26,10 @@ type. It is now a decimal: the seconds, with their fraction.
   measured on a server older than 14.
 - **A CTE column over a sum of it is a `DecimalField`.** It used to be an `IntegerField`. A filter on
   that column now takes a decimal value.
+- **`Concat` over it raises `QueryBuildError` on PostgreSQL and MySQL.** It used to build alone and in
+  a `Subquery`, while `Concat` over a CTE column holding the same seconds was refused. A decimal's text
+  is each engine's own (its number of places differs), so `Concat` refuses it as it refuses any decimal
+  (#1027): cast it to text first, or to an integer if whole seconds are meant.
 
 SQLite has no `EPOCH` part and still raises `BackendCapabilityError`.
 
@@ -40,11 +44,14 @@ Examples on `Race`, whose `start_at` is a `DateTimeField`, and `Result`, whose `
 | `values("v" => Extract("start_at", "epoch"))` on PostgreSQL, SQL | `EXTRACT(EPOCH FROM "Tb"."start_at")` | `EXTRACT(EPOCH FROM "Tb"."start_at")::numeric` |
 | the same, value on PostgreSQL 14+ | `Decimal` | `Decimal` (unchanged) |
 | the same, value on PostgreSQL 13 or older | `Float64` | `Decimal` |
+| `values("v" => Concat(Value("t="), Extract("start_at", "epoch")))` on PostgreSQL or MySQL | builds | `QueryBuildError` |
+| `values("v" => Concat(Value("t="), Cast(Extract("start_at", "epoch"), "text")))` | builds | builds (unchanged) |
 
 ### Who this affects
 
 - Code on MySQL that worked around the refusal, for example by casting `EPOCH` before dividing it.
 - Code that compares PostgreSQL SQL text containing `EXTRACT(EPOCH FROM …)`.
+- Code that puts `EPOCH` in a `Concat` without a cast.
 - Code on a PostgreSQL server older than 14 that expects `EPOCH` to read back as a `Float64`, or
   needs its last microsecond digit.
 
@@ -66,6 +73,19 @@ q.values("raceid", "half" => Cast(Extract("start_at", "epoch"), "numeric(20,6)")
 # ✓ after — the seconds are a decimal on PostgreSQL and MySQL
 q = M.Race.objects
 q.values("raceid", "half" => Extract("start_at", "epoch") / 2)
+```
+
+A `Concat` over the seconds names the text it wants:
+
+```julia
+# ✗ before — built, writing each engine's own decimal text
+q = M.Race.objects
+q.values("raceid", "label" => Concat(Value("t="), Extract("start_at", "epoch")))
+
+# ✓ after — say which text: the decimal's own, or whole seconds
+q = M.Race.objects
+q.values("raceid", "label" => Concat(Value("t="), Cast(Extract("start_at", "epoch"), "text")))
+q.values("raceid", "label" => Concat(Value("t="), Cast(Extract("start_at", "epoch"), IntegerField())))
 ```
 
 On a PostgreSQL server older than 14, if code needs the `Float64` it used to get, convert the

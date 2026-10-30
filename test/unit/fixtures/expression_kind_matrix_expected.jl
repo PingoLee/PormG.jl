@@ -3441,23 +3441,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Case int float to integer | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
   ("Cast Case float col to scale 0 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(10, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "zero_scale_decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :sqlite) =>
@@ -4341,23 +4341,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int to scale 1 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast int to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 2)", whole_numeric = nothing),
   ("Cast decimal to numeric(3,2) | alone", :sqlite) =>
@@ -4395,23 +4395,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float to numeric(3,1) | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(3, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(3, 1)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Cast F int * 10 to numeric(2,0) | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(2, 0)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(2, 0)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(2, 0)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | alone", :sqlite) =>
@@ -4430,6 +4430,132 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(4,2) | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(4, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(4, 2)", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(2,0) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast int numeric(10) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float numeric(10,0) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float numeric(10,0) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float numeric(10,0) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float DecimalField(10,0) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float DecimalField(10,0) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Cast Floor float DecimalField(10,0) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce int output numeric(10,0) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Coalesce Floor float output numeric(10,0) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Coalesce Floor float output numeric(10,0) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat of a value cast to numeric(10,0) means the whole number it rounds to, written as an integer (`14`); SQLite comput"),
+  ("Concat Coalesce Floor float output numeric(10,0) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Cast Floor float numeric(10,0) integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float float4 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | alone", :sqlite) =>
@@ -5673,11 +5799,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract minute F interval * 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The minute part over a duration is not supported: the part reads a time of day, and a duration has none, so the part has"),
   ("Extract epoch F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | cte", :sqlite) =>
@@ -5685,11 +5811,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F interval * 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
   ("Extract epoch F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract quarter F datetime - date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The quarter part over a duration is not supported: a duration has no calendar date on any engine, so the part has no mea"),
   ("Extract quarter F datetime - date | alone", :sqlite) =>
@@ -6087,7 +6213,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract hour F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | alone", :mysql) =>
@@ -6099,11 +6225,47 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F time - time | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
   ("Extract epoch F time - time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract epoch F time - time | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on SQLite: a time is its `HH:MM:SS` text there, and `-` computes on the n"),
   ("Extract epoch F time - time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`-` on a time of day (`time`) is not supported on MySQL: MySQL reads a time there as the number its digits spell (06:00:"),
+  ("Concat Extract epoch start_at | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract epoch start_at | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract epoch start_at | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract epoch start_at | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract epoch start_at | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract epoch start_at | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: epoch"),
+  ("Concat Extract epoch start_at | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `EXTRACT(…)` is not text: say which text you mean (#1027). Cast it to text first: Cast(\"<flag>\", "),
+  ("Concat Extract year start_at | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat Extract year start_at | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Round F time - time | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Round` of a duration is not supported: a duration is not a number, so `Round` has no meaning over one on any engine (#1"),
   ("Round F time - time | alone", :sqlite) =>
@@ -7271,19 +7433,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("F json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
   ("F json key / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
   ("F json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key | alone", :postgres) =>
@@ -7307,19 +7469,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Sum json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Sum json key / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
   ("Sum json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Max json key | alone", :postgres) =>
@@ -7343,21 +7505,201 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor json key / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Floor json key / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
   ("Floor json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
   ("Floor json key / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor json key / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
   ("Floor json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Ceil json key / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Ceil json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is CEIL(…), whose result type PormG cannot name. Name the type the column h"),
+  ("Ceil json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Ceil json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Ceil json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Ceil json key / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Ceil json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs json key / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Abs json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ABS(…), whose result type PormG cannot name. Name the type the column ho"),
+  ("Abs json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Abs json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Abs json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs json key / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Abs json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Round json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round json key / 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG cannot name. Name the type the column "),
+  ("Round json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Round json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round json key / 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Max json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Max json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Max json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("Max json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Max json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Max json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Max json key / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+  ("Max json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+  ("Coalesce json key 0 / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG cannot name. Name the type the colu"),
+  ("Coalesce json key 0 / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+  ("Coalesce json key 0 / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Coalesce json key 0 / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce json key 0 / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+  ("Coalesce json key 0 / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+  ("F json key + 1 / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F json key + 1 / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+  ("F json key + 1 / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key + 1 / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("F json key + 1 / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+  ("F json key + 1 / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Cast json key numeric / 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast json key numeric / 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Case json key branch / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case json key branch / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Case json key branch / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Case json key branch / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (JSONField and IntegerField)"),
+  ("Case json key branch / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Case json key branch / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("Case json key branch / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case json key branch / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+  ("Case json key branch / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key * 1.0 / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+  ("F json key * 1.0 / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+  ("F json key * 1.0 / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key * 1.0 / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F json key * 1.0 / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F json key * 1.0 / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("F json key * 1.0 / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+  ("F json key * 1.0 / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+  ("F json key * 1.0 / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+  ("NullIf id json key / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf id json key / 2 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Cast json key integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast json key integer | alone", :sqlite) =>
@@ -7453,12 +7795,24 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
+  ("Extract epoch F interval * 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Extract epoch F interval * 2 | cte", :postgres) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
   ("Extract epoch F interval * 2 | cte", :mysql) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F interval * 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F time - time | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Extract epoch F time - time | cte", :postgres) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract epoch F time - time | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Cast text ArrayField(CharField(3)) | alone", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast text ArrayField(CharField(3)) | subquery", :postgres) =>
@@ -7479,6 +7833,26 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=decimal")],
   ("Floor json key / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=decimal")],
+  ("Ceil json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Ceil json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Round json key / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | alone", :mysql) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round json key / 2 | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=numeric")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -7507,10 +7881,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Extract epoch F interval * 2", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Extract epoch F interval * 2", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Extract epoch F time - time", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
 )

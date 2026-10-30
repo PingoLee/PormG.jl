@@ -837,6 +837,55 @@ _json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference}, instruc:
   _expression_kind(p, instruc) isa CJSONValue
 _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
+# #1471 — a side of `/` whose value is the number a JSON key holds: the key itself, or a value that
+# carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
+# `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case` branch, `NullIf`'s
+# first operand, a `Sum` of it. A JSON number has no integer type, so its quotient keeps the fraction
+# (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over the integer the document
+# holds, and these keep it, so `/` there divides as integers. A declared type (`Cast`, an
+# `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the number and carry
+# no key, and so does arithmetic beside a float literal or a `FloatField` column (`F(key) * 1.0`,
+# `_real_on_every_row`): SQLite computes it as a REAL. `(what, flag)`: the side as a refusal names it, and the key's path for
+# the explicit spelling; or `nothing`.
+_json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
+function _json_number_side(p::FExpression, instruc::SQLInstruction)
+  p.operation === nothing && return _json_number_side(p.field_name, instruc)
+  p.operation in ("+", "-", "*") || return nothing
+  (_real_on_every_row(p.field_name, instruc) || _real_on_every_row(p.operand, instruc)) && return nothing
+  side = _json_number_side(p.field_name, instruc)
+  side === nothing && (side = _json_number_side(p.operand, instruc))
+  return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
+end
+_json_number_side(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+  _json_key_lookup_operand(p, instruc) ? ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p)) : nothing
+function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  name = p.function_name
+  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  declared isa AbstractString && !isempty(declared) && return nothing
+  if _undeclared_case(p)
+    values = _case_values(p)
+  else
+    rule = _result_rule(p)
+    rule in _OPERAND_TYPED_RULES || return nothing   # `SUM` is `:promoting`
+    values = rule === :first_operand ? (_first_operand(p),) : p.column isa AbstractVector ? p.column : (p.column,)
+  end
+  for value in values
+    side = _json_number_side(value, instruc)
+    side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
+  end
+  # A `Lag`/`Lead` `default` is the value on the rows it applies to, as `_textless_number` reads it.
+  if p isa WindowFunction
+    default = get(p.kwargs, "default", nothing)
+    literal = default isa SQLText ? default.field : default
+    if !(literal === nothing || literal isa AbstractString || _is_null_literal(literal))
+      side = _json_number_side(default, instruc)
+      side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
+    end
+  end
+  return nothing
+end
+_json_number_side(::Any, ::SQLInstruction) = nothing
+
 # #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`
 # compares, through `_render_json_lookup_comparison`, for the operators that renders.
 function _alias_projects_json_key(having_key::MemoKey, instruc::SQLInstruction)::Bool
@@ -861,9 +910,17 @@ function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{T
   occursin("__", p.path) && return nothing
   k = _infer_kind(p, instruc, _MeaningKinds())
   tag = k isa CDateTime ? :timestamp : k isa CInterval ? :interval : k isa CFloat64 ? :float :
-        k isa CDecimal && k.scale != 0 ? :decimal : nothing
+        k isa CDecimal && _cte_decimal_places(p, k, instruc) != 0 ? :decimal : nothing
   tag === nothing && return nothing
   return (tag, "the $(_field_label(_kind_field(k))) `$(_concat_operand_label(p))`")
+end
+# D5 (#1034) — the places of a decimal CTE column: the walk's scale where it names one (a declared
+# `numeric(p, s)` in the body, a `DecimalField` path), which the meaning kind (the read path's width-less
+# decimal, #1121) and the CTE model's `DecimalField()` both drop, so a zero-scale cast is whole through a
+# CTE as it is alone; otherwise the kind's own. As the scale classifier reads a scale (#1034 step 2b).
+function _cte_decimal_places(p::CTEReference, k::CDecimal, instruc::SQLInstruction)
+  walk = _expression_kind(p, instruc)
+  return walk isa CDecimal && walk.scale !== nothing ? walk.scale : k.scale
 end
 _cte_textless_record(p::SQLField, instruc::SQLInstruction) = _cte_textless_record(p.field, instruc)
 _cte_textless_record(::Any, ::SQLInstruction) = nothing
@@ -1356,7 +1413,11 @@ function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc
   field isa Models.sFloatField && return (:float, "the FloatField `$(_concat_operand_label(p))`")
   # #1087: a zero-scale DecimalField holds whole numbers, which read `14` on both engines, as an
   # integer column's do.
-  field isa Models.sDecimalField && field.decimal_places > 0 &&
+  # D5 (#1034): a CTE column's model field drops a declared scale (`DecimalField()`); the walk keeps it.
+  places = field isa Models.sDecimalField && p isa CTEReference && !occursin("__", p.path) ?
+           _cte_decimal_places(p, CDecimal(field.max_digits, field.decimal_places), instruc) :
+           field isa Models.sDecimalField ? field.decimal_places : 0
+  field isa Models.sDecimalField && places != 0 &&
     return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
   return nothing
 end
@@ -1422,7 +1483,10 @@ const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")
 # cannot type, which may be a `sum(bigint)`), a number with a fraction
 # there only.
 const _DIVISION_KINDS = (:numeric_whole_division,)
-const _FRACTIONAL_KINDS = (:float, :decimal, :numeric, _DIVISION_KINDS...)
+# D5 (#1034): a zero-scale cast over an operand that is not an integer is whole where the cast rounds
+# it, and keeps the operand's fraction on SQLite (`_zero_scale_cast_textless`), so a cast of it to an
+# integer reads the #1028 row as any fraction does.
+const _FRACTIONAL_KINDS = (:float, :decimal, :numeric, :zero_scale_decimal, _DIVISION_KINDS...)
 # #1127 — a CTE column answers as its body's expression did, recorded while the body built
 # (`CTEDivision`): its field cannot say it, since a `Sum` column is typed as an integer whatever it
 # sums, and its kind cannot either. A column with no answer — a plain path, a body not built in this
@@ -1533,7 +1597,10 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   if declared isa AbstractString && !isempty(declared)
     field = _sql_type_field(declared)
     field isa Models.sFloatField && return (:float, "a value cast to $(declared)")
-    field isa Models.sDecimalField && return (:decimal, "a value cast to $(declared)")
+    if field isa Models.sDecimalField
+      _numeric_cast_scale(declared) == 0 && return _zero_scale_cast_textless(p, declared, instruc)
+      return (:decimal, "a value cast to $(declared)")
+    end
     return nothing
   end
   # #1111: `ROUND` over an integer division is the division's split, not a `numeric` function's
@@ -1547,7 +1614,10 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   end
   rule = _result_rule(p)
   rule === :numeric && return (:numeric, "`$(name)(…)`")
-  rule in _OPERAND_TYPED_RULES || return nothing
+  # #1034 (the #1457 leftover): a function whose value is not its operand's is classified by the kind
+  # the walk gives it, as its CTE column is (`_cte_textless_record`), so the two contexts agree.
+  # `Extract(x, "EPOCH")` is a decimal there since #1457, and its text is a decimal's.
+  rule in _OPERAND_TYPED_RULES || return _textless_walk_leaf(p, instruc)
   # The whole classifier, not only the number half: `Lag("active")` is the boolean's own value, and
   # `_expression_formatter` does not type a window value function. A `Lag`/`Lead` `default` is one of
   # its values too (#1147 step 2, `_with_window_default`): `Lag("number"; default = 3.5)` is a float.
@@ -1561,6 +1631,35 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   end
   side = _division_first((_concat_textless_operand(operand, instruc) for operand in operands), instruc.connection)
   return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
+end
+# #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
+# names it (`_expression_kind`); any other kind has one text, `nothing`. A zero-scale decimal is whole,
+# as D5 decides for a declared one. A `Case` with no `output_field` is not this leaf's: its branches
+# are read one by one where it is an operand (`_case_textless_branch`), and the walk's unified kind
+# would lose a zero-scale branch's places (`Case(…, then = "grid") + 1` is whole). Inside arithmetic it
+# answers `nothing`, as before this leaf.
+function _textless_walk_leaf(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  _undeclared_case(p) && return nothing
+  k = _expression_kind(p, instruc)
+  k isa CFloat64 && return (:float, "`$(p.function_name)(…)`")
+  k isa CDecimal && !_whole_kind(k) && return (:decimal, "`$(p.function_name)(…)`")
+  return nothing
+end
+# D5 (#1034) — a zero-scale cast (`numeric(p,0)`, `numeric(p)`, a `DecimalField(…, decimal_places = 0)`,
+# as a `Cast` or an `output_field`) is a whole number, as a zero-scale column is since #1087: PostgreSQL
+# and MySQL round it, half away from zero, and write the integer (`CAST(14.6 AS numeric(2,0))` is `15`,
+# a whole float `14`). SQLite's cast to NUMERIC keeps a REAL as it is (`14.6`, `14.0`) and writes the
+# integer's text only over an integer (measured on PostgreSQL 18.6, MySQL 8.4 and SQLite 3.54.0, posted
+# on #1034). So over operands the walk names whole and the classifier lets through (an integer column or
+# literal, a zero-scale `DecimalField` column, which SQLite stores as an INTEGER) it is whole on every
+# engine, `nothing`; over any other it is `:zero_scale_decimal`, whose text departs on SQLite only
+# (`_MEANING_DEPARTURES`): `Concat` over it builds on PostgreSQL and MySQL. A fractional operand is
+# refused on SQLite before this, as the cast's own rounding (#1040, `:scale`). A NULL operand has no text.
+function _zero_scale_cast_textless(p::Union{FObject,WindowFunction}, declared::AbstractString, instruc::SQLInstruction)
+  operands = _declared_case(p) ? _case_values(p) : p.column isa AbstractVector ? p.column : (p.column,)
+  whole(x) = (x isa SQLText && _is_null_literal(x.field)) || _is_null_literal(x) ||
+             (_whole_kind(_expression_kind(x, instruc)) && _concat_textless_operand(x, instruc) === nothing)
+  return all(whole, operands) ? nothing : (:zero_scale_decimal, "a value cast to $(declared)")
 end
 _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
 _textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)

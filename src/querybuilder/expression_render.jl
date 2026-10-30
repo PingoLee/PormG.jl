@@ -1928,9 +1928,21 @@ end
 # backend gets a `MethodError` here rather than PostgreSQL's text.
 _division_sql(::PormGPostgres, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
   "($(left) / $(right))"
-function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+function _division_sql(conn::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
   fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}
-  (fractional(v.field_name) || fractional(v.operand)) || return "($(left) / $(right))"
+  if !(fractional(v.field_name) || fractional(v.operand))
+    # #1471: with no side a fraction, a side holding a JSON key's number divides as the integer the
+    # document holds, where the quotient means its fraction (`_MEANING_DEPARTURES`, `:division`). A
+    # float or a decimal side makes the division REAL below, which keeps the fraction (`x / 2.0`).
+    # Refused rather than cast: the query does not say whether the key holds an integer or a float.
+    json = _json_number_side(v.field_name, instruc)
+    json === nothing && (json = _json_number_side(v.operand, instruc))
+    if json !== nothing
+      row = _departure(conn, :division, :json_number)
+      row === nothing || throw(_meaning_refusal("A quotient", json[1], row, conn; flag = json[2]))
+    end
+    return "($(left) / $(right))"
+  end
   (_real_on_every_row(v.field_name, instruc) || _real_on_every_row(v.operand, instruc)) && return "($(left) / $(right))"
   return "(CAST($(left) AS REAL) / $(right))"
 end

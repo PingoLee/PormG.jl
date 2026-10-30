@@ -1135,6 +1135,21 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__wins" => F("points")).list(show_query = :dict),
     ),
+    # #1471 — *Arithmetic over a key* says a `/` over a value carrying a JSON key's number raises
+    # `QueryBuildError` on SQLite, which divided it as integers.
+    (
+        "read/filters_and_aggregates.md — a quotient over a JSON key on SQLite (#1471)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.values("half" => PormG.Functions.Floor("payload__wins") / 2).list(show_query = :dict),
+    ),
+    # D5 (#1034) — functions_and_dates.md says `Concat` over a zero-scale cast of a value that is not
+    # an integer raises `QueryBuildError` on SQLite, which keeps the float (`14.0`) unrounded.
+    (
+        "read/functions_and_dates.md — Concat over a zero-scale cast of a float on SQLite (D5, #1034)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.values("v" => PormG.Functions.Concat(PormG.Functions.Value("#"),
+                  PormG.Functions.Cast(PormG.Functions.Floor(PormG.Functions.Value(14.5)), "numeric(10,0)"))).list(show_query = :dict),
+    ),
     (
         "read/filters_and_aggregates.md — @in against a column expression",
         FilterError,

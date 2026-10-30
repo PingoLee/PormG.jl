@@ -330,6 +330,15 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast float to numeric(3,1)", :Result,           m -> _EKM_FN.Cast("points", "numeric(3,1)")),
   ("Cast F int * 10 to numeric(2,0)", :Result,      m -> _EKM_FN.Cast(_EKM_Q.F("grid") * 10, "numeric(2,0)")),
   ("Coalesce decimal output numeric(4,2)", :Constructor_results, m -> _EKM_FN.Coalesce("points", 0; output_field = "numeric(4,2)")),
+  # D5 (#1034): a zero-scale cast in `Concat`. PostgreSQL and MySQL round it to a whole number and
+  # write `14`; SQLite's cast keeps a REAL operand's own text (`14.0`), and an integer's `14`.
+  ("Concat Cast int numeric(2,0)", :Result,         m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast("grid", "numeric(2,0)"))),
+  ("Concat Cast int numeric(10)", :Result,          m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast("grid", "numeric(10)"))),
+  ("Concat Cast Floor float numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast(_EKM_FN.Floor("points"), "numeric(10,0)"))),
+  ("Concat Cast Floor float DecimalField(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Cast(_EKM_FN.Floor("points"), PormG.Models.DecimalField(max_digits = 10, decimal_places = 0)))),
+  ("Concat Coalesce int output numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Coalesce("grid", 0; output_field = "numeric(10,0)"))),
+  ("Concat Coalesce Floor float output numeric(10,0)", :Result, m -> _EKM_FN.Concat(_EKM_FN.Value("v="), _EKM_FN.Coalesce(_EKM_FN.Floor("points"), 0; output_field = "numeric(10,0)"))),
+  ("Cast Cast Floor float numeric(10,0) integer", :Result, m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Floor("points"), "numeric(10,0)"), PormG.Models.IntegerField())),
   # #1215: a single-precision cast — `real`, `float4`, `float(p)` up to 24 — and `float(25)`, a double
   ("Cast float float4",       :Result,              m -> _EKM_FN.Cast("points", "float4")),
   ("Cast float float(24)",    :Result,              m -> _EKM_FN.Cast("points", "float(24)")),
@@ -439,6 +448,9 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Extract year F time - time", :Race,             m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "year")),
   ("Extract hour F time - time", :Race,             m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "hour")),
   ("Extract epoch F time - time", :Race,            m -> _EKM_FN.Extract(_EKM_Q.F("time") - _EKM_Q.F("time"), "epoch")),
+  # The #1457 leftover (#1034): `EPOCH` is a decimal to the walk, so `Concat` over it is a decimal's text.
+  ("Concat Extract epoch start_at", :Race,          m -> _EKM_FN.Concat(_EKM_FN.Value("t="), _EKM_FN.Extract("start_at", "epoch"))),
+  ("Concat Extract year start_at", :Race,           m -> _EKM_FN.Concat(_EKM_FN.Value("y="), _EKM_FN.Extract("start_at", "year"))),
   ("Round F time - time",     :Race,                m -> _EKM_FN.Round(_EKM_Q.F("time") - _EKM_Q.F("time"))),
   ("Coalesce F time - time int", :Race,             m -> _EKM_FN.Coalesce(_EKM_Q.F("time") - _EKM_Q.F("time"), "year")),
   # ── #1386: a boolean beside another type in a conditional ───────────────────────────────────────
@@ -529,6 +541,21 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Sum json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Sum("payload__n") / 2),
   ("Max json key",            :Field_validation_scratch, m -> _EKM_FN.Max("payload__n")),
   ("Floor json key / 2",      :Field_validation_scratch, m -> _EKM_FN.Floor("payload__n") / 2),
+  # #1471: the siblings of `Floor json key / 2`. A function that keeps its operand's value (`Ceil`,
+  # `Abs`, `Max`, `Coalesce`) or arithmetic over the key carries the number the JSON holds; `Round`
+  # is a REAL on SQLite, and a declared `numeric` is the explicit spelling.
+  ("Ceil json key / 2",       :Field_validation_scratch, m -> _EKM_FN.Ceil("payload__n") / 2),
+  ("Abs json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Abs("payload__n") / 2),
+  ("Round json key / 2",      :Field_validation_scratch, m -> _EKM_FN.Round("payload__n") / 2),
+  ("Max json key / 2",        :Field_validation_scratch, m -> _EKM_FN.Max("payload__n") / 2),
+  ("Coalesce json key 0 / 2", :Field_validation_scratch, m -> _EKM_FN.Coalesce("payload__n", 0) / 2),
+  ("F json key + 1 / 2",      :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") + 1) / 2),
+  ("Cast json key numeric / 2", :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "numeric") / 2),
+  # #1471 review: a `Case` branch carries the key; a float literal beside it makes SQLite compute a REAL;
+  # `NullIf`'s value is its first operand only.
+  ("Case json key branch / 2", :Field_validation_scratch, m -> _EKM_FN.Case([_EKM_FN.When("id" => 1, then = _EKM_Q.F("payload__n"))], default = 0) / 2),
+  ("F json key * 1.0 / 2",    :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") * 1.0) / 2),
+  ("NullIf id json key / 2",  :Field_validation_scratch, m -> _EKM_FN.NullIf("id", "payload__n") / 2),
   ("Cast json key integer",   :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "integer")),
   ("Concat json key",         :Field_validation_scratch, m -> _EKM_FN.Concat(_EKM_FN.Value("n="), "payload__n")),
 ]

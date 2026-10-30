@@ -1110,7 +1110,10 @@ end
 function _record_cte_division!(divisions::Dict{String,CTEDivision}, key::String, source, instruct::SQLInstruction)
   divided = _whole_numeric_operand(source, instruct)
   quotient = _concat_textless_operand(source, instruct)
-  quotient === nothing || quotient[1] in _DIVISION_KINDS || (quotient = nothing)
+  # D5 (#1034): a zero-scale cast over a value that is not an integer is recorded too: the column's
+  # kind is the whole `CDecimal(p, 0)` and its field a zero-scale `DecimalField`, neither of which says
+  # that SQLite keeps the operand's fraction (`_zero_scale_cast_textless`).
+  quotient === nothing || quotient[1] in _DIVISION_KINDS || quotient[1] === :zero_scale_decimal || (quotient = nothing)
   divided === nothing && quotient === nothing && return nothing
   old = get(divisions, key, (divided = nothing, quotient = nothing))
   divisions[key] = (divided = something(divided, old.divided, Some(nothing)),

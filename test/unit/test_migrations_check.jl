@@ -6,8 +6,9 @@
 # and before #475 the case that mattered most produced NO warning at all, because a textual column
 # silently kept an expression default as a quoted literal.
 #
-# Hermetic. The PostgreSQL arm is pure over the frame `get_database_schema` returns, so it is driven
-# with a synthetic `DataFrame`; the SQLite arm runs against a real temp database, which is the house
+# Hermetic. The PostgreSQL arm is pure over the rows `get_database_schema` returns, so it is driven
+# with synthetic rows (built as a `DataFrame` for readability, then one `NamedTuple` per row, which is
+# what the dump is since #1344); the SQLite arm runs against a real temp database, which is the house
 # idiom for the live reader (test_introspection_guards.jl).
 #
 # Helpers are `_chk_`-prefixed on purpose: `test/runtests.jl` includes every unit file into ONE
@@ -26,20 +27,23 @@ import PormG.ConnectionPool: SQLiteConnectionPool, fetch
 import PormG.Migrations: check, SchemaCheckResult, SchemaCheckFinding, convert_schema_to_models
 
 # One entry of the PostgreSQL `columns` JSON aggregate — the same shape the schema query emits and
-# `convertSQLToModel(::DataFrameRow)` reads.
+# `convertSQLToModel(row)` reads.
 _chk_col(name, type; default = nothing, notnull = false) =
   Dict{String, Any}("name" => name, "type" => type, "notnull" => notnull, "default" => default,
                     "identity" => "", "unique" => false,
                     "non_negative_check" => false, "byte_limit" => nothing)
 
+# A frame's rows as the schema dump holds them: one `NamedTuple` per row (#1344).
+_chk_rows(df::DataFrame) = [NamedTuple(r) for r in eachrow(df)]
+
 # A multi-row stand-in for `get_database_schema(::PormGPostgres)`; `tables` is table_name => columns.
-_chk_schema_frame(tables::Vector{<:Pair}) = DataFrame(
+_chk_schema_frame(tables::Vector{<:Pair}) = _chk_rows(DataFrame(
   table_name   = [String(t.first) for t in tables],
   columns      = [JSON.json(t.second) for t in tables],
   primary_keys = [JSON.json(["id"]) for _ in tables],
   foreign_keys = [missing for _ in tables],
   indexes      = [missing for _ in tables],
-)
+))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The PostgreSQL arm: an expression default is a finding, every literal is not
@@ -268,24 +272,24 @@ end
             PormG.Migrations._pg_expression_default_findings(uuid_key; ignore_table = String[])) ==
         Set(["id"])
 
-  varchar_key = DataFrame(
+  varchar_key = _chk_rows(DataFrame(
     table_name   = ["code_table"],
     columns      = [JSON.json([_chk_col("code", "character varying(20)"; notnull = true,
                                         default = "nextval('code_seq'::regclass)")])],
     primary_keys = [JSON.json(["code"])],
-    foreign_keys = [missing], indexes = [missing])
+    foreign_keys = [missing], indexes = [missing]))
   @test Set(only(f.columns) for f in
             PormG.Migrations._pg_expression_default_findings(varchar_key; ignore_table = String[])) ==
         Set(["code"])
 
-  fk_key = DataFrame(
+  fk_key = _chk_rows(DataFrame(
     table_name   = ["profile"],
     columns      = [JSON.json([_chk_col("driver_id", "bigint"; notnull = true,
                                         default = "nextval('driver_seq'::regclass)")])],
     primary_keys = [JSON.json(["driver_id"])],
     foreign_keys = [JSON.json([Dict{String,Any}("column" => "driver_id", "table" => "driver",
                                                 "pk" => "id", "on_delete" => "a")])],
-    indexes      = [missing])
+    indexes      = [missing]))
   @test Set(only(f.columns) for f in
             PormG.Migrations._pg_expression_default_findings(fk_key; ignore_table = String[])) ==
         Set(["driver_id"])

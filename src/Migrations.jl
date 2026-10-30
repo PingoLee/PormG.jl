@@ -7,8 +7,8 @@
 
 module Migrations
 
-using DataFrames
-using CSV
+# Every catalog and history read is `fetch(...) |> Tables.rowtable`, one `NamedTuple` per row (#1344).
+import Tables
 using Dates
 using JSON
 import OrderedCollections: OrderedDict, OrderedSet

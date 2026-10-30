@@ -1557,7 +1557,7 @@ end
 # ── inspectdb's compiler: ColumnSpec → PormGField ──────────────────────────────────────────────
 
 # Dispatch-only engines for the one reader that has no connection in hand — the PostgreSQL row
-# decoder, which is handed a `DataFrameRow` and asked for a model. `field_from_spec` chooses structs
+# decoder, which is handed a row of the schema dump and asked for a model. `field_from_spec` chooses structs
 # per ENGINE (`CInt64` is `BigIntegerField` on PostgreSQL and `IntegerField` on SQLite, because that
 # is what renders back to the same column) and never touches a connection, so a subtype with no
 # fields is enough. The same shape every planner unit test uses for its mock connections.

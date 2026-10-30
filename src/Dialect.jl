@@ -1,6 +1,5 @@
 module Dialect
 using Dates, TimeZones
-using DataFrames
 import Tables
 # #648: `_parse_sqlite_decimal` builds a `Decimals.Decimal` through the three-argument constructor.
 import Decimals

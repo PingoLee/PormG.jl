@@ -1,6 +1,6 @@
 """
 Unit coverage for the introspection primary-key attribute guards
-(`convertSQLToModel(row::DataFrameRow)`, the PostgreSQL path).
+(`convertSQLToModel(row)`, the PostgreSQL path).
 
 The original guard (this file's reason for existing): a natural primary key
 (`VARCHAR(n) PRIMARY KEY`) or a numeric one (`NUMERIC(p,s) PRIMARY KEY`) parsed a
@@ -24,7 +24,7 @@ other key type could never equal what introspection reported, so `makemigrations
 So the max_length/max_digits guard is still load-bearing, but for the `numeric` fallback rather than
 for every key.
 
-`convertSQLToModel(row)` takes the introspected table metadata as a single `DataFrameRow`, so
+`convertSQLToModel(row)` takes the introspected table metadata as a single Tables.jl row, so
 this is fully hermetic — no live database.
 """
 
@@ -660,7 +660,7 @@ end
 #
 # These two readers are covered here rather than through an importer because neither is reachable
 # from `import_models_from_sqlite`: the DDL-regex reader is off the production path entirely, and
-# the PostgreSQL reader needs a live server — but it takes a `DataFrameRow` and nothing else, so a
+# the PostgreSQL reader needs a live server — but it takes one row and nothing else, so a
 # synthetic row exercises it at full fidelity.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "introspected FKs carry the target binding and physical table (#360)" begin
@@ -763,7 +763,7 @@ end
 # lookup from another — so a change that normalized one side alone would break FK detection for
 # every mixed-case column. The second testset below is that mutation gate.
 #
-# Fully hermetic: `convertSQLToModel(::DataFrameRow)` takes the metadata and nothing else.
+# Fully hermetic: `convertSQLToModel(row)` takes the metadata and nothing else.
 # The live-database half is test/integration/test_importers_introspection.jl.
 # ─────────────────────────────────────────────────────────────────────────────
 # `add_foreign_key` dispatches on the abstract backend marker and never touches connection state,

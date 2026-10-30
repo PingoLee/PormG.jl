@@ -119,7 +119,7 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
     )
 
     print("Models file name [Default: models.jl]: ")
-    models_filename = readline() |> strip
+    models_filename = read_input()
     if isempty(models_filename); models_filename = "models.jl"; end
 
     Generator.create_models_jl(folder, models_filename)
@@ -136,7 +136,7 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
     println("(GitHub Copilot, Claude, Cursor, and other agents) understand the PormG API in your project.")
     print("Do you want to install PormG AI skills into $(abspath(skills_dir))? (Y/n) [Default Y]: ")
 
-    choice = readline() |> strip |> lowercase
+    choice = lowercase(read_input())
     if isempty(choice) || choice == "y"
         install_ai_skills(skills_dir)
     end

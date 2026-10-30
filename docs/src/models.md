@@ -730,13 +730,38 @@ PormG supports two primary workflows for model creation:
 3. Use `PormG.Migrations.migrate()` to apply them to your database.
 
 ### 2. DB-First (Legacy or Existing Databases)
-If you already have a database, you can use the **`PormG.setup()`** utility to generate your model code automatically:
+If you already have a database, the importers read its tables and write the models for you.
+`PormG.setup()` does **not** read the database: it writes `connection.yml` and an empty
+`models.jl` template, and never connects.
 
-```julia
-using PormG
-# This will introspect the DB and create a basic models.jl for you
-PormG.setup("path/to/my/db") 
-```
+1. Describe the connection: run `PormG.setup("db")`, or write `db/connection.yml` by hand
+   (see [connection.yml](configuration/connection_yml.md)).
+2. Load it:
+
+   ```julia
+   using PormG
+   PormG.Configuration.load("db"; env = "dev")
+   ```
+
+3. Run the importer for your engine and name the output file:
+
+   ```julia
+   PormG.Migrations.import_models_from_postgres("db"; file = "models.jl", force_replace = true)
+   PormG.Migrations.import_models_from_sqlite("db"; file = "models.jl", force_replace = true)
+   PormG.Migrations.import_models_from_mysql("db"; file = "models.jl", force_replace = true)
+   ```
+
+   Without `file`, the models go to `db/automatic_models.jl`. An importer never overwrites an
+   existing file unless `force_replace = true`. Without it, the importer warns and returns
+   `nothing`, and the empty template `setup` wrote is still the only models file.
+   `force_replace = true` overwrites the file, so never use it on a models file you have edited.
+   On the Formula 1 database, the file declares one model per table: `Circuit`, `Driver`, `Race`,
+   `Result`, and so on.
+
+4. Review the generated file, then load it with `@import_models` (see
+   [Loading Models in Your Application](#Loading-Models-in-Your-Application)).
+   Views are skipped unless you pass `include_views = true`; see
+   [Generating models for existing views](#Generating-models-for-existing-views).
 
 ---
 

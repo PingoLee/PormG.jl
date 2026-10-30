@@ -450,3 +450,23 @@ end
         @test isfile(joinpath(root, "db", "connection.yml"))
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# setup: a typed models-file name is used, not a crash (#1477)
+# The models prompt read its answer with `readline() |> strip`, a `SubString{String}`, and
+# `Generator.create_models_jl` takes a `String`: any typed name threw a `MethodError` after
+# `connection.yml` was already written, so only the empty answer (the `"models.jl"` literal) worked.
+# Every other prompt reads through `read_input`, which returns a `String`; this one now does too.
+# No SQL: `setup` only writes files.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "setup writes the models file under the name typed at the prompt (#1477)" begin
+    mktempdir() do project
+        # SQLite, database.sqlite, UTC, `f1_models.jl`, no skills.
+        _ai1294_setup("2\n\n\nf1_models.jl\nn\n", "db"; root = project)
+        models_file = joinpath(project, "db", "f1_models.jl")
+        @test isfile(joinpath(project, "db", "connection.yml"))
+        @test isfile(models_file)
+        @test !isfile(joinpath(project, "db", "models.jl"))     # the typed name, not the default
+        @test startswith(read(models_file, String), "module f1_models\n")
+    end
+end

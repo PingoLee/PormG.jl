@@ -9,16 +9,15 @@
 
 A JSON number has no integer type, so a quotient over one means a quotient that keeps its fraction.
 SQLite's `json_extract` returns the integer the document holds. The functions whose value is their
-operand's (`Floor`, `Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag`, a `Case`
-branch, `NullIf`'s first operand), `Sum` and arithmetic over the key keep that integer, so SQLite
-divided it as an integer:
-over `{"wins": 121}`, `Floor("metadata__wins") / 2` returned `60`, where PostgreSQL returns `60.5`.
+operand's (`Floor`, `Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its
+`default`, a `Case` branch, `NullIf`'s first operand), `Sum` and arithmetic over the key keep that
+integer, so SQLite divided it as an integer: over `{"wins": 121}`, `Floor("metadata__wins") / 2` returned `60`, where PostgreSQL returns `60.5`.
 Nothing reported the difference.
 
 SQLite now refuses a `/` with such a side, on either side of the operator, and the message names the
 cast to write. A side that names its number still builds: `Round` and `Avg` (a REAL on SQLite), a
-`Cast` or an `output_field`, a float divisor (`/ 2.0`) and arithmetic beside a float
-(`F("metadata__wins") * 1.0`), which SQLite computes as a REAL.
+`Cast` or an `output_field`, a float divisor (`/ 2.0`) and arithmetic beside a float literal or a
+`FloatField` column (`F("metadata__wins") * 1.0`), which SQLite computes as a REAL.
 
 | query on SQLite (`metadata` holds `{"wins": 121}`) | before | now |
 |---|---|---|
@@ -32,15 +31,16 @@ cast to write. A side that names its number still builds: `Round` and `Avg` (a R
 
 Code on SQLite that divides a value taken from a JSON key, directly or through one of the functions
 above, including inside a CTE body or a `Subquery`, and wherever the quotient is used: a projection, a
-filter value (`"points__@gt" => F("metadata__wins") / 2`), an `update()` value, an ordering.
+filter value (`"constructorid__@gt" => F("metadata__wins") / 2`), an `update()` value, an ordering.
 
 ### How to find the calls to migrate
 
 ```bash
-grep -rnE '(__[A-Za-z_0-9]+"\)? *\)? */|/ *[A-Za-z]*\(?"[A-Za-z_0-9]+__)' --include=*.jl src/ test/
+grep -rnE '"[A-Za-z_0-9]+__[A-Za-z_0-9]+".*/|/.*"[A-Za-z_0-9]+__' --include=*.jl src/ test/
 ```
 
-and look for a JSONField path on the left or the right of `/`. The error message reads
+It over-matches on purpose (any `__` path on a line with a `/`): read each hit and keep those where a
+JSONField path sits on either side of the division, directly or inside a function or arithmetic. The error message reads
 `` A quotient of … the JSON key `…` means one that keeps its fraction``.
 
 ### Migrate your app

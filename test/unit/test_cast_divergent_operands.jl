@@ -1372,6 +1372,11 @@ end
   end
   # The spelling the message names writes the integer on every engine.
   @test _ccd_builds(Fn.Concat(Fn.Value("#"), Fn.Cast(whole_float, Models.IntegerField())))
+  # #1034 review: a `Case` with no `output_field` inside arithmetic is not the walk leaf's. Its unified
+  # kind loses a zero-scale branch's places, so `Case(… then = grid) + 1` would read as a decimal; it
+  # builds, as on main and as `F("grid") + 1` does.
+  @test _ccd_builds(Fn.Concat(Fn.Value("#"), Fn.Case(Fn.When("number" => 1, then = _CF("grid")), default = 0) + 1))
+  @test _ccd_builds(Fn.Concat(Fn.Value("#"), _CF("grid") + 1))
   # An unscaled `numeric` and a scale of one are no whole number: still a decimal's text everywhere.
   _ccd_refused_everywhere(Fn.Concat(Fn.Value("#"), Fn.Cast("number", "numeric")); issue = "#1027", named = "a value cast to numeric")
   _ccd_refused_everywhere(Fn.Concat(Fn.Value("#"), Fn.Cast("number", "numeric(10,1)")); issue = "#1027")
@@ -1750,6 +1755,23 @@ end
 # a fraction a fraction (#1028). Alone it answers on both. Why it matters: a regression in the SQLite
 # branch would otherwise pass the suite.
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# #1471: a window function's `default` holding a JSON key is one of its values
+# `Lag("number"; default = F("payload__n"))` takes the key's integer on the rows where the default
+# applies, so `… / 2` divides it as an integer on SQLite, as `Coalesce("number", key) / 2` does. Expected:
+# refused on SQLite as #1471, naming the key; built on PostgreSQL
+# (`(LAG("Tb"."number", $1::integer, "Tb"."payload" #>> '{"n"}') OVER (ORDER BY "Tb"."id" ASC) / $2::bigint)`); a
+# literal default builds on both.
+# Why it matters: the review found the default unread, the window form of the `Coalesce` case.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1471: a Lag default holding a JSON key, divided, is refused on SQLite" begin
+  lagd(default) = PormG.QueryBuilder.Lag("number"; default = default, over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))
+  _ccd_expect(lagd(_CF("payload__n")) / 2; departs = _SL_ONLY, issue = "#1471", named = "the JSON key `payload__n`")
+  @test occursin("(LAG(\"Tb\".\"number\", \$1::integer, \"Tb\".\"payload\" #>> '{\"n\"}') OVER (ORDER BY \"Tb\".\"id\" ASC) / \$2::bigint)",
+                 replace(_ccd_render(lagd(_CF("payload__n")) / 2; conn = _CCD_PG), r"\s+" => " "))
+  @test _ccd_builds(lagd(0) / 2)
+end
+
 @testset "#1305: _division_first answers by the untyped-sum engine fact, on each side" begin
   QB = PormG.QueryBuilder
   q, iv, fl = (:numeric_whole_division, "a quotient"), (:interval, "an interval"), (:float, "a float")

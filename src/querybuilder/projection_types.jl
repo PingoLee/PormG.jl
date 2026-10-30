@@ -839,13 +839,13 @@ _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 
 # #1471 — a side of `/` whose value is the number a JSON key holds: the key itself, or a value that
 # carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
-# `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag`), a `Case` branch, `NullIf`'s first operand, a
-# `Sum` of it. A JSON number has no integer type, so its quotient keeps the fraction
+# `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case` branch, `NullIf`'s
+# first operand, a `Sum` of it. A JSON number has no integer type, so its quotient keeps the fraction
 # (`_MEANING_DEPARTURES`, `:division`); SQLite's `json_extract` hands over the integer the document
 # holds, and these keep it, so `/` there divides as integers. A declared type (`Cast`, an
 # `output_field`) and a `numeric` function (`Round`, `Avg`, a REAL on SQLite) name the number and carry
-# no key, and so does arithmetic beside a REAL on every row (`F(key) * 1.0`, `_real_on_every_row`):
-# SQLite computes it as a REAL. `(what, flag)`: the side as a refusal names it, and the key's path for
+# no key, and so does arithmetic beside a float literal or a `FloatField` column (`F(key) * 1.0`,
+# `_real_on_every_row`): SQLite computes it as a REAL. `(what, flag)`: the side as a refusal names it, and the key's path for
 # the explicit spelling; or `nothing`.
 _json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
 function _json_number_side(p::FExpression, instruc::SQLInstruction)
@@ -872,6 +872,15 @@ function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruc
   for value in values
     side = _json_number_side(value, instruc)
     side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
+  end
+  # A `Lag`/`Lead` `default` is the value on the rows it applies to, as `_textless_number` reads it.
+  if p isa WindowFunction
+    default = get(p.kwargs, "default", nothing)
+    literal = default isa SQLText ? default.field : default
+    if !(literal === nothing || literal isa AbstractString || _is_null_literal(literal))
+      side = _json_number_side(default, instruc)
+      side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
+    end
   end
   return nothing
 end

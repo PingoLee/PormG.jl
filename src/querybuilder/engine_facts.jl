@@ -84,14 +84,14 @@ _insert_returns_rows(::PormGMySQL) = false   # MySQL has no `RETURNING` (#1266)
 
 # The statement that reads back the row an `INSERT` just wrote, on the same connection, when the
 # engine does not return it (`_insert_returns_rows`): `(sql, params)`, or `nothing` when there is no
-# key to read it by. PostgreSQL's `RETURNING *` carries the row. SQLite reads `last_insert_rowid()`,
+# key to read it by. PostgreSQL's `RETURNING` carries the row. SQLite reads `last_insert_rowid()`,
 # which is per connection. MySQL keys on the primary key: an `AUTO_INCREMENT` one by the value the
 # INSERT's OK packet reports (`backend_last_insert_id`), which is the generated id or the one the
 # caller supplied; any other by the value the INSERT bound. Not `LAST_INSERT_ID()`: it changes only
 # when the server generates the value, so after a supplied id it names an older row (measured, #1266).
 _inserted_row_query(::PormGPostgres, model, insert, result, table) = nothing
-_inserted_row_query(::PormGSQLite, model, insert, result, table) =
-  ("SELECT * FROM $(table) WHERE rowid = last_insert_rowid();", nothing)
+_inserted_row_query(conn::PormGSQLite, model, insert, result, table) =
+  ("SELECT $(_returned_columns(model, conn, table)) FROM $(table) WHERE rowid = last_insert_rowid();", nothing)
 function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
   pk = get_model_pk_field(model)
   pk === nothing && return nothing
@@ -108,7 +108,7 @@ function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
   set_context!(params, :where)
   marker = add_parameter!(params, value)
   column = safe_column_identifier(Models.model_column(model, name), conn)
-  return ("SELECT * FROM $(table) WHERE $(column) = $(marker)", params)
+  return ("SELECT $(_returned_columns(model, conn, table)) FROM $(table) WHERE $(column) = $(marker)", params)
 end
 
 # A bulk statement binds one ARRAY per column (`unnest($n::<type>[])`, #672) rather than one

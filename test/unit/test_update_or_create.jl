@@ -50,7 +50,8 @@ PormG.config["uoc_sqlite"] = PormG.Configuration.Settings(connections = MockSqli
   # db_column mapping: logical no_cbo renders as physical nome_cbo in the SET.
   @test !occursin("\"no_cbo\" = EXCLUDED", sql)
   # PG created-detection sentinel on RETURNING.
-  @test occursin("RETURNING *, (xmax = 0) AS \"__pormg_created\"", sql)
+  # #1490: the declared columns (physical `nome_cbo`), never `*`, then the sentinel.
+  @test occursin("RETURNING \"id\", \"co_cbo\", \"nome_cbo\", (xmax = 0) AS \"__pormg_created\"", sql)
   # The lookup field is NOT in the SET (it's the match key, not an updated column).
   @test !occursin("\"id\" = EXCLUDED", sql)
 

@@ -52,13 +52,13 @@ end
 
 @testset "get_or_create SQL rendering (PostgreSQL mock)" begin
   # No-update match-or-insert: DO NOTHING (never DO UPDATE). On PostgreSQL a miss sends the INSERT
-  # with `RETURNING *` — an empty result is how a lost insert race is detected — so since #48 the
-  # :sql form shows it too: inspection shows the statement that executes. (It used to assert the
+  # with `RETURNING` (the declared columns, #1490) — an empty result is how a lost insert race is
+  # detected — so since #48 the :sql form shows it too: inspection shows the statement that executes. (It used to assert the
   # opposite, which was true only of SQLite's plain INSERT + out-of-band read-back, below.)
   sql = GocPg.objects.get_or_create("code" => "HAM"; defaults = ["surname" => "Hamilton"], show_query = :sql)
   @test occursin("ON CONFLICT (\"code\") DO NOTHING", sql)
   @test !occursin("DO UPDATE", sql)
-  @test endswith(rstrip(sql), "DO NOTHING RETURNING *;")
+  @test endswith(rstrip(sql), "DO NOTHING RETURNING \"id\", \"code\", \"family_name\", \"points\";")
   # defaults are create-only extras merged into the INSERT column list (physical db_column name).
   @test occursin("\"family_name\"", sql)
 

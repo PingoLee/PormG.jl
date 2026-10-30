@@ -42,8 +42,8 @@ function fetch(connection::MockRowLevelPostgres, sql::String;
   push!(ROW_LEVEL_SQL, sql)
 
   if occursin("RETURNING", sql)
-    # Answers insert()'s "RETURNING *", update_or_create()'s "RETURNING *, (xmax=0) AS
-    # __pormg_created", and get_or_create()'s "... ON CONFLICT DO NOTHING RETURNING *" alike —
+    # Answers insert()'s "RETURNING <columns>", update_or_create()'s "RETURNING <columns>, (xmax=0) AS
+    # __pormg_created", and get_or_create()'s "... ON CONFLICT DO NOTHING RETURNING <columns>" alike —
     # _row_to_field_keyed_dict converts whatever columns are present with no strict validation
     # against model.fields, so the extra __pormg_created column is harmless when unused.
     return DataFrame(:id => [5], :forename => ["Max"], Symbol("__pormg_created") => [true])

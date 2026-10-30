@@ -4,7 +4,8 @@ The Postgres.jl driver runs statements through its per-connection prepared-state
 Before #1479 the Postgres.jl extension sent every statement as an unnamed one, parsed and planned on
 every call; it now goes through `DBInterface.prepare`, which serves a statement the connection has
 seen from the driver's LRU (`statement_cache_maxsize`, default 100). A cached statement whose result
-columns change under it — an `ADD COLUMN` on the table of a cached `SELECT *` or `RETURNING *`, run
+columns change under it — an `ADD COLUMN` on the table of a cached `SELECT *` (a write names its
+columns since #1490, so a write's statement keeps its result type), run
 by another connection or process — is refused by PostgreSQL with `cached plan must not change result
 type` (SQLSTATE 0A000), and one the server deallocated (`DEALLOCATE ALL`, `DISCARD ALL`) with
 26000. Either way the extension clears the cache. Outside a transaction it runs the statement again;
@@ -64,7 +65,7 @@ end
       # `SELECT * FROM "stmt_cache_1479_scratch" WHERE "id" = $1` runs twice on one connection (cached
       # under Postgres.jl), another connection adds a column, and the third run must return the new
       # three-column row instead of raising 0A000: this is what every pooled connection meets after a
-      # deploy migrates a table a cached `create()` (`RETURNING *`) writes to. Both drivers answer it.
+      # deploy migrates a table a cached `list()` (`SELECT *`) reads. Both drivers answer it.
       # ─────────────────────────────────────────────────────────────────────────────
       @testset "outside a transaction the statement is prepared again after ADD COLUMN ($(SC1479_DRIVER))" begin
         sc1479_with_two_connections() do conn, other
@@ -122,6 +123,49 @@ end
           sc1479_run(conn, "BEGIN")
           try
             @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
+          finally
+            sc1479_run(conn, "ROLLBACK")
+          end
+        end
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # #1490: create()'s INSERT survives an ADD COLUMN inside a transaction
+      # The statement is the one the ORM renders for a model of the scratch table (`id`, `name`):
+      # `INSERT … RETURNING "id", "name"`, never `RETURNING *`. It is cached on one connection, another
+      # connection adds `team`, and inside a transaction the same statement runs again and returns
+      # the model's two columns. With `RETURNING *` that run was the 0A000 of the testset above, and
+      # the deploy's transaction was lost; naming the columns keeps the result type the model's.
+      # ─────────────────────────────────────────────────────────────────────────────
+      sc1479_reset!()
+      @testset "create()'s statement keeps its result type across ADD COLUMN in a transaction (#1490)" begin
+        model = PormG.Models.Model(SC1479_TABLE; id = PormG.Models.IDField(generated = false),
+                                   name = PormG.Models.CharField(max_length = 50))
+        model.connect_key = PORMG_DB_FOLDER
+        insert(id, name) = model.objects.create("id" => id, "name" => name; show_query = :dict)
+        first_insert, second_insert = insert(2, "Prost"), insert(3, "Piquet")
+        @test first_insert[:sql_text] == second_insert[:sql_text]   # one cached statement
+        @test endswith(rstrip(first_insert[:sql_text]), "RETURNING \"id\", \"name\";")
+        # The statement as it was before #1490, cached beside it: the control that shows the setup
+        # below does reproduce the failure, so the named statement passing is not an accident of it.
+        star(sql) = replace(sql, r"RETURNING [^;]+;" => "RETURNING *;")
+        sc1479_with_two_connections() do conn, other
+          @test sc1479_ncols(sc1479_run(conn, first_insert[:sql_text], first_insert[:parameters])) == 2
+          @test sc1479_ncols(sc1479_run(conn, star(first_insert[:sql_text]), insert(4, "Lauda")[:parameters])) == 2
+          if SC1479_DRIVER === :postgres
+            @test haskey(Postgres.get_cached_statements(conn), first_insert[:sql_text])
+          end
+          sc1479_run(other, """ALTER TABLE "$(SC1479_TABLE)" ADD COLUMN "team" text""")
+          sc1479_run(conn, "BEGIN")
+          try
+            result = sc1479_run(conn, second_insert[:sql_text], second_insert[:parameters])
+            @test sc1479_ncols(result) == 2
+            @test only(Tables.rowtable(result)).name == "Piquet"
+            if SC1479_DRIVER === :postgres
+              # `RETURNING *`, cached before the ADD COLUMN, is refused in the same transaction.
+              e = sc1479_raised(() -> sc1479_run(conn, star(second_insert[:sql_text]), insert(5, "Mansell")[:parameters]))
+              @test e isa Postgres.Error && e.code == "0A000"
+            end
           finally
             sc1479_run(conn, "ROLLBACK")
           end

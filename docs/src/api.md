@@ -158,7 +158,7 @@ meta = query.list(show_query=:dict)
 
 | Key | Value |
 | :--- | :--- |
-| `:sql_text` | The SQL string — exactly what executes (on PostgreSQL, `create()` includes its `RETURNING *`). |
+| `:sql_text` | The SQL string — exactly what executes (on PostgreSQL, `create()` includes its `RETURNING` of the model's columns). |
 | `:parameters` | The bound values, in bucket order. |
 | `:parameter_count` | `length(:parameters)`. |
 | `:parameter_buckets` | SQLite and MySQL: the values per positional bucket (`:select`, `:where`, `:limit`, …). PostgreSQL: empty. |

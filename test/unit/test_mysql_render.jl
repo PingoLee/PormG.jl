@@ -1600,7 +1600,9 @@ PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
   @test !occursin("RETURNING", ins[:sql_text]) && ins[:parameter_count] == 4
   # The read-back: an AUTO_INCREMENT pk by the OK packet's id, a generated or supplied one alike.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(42), "`driver`")
-  @test rb[1] == "SELECT * FROM `driver` WHERE `driverid` = ?" && rb[2].select_params == Any[] && rb[2].where_params == Any[42]
+  # #1490: the declared columns, qualified with the table, never `*`.
+  @test rb[1] == "SELECT $(_MR_QB._returned_columns(_MR_MY.Driver, my, "`driver`")) FROM `driver` WHERE `driverid` = ?" &&
+        startswith(rb[1], "SELECT `driver`.`driverid`, ") && rb[2].select_params == Any[] && rb[2].where_params == Any[42]
   # The stored id first: the packet's id is what the row holds.
   rb = _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}("driverid" => 7), MrInsertResult(501), "`driver`")
   @test rb[2].where_params == Any[501]
@@ -1614,9 +1616,10 @@ PormG.backend_last_insert_id(::MrMockMySQL, r::MrInsertResult) = r.id
   @test _MR_QB._inserted_row_query(my, _MR_MY.Driver, Dict{String,Any}(), MrInsertResult(0), "`driver`") === nothing
   # SQLite keeps its rowid read-back; PostgreSQL's RETURNING carries the row.
   @test _MR_QB._inserted_row_query(MrMockSQLite(), _MR_SL.Driver, Dict{String,Any}(), nothing, "\"driver\"") ==
-        ("SELECT * FROM \"driver\" WHERE rowid = last_insert_rowid();", nothing)
+        ("SELECT $(_MR_QB._returned_columns(_MR_SL.Driver, MrMockSQLite(), "\"driver\"")) FROM \"driver\" WHERE rowid = last_insert_rowid();",
+         nothing)
   @test _MR_QB._inserted_row_query(MrMockPostgres(), _MR_PG.Driver, Dict{String,Any}(), nothing, "\"driver\"") === nothing
-  @test occursin("RETURNING *", _MR_PG.Driver.objects.create("forename" => "A", "surname" => "B", "nationality" => "C",
+  @test occursin("RETURNING \"driverid\", ", _MR_PG.Driver.objects.create("forename" => "A", "surname" => "B", "nationality" => "C",
                                                               "dob" => Date(1960, 1, 1); show_query = :sql))
 
   upd = _MR_MY.Result.objects.filter("grid" => 1).update("laps" => 5; show_query = :dict)

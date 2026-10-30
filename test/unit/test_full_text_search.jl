@@ -1032,7 +1032,10 @@ end
     refused(f) = (e = _err31(f); e isa InvalidValueError && occursin("it is a generated column", _plain31(sprint(showerror, e))))
     # Left out: the NOT NULL column is neither filled nor reported as missing.
     sql = S.objects.create("title" => "Monaco", show_query = :dict)[:sql_text]
-    @test occursin("INSERT INTO \"story\"", sql) && !occursin("search", sql)
+    insert_part, returning_part = split(sql, "RETURNING"; limit = 2)
+    @test occursin("INSERT INTO \"story\"", insert_part) && !occursin("search", insert_part)
+    # Read back: `create()` returns every declared column (#1490), the computed one included.
+    @test occursin("\"search\"", returning_part)
     df_sql = bulk_insert(S.objects, DataFrame(title = ["Monaco"], body = ["Senna wins"]); show_query = :dict)[:sql_text]
     @test !occursin("search", df_sql)
     # Read back: `returning` names it, which is not a write.

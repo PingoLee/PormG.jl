@@ -155,18 +155,19 @@ PormG.config["default"] = MockSettings
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Inspection shows what executes: PostgreSQL create() (#48)
-  # On PostgreSQL create() and get_or_create() send `INSERT … RETURNING *;` so the new row comes
-  # back; inspection used to show the INSERT without it. update_or_create() already showed its
+  # On PostgreSQL create() and get_or_create() send `INSERT … RETURNING <declared columns>;` (#1490)
+  # so the new row comes back; inspection used to show the INSERT without it. update_or_create() already showed its
   # RETURNING, so the three terminals now agree with each other and with the wire.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "PostgreSQL create()/get_or_create() inspection shows RETURNING (#48)" begin
     sql = DriverModel.objects.create("forename" => "Ayrton", "surname" => "Senna", show_query=:sql)
-    @test endswith(rstrip(sql), "RETURNING *;")
+    @test endswith(rstrip(sql), "RETURNING \"id\", \"forename\", \"surname\", \"nationality\";")
     res = DriverModel.objects.create("forename" => "Ayrton", "surname" => "Senna", show_query=:dict)
     @test res[:sql_text] == sql && res[:parameters] == ["Ayrton", "Senna"]
     # get_or_create() inserts on a miss with the same RETURNING, and showed it without too.
     goc = DriverModel.objects.get_or_create("surname" => "Senna"; defaults = Dict("forename" => "Ayrton"), show_query=:sql)
-    @test occursin("ON CONFLICT", goc) && endswith(rstrip(goc), "RETURNING *;")
+    @test occursin("ON CONFLICT", goc) &&
+          endswith(rstrip(goc), "RETURNING \"id\", \"forename\", \"surname\", \"nationality\";")
   end
 
   # Test: DELETE Inspection: Verify SQL and Metadata

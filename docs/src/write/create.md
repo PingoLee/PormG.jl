@@ -40,9 +40,20 @@ new_record = M.Just_a_test_deletion.objects.create("name" => "test", "test_resul
 ```sql
 INSERT INTO "just_a_test_deletion" ("name", "test_result") 
 VALUES ($1, $2) 
-RETURNING *
+RETURNING "id", "name", "test_result", "test_result2", "test_result_set_null", "test_result_set_default"
 -- Parameters: ["test", 1]
 ```
+
+`RETURNING` names the model's columns, never `*`, so the row carries the fields the model declares and
+nothing else: a column the table has but the model does not declare is not on it. On SQLite and MySQL
+the read-back below names the same columns. Reads that select no fields (`get()`, `first()`, `list()`)
+still return every column the table has, so for a table that has a column the model does not declare,
+the row `create()` returns has fewer keys than the same row read back with `get()`. The other way
+round, a field the model declares and the table does not have yet makes the write raise
+`StatementError` on every engine, so run `migrate` before code that declares a new field serves
+writes. On SQLite and MySQL the read-back is what raises, after the `INSERT` ran: inside a
+transaction of yours that row is in the transaction, so roll it back rather than commit past the
+error.
 
 !!! note "SQLite and MySQL do not use `RETURNING`"
     The SQL above is the PostgreSQL form. On SQLite, PormG deliberately issues a plain `INSERT`
@@ -111,7 +122,7 @@ new_record = M.Driver.objects.create(
 ```sql
 INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
 VALUES ($1, $2, $3, $4, $5) 
-RETURNING *
+RETURNING "driverid", "driverref", "number", "code", "forename", "surname", "dob", "nationality", "url"
 -- Parameters: ["Lewis", "Hamilton", "British", "hamilton", '1985-01-07']
 ```
 
@@ -132,7 +143,9 @@ race_result = M.Result.objects.create(
 ```sql
 INSERT INTO "result" ("driverid", "raceid", "constructorid", "positionorder") 
 VALUES ($1, $2, $3, $4) 
-RETURNING *
+RETURNING "resultid", "raceid", "driverid", "constructorid", "number", "grid", "position", "positiontext",
+  "positionorder", "points", "laps", "time", "milliseconds", "fastestlap", "rank", "fastestlaptime",
+  "fastestlapspeed", "statusid"
 -- Parameters: [driver_id, 1, 1, 1]
 ```
 
@@ -235,7 +248,7 @@ including `"field" => nothing`, which stores SQL `NULL` on a nullable field and 
 ```sql
 INSERT INTO "status" ("status") 
 VALUES ($1) 
-RETURNING *
+RETURNING "statusid", "status"
 -- Parameters: ["Finished"]
 ```
 
@@ -261,7 +274,7 @@ generated_id = record[:driverid]
 ```sql
 INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
 VALUES ($1, $2, $3, $4, $5) 
-RETURNING *
+RETURNING "driverid", "driverref", "number", "code", "forename", "surname", "dob", "nationality", "url"
 -- Parameters: ["Max", "Verstappen", "Dutch", "max_verstappen", '1997-04-01']
 ```
 
@@ -292,7 +305,7 @@ row.save()
 INSERT INTO "status" ("statusid", "status")
 VALUES ($1, $2)
 ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
-RETURNING *, (xmax = 0) AS "__pormg_created"
+RETURNING "statusid", "status", (xmax = 0) AS "__pormg_created"
 -- Parameters: [3, "Accident"]
 ```
 
@@ -402,7 +415,7 @@ circuit = M.Circuit.objects.create(
 ```sql
 INSERT INTO "circuit" ("name", "country", "circuitref", "location", "lat", "lng", "alt", "url") 
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
-RETURNING *
+RETURNING "circuitid", "circuitref", "name", "location", "country", "lat", "lng", "alt", "url"
 -- Parameters: ["Monaco", "Monaco", "monaco", "Monte Carlo", 43.7347, 7.4206, 5, "https://..."]
 ```
 
@@ -426,7 +439,9 @@ race = M.Race.objects.create(
 ```sql
 INSERT INTO "race" ("year", "round", "circuitid", "name", "date", "time", "url") 
 VALUES ($1, $2, $3, $4, $5, $6, $7) 
-RETURNING *
+RETURNING "raceid", "year", "round", "circuitid", "name", "date", "time", "start_at", "url", "fp1_date",
+  "fp1_time", "fp2_date", "fp2_time", "fp3_date", "fp3_time", "quali_date", "quali_time", "sprint_date",
+  "sprint_time"
 -- Parameters: [2024, 8, circuit_id, "Monaco Grand Prix", '2024-05-26', '13:00:00', "https://..."]
 ```
 
@@ -459,7 +474,9 @@ result = M.Result.objects.create(
 ```sql
 INSERT INTO "result" ("raceid", "driverid", "constructorid", "positionorder", "points", "grid", "laps") 
 VALUES ($1, $2, $3, $4, $5, $6, $7) 
-RETURNING *
+RETURNING "resultid", "raceid", "driverid", "constructorid", "number", "grid", "position", "positiontext",
+  "positionorder", "points", "laps", "time", "milliseconds", "fastestlap", "rank", "fastestlaptime",
+  "fastestlapspeed", "statusid"
 -- Parameters: [race_id, driver_id, constructor_id, 1, 25.0, 1, 58]
 ```
 
@@ -519,7 +536,9 @@ is safe to show a user — see
 ```sql
 INSERT INTO "race" ("year", "round", "circuitid", "name", "date") 
 VALUES ($1, $2, $3, $4, $5) 
-RETURNING *
+RETURNING "raceid", "year", "round", "circuitid", "name", "date", "time", "start_at", "url", "fp1_date",
+  "fp1_time", "fp2_date", "fp2_time", "fp3_date", "fp3_time", "quali_date", "quali_time", "sprint_date",
+  "sprint_time"
 -- Parameters: [2025, 1, 9999, "Phantom Grand Prix", '2025-03-23']
 ```
 
@@ -558,7 +577,7 @@ end
 ```sql
 INSERT INTO "just_a_test_deletion" ("name", "test_result") 
 VALUES ($1, $2) 
-RETURNING *
+RETURNING "id", "name", "test_result", "test_result2", "test_result_set_null", "test_result_set_default"
 ```
 
 ### Why Not Loop for Large Datasets?

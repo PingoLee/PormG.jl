@@ -2074,7 +2074,8 @@ end
         "WITH source(\"constructorid\", \"nationality\") AS (\n  VALUES (?, ?), (?, ?)\n)\nUPDATE \"constructor\"\n" *
         "SET \"nationality\" = source.\"nationality\"\nFROM source\nWHERE \"constructor\".\"constructorid\" = source.\"constructorid\"\n"
   # The many-to-many `add`: one method per engine, chosen by dispatch (#1413) — MySQL's `VALUES ROW`
-  # groups, PostgreSQL's `unnest` array, SQLite's INSERT OR IGNORE — and no shared method with a branch.
+  # groups, PostgreSQL's `unnest` array, SQLite's `WITH "v" … VALUES` CTE (#1473) — and no shared method
+  # with a branch.
   add_method(T) = which(_MR_QB._m2m_add!, Tuple{T, Any, Any, Any, Any, Any, Any, PormG.PormGField})
   @test length(unique([add_method(MrMockMySQL), add_method(MrMockPostgres), add_method(MrMockSQLite)])) == 3
 end

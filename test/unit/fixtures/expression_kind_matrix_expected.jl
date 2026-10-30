@@ -7413,77 +7413,77 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("json key | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("F json key + 1 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no integer type; SQLi"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `SUM(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Sum json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Max json key | alone", :sqlite) =>
@@ -7503,59 +7503,59 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max json key | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
   ("Floor json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG cannot name. Name the type the column "),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `FLOOR(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Ceil json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is CEIL(…), whose result type PormG cannot name. Name the type the column h"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CEIL(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Ceil json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CEIL(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Abs json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ABS(…), whose result type PormG cannot name. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `ABS(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Abs json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `ABS(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Round json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round json key / 2 | alone", :sqlite) =>
@@ -7575,59 +7575,59 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round json key / 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `MAX(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no inte"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Max json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
   ("Coalesce json key 0 / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG cannot name. Name the type the colu"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `COALESCE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("F json key + 1 / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of arithmetic over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no in"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key + 1 / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`+` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Cast json key numeric / 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast json key numeric / 2 | alone", :sqlite) =>
@@ -7647,41 +7647,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast json key numeric / 2 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Case json key branch / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: its branches have different types (JSONField and IntegerField)"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A quotient of `CASE(…)` over the JSON key `payload__n` means one that keeps its fraction, since a JSON number has no int"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("Case json key branch / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `CASE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the quer"),
   ("F json key * 1.0 / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = "float", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("F json key * 1.0 / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "/ over a side whose type PormG cannot name divides as integers or keeps the fraction depending on that type; MySQL's / a"),
+    (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("NullIf id json key / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf id json key / 2 | alone", :sqlite) =>
@@ -7829,18 +7829,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=array has no SQLite read parser")],
   ("Cast decimal numeric(10,2)[] | subquery", :postgres) =>
     [(:unparsed, "read=array has no SQLite read parser")],
-  ("Floor json key / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
-  ("Floor json key / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
-  ("Ceil json key / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
-  ("Ceil json key / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
-  ("Abs json key / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
-  ("Abs json key / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=decimal")],
   ("Round json key / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Round json key / 2 | alone", :sqlite) =>

@@ -1710,7 +1710,17 @@ _time_arithmetic_refusal(::PormGMySQL, op, label) =
                   "has no spelling for arithmetic on a time of day on MySQL: compare a time with a time (a Time " *
                   "literal), or compute it in Julia.")
 
+# #1483 — arithmetic over an uncast JSON key is refused on every engine (`_refuse_json_key_arithmetic`).
+# Asked once the node has rendered, as every type question here is (#568): rendering resolves a joined
+# path's column, which the kind walk reads. `/` asks before `_division_sql` too (below), so MySQL's
+# untyped-side refusal does not answer first.
 function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  rendered = _render_expr_node_sql(v, instruc)
+  _refuse_json_key_arithmetic(v, instruc)
+  return rendered
+end
+
+function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String
@@ -1892,7 +1902,10 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
         # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
         v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
           _refuse_untyped_date_operand(v.operation, instruc)
-        v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
+        if v.operation == "/"
+          _refuse_json_key_arithmetic(v, instruc)
+          return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
+        end
         # #1406: `time - time` is an interval on PostgreSQL; the one copy of the rule says so.
         return "($(left_side) $(v.operation) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
       end
@@ -1906,7 +1919,10 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
     v.operation in _COMPARISON_OPERATIONS && v.operand isa Union{SubqueryObject,CTEReference} &&
       _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
 
-    v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
+    if v.operation == "/"
+      _refuse_json_key_arithmetic(v, instruc)
+      return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
+    end
     # `&`, `|`, `<<`, `>>`: a signed 64-bit integer on every engine (`_bitwise_sql`).
     v.operation in _BITWISE_OPERATIONS &&
       return _bitwise_sql(instruc.connection, v.operation, left_side, right_side), nothing
@@ -1928,21 +1944,9 @@ end
 # backend gets a `MethodError` here rather than PostgreSQL's text.
 _division_sql(::PormGPostgres, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
   "($(left) / $(right))"
-function _division_sql(conn::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
   fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}
-  if !(fractional(v.field_name) || fractional(v.operand))
-    # #1471: with no side a fraction, a side holding a JSON key's number divides as the integer the
-    # document holds, where the quotient means its fraction (`_MEANING_DEPARTURES`, `:division`). A
-    # float or a decimal side makes the division REAL below, which keeps the fraction (`x / 2.0`).
-    # Refused rather than cast: the query does not say whether the key holds an integer or a float.
-    json = _json_number_side(v.field_name, instruc)
-    json === nothing && (json = _json_number_side(v.operand, instruc))
-    if json !== nothing
-      row = _departure(conn, :division, :json_number)
-      row === nothing || throw(_meaning_refusal("A quotient", json[1], row, conn; flag = json[2]))
-    end
-    return "($(left) / $(right))"
-  end
+  (fractional(v.field_name) || fractional(v.operand)) || return "($(left) / $(right))"
   (_real_on_every_row(v.field_name, instruc) || _real_on_every_row(v.operand, instruc)) && return "($(left) / $(right))"
   return "(CAST($(left) AS REAL) / $(right))"
 end

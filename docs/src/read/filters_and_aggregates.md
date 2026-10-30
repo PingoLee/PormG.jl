@@ -445,27 +445,28 @@ against a column means the same thing on all of them.
 
 ### Arithmetic over a key
 
-A key's value has the type the data gives it, so PormG does not know whether `wins` holds an integer
-or a float. State the number you mean with a cast before computing on it:
+A key's value has the type the data gives it, so PormG does not know whether `wins` holds an integer,
+a float or text. State the number you mean with a cast before computing on it:
 
 ```julia
 q = M.Constructor.objects
 q.values("name", "half" => Cast("metadata__wins", "numeric") / 2)    # 60.5 on every engine
+q.values("name", "half" => Cast("metadata__wins", BigIntegerField()) / 2)    # 60 on every engine
 ```
 
-A JSON number has no integer type, so a quotient over one keeps its fraction. SQLite's
-`json_extract` returns the integer the document holds, and the functions whose value is their
-operand's keep it (`Floor`, `Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and
-its `default`, a `Case` branch, `NullIf`'s first operand), as do `Sum` and arithmetic, so SQLite would divide `121 / 2`
-as integers and return `60`. A `/` with such a side, `Floor("metadata__wins") / 2` for example,
-therefore raises `QueryBuildError` on SQLite, naming the cast to write (#1471). That holds wherever
-the quotient appears: a projection, a filter value (`"constructorid__@gt" => F("metadata__wins") / 2`),
-an `update()` value, an ordering. A side that SQLite computes as a fraction keeps building: a float
-divisor (`/ 2.0`), arithmetic beside a float literal or a `FloatField` column
-(`F("metadata__wins") * 1.0`), `Round` and `Avg`. PostgreSQL extracts the key as text: it computes the fraction where
-a function casts it (`Floor`, `Ceil`, `Abs`, `Round`), and raises at the server for arithmetic on the
-text itself (`F("metadata__wins") / 2`, `Sum("metadata__wins")`). MySQL refuses the quotient when the
-query is built (a side whose type PormG cannot name). The cast works on all three.
+Without the cast, arithmetic on a key (`+`, `-`, `*`, `/`), a `Sum` and an `Avg` raise
+`QueryBuildError` on every engine, naming the cast to write (#1483). The query does not say which
+number it computes on, and the engines answer differently: SQLite's `json_extract` returns the integer
+the document holds, so it would divide `121 / 2` as integers and return `60`, and PostgreSQL extracts
+the key as text, which its `+`, `/` and `sum` reject when the query runs. The same holds for a value
+that carries the key into the arithmetic: the functions whose value is their operand's (`Floor`,
+`Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case`
+branch and `NullIf`'s first operand, so `Floor("metadata__wins") / 2` raises too. It also holds wherever
+the arithmetic appears: a projection, a filter value (`"constructorid__@gt" => F("metadata__wins") / 2`),
+an `update()` value, an ordering, a CTE body or a `Subquery`.
+
+A function over the key with nothing computed on it builds (`Floor("metadata__wins")`,
+`Max("metadata__wins")`), and so does a comparison (`"metadata__wins__@gte" => 100`, above).
 
 ### A whole document (`field => document`)
 

@@ -588,58 +588,75 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1471: a quotient over a JSON key's number keeps its fraction, so SQLite refuses it
-# A JSON number has no integer type, so `/` over one means a quotient that keeps its fraction.
-# SQLite's `json_extract` hands over the integer the document holds, and `FLOOR`, `CEIL`, `ABS`, `MAX`,
-# `COALESCE`, `SUM` and arithmetic keep it, so `FLOOR(json_extract(…)) / ?` divided as integers (`7 / 2`
-# was `3`). Expected: each such side refused on SQLite (`_MEANING_DEPARTURES`, `:division`), the message
-# naming SQLite only, the side, and the explicit spelling on the key; PostgreSQL builds
-# `FLOOR((… #>> '{n}')::numeric) / $1::bigint`, which keeps the fraction. A side that names its number —
-# `Round` (a REAL on SQLite, cast by `_division_sql`), `Cast(key, "numeric")`, which renders
-# `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` — builds on SQLite, and so does arithmetic beside
-# a float (`(json_extract(…) * ?) / ?`, a REAL) and `NullIf("id", key)`, whose value is the integer `id`.
-# Why it matters: the SQLite answer was a different value with nothing to say so.
+# #1483 (was #1471): arithmetic, a Sum or an Avg over an uncast JSON key is refused on every engine
+# A JSON key's value has no declared type: the document decides, row by row, whether it is an integer,
+# a float or text. Arithmetic on it does not say which number it computes on, and the engines answer
+# differently: SQLite's `json_extract` hands over the integer the document holds, so `FLOOR(…) / ?`
+# divided as integers (`7 / 2` was `3`); PostgreSQL's `#>>` is text, which `+`, `/` and `sum` reject at
+# the server. Expected: every shape below raises `QueryBuildError` on PostgreSQL, SQLite and MySQL
+# alike, naming the key, the operation, and the explicit spelling (`Cast("payload__n", "numeric")`),
+# and no engine. A value that names its number builds on every engine: `Cast(key, "numeric") / 2`
+# renders `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` on SQLite and
+# `((… #>> '{"n"}')::decimal / $1::bigint)` on PostgreSQL; `Round` (a `numeric` function) and
+# `NullIf("id", key)`, whose value is the integer `id`, build too, and so does a function over the key
+# with nothing computed on it (`Floor(key)`, `Max(key)`).
+# Why it matters: the SQLite answer was a different value with nothing to say so, and PostgreSQL's
+# error, raised only when the query ran, named neither the key nor the cast to write.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1471: a quotient over a JSON key is refused on SQLite, built on PostgreSQL" begin
+@testset "#1483: arithmetic, Sum or Avg over an uncast JSON key is refused on every engine" begin
   FN = PormG.Functions
-  quotient(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  QB = PormG.QueryBuilder
+  proj(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
   plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
-  for (label, expr) in (
-      ("the key", () -> PormG.QueryBuilder.F("payload__n") / 2),
-      ("Floor", () -> FN.Floor("payload__n") / 2),
-      ("Ceil", () -> FN.Ceil("payload__n") / 2),
-      ("Abs", () -> FN.Abs("payload__n") / 2),
-      ("Max", () -> FN.Max("payload__n") / 2),
-      ("Sum", () -> FN.Sum("payload__n") / 2),
-      ("Coalesce", () -> FN.Coalesce("payload__n", 0) / 2),
-      ("arithmetic", () -> (PormG.QueryBuilder.F("payload__n") + 1) / 2),
-      ("a Case branch", () -> PormG.QueryBuilder.Case([PormG.QueryBuilder.When("id" => 1, then = PormG.QueryBuilder.F("payload__n"))], default = 0) / 2),
-      ("Coalesce beside a float", () -> FN.Coalesce("payload__n", 0.5) / 2),
-      ("the divisor", () -> PormG.QueryBuilder.F("id") / FN.Floor("payload__n")))
-    @testset "$label" begin
-      e = try _sql(quotient(expr()); conn = _JL_SL); nothing catch err; err end
+  for (label, op, expr) in (
+      ("the key / 2", "`/`", () -> QB.F("payload__n") / 2),
+      ("the key + 1", "`+`", () -> QB.F("payload__n") + 1),
+      ("the key - 1", "`-`", () -> QB.F("payload__n") - 1),
+      ("the key * 2", "`*`", () -> QB.F("payload__n") * 2),
+      ("the key * 1.0", "`*`", () -> QB.F("payload__n") * 1.0),
+      ("the key / 2.0", "`/`", () -> QB.F("payload__n") / 2.0),
+      ("a column + the key", "`+`", () -> QB.F("id") + QB.F("payload__n")),
+      ("the divisor", "`/`", () -> QB.F("id") / FN.Floor("payload__n")),
+      ("Floor", "`/`", () -> FN.Floor("payload__n") / 2),
+      ("Ceil", "`/`", () -> FN.Ceil("payload__n") / 2),
+      ("Abs", "`/`", () -> FN.Abs("payload__n") / 2),
+      ("Max", "`/`", () -> FN.Max("payload__n") / 2),
+      ("Coalesce", "`/`", () -> FN.Coalesce("payload__n", 0) / 2),
+      ("Coalesce beside a float", "`/`", () -> FN.Coalesce("payload__n", 0.5) / 2),
+      ("a Case branch", "`/`", () -> QB.Case([QB.When("id" => 1, then = QB.F("payload__n"))], default = 0) / 2),
+      ("Sum", "Sum", () -> FN.Sum("payload__n")),
+      ("Avg", "Avg", () -> FN.Avg("payload__n")),
+      ("Sum / 2", "Sum", () -> FN.Sum("payload__n") / 2),
+      ("Sum of Coalesce", "Sum", () -> FN.Sum(FN.Coalesce("payload__n", 0))))
+    @testset "$label on $(nameof(typeof(conn)))" for conn in (_JL_PG, _JL_SL, _JL_MY)
+      e = try _sql(proj(expr()); conn = conn); nothing catch err; err end
       @test e isa PormG.QueryBuildError
-      msg = plain(e)
+      msg = e === nothing ? "" : plain(e)
+      @test startswith(msg, "$(op) over ")
       @test occursin("JSON key `payload__n`", msg)
-      @test occursin("SQLite computes an integer quotient", msg)
-      @test occursin("PormG refuses it on SQLite (#1471)", msg)
-      @test startswith(msg, "A quotient of ")
+      @test occursin("has no declared type", msg)
+      @test occursin("(#1483)", msg)
       @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
-      @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
+      @test occursin("Cast(\"payload__n\", BigIntegerField())", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg) && !occursin("MySQL", msg)
     end
   end
-  @test occursin("FLOOR((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric) / \$1::bigint",
-                 _sql(quotient(FN.Floor("payload__n") / 2); conn = _JL_PG)[:sql_text])
-  # The sides that name their number build on SQLite, and so does a fractional divisor: SQLite
-  # divides by a float as REAL, which keeps the fraction.
-  @test occursin("json_extract(\"Tb\".\"payload\", '\$.n') / ?", _sql(quotient(PormG.QueryBuilder.F("payload__n") / 2.0); conn = _JL_SL)[:sql_text])
-  @test occursin("CAST(ROUND(", _sql(quotient(FN.Round("payload__n") / 2); conn = _JL_SL)[:sql_text])
+  # A value that names its number builds on every engine, with the SQL it always had.
   @test occursin("(CAST(CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS NUMERIC) AS REAL) / ?)",
-                 _sql(quotient(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
-  # Arithmetic beside a float is a REAL on SQLite, which keeps the fraction (`F(key) * 1.0`), and
-  # `NullIf`'s value is its first operand, here the integer `id`, whose integer quotient is the meaning.
-  @test occursin("((json_extract(\"Tb\".\"payload\", '\$.n') * ?) / ?)",
-                 _sql(quotient((PormG.QueryBuilder.F("payload__n") * 1.0) / 2); conn = _JL_SL)[:sql_text])
+                 _sql(proj(FN.Cast("payload__n", "numeric") / 2); conn = _JL_SL)[:sql_text])
+  @test occursin("((\"Tb\".\"payload\" #>> '{\"n\"}')::decimal / \$1::bigint)",
+                 _sql(proj(FN.Cast("payload__n", "numeric") / 2); conn = _JL_PG)[:sql_text])
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test _sql(proj(FN.Cast("payload__n", "numeric") + 1); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Sum(FN.Cast("payload__n", "numeric"))); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Round("payload__n") / 2); conn = conn) isa AbstractDict
+    # A function over the key with nothing computed on it is the key's own value.
+    @test _sql(proj(FN.Floor("payload__n")); conn = conn) isa AbstractDict
+    @test _sql(proj(FN.Max("payload__n")); conn = conn) isa AbstractDict
+  end
+  # `NullIf`'s value is its first operand, here the integer `id`, whose quotient is the meaning.
   @test occursin("(NULLIF(\"Tb\".\"id\", json_extract(\"Tb\".\"payload\", '\$.n')) / ?)",
-                 _sql(quotient(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
+                 _sql(proj(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
+  # A comparison is not arithmetic: the key lookup's own filter binds it (#1382).
+  @test _sql((q = JL.Json_scratch.objects; q.filter("payload__n__@gt" => 5); q); conn = _JL_PG) isa AbstractDict
 end

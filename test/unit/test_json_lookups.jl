@@ -242,9 +242,10 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test sl[:parameters] == [5]                          # SQLite: native
     @test _sql(mkq(); conn = _JL_PG)[:parameters] == ["5"]   # PG: text
 
-    # A string/LIKE operator on a JSON path is not a supported comparison → clear error.
+    # A string/LIKE operator on a JSON path is not a supported comparison → clear error, naming the
+    # lookup as written (#1499: `@startswith`, not the internal `startswith`).
     q = JL.Json_scratch.objects; q.filter("payload__nome__@startswith" => "ham"); q.values("id")
-    @test_throws "not supported on a JSON path lookup" inspect_query(q)
+    @test_throws "The @startswith lookup is not supported on payload__nome, a JSON key's value" inspect_query(q)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -411,9 +412,9 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test occursin("(\"Tb\".\"payload\" #>> '{\"driver\"}')::numeric > \$1", _sql(keyed("d__@gt", 5); conn = _JL_PG)[:sql_text])
     @test _sql(keyed("d", 5); conn = _JL_SL)[:parameters] == Any[5]
     @test _sql(keyed("d", 5); conn = _JL_PG)[:parameters] == Any["5"]
-    # A pattern lookup and a membership list bind as given, as they did: the key's text, unchecked.
-    @test _sql(keyed("d__@contains", "ham"); conn = _JL_PG)[:parameters] == Any["%ham%"]
-    @test _sql(keyed("d__@in", ["a", "b"]); conn = _JL_SL)[:parameters] == Any["a", "b"]
+    # A pattern lookup and a membership list are refused, as on the key lookup (#1499).
+    @test_throws PormG.FilterError _sql(keyed("d__@contains", "ham"); conn = _JL_PG)
+    @test_throws PormG.FilterError _sql(keyed("d__@in", ["a", "b"]); conn = _JL_SL)
     # An alias over the whole document keeps the JSON formatter and the #1360 marker.
     whole = (q = JL.Json_scratch.objects; q.values("id", "p" => F("payload")); q.filter("p" => "notjson"); q)
     @test_throws PormG.InvalidValueError _sql(whole; conn = _JL_PG)
@@ -909,12 +910,10 @@ end
     r = sql("w__@gt" => 100, conn)
     @test occursin(r"\) > \?$", where(r)) && r[:parameters] == [100]
   end
-  # `@in`, which a key lookup refuses, binds its values as given, as on an `F` alias over the key (#1382);
-  # it bound the text `"9"`, which SQLite's number never equals. (`@range` on PostgreSQL is #1499.)
-  # PostgreSQL binds one array (`= ANY($1)`); SQLite and MySQL one marker per value.
-  @test sql("w__@in" => [9, 10], _JL_PG)[:parameters] == [[9, 10]]
-  @test sql("w__@in" => [9, 10], _JL_SL)[:parameters] == [9, 10]
-  @test sql("w__@in" => [9, 10], _JL_MY)[:parameters] == [9, 10]
+  # `@in`, which a key lookup refuses, is refused here too (#1499).
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test_throws PormG.FilterError sql("w__@in" => [9, 10], conn)
+  end
   # An equality with a number: text on PostgreSQL and MySQL, the native number on SQLite.
   @test sql("w" => 100, _JL_PG)[:parameters] == ["100"]
   @test sql("w" => 100, _JL_SL)[:parameters] == [100]
@@ -934,4 +933,70 @@ end
   end
   @test occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG))) &&
         !occursin("::numeric", where(sql("w__@gt" => 100, _JL_PG; col = "id")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1499: a filter on anything that holds a JSON key's value refuses what the key lookup refuses
+# A filter on a projection alias over a key (`F("payload__n")`), a CTE column over one and a `Subquery`
+# alias projecting one compared as the key lookup does for `=`, `@ne`, the orderings and `@isnull`
+# (#1382, #1472, #1492), but the other operators fell through and bound their values raw. On PostgreSQL
+# the alias is text, so `w__@range => (9, 100)` rendered `#>> '{"n"}' BETWEEN $1 AND $2`, where `'15'`
+# is not between `'9'` and `'100'`: the row dropped without a word. Expected, on every engine and for
+# every handle: `@in`, `@nin`, `@range` and a pattern lookup raise the `FilterError` the key lookup
+# raises, naming the lookup as the caller wrote it and the cast spelling; a cast alias takes the range.
+# Why it matters: a filter on the alias returned fewer rows, silently, where the same filter on the key
+# refused to run.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1499: an alias, CTE column or Subquery over a JSON key refuses what the key lookup refuses" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub() = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => "payload__n"); s)
+  aliased(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => F("payload__n")); q.filter(filt); q)
+  subquery(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => QB.Subquery(sub())); q.filter(filt); q)
+  function cte(filt)
+    body = JL.Json_scratch.objects
+    body.values("id", "w" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__w")
+    q.filter(filt)
+    return q
+  end
+  key(filt) = (q = JL.Json_scratch.objects; q.values("name"); q.filter(filt); q)
+  # The `Subquery` projection warns that it may match more than one row; that is not under test.
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(mk, filt, conn) = quiet(() -> try _sql(mk(filt); conn = conn); nothing catch e; e end)
+  for conn in (_JL_PG, _JL_SL, _JL_MY),
+      (suffix, value) in (("@range", (9, 100)), ("@in", [9, 15]), ("@nin", [9, 15]), ("@startswith", "1"))
+    @testset "$suffix on $(nameof(typeof(conn)))" begin
+      # The key lookup itself: the reference refusal.
+      e = refusal(key, "payload__n__$suffix" => value, conn)
+      @test e isa PormG.FilterError && occursin("The $suffix lookup is not supported on payload__n", e.msg)
+      for (mk, name) in ((aliased, "w"), (subquery, "w"), (cte, "g__w"))
+        e = refusal(mk, "$(name)__$suffix" => value, conn)
+        @test e isa PormG.FilterError
+        e isa PormG.FilterError &&
+          @test occursin("The $suffix lookup is not supported on $name, a JSON key's value", e.msg)
+        # Both casts: a pattern lookup or a list of text needs the text one (review of #1499).
+        e isa PormG.FilterError && @test occursin("Cast(<the key path>, \"numeric\")", e.msg) &&
+          occursin("Cast(<the key path>, \"text\")", e.msg)
+      end
+      # A `When` condition on the alias refuses as the alias's filter does.
+      q = JL.Json_scratch.objects
+      q.values("name", "w" => F("payload__n"))
+      q.filter(QB.Case([QB.When("w__$suffix" => value, then = 1)], default = 0) == 1)
+      @test_throws PormG.FilterError _sql(q; conn = conn)
+    end
+  end
+  # The explicit spelling: a cast alias takes the range, two numbers bound on every engine.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    q = JL.Json_scratch.objects
+    q.values("name", "w" => FN.Cast("payload__n", "numeric"))
+    q.filter("w__@range" => (9, 100))
+    r = _sql(q; conn = conn)
+    @test occursin("BETWEEN", r[:sql_text]) && r[:parameters] == [9, 100]
+  end
+  # Controls: the comparisons the key lookup renders still build on the alias.
+  @test _sql(aliased("w__@gte" => 9); conn = _JL_PG)[:parameters] == [9]
+  @test isempty(_sql(aliased("w__@isnull" => true); conn = _JL_SL)[:parameters])
 end

@@ -274,10 +274,28 @@ end
             @test length(sub_filtered("payload__points", "w__@gt" => 20).list()) == 0
             @test length(sub_filtered("payload__driver", "w" => "hamilton").list()) == 1
             @test length(sub_filtered("payload__driver", "w" => "norris").list()) == 0
-            # `@in` binds its values as given, as on an `F` alias over the key: it bound the text "15",
-            # which SQLite's number never equals.
-            @test length(sub_filtered("payload__points", "w__@in" => [15, 99]).list()) == 1
-            @test length(sub_filtered("payload__points", "w__@in" => [16, 99]).list()) == 0
+        end
+
+        # #1499: the lookups a key lookup refuses are refused on everything that holds its value. On
+        # PostgreSQL `@range` on an alias over `payload__points` (15) compared text, so `(9, 100)` matched
+        # no row ('15' is not between '9' and '100'), while SQLite matched it. Expected: `FilterError` on
+        # every engine for `@range` and `@in` through an `F` alias and a `Subquery` alias, before any
+        # SQL is sent; the cast spelling matches the row on every engine.
+        @testset "an alias over a JSON key refuses @in and @range (#1499)" begin
+            via_f(filt) = (q = base(); q.values("id", "w" => F("payload__points")); q.filter(filt); q)
+            function via_sub(filt)
+                s = M.Field_validation_scratch.objects
+                s.filter("id" => OuterRef("id")); s.values("k" => "payload__points")
+                q = base(); q.values("id", "w" => Subquery(s)); q.filter(filt)
+                return q
+            end
+            for mk in (via_f, via_sub), filt in ("w__@range" => (9, 100), "w__@in" => [15, 99])
+                @test_throws PormG.FilterError mk(filt).list()
+            end
+            q = base(); q.values("id", "w" => Cast("payload__points", "numeric")); q.filter("w__@range" => (9, 100))
+            @test length(q.list()) == 1
+            q = base(); q.values("id", "w" => Cast("payload__points", "numeric")); q.filter("w__@in" => [15, 99])
+            @test length(q.list()) == 1
         end
 
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────

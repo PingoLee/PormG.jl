@@ -445,6 +445,18 @@ q.values("name", "wins" => Subquery(wins))
 q.filter("wins__@gt" => 100)               # a numeric comparison, as "metadata__wins__@gt" => 100
 ```
 
+All three take exactly the path lookup's comparisons. `@in`, `@nin`, `@range`, `@nrange` and the
+pattern lookups (`@contains`, `@startswith`, …) raise a `FilterError` on every engine, on the path
+lookup and on an alias, CTE column or `Subquery` over it (#1499). A key's value has no declared type,
+and PostgreSQL extracts it as text, so `@range` over `9` and `100` would compare text there and skip a
+row holding `15`. Project the key with the type you mean and filter that name:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "wins" => Cast("metadata__wins", "numeric"))
+q.filter("wins__@range" => (9, 100))       # numbers on every engine
+```
+
 A path lookup compares the extracted value against a **value**. A column expression on the right
 (`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison

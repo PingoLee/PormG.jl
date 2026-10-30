@@ -1944,11 +1944,11 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   interval = _render_interval_alias_predicate(v, having_key, instruc)
   interval === nothing || return interval
   # #1382: an alias over a JSON key lookup compares as the key lookup does — text on PostgreSQL and
-  # MySQL, the native value on SQLite, a number ordered as a number — for the operators that comparison
-  # renders, against a value. A pattern lookup, a membership list or an expression or a queryset on the
-  # right (`_expression_operand`) renders as it did.
-  _alias_projects_json_key(having_key, instruc) && v.operator in _JSON_KEY_COMPARISON_OPERATORS &&
-    !_expression_operand(v.values) &&
+  # MySQL, the native value on SQLite, a number ordered as a number — against a value. #1499: under
+  # every operator, so the ones the key lookup refuses (a membership list, a range, a pattern) are
+  # refused here too; `@range` compared text on PostgreSQL. An expression or a queryset on the right
+  # (`_expression_operand`) renders as it did.
+  _alias_projects_json_key(having_key, instruc) && !_expression_operand(v.values) &&
     return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.

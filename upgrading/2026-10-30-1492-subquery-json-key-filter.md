@@ -23,16 +23,15 @@ binds as `filter("metadata__wins" => …)` does (#1382): a numeric comparison fo
 text for an equality on PostgreSQL and MySQL, the native value on SQLite. A `When` condition on the
 alias compares the same way. A `Subquery` over the whole document keeps the JSON formatter.
 
-`@in` and `@range`, which a key lookup refuses, now bind their values as given, as they already did on
-an alias over `F("metadata__wins")`. `@in` matched no row on SQLite (`"15"` against the number `15`)
-and now matches. `@range` is still a text comparison on PostgreSQL, on both kinds of alias: #1499.
+`@in`, `@range` and the pattern lookups, which a key lookup refuses, raise `FilterError` on the alias
+too (#1499, in this train): see `2026-10-30-1499-json-key-alias-operators.md`.
 
 | filter on an alias `wins => Subquery(… values("w" => "metadata__wins"))` | before | now |
 |---|---|---|
 | `filter("wins__@gt" => 100)` on PostgreSQL, a row holding `99` | matched (text `'99' > '100'`) | not matched |
 | `filter("wins__@gt" => 100)` on SQLite, a row holding `121` | not matched | matched |
 | `filter("wins" => 121)` on SQLite, a row holding `121` | not matched | matched |
-| `filter("wins__@in" => [121, 99])` on SQLite, a row holding `121` | not matched | matched |
+| `filter("wins__@in" => [121, 99])` on SQLite, a row holding `121` | not matched | `FilterError` (#1499) |
 | `filter("principal" => "Toto Wolff")`, an alias `principal => Subquery(… values("p" => "metadata__principal"))` | `InvalidValueError` | matches the row |
 
 ### Who this affects

@@ -12,17 +12,21 @@
 ## before, so a slow stretch of the machine lands on all cells rather than one. A visit spawns a fresh
 ## `julia -t 8,1` child, waits for it to report `READY`, waits a random 0–500 ms, sends SIGTERM and
 ## gives the child 30 s to exit. A child still alive then is a hang: the parent saves each thread's
-## `/proc/<pid>/task/*/wchan`, SIGKILLs it, and records it. (A SIGQUIT at that point prints nothing:
-## once the SIGTERM exit has started, Julia's signal thread no longer handles it.) One TSV row per
-## visit goes to `<out_dir>/results.tsv`, the child's output to `<out_dir>/<cell>-<round>.log`, and
-## a tally is printed at the end. Linux only (`/proc`, `pipe(2)`).
+## `/proc/<pid>/task/*/wchan`, sends SIGUSR1, waits 10 s, saves the wchan again (`.wchan-after`),
+## SIGKILLs the child and records the hang. For a SIGUSR1 sent by hand, Julia's signal thread
+## suspends every thread and prints its backtrace (`signal (10)` in the log), whether or not the
+## profile peek is still armed. A SIGQUIT would not help: Julia takes a second exit signal as a
+## request to die at once and prints nothing (`signal_listener` in `src/signals-unix.c`). One TSV
+## row per visit goes to `<out_dir>/results.tsv`, the child's output to `<out_dir>/<cell>-<round>.log`,
+## and a tally is printed at the end. Linux only (`/proc`, `pipe(2)`).
 ##
 ## Every atexit hook in a child is wrapped in `MARK hook_begin <i> <name>` / `MARK hook_end <i>`
 ## lines written straight to fd 2 (`MARK hook_threw <i>` if it throws), and a last hook writes
 ## `MARK hooks_done`. The child refuses to report `READY` if a hook was registered after the wrapping;
 ## the compile cell, which reports `READY` before its first query, writes `MARK late_hook` if that
-## query registers one. The TSV's `last_mark=` is the last mark a child wrote: a hang names the
-## hook it stopped in, or, with no mark at all, shows that the exit never reached the hooks.
+## query registers one. The TSV's `last_mark=` is the last mark a child wrote before the SIGUSR1
+## dump: a hang names the hook it stopped in, or, with no mark at all, shows that the exit never
+## reached the hooks. (A SIGUSR1 sometimes wakes a hung exit; `exited_after_usr1` records it.)
 ## `abnormal` counts children that exited with anything but code 0 or SIGTERM — a crash is not a
 ## clean exit.
 ##
@@ -41,6 +45,8 @@ const ALL_CELLS = ["libpq:on", "libpq:off", "postgres:on", "postgres:off", "libp
 const N_TASKS = 16
 const EXIT_GRACE_SECONDS = 30.0
 const READY_TIMEOUT_SECONDS = 180.0
+const USR1_WAIT_SECONDS = 10.0
+const SIGUSR1 = 10   # Linux; Base names SIGTERM and SIGKILL but not this one
 
 # ── child ────────────────────────────────────────────────────────────────────
 
@@ -166,9 +172,17 @@ function wchan_dump(pid::Int32)
   return String(take!(io))
 end
 
+function save_wchan(p::Base.Process, path::String)
+  try
+    write(path, wchan_dump(getpid(p)))
+  catch e
+    write(path, sprint(showerror, e))
+  end
+end
+
 function visit(cell::String, rnd::Int, out::String)
   log = joinpath(out, "$(replace(cell, ':' => '-'))-$rnd.log")
-  outcome, seconds, code, sig = "exited", NaN, -1, -1
+  outcome, seconds, code, sig, usr1_exit = "exited", NaN, -1, -1, false
   open(log, "w") do io
     p = run(pipeline(child_cmd(cell); stdout = io, stderr = io); wait = false)
     try
@@ -187,11 +201,10 @@ function visit(cell::String, rnd::Int, out::String)
           seconds = time() - t0
           if exited === :timed_out
             outcome = "HANG"
-            try
-              write(log * ".wchan", wchan_dump(getpid(p)))
-            catch e
-              write(log * ".wchan", sprint(showerror, e))
-            end
+            save_wchan(p, log * ".wchan")
+            kill(p, SIGUSR1)
+            sleep(USR1_WAIT_SECONDS)
+            process_exited(p) ? (usr1_exit = true) : save_wchan(p, log * ".wchan-after")
           end
         end
       end
@@ -203,10 +216,16 @@ function visit(cell::String, rnd::Int, out::String)
     code, sig = p.exitcode, p.termsignal
   end
   text = read(log, String)
+  # A SIGUSR1 can wake a hung exit (the hooks then finish), so `last_mark` reads only what came
+  # before the dump: where the exit was stuck at 30 s, not where it got to afterwards.
+  usr1_at = findfirst("signal (10)", text)
+  before = usr1_at === nothing ? text : text[1:prevind(text, first(usr1_at))]
   marks = join(filter(!isempty, [
     occursin("val already in a list", text) ? "val_in_list" : "",
     occursin("closed connections that were still checked out", text) ? "closed_leased" : "",
-    let m = collect(eachmatch(r"MARK ([^\n]*)", text)); isempty(m) ? "" : "last_mark=" * m[end][1] end,
+    occursin("signal (10)", text) ? "usr1_backtrace" : "",
+    usr1_exit ? "exited_after_usr1" : "",
+    let m = collect(eachmatch(r"MARK ([^\n]*)", before)); isempty(m) ? "" : "last_mark=" * m[end][1] end,
   ]), ",")
   return (; cell, round = rnd, outcome, seconds = round(seconds; digits = 2), code, sig, marks, log)
 end

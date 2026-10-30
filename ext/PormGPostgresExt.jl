@@ -703,8 +703,8 @@ end
 
 # A cached statement the server will not run again as it is, which preparing it afresh heals — the
 # two cases pgjdbc's `willHealViaReparse` names:
-#   * its result columns changed under it (an `ADD COLUMN` on the table of a cached `RETURNING *`,
-#     by any connection, this one included): `cached plan must not change result type`, recognised
+#   * its result columns changed under it (an `ADD COLUMN` on the table of a cached `SELECT *`, or a
+#     type change to a column it names, by any connection, this one included): `cached plan must not change result type`, recognised
 #     by SQLSTATE `0A000` and the server routine that raises it, since `0A000` alone is every
 #     `feature_not_supported`. The routine is a C function name, never translated by `lc_messages`;
 #   * it is gone from the server (`DEALLOCATE ALL` or `DISCARD ALL` on the connection): `26000`.

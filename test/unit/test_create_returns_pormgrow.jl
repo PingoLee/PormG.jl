@@ -7,7 +7,7 @@ import PormG.ConnectionPool: fetch
 # ─────────────────────────────────────────────────────────────────────────────
 # create()/insert() return a PormGRow (#166)
 #
-# DB-free: a mock PG connection answers the INSERT ... RETURNING * with a full row, so create()
+# DB-free: a mock PG connection answers the INSERT ... RETURNING <declared columns> with a full row, so create()
 # on the :execute path wraps it into a PormGRow (the same object get()/first()/list() return).
 # The show_query=:dict path must still return the inspection Dict — the dual contract is unchanged.
 # (SQLite's INSERT + read-back path is covered end-to-end in test/integration/test_inserts.jl.)
@@ -18,7 +18,7 @@ CreateRowModel.connect_key = "create_pormgrow"
 
 struct MockPgCreate <: PormG.PormGPostgres end
 
-# create() PG path issues `INSERT ... RETURNING *`; hand back a full row to wrap.
+# create() PG path issues `INSERT ... RETURNING <declared columns>` (#1490); hand back a full row to wrap.
 function fetch(connection::MockPgCreate, sql::String;
   conn = nothing, params = nothing, ignore_tx::Bool = false)
   if occursin("INSERT INTO", sql) && occursin("RETURNING", sql)
@@ -51,7 +51,7 @@ end
 end
 
 @testset "pk accessor, .pk property, and honest reflection" begin
-  row = CreateRowModel.objects.create("name" => "Senna")   # RETURNING * → id = 7
+  row = CreateRowModel.objects.create("name" => "Senna")   # RETURNING → id = 7
 
   @test pk(row) == 7
   @test row.pk == 7                       # virtual `.pk` property
@@ -130,7 +130,7 @@ PormG.config["create_pormgrow_dur"] =
   @test !haskey(getfield(urow, :_data), :__pormg_created)
 
   # get_or_create's miss: the lookup finds nothing (the mock answers every SELECT with no rows), so
-  # it inserts and hands back the `RETURNING *` row — the third call site.
+  # it inserts and hands back the `RETURNING` row — the third call site.
   grow, gcreated = DurRowModel.objects.get_or_create("label" => "pit";
     defaults = ["dur" => Second(23), "day" => Date(2011, 4, 10)])
   @test gcreated

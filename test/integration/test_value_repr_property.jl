@@ -277,7 +277,7 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
       @test created
       same_as_reread(irow)
 
-      # get_or_create's miss: on PostgreSQL the `RETURNING *` row, on SQLite a `first()` read-back.
+      # get_or_create's miss: on PostgreSQL the `RETURNING` row, on SQLite and MySQL the read-back of the declared columns.
       M.Django_contract_scratch.objects.filter("label" => label).delete()
       grow, created = M.Django_contract_scratch.objects.get_or_create("label" => label;
         defaults = Pair{String,Any}["event_date" => Date(2031, 7, 7), "price" => 1.5])

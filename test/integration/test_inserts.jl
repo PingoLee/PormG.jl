@@ -260,7 +260,7 @@ end
 
         # The server-generated primary key must be present and positive.
         # IDField maps to SERIAL (PostgreSQL) / AUTOINCREMENT (SQLite), so the
-        # ORM retrieves the value via RETURNING * rather than a second SELECT.
+        # ORM retrieves the value via RETURNING rather than a second SELECT.
         @test haskey(result, :id)
         @test result[:id] isa Integer
         @test result[:id] > 0

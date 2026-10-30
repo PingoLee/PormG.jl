@@ -17,8 +17,8 @@ end
 # differently-named column via db_column (#50). No-op shape on the common path.
 #
 # #800: and parse each field's value through the #564 read table, as `list()` does for the same
-# column. This is the row `create()` / `update_or_create` / `get_or_create` hand back (`RETURNING *`
-# on PostgreSQL, the `SELECT *` read-back on SQLite), and before this it arrived exactly as the driver
+# column. This is the row `create()` / `update_or_create` / `get_or_create` hand back (`RETURNING`
+# on PostgreSQL, the read-back on SQLite and MySQL), and before this it arrived exactly as the driver
 # delivered it — text for every temporal column on SQLite, a bare `Period` for a one-component
 # INTERVAL on Postgres.jl — so re-reading the row through a query changed its types. A key that is
 # not a field (`__pormg_created`) is left alone.
@@ -37,6 +37,32 @@ function _row_to_field_keyed_dict(row, model::PormGModel, connection)::Dict{Symb
   end
   return dict
 end
+
+# The columns a write hands its row back through (#1490): every declared field that owns a column, in
+# declaration order, quoted. `RETURNING` and the SQLite/MySQL read-backs name them rather than `*`, so
+# the statement's result type follows the model and not the table. Under the Postgres.jl statement
+# cache an `ADD COLUMN` on the table (a deploy's `migrate`, from any process) would otherwise change
+# the prepared statement's result type, and PostgreSQL refuses that inside a transaction (`0A000`
+# *cached plan must not change result type*). The row then carries the model's fields only, on every
+# engine, as a Django instance does. A type change to a declared column (`varchar(50)` → `varchar(100)`)
+# still changes the result type, and still raises there (measured).
+#
+# A read-back passes its quoted `table`, and each column is qualified with it. That is for SQLite: a
+# double-quoted name that matches no column is a string literal there, so a declared field the table
+# does not have yet (code deployed before `migrate`) would read back as its own name, silently, where
+# PostgreSQL and MySQL raise. Qualified, SQLite raises `no such column` too (measured), and it names
+# the result column without the qualifier, so the row's keys are unchanged.
+function _returned_columns(model::PormGModel, connection, table::Union{Nothing,String} = nothing)::String
+  prefix = table === nothing ? "" : table * "."
+  return join((prefix * safe_column_identifier(Models.field_db_column(f, name), connection)
+               for (name, f) in model.fields if !Models.is_many_to_many_field(f)), ", ")
+end
+
+# A row a write FINDS rather than writes (get_or_create's hit, the winner of a lost race) is a read, and
+# keeps what a read returns: every column the table has (`SELECT *`, as `get()` sends). The one place a
+# write path builds that read names it with this constant, so a `*` anywhere else in this file is a
+# write that reverted #1490 (`test/unit/test_write_returning_columns.jl` scans for it).
+const _FOUND_ROW_HEAD = "SELECT *"
 
 # Shared row-level INSERT marshalling, extracted from insert() (#30) so insert() and
 # _update_or_create() build the identical VALUES body from one place. Fills each missing field
@@ -140,10 +166,10 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   )
   """
 
-  # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING *`, SQLite runs the
-  # plain INSERT and reads the row back out-of-band (see below). `_update_or_create` already showed
-  # its RETURNING; this terminal showed SQL it never sent.
-  exec_sql = _insert_returns_rows(connection) ? sql * " RETURNING *;" : sql
+  # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING <declared columns>`
+  # (#1490), SQLite runs the plain INSERT and reads the row back out-of-band (see below).
+  # `_update_or_create` already showed its RETURNING; this terminal showed SQL it never sent.
+  exec_sql = _insert_returns_rows(connection) ? sql * " RETURNING $(_returned_columns(model, connection));" : sql
   if show_query !== :execute
     return _show_query_result(show_query, exec_sql, connection, model.name, :insert;
                             parameters=parameters)
@@ -151,8 +177,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 
   # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
   # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
-  # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. RETURNING */SELECT *
-  # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
+  # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. The RETURNING list and the
+  # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
   if _insert_returns_rows(connection)
     result = fetch(settings, exec_sql, parameters)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
@@ -164,9 +190,9 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # `INSERT ... RETURNING *`: it can hang indefinitely inside SQLite/libsqlite3 for some table shapes
   # (observed: an AUTOINCREMENT primary key that migrations left in a non-first column position). The
   # previous broad `catch` masked that hang/error by re-running a plain INSERT, which then tripped a
-  # spurious UNIQUE violation because the first INSERT had already written the row. Reading the whole
-  # row keeps the returned row consistent with the Postgres `RETURNING *` path — all columns present,
-  # including nullable ones the caller did not set.
+  # spurious UNIQUE violation because the first INSERT had already written the row. Reading every
+  # declared column keeps the returned row consistent with the PostgreSQL `RETURNING` path — every
+  # field present, including nullable ones the caller did not set.
   #
   # The empty-rows fallback (no key to read by, or the read-back returned nothing, which should not
   # happen after a successful INSERT) builds the dict from real_obj.insert only, so it may omit an
@@ -301,7 +327,8 @@ end
 # already merged lookup+defaults into real_obj.insert and validated the fields.
 #
 # created detection per backend:
-#   PostgreSQL — single atomic `... RETURNING *, (xmax = 0) AS "__pormg_created"`; xmax = 0 ⇒ inserted.
+#   PostgreSQL — single atomic `... RETURNING <declared columns>, (xmax = 0) AS "__pormg_created"`
+#                (#1490); xmax = 0 ⇒ inserted.
 #   SQLite     — RETURNING is avoided (see insert()) and last_insert_rowid() is unreliable on DO
 #                UPDATE, so: pre-check existence by the target, run the upsert, read the row back by
 #                the target — all on one pinned connection under BEGIN IMMEDIATE + the writer lock,
@@ -350,7 +377,7 @@ end
 function _run_update_or_create(connection::PormGPostgres, settings, real_obj, model, sql, parameters,
                                safe_table_name, target_fields, show_query)
   # Atomic upsert; `(xmax = 0)` distinguishes the inserted vs updated tuple version.
-  exec_sql = sql * " RETURNING *, (xmax = 0) AS \"__pormg_created\";"
+  exec_sql = sql * " RETURNING $(_returned_columns(model, connection)), (xmax = 0) AS \"__pormg_created\";"
   if show_query !== :execute
     return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
   end
@@ -379,7 +406,7 @@ function _run_update_or_create(connection::PormGSQLite, settings, real_obj, mode
     ["$(safe_column_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
     " AND ")
   precheck_sql = "SELECT 1 FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
-  readback_sql = "SELECT * FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
+  readback_sql = "SELECT $(_returned_columns(model, connection, safe_table_name)) FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
   make_target_params = () -> begin
     tp = get_parameter(connection)
     set_context!(tp, :where)
@@ -448,8 +475,9 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
     # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
     # a row another session committed after it, when this statement hit it unchanged (measured). The
     # ODKU already locked that row, so the read waits on nothing.
-    rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields,
-                                             safe_table_name, connection; lock = true)...) |> Tables.rowtable
+    rows = fetch(settings, _select_by_target("SELECT $(_returned_columns(model, connection, safe_table_name))", real_obj, model,
+                                             target_fields, safe_table_name, connection; lock = true)...) |>
+      Tables.rowtable
     isempty(rows) && throw(StatementError(_backend_name(connection),
       "update_or_create: the statement reported success, but the $(model.name) row could not be read " *
       "back: a trigger may have dropped it, or the lookup does not match what was stored."))
@@ -576,11 +604,16 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
   # after a duplicate inside a transaction, whose snapshot may predate the winner (#1267). The failed
   # INSERT already holds that lock on the duplicate, so it waits on nothing; `FOR UPDATE` would ask for
   # more, and two sessions that lost the same race deadlocked on it (measured, 1213).
-  fetch_by_target = (; lock::Bool = false) -> begin
-    lock || return _get_or_create_lookup(model, target_fields, target_values).first()
+  # `readback` reads the row this call just inserted, as every write's read-back does: the declared
+  # columns (#1490), so a miss carries the same fields on every engine as PostgreSQL's `RETURNING`.
+  # A hit, and the winner of a lost race, is a row the call found, and reads as any read does: every
+  # column the table has, through the lookup, or through `SELECT *` where the re-read must lock.
+  fetch_by_target = (; lock::Bool = false, readback::Bool = false) -> begin
+    lock || readback || return _get_or_create_lookup(model, target_fields, target_values).first()
     table = safe_table_identifier(Models.model_table_name(model), connection)
-    rows = fetch(settings, _select_by_target("SELECT *", real_obj, model, target_fields, table, connection;
-                                             lock = true)...) |> Tables.rowtable
+    head = readback ? "SELECT $(_returned_columns(model, connection, table))" : _FOUND_ROW_HEAD
+    rows = fetch(settings, _select_by_target(head, real_obj, model, target_fields, table, connection;
+                                             lock = lock)...) |> Tables.rowtable
     isempty(rows) ? nothing : PormGRow(_row_to_field_keyed_dict(rows[1], model, connection), model)
   end
 
@@ -612,8 +645,9 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
     parameters = get_parameter(connection)
     insert_sql = build_insert(parameters)
-    # #48: PostgreSQL sends it with `RETURNING *` (below), so that is what inspection shows.
-    shown_sql = _insert_returns_rows(connection) ? insert_sql * " RETURNING *;" : insert_sql
+    # #48: PostgreSQL sends it with `RETURNING <declared columns>` (below), so that is what inspection shows.
+    shown_sql = _insert_returns_rows(connection) ?
+      insert_sql * " RETURNING $(_returned_columns(model, connection));" : insert_sql
     return _show_query_result(show_query, shown_sql, connection, model.name, :insert; parameters = parameters)
   end
 
@@ -639,7 +673,7 @@ end
 # get_or_create's miss: run `insert_sql` and return `(PormGRow, created)`, one method per engine.
 function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql, parameters, fetch_by_target,
                          target_fields)
-  exec_sql = insert_sql * " RETURNING *;"
+  exec_sql = insert_sql * " RETURNING $(_returned_columns(model, connection));"
   result = try
     fetch(settings, exec_sql, parameters)
   catch e
@@ -675,7 +709,7 @@ function _create_on_miss(connection::PormGSQLite, settings, model, insert_sql, p
   catch e
     _rethrow_conflict_target_error(e, model, target_fields)
   end
-  row = fetch_by_target()
+  row = fetch_by_target(; readback = true)
   # #1299: not the caller's call, so not a `UsageError`, and no race either: the serialized write
   # lock (`_get_or_create`'s transaction) keeps every other writer out between the INSERT and this read. So the insert
   # stored nothing the lookup finds (a trigger that drops the row, or a PormG fault), and a retry
@@ -708,7 +742,7 @@ function _create_on_miss(connection::PormGMySQL, settings, model, insert_sql, pa
     raced === nothing && rethrow()
     return (raced, false)
   end
-  row = fetch_by_target()
+  row = fetch_by_target(; readback = true)
   # The INSERT succeeded and this read sees it (it committed, or it is the open transaction's own), so
   # a row the lookup does not find was dropped by a trigger, or the lookup does not match what was
   # stored (#1299), as on SQLite.

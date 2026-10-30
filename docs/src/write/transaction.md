@@ -418,7 +418,9 @@ BEGIN;
 -- First insert succeeds
 INSERT INTO "result" ("raceid", "driverid", "constructorid", "points") 
 VALUES (\$1, \$2, \$3, \$4) 
-RETURNING *
+RETURNING "resultid", "raceid", "driverid", "constructorid", "number", "grid", "position", "positiontext",
+  "positionorder", "points", "laps", "time", "milliseconds", "fastestlap", "rank", "fastestlaptime",
+  "fastestlapspeed", "statusid"
 -- Parameters: [1, 1, 1, 25]
 
 -- Second insert violates the raceid foreign key -> IntegrityError

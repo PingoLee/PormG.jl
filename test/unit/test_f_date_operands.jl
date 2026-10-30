@@ -1851,6 +1851,8 @@ end
        "(? - \"Tb\".\"points\")", "(\$1::bigint - \"Tb\".\"points\")", "(? - `Tb`.`points`)", Any[10]),
       ("10 / F", () -> 10 / F("points"),
        "(? / \"Tb\".\"points\")", "(\$1::bigint / \"Tb\".\"points\")", "(? DIV `Tb`.`points`)", Any[10]),
+      ("10.5 / F", () -> 10.5 / F("points"),
+       "(? / \"Tb\".\"points\")", "(\$1::double precision / \"Tb\".\"points\")", "(? / `Tb`.`points`)", Any[10.5]),
       ("10.5 - F", () -> 10.5 - F("points"),
        "(? - \"Tb\".\"points\")", "(\$1::double precision - \"Tb\".\"points\")", "(? - `Tb`.`points`)", Any[10.5]),
       ("10 - (F + 1)", () -> 10 - (F("points") + 1),
@@ -1883,6 +1885,17 @@ end
     @test occursin("(#1476)", e === nothing ? "" : plain(e))
     @test occursin(needle, e === nothing ? "" : plain(e))
   end
+  # The message lists what that node family takes: a function takes no Dates period and an aggregate
+  # no window function, and each says so with the spelling that exists.
+  e = try Fn.Max("seen") + Day(1); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("Arithmetic on a function takes", plain(e)) &&
+        !occursin("Dates period", plain(e)) && occursin("Max(F(\"date\") + Day(1))", plain(e))
+  e = try Fn.Sum("points") / lag; nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("not a window function", plain(e))
+  e = try lag + Day(1); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("Arithmetic on a window function takes", plain(e))
+  e = try F("points") + :sym; nothing catch err; err end
+  @test occursin("Arithmetic on an `F(...)` expression takes", plain(e)) && occursin("Dates period", plain(e))
   e = try F("points") + Fn.Value("10"); nothing catch err; err end
   @test e isa PormG.QueryBuildError && occursin("Value(\"…\") is text", plain(e))
   # A Dates period still reaches date arithmetic, and a date literal still reaches `-` (#25, #814).

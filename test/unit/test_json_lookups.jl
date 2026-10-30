@@ -659,6 +659,22 @@ end
                  _sql(proj(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
   # A comparison is not arithmetic: the key lookup's own filter binds it (#1382).
   @test _sql((q = JL.Json_scratch.objects; q.filter("payload__n__@gt" => 5); q); conn = _JL_PG) isa AbstractDict
+  # Wherever the arithmetic renders: a filter value, a CTE body, an `update()` value. (`order_by` takes
+  # no expression; ordering by a projected alias goes through the projection, refused above.)
+  arith() = QB.F("payload__n") + 1
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    for (label, run) in (
+        ("filter value", () -> _sql((q = JL.Json_scratch.objects; q.filter("id__@gt" => arith()); q); conn = conn)),
+        ("CTE body",     () -> _sql((b = JL.Json_scratch.objects; b.values("id", "w" => arith());
+                                     q = JL.Json_scratch.objects; q.with("c" => b, join_field = "id" => "id");
+                                     q.values("id", "c__w"); q); conn = conn)))
+      e = try run(); nothing catch err; err end
+      @test e isa PormG.QueryBuildError && occursin("(#1483)", plain(e))
+    end
+  end
+  # `update()` builds on the model's own connection (the mock SQLite here): the SET value refuses too.
+  e = try (q = JL.Json_scratch.objects; q.filter("id" => 1); q.update("name" => arith(); show_query = :sql)); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("(#1483)", plain(e))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -710,6 +726,14 @@ end
     refused_1483(withcte(lag_default_key(), FN.Floor(PormG.CTE("c", "w")) + 1), conn, "the CTE column")
     @test _sql(withcte(lag_default_key(), PormG.CTE("c", "w")); conn = conn) isa AbstractDict
   end
+  # An `OuterRef` to the outer query's key carries it into a `Subquery`, typed on the outer query.
+  outer_sub(expr) = QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("v" => expr); s))
+  for conn in (_JL_PG, _JL_MY)
+    msg = refused_1483(proj(outer_sub(FN.Coalesce(QB.OuterRef("payload__n"), 0) / 2)), conn, "the outer query's")
+    @test occursin("`OuterRef`", msg)
+  end
+  # The control (MySQL refuses an `OuterRef` side it cannot type in `/`, #1130, so PostgreSQL only).
+  @test _sql(proj(outer_sub(FN.Coalesce(QB.OuterRef("id"), 0) / 2)); conn = _JL_PG) isa AbstractDict
   for conn in (_JL_PG, _JL_SL, _JL_MY)
     @testset "$(nameof(typeof(conn)))" begin
       # The Subquery record: a projection carrying the key, or the key itself.
@@ -732,6 +756,13 @@ end
       for body in (FN.Cast("payload__n", "numeric"), FN.Coalesce("payload__n", 0; output_field = "integer"), FN.Coalesce("id", 0))
         @test _sql(withcte(body, half(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
       end
+      # The spelling names the body's key path, where the cast goes, whether the body computed over the
+      # key or projected it bare (never a `"<flag>"` placeholder); the spelled body then builds outside.
+      for body in (FN.Max("payload__n"), "payload__n")
+        msg = refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "the CTE column")
+        @test occursin("Cast(\"payload__n\", \"numeric\")", msg) && !occursin("<flag>", msg)
+      end
+      @test _sql(withcte(FN.Cast("payload__n", "numeric"), half(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
     end
   end
 end
@@ -769,6 +800,11 @@ end
     r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_MY)
     @test occursin("WHERE `R1_1`.`k` = ?", where(r)) && r[:parameters] == ["hamilton"]
   end
+  # A number for an equality binds as the key lookup binds it: text on PostgreSQL and MySQL, the native
+  # number on SQLite (where it bound the text `"121"` before, which an integer never equals there).
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_PG)[:parameters] == ["121"]
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_SL)[:parameters] == [121]
+  @test _sql(filtered("payload__n", "g__k" => 121); conn = _JL_MY)[:parameters] == ["121"]
   r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_PG)
   @test occursin("WHERE (\"R1_1\".\"k\")::numeric > \$1", where(r)) && r[:parameters] == [5]
   r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_SL)

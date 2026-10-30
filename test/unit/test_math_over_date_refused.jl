@@ -244,9 +244,12 @@ end
       err = _mdt_refusal(MDT.Result, expr; conn = conn)
       @test err === nothing || !occursin("#1387", _mdt_msg(err))
     end
-    for expr in (Fn.Round("payload__lap"), Fn.Sum("payload__lap"), Fn.Abs("payload__lap"))
+    for expr in (Fn.Round("payload__lap"), Fn.Abs("payload__lap"))
       @test _mdt_refusal(MDT.Field_validation_scratch, expr; conn = conn) === nothing
     end
+    # #1483: a sum of an uncast JSON key is refused on every engine, as explicit intent, not as #1387.
+    err = _mdt_refusal(MDT.Field_validation_scratch, Fn.Sum("payload__lap"); conn = conn)
+    @test err !== nothing && occursin("(#1483)", _mdt_msg(err)) && !occursin("#1387", _mdt_msg(err))
     for expr in (Fn.Round("boolean_field"), Fn.Abs("boolean_field"))
       @test _mdt_refusal(MDT.New_join_position, expr; conn = conn) === nothing
     end

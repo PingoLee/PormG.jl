@@ -374,8 +374,8 @@ Base.:/(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "/", f)
 for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject)
   @eval Base.$op(f::$T, v::SQLText) = $op(f, _arith_value(v, $(string(op))))
   @eval Base.$op(v::SQLText, f::$T) = $op(_arith_value(v, $(string(op))), f)
-  @eval Base.$op(::$T, x::Any) = throw(_unsupported_arithmetic_operand($(string(op)), x))
-  @eval Base.$op(x::Number, ::$T) = throw(_unsupported_arithmetic_operand($(string(op)), x))
+  @eval Base.$op(::$T, x::Any) = throw(_unsupported_arithmetic_operand($(string(op)), x, $T))
+  @eval Base.$op(x::Number, ::$T) = throw(_unsupported_arithmetic_operand($(string(op)), x, $T))
 end
 # Text in `Value` is refused: unwrapped, a String is a column path, so `F("grid") + Value("10")` would
 # read a column named `10`.

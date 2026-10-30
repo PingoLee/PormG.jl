@@ -861,10 +861,19 @@ _json_number_side(p::Union{String,JoinedReference}, instruc::SQLInstruction) =
 # its body's expression does (`Coalesce(key, 0)`, a `Case` branch), which its kind cannot say: the body
 # records that (`CTEDivision.json_key`).
 function _json_number_side(p::CTEReference, instruc::SQLInstruction)
-  _json_key_lookup_operand(p, instruc) && return ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p))
+  # The body's record first: it names the key path a cast in the body takes (`Max(key)` and a bare
+  # `"payload__n"` column both record `payload__n`). The kind answers for a column with no record.
   side = _cte_division(p, instruc, :json_key)
-  return side === nothing ? nothing : ("the CTE column `$(_concat_operand_label(p))` ($(side[1]))", side[2])
+  side === nothing || return ("the CTE column `$(_concat_operand_label(p))` ($(side[1]))", side[2])
+  _json_key_lookup_operand(p, instruc) || return nothing
+  return ("the CTE column `$(_concat_operand_label(p))`, a JSON key's value", _concat_flag(p))
 end
+# An `OuterRef` is the outer query's column, typed on the outer instruction (as `_side_walk_kind` reads
+# it), so `Coalesce(OuterRef("payload__n"), 0) / 2` inside a `Subquery` carries the outer key.
+_json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
+  instruc.outer === nothing ? nothing :
+  (side = _json_number_side(p.field_name, instruc.outer); side === nothing ? nothing :
+   ("the outer query's $(side[1]) (an `OuterRef`)", side[2]))
 # #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
 function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
   instruc.subquery_json_key === nothing && return nothing

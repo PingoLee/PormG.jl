@@ -50,22 +50,39 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 # catch-all methods in `operators.jl` — six per family, `F`, `Joined` and, since #895, a function on the
 # left (`Lower(…) == x`) — which is what earns it a funnel: one wording, one fix, and the accepted
 # list is read LIVE from `_CompareLiteral` so the text cannot drift from the union it describes.
-# #1476 — an operand `+ - * /` does not take, named rather than left to Julia's `MethodError`. A
+# #1476 — an operand `+ - * /` does not take, named rather than left to Julia's `MethodError`. What
+# each node family takes differs (`operators.jl`), so the message lists that family's operands: only an
+# `F` expression takes a Dates period, and an aggregate or scalar function takes no window function. A
 # `Decimal` has no literal here (a comparison and a function take none either), so the spelling is a
 # `Float64` or a cast of its digits; a `Rational` has no SQL literal at all. The value is never printed.
-function _unsupported_arithmetic_operand(op::AbstractString, operand)
+_arith_operands(::Type{FExpression}) =
+  "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
+  "expression, a function or a window function, or \e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also " *
+  "take a Dates period or an Interval"
+_arith_operands(::Type{WindowFunction}) =
+  "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
+  "expression, a function, or \e[4m\e[32mValue(n)\e[0m of a number"
+_arith_operands(::Type{FObject}) =
+  "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
+  "expression, another function that is not a window function, or \e[4m\e[32mValue(n)\e[0m of a number"
+function _unsupported_arithmetic_operand(op::AbstractString, operand, node::Type)
   T = typeof(operand)
   spelling = operand isa Decimals.Decimal ?
       "Write it as a float, \e[4m\e[32mFloat64(x)\e[0m, or keep its digits with a cast, " *
       "\e[4m\e[32mCast(Value(string(x)), \"numeric\")\e[0m." :
     operand isa Rational ? "Write it as a float, \e[4m\e[32mFloat64(x)\e[0m." :
+    operand isa Union{Dates.Period,Dates.CompoundPeriod,Interval} ?
+      "Shift the column inside the function instead: \e[4m\e[32mMax(F(\"date\") + Day(1))\e[0m." :
+    operand isa WindowFunction ?
+      "Compute the window function in a CTE and combine its column, or put the function inside the window's operand." :
       "Wrap a literal of another type in a cast, or compute it in Julia first."
   return QueryBuildError(
-    "\e[4m\e[31m$(T)\e[0m is not an operand of \e[4m\e[31m$(op)\e[0m (#1476). Arithmetic takes a number " *
-    "(an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m expression, " *
-    "a function, or \e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an " *
-    "Interval. " * spelling)
+    "\e[4m\e[31m$(T)\e[0m is not an operand of \e[4m\e[31m$(op)\e[0m here (#1476). Arithmetic on " *
+    "$(_arith_node_label(node)) takes " * _arith_operands(node) * ". " * spelling)
 end
+_arith_node_label(::Type{FExpression}) = "an `F(...)` expression"
+_arith_node_label(::Type{WindowFunction}) = "a window function"
+_arith_node_label(::Type{FObject}) = "a function"
 
 function _unsupported_compare_operand(op::AbstractString, operand)
   accepted = join(string.(Base.uniontypes(_CompareLiteral)), ", ")

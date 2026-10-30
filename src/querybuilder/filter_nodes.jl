@@ -42,7 +42,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   inner_formatter = Ref{Any}(nothing)
   inner_textless = Ref{Any}(nothing)
   inner_whole_numeric = Ref{Any}(nothing)
-  inner_json_key = Ref{Any}(nothing)
+  inner_json_key = Base.RefValue{Union{Nothing,Tuple{String,String}}}(nothing)   # #1346: typed, unlike its older neighbours
   inner_kind = Ref{Any}(nothing)
   inner_unapplied = Ref(false)
   inner_sql = query(handler,

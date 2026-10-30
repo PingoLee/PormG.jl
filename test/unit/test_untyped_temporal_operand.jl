@@ -14,7 +14,11 @@ after a review found it. #1310 refuses the shape instead, when the walk has not 
 |---|---|---|
 | a side the walk cannot name, the other side a date, a timestamp or an interval | builds: the server types the operands | refused |
 | a side the walk cannot name that holds one (`Case`, `Coalesce`, `Max` over it), beside anything | builds | refused |
-| equality, `@in`, a number beside a number (`F("meta__round") * 2`) | builds | builds |
+| equality, `@in`, a comparison of a number with a number (`F("meta__round") > 2`) | builds | builds |
+
+Since #1483, arithmetic over an uncast JSON key (`F("meta__round") * 2`, a `Case`, `Coalesce` or `Lag`
+holding one) is refused on every engine as explicit intent, before this rule is asked, so the
+arithmetic shapes here assert that refusal; the orderings over a key are still this rule's.
 
 Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders the conditionals
 (`Case`, `Coalesce`) since #1130 phase 2c-1, so those shapes are checked live on MySQL below; JSON key
@@ -118,8 +122,11 @@ end
 # data's; SQLite's answer depends on what the document happens to hold.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: a JSON key lookup beside a date or an interval" begin
-  @test _utt_sql(F("date") * F("meta__round"); conn = _UTT_PG) ==
-        "SELECT (\"Tb\".\"date\" * \"Tb\".\"meta\" #>> '{\"round\"}') as \"v\" FROM \"utt_race\" as \"Tb\""
+  # #1483: arithmetic over the key is refused on every engine before this rule is asked.
+  for conn in (_UTT_PG, _UTT_SL, _UTT_MY)
+    e = _utt_refusal(F("date") * F("meta__round"); conn = conn)
+    @test e isa QueryBuildError && occursin("(#1483)", e.msg)
+  end
   @test _utt_sql(F("meta__round") > F("date"); conn = _UTT_PG, filter = true) ==
         "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (\"Tb\".\"meta\" #>> '{\"round\"}' > \"Tb\".\"date\")"
   @test _utt_sql(F("fastestlaptime") > F("meta__round"); conn = _UTT_PG, filter = true) ==
@@ -129,7 +136,6 @@ end
          Any["2009-01-01"])
 
   for (label, expr, filter, op) in (
-      ("date * key",       F("date") * F("meta__round"),           false, "*"),
       ("key > date",       F("meta__round") > F("date"),           true,  ">"),
       ("date > key",       F("date") > F("meta__round"),           true,  ">"),
       ("key > duration",   F("meta__round") > F("fastestlaptime"), true,  ">"),
@@ -160,19 +166,30 @@ end
 # the fact that a date or a duration is one of the values is enough to know the generic SQL is wrong.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: a value the walk cannot name holding a date or a duration" begin
-  @test _utt_render(_utt_case_lap() * 2; conn = _UTT_PG) ==
-        ("SELECT (CASE WHEN \"Tb\".\"year\" = \$1 THEN \"Tb\".\"meta\" #>> '{\"round\"}' ELSE \"Tb\".\"fastestlaptime\" END * \$2::bigint) as \"v\" FROM \"utt_race\" as \"Tb\"",
-         Any[2009, 2])
-
-  for (label, expr, filter, op, named) in (
-      ("Case(key | duration) * 2",  _utt_case_lap() * 2,                         false, "*", "`CASE(…)`"),
-      ("Case(key | date) + 1",      _utt_case_date() + 1,                        false, "+", "`CASE(…)`"),
-      ("Coalesce(key, date) + 1",   Fn.Coalesce("meta__round", "date") + 1,      false, "+", "`COALESCE(…)`"),
-      ("Coalesce(key, dur) * 2",    Fn.Coalesce("meta__round", "fastestlaptime") * 2, false, "*", "`COALESCE(…)`"),
-      ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1,                   false, "+", "`MAX(…)`"),
+  # #1483: each of these computes on a value that carries the JSON key, so it is refused on every
+  # engine as explicit intent, naming the key, before this rule reads the temporal side.
+  for (label, expr) in (
+      ("Case(key | duration) * 2",  _utt_case_lap() * 2),
+      ("Case(key | date) + 1",      _utt_case_date() + 1),
+      ("Coalesce(key, date) + 1",   Fn.Coalesce("meta__round", "date") + 1),
+      ("Coalesce(key, dur) * 2",    Fn.Coalesce("meta__round", "fastestlaptime") * 2),
+      ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1),
       ("Lag(key, default = date) + 1",
-       PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1,
-                                                                                  false, "+", "`LAG(…)`"),
+       PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1))
+    @testset "$label" begin
+      for conn in (_UTT_PG, _UTT_SL)
+        e = _utt_refusal(expr; conn = conn)
+        @test e isa QueryBuildError && occursin("(#1483)", e.msg) && occursin("`meta__round`", e.msg)
+      end
+      # MySQL refuses a conditional over a duration and another type when the conditional renders, which
+      # is before the arithmetic over it is asked (#1130); every other shape reaches #1483 there too.
+      m = _utt_refusal(expr; conn = _UTT_MY)
+      @test m isa QueryBuildError
+      occursin("dur", label) || occursin("duration", label) ||
+        @test occursin("(#1483)", m.msg)
+    end
+  end
+  for (label, expr, filter, op, named) in (
       ("Case(key | duration) > 2",  _utt_case_lap() > 2,                         true,  ">", "`CASE(…)`"),
     )
     @testset "$label" begin
@@ -206,21 +223,21 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # What keeps building on SQLite: where the value only passes, or the type is named.
-# Expected: each builds on SQLite, as before #1310. A JSON key times a number or an integer column, and
-# ordered against a number (`json_extract(…) * ?`); a JSON key compared for EQUALITY with a date; a
+# Expected: each builds on SQLite, as before #1310. A JSON key ordered against a number; a JSON key
+# compared for EQUALITY with a date; a
 # function that names its own result over a date (`Count`, `Extract(…, "YEAR")`); the remedies the
 # message gives — a `Cast` of the `Case` to a date, and the arithmetic inside each branch.
-# Why it matters: the rule is positional, not global. A JSON key lookup is the largest source of "cannot
-# name" and is correct as written beside a number; refusing it everywhere would trade one wrong answer
-# for a wall of refusals.
+# Why it matters: the rule is positional, not global. (Arithmetic over a JSON key beside a number,
+# `F("meta__round") * 2`, built here until #1483 refused it on every engine as explicit intent.)
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: shapes that keep building on SQLite" begin
-  @test _utt_render(F("meta__round") * 2; conn = _UTT_SL) ==
-        ("SELECT (json_extract(\"Tb\".\"meta\", '\$.round') * ?) as \"v\" FROM \"utt_race\" as \"Tb\"", Any[2])
+  for expr in (F("meta__round") * 2, F("meta__round") * F("year"))   # #1483: refused on every engine
+    e = _utt_refusal(expr; conn = _UTT_SL)
+    @test e isa QueryBuildError && occursin("(#1483)", e.msg)
+  end
   @test _utt_sql(F("meta__round") == F("date"); conn = _UTT_SL, filter = true) ==
         "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (json_extract(\"Tb\".\"meta\", '\$.round') = \"Tb\".\"date\")"
   for (label, expr, filter) in (
-      ("key * year",                    F("meta__round") * F("year"),                      false),
       ("key > 2",                       F("meta__round") > 2,                              true),
       ("Case(key | date) == 2",         _utt_case_date() == 2,                             true),
       ("Count(date) * 2",               Count("date") * 2,                                 false),
@@ -258,12 +275,15 @@ end
 # Why it matters: a remedy that is itself a `BackendCapabilityError` on this engine is a dead end.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: the refusal's remedies are the engine's own" begin
+  # The arithmetic remedies are pinned through the refusal's constructor, as MySQL's are below: the
+  # value these fixtures leave unnamed in arithmetic is a JSON key, which #1483 refuses first.
+  QB = PormG.QueryBuilder
   # A date at stake: the branch spelling, or a cast to a date, which SQLite renders (`date(x)`).
-  sl = _utt_refusal(_utt_case_date() + 1; conn = _UTT_SL).msg
+  sl = QB._unnamed_temporal_refusal(_UTT_SL, "+", "`CASE(…)`", PormG.CDate()).msg
   @test occursin("inside each branch", sl) && occursin("Cast(…, \"date\")", sl)
   # A duration at stake: SQLite casts an interval to nothing, and to a number refuses it (#1259), so the
   # one spelling is the branch one, with a duration where `0` was.
-  lap = _utt_refusal(_utt_case_lap() * 2; conn = _UTT_SL).msg
+  lap = QB._unnamed_temporal_refusal(_UTT_SL, "*", "`CASE(…)`", PormG.CInterval()).msg
   @test occursin("inside each branch", lap) && occursin("default = Second(0)", lap)
   @test !occursin("Cast(", lap)
   # A timestamp at stake: SQLite cannot cast to one (#822).
@@ -274,7 +294,6 @@ end
     @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
   end
 
-  QB = PormG.QueryBuilder
   my = QB._unnamed_temporal_refusal(_UTT_MY, "+", "`CASE(…)`", PormG.CDateTime(false))
   @test my isa QueryBuildError
   @test occursin("not supported on MySQL", my.msg)
@@ -327,7 +346,8 @@ end
   catch err
     err
   end
-  @test upd isa QueryBuildError && occursin("with `CASE(…)` on one side", upd.msg)
+  # #1483: arithmetic over a value carrying the key, refused in the SET render as anywhere else.
+  @test upd isa QueryBuildError && occursin("(#1483)", upd.msg)
   # A typed alias and a date range on a date column keep building, with the SQL they had.
   q = UTT.Utt_race.objects
   q.values("raceid"); q.filter("date__@range" => [Date(2009, 1, 1), Date(2010, 1, 1)])

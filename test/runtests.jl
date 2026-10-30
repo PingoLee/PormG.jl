@@ -245,6 +245,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Postgres.jl Driver Extension (#788)" include("unit/test_postgres_ext.jl")
     @testset "MySQL Driver Extension, Phase 1 (#1130)" include("unit/test_mysql_ext.jl")
     @testset "Writes Return the Declared Columns, Never * (#1490)" include("unit/test_write_returning_columns.jl")
+    @testset "Driver Internals the Extensions Read Are Pinned (#1494)" include("unit/test_driver_internals.jl")
     @testset "MySQL Query Builder, Phase 2a Reads (#1130)" include("unit/test_mysql_render.jl")
     @testset "MySQL Migrations, Phase 4a (#1130, #1268)" include("unit/test_mysql_migrations.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")

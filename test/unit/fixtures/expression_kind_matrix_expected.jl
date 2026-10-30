@@ -7575,23 +7575,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Sum over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, cte_field = "sJSONField", kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_json_sql", textless = nothing, kind = "CJSONValue()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Floor json key / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`/` over `FLOOR(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the que"),
   ("Floor json key / 2 | alone", :sqlite) =>
@@ -7665,23 +7665,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round json key / 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max json key / 2 | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Max json key / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "`/` over `MAX(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query"),
+    (stage = :build, error = "QueryBuildError", message = "Max over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("Coalesce json key 0 / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the "),
   ("Coalesce json key 0 / 2 | alone", :sqlite) =>

@@ -1631,7 +1631,7 @@ end
 # What: the groups `remove`/`set` and SQLite's `add` bind their target ids in, on a SQLite older than
 # 3.32 (999 parameters) and a MySQL driver at 4096; and that one statement runs without a transaction.
 # SQL: `DELETE … WHERE owner = ? AND related IN (?, …)` per group (one parameter per id plus the
-# owner's), `INSERT OR IGNORE … VALUES (?, ?), …` per group (two per id) — asserted live in
+# owner's), SQLite's `WITH "v"("o", "r") AS (VALUES (?, ?), …) INSERT …` per group (two per id, #1473) — asserted live in
 # test/integration/test_many_to_many.jl past each engine's real limit.
 # Why: each was one statement whatever the target count, so a large remove raised on MySQL before it
 # was sent and a large SQLite add failed at the driver, as the bulk writers no longer do (#84).
@@ -1891,5 +1891,99 @@ end
   reset!()
   PormG.QueryBuilder.add(manager, vcat(collect(1:2048), [5]))
   @test length(POOL_1413.executed) == 1 && rows(only(POOL_1413.executed)) == 2048
+  reset!()
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1473: SQLite's many-to-many add skips a linked pair with NOT EXISTS, and drops a repeat first
+# What: the statements an `add` sends on a recording SQLite pool on a SQLite older than 3.32 (999
+# parameters, 499 targets a statement): three targets are one statement with no transaction of its own;
+# a target given twice, or once as a number and once as integer text, is bound once; 500 distinct targets
+# are two statements, 499 rows then 1, in one transaction; 500 targets with one repeat are one statement.
+# SQL: WITH "v"("o", "r") AS (VALUES (?, ?), …) INSERT INTO "seasons_drivers" ("seasons_id", "drivers_id")
+#      SELECT "v"."o", "v"."r" FROM "v" WHERE NOT EXISTS (SELECT 1 FROM "seasons_drivers" AS "e" WHERE
+#      "e"."seasons_id" = "v"."o" AND "e"."drivers_id" = "v"."r"); — live in
+#      test/integration/test_many_to_many.jl, on an explicit through model without a unique key.
+# Why: the add was `INSERT OR IGNORE … VALUES`, which skips a pair only on the through table's unique
+# key: an explicit through model without one got a second row for a target linked already or given
+# twice, where PostgreSQL and MySQL link it once.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct MockSLPool1473 <: PormG.PormGSQLite
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  split_read_write::Bool
+  writer_slot::Int
+  reader_cursor::Int
+  lock::ReentrantLock
+  write_lock::ReentrantLock
+  executed::Vector{String}
+  bound::Vector{Vector{Any}}
+end
+MockSLPool1473() = MockSLPool1473(Any[FakeConn1399(1)], [true], "mock://sl1473", 1, false, 1, 0,
+                                  ReentrantLock(), ReentrantLock(), String[], Vector{Any}[])
+PormG.backend_is_alive(::MockSLPool1473, conn) = conn isa FakeConn1399
+PormG.backend_connect(::MockSLPool1473; kwargs...) = FakeConn1399(2)
+PormG.backend_sqlite_version(::MockSLPool1473) = 3029000
+function PormG.backend_execute(pool::MockSLPool1473, conn, sql::String, params)
+  push!(pool.executed, sql)
+  push!(pool.bound, _bound1399(params))
+  return NamedTuple[]
+end
+
+const POOL_1473 = MockSLPool1473()
+PormG.config["m2m_sl_mock_1473"] = PormG.Configuration.Settings(
+  connections = POOL_1473, change_data = true, db_def_folder = "m2m_sl_mock_1473")
+
+module ManyToManySL1473
+import PormG
+import PormG.Models
+Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
+Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
+  drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+PormG.Models.set_models(@__MODULE__, "m2m_sl_mock_1473")
+end
+
+@testset "#1473: SQLite's many-to-many add skips a linked pair and binds a repeat once" begin
+  rel = Models.get_many_to_many_relation(ManyToManySL1473.Season, "drivers")
+  manager = PormG.QueryBuilder.ManyToManyManager(ManyToManySL1473.Season, ManyToManySL1473.Driver, rel, 1)
+  reset!() = (empty!(POOL_1473.executed); empty!(POOL_1473.bound))
+  inserts() = filter(sql -> startswith(sql, "WITH"), POOL_1473.executed)
+  rows(sql) = count("(?, ?)", sql)
+
+  # Three targets: one statement, the exact shape.
+  reset!()
+  PormG.QueryBuilder.add(manager, 7, 8, 9)
+  table = PormG.QueryBuilder.safe_table_identifier(rel.through_table, POOL_1473)
+  owner = PormG.QueryBuilder.safe_column_identifier(rel.owner_column, POOL_1473)
+  related = PormG.QueryBuilder.safe_column_identifier(rel.related_column, POOL_1473)
+  @test POOL_1473.executed == ["WITH \"v\"(\"o\", \"r\") AS (VALUES (?, ?), (?, ?), (?, ?)) " *
+    "INSERT INTO $table ($owner, $related) SELECT \"v\".\"o\", \"v\".\"r\" FROM \"v\" WHERE NOT EXISTS " *
+    "(SELECT 1 FROM $table AS \"e\" WHERE \"e\".$owner = \"v\".\"o\" AND \"e\".$related = \"v\".\"r\");"]
+  @test POOL_1473.bound == [Any[1, 7, 1, 8, 1, 9]]
+
+  # A repeat, and an integer key's integer text, are one target: one statement does not see its own
+  # inserts, so each would pass NOT EXISTS again.
+  reset!()
+  PormG.QueryBuilder.add(manager, 7, 8, 7, "8")
+  @test POOL_1473.bound == [Any[1, 7, 1, 8]] && POOL_1473.bound[1][4] isa Int64
+
+  # 499 targets fill one statement (998 parameters); no transaction.
+  reset!()
+  PormG.QueryBuilder.add(manager, collect(1:499))
+  @test length(POOL_1473.executed) == 1 && rows(only(POOL_1473.executed)) == 499
+
+  # 500: two statements, 499 rows then 1, in one transaction.
+  reset!()
+  PormG.QueryBuilder.add(manager, collect(1:500))
+  @test startswith(first(POOL_1473.executed), "BEGIN") && last(POOL_1473.executed) == "COMMIT;"
+  @test rows.(inserts()) == [499, 1]
+  @test POOL_1473.bound[end - 1] == Any[1, 500]
+
+  # 500 targets of which one is a repeat: 499 distinct, one statement.
+  reset!()
+  PormG.QueryBuilder.add(manager, vcat(collect(1:499), [5]))
+  @test length(POOL_1473.executed) == 1 && rows(only(POOL_1473.executed)) == 499
   reset!()
 end

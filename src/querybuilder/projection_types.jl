@@ -960,6 +960,20 @@ function _alias_projects_json_key(having_key::MemoKey, instruc::SQLInstruction):
   return source isa SQLTypeField && _json_key_lookup_operand(source.field, instruc)
 end
 
+# #1506 — a filter on a handle that carries an uncast JSON key's value without being the key: an alias
+# over `Coalesce(key, 0)`, a `Case` branch or `NullIf(key, …)`, or a `Subquery` projecting one. The value
+# bound through the handle's formatter (`"9"`, text), which SQLite's `json_extract` integer is never
+# equal to nor greater than, so the filter matched no row; and PostgreSQL's `COALESCE(text, bigint)` is
+# a server error. EXPLICIT INTENT, refused on every engine and whatever the right side is, as arithmetic
+# (#1483) and an ordering (#1497) over the same value are. The caller asks for the key first: a handle
+# that IS the key compares as the key lookup (#1382). `@isnull` binds nothing and keeps its own arm.
+function _refuse_json_key_carrier_filter(v::SQLTypeOper, source, label::AbstractString, instruc::SQLInstruction)
+  v.operator == "ISNULL" && return nothing
+  side = _json_number_side(source, instruc)
+  side === nothing || throw(_json_key_carrier_refusal(label, side))
+  return nothing
+end
+
 # #1127, #1034 phase 3 step 2c — the classification of a CTE column, from what its body recorded:
 # - an integer quotient an engine departs on (`_DIVISION_KINDS`), from the division record
 #   (`CTEDivision`): the walk names no kind for it;
@@ -1964,9 +1978,14 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # MySQL, the native value on SQLite, a number ordered as a number — against a value. #1499: under
   # every operator, so the ones the key lookup refuses (a membership list, a range, a pattern) are
   # refused here too; `@range` compared text on PostgreSQL. An expression or a queryset on the right
-  # (`_expression_operand`) renders as it did.
-  _alias_projects_json_key(having_key, instruc) && !_expression_operand(v.values) &&
-    return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
+  # (`_expression_operand`) renders as it did. #1506: an alias that carries a key without being it is
+  # refused, ahead of the bind.
+  if _alias_projects_json_key(having_key, instruc)
+    _expression_operand(v.values) ||
+      return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
+  else
+    _refuse_json_key_carrier_filter(v, _projected_source(having_key, instruc), having_key[2], instruc)
+  end
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
   alias_formatter = _having_alias_formatter(having_key, instruc)

@@ -1009,6 +1009,70 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1506: a filter on an alias over a value that CARRIES an uncast JSON key is refused on every engine
+# #1382 compares an alias over the key as the key lookup does; an alias over `Coalesce(key, 0)`, a
+# `Case` branch, `NullIf(key, …)`, `Abs(key)`, or a `Subquery` projecting one, is not the key, and bound
+# its value through its own formatter: `COALESCE(json_extract(…), ?) > ?` with `"9"` as text on SQLite,
+# where an integer is never greater than text, so the filter matched no row with no error;
+# `COALESCE(#>> …, $2::bigint)` on PostgreSQL is a server error. Expected: `FilterError` naming `(#1506)`
+# and the cast inside the expression, under `=`, `@gt`, `@ne` and a column on the right, on the alias's
+# filter, a `Q`, a `When` condition and a `Subquery` alias. `@isnull` keeps its own arm; the cast inside
+# the carrier builds and binds the number. Why it matters: the rows silently differed by engine (#1497
+# already refuses an `order_by` on this same alias, #1483 arithmetic over it).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1506: a filter on an alias over a carrier of an uncast JSON key is refused on every engine" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  carriers = (("Coalesce", () -> FN.Coalesce("payload__n", 0)),
+              ("NullIf", () -> FN.NullIf("payload__n", 0)),
+              ("Case", () -> Case([When("id" => 1, then = F("payload__n"))], default = 0)),
+              ("Abs", () -> FN.Abs("payload__n")),
+              ("Ceil", () -> FN.Ceil("payload__n")))
+  sub(src) = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => src); s)
+  aliased(src, filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => src); q.filter(filt); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (label, src) in carriers
+    @testset "$label on $(nameof(typeof(conn)))" begin
+      for filt in ("w" => 9, "w__@gt" => 9, "w__@ne" => 9, "w__@gt" => F("id"))
+        # A `Subquery` over `NullIf(key, …)` is left out: the walk types it as the key's value
+        # (`CJSONValue`, `NullIf` takes its first operand's type), so it compares as the key (#1492),
+        # as a CTE column over it does (#1472). The two answers for one value are #1510.
+        handles = (("alias", aliased(src(), filt)), ("Q", aliased(src(), QB.Q(filt))),
+                   ("Qor", aliased(src(), QB.Qor(filt, "name" => "Senna"))))
+        label == "NullIf" || (handles = (handles..., ("Subquery", aliased(QB.Subquery(sub(src())), filt))))
+        for (handle, q) in handles
+          e = refusal(q, conn)
+          @test (handle, e isa PormG.FilterError) == (handle, true)
+          e isa PormG.FilterError && @test occursin("A filter on w is not supported", plain(e)) &&
+            occursin("(#1506)", plain(e)) && occursin("Cast(\"payload__n\", \"numeric\")", plain(e))
+        end
+      end
+      # A `When` condition on the alias refuses as the alias's filter does.
+      q = JL.Json_scratch.objects
+      q.values("name", "w" => src())
+      q.filter(Case([When("w__@gt" => 9, then = 1)], default = 0) == 1)
+      e = refusal(q, conn)
+      @test e isa PormG.FilterError && occursin("(#1506)", plain(e))
+      # `@isnull` binds nothing and is not this refusal: it renders `IS NULL`, or its own arm refuses a
+      # function expression under it, as before #1506.
+      q = aliased(src(), "w__@isnull" => true)
+      e = refusal(q, conn)
+      @test (label, e === nothing ? occursin("IS NULL", _sql(q; conn = conn)[:sql_text]) :
+                    e isa PormG.FilterError && occursin("Error in ISNULL", plain(e))) == (label, true)
+    end
+  end
+  # The explicit spelling: the cast inside the carrier binds the number on every engine.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    r = _sql(aliased(FN.Coalesce(FN.Cast("payload__n", "numeric"), 0), "w__@gt" => 9); conn = conn)
+    @test r[:parameters] == [0, 0, 9]
+  end
+  # Control: an alias that IS the key still compares as the key lookup (#1382).
+  @test _sql(aliased(F("payload__n"), "w__@gt" => 9); conn = _JL_SL)[:parameters] == [9]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1497: an ordering over an uncast JSON key is refused on every engine
 # #1491 refuses `Max`/`Min` over a key because they order a value the query does not type; an
 # ordering term and `Greatest`/`Least` asked the same question and still built. PostgreSQL rendered

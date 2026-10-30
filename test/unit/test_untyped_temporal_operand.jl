@@ -18,7 +18,8 @@ after a review found it. #1310 refuses the shape instead, when the walk has not 
 
 Since #1483, arithmetic over an uncast JSON key (`F("meta__round") * 2`, a `Case`, `Coalesce` or `Lag`
 holding one) is refused on every engine as explicit intent, before this rule is asked, so the
-arithmetic shapes here assert that refusal; the orderings over a key are still this rule's.
+arithmetic shapes here assert that refusal; the orderings over a key are still this rule's. Since
+#1506 so is a filter on an alias over a value that carries a key (`Case(key | date)`).
 
 Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders the conditionals
 (`Case`, `Coalesce`) since #1130 phase 2c-1, so those shapes are checked live on MySQL below; JSON key
@@ -309,10 +310,11 @@ end
 # Every spelling of an ordering takes the rule: a filter pair, an alias, a `Q`, a `When` condition, and
 # an `update()` value.
 # Expected on SQLite: `filter("date__@gt" => F("meta__round"))`, `filter("fastestlaptime__@gt" =>
-# <Case(key | duration)>)`, a projected `Case(key | date)` filtered by its alias against a date, the same
-# pair inside `Q(...)`, a `When` comparing the key with a date, and `update("date" => Case(key | date) + 1)`
-# each raise the refusal; PostgreSQL builds each. A typed alias (`F("date") + 1`) filtered against a date,
-# and `"date__@range" => [Date, Date]`, build on SQLite.
+# <Case(key | duration)>)`, the same pair inside `Q(...)`, a `When` comparing the key with a date, and
+# `update("date" => Case(key | date) + 1)` each raise the refusal; PostgreSQL builds each. A projected
+# `Case(key | date)` filtered by its alias against a date is refused earlier, on every engine, by #1506.
+# A typed alias (`F("date") + 1`) filtered against a date, and `"date__@range" => [Date, Date]`, build
+# on SQLite.
 # Why it matters: one comparison spelled two ways must not build in one and be refused in the other
 # (#1311 fixed that asymmetry for duration aliases).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +323,8 @@ end
   refused = (
     ("pair date > key",       q -> q.filter("date__@gt" => F("meta__round")),                        "`meta__round`"),
     ("pair duration > Case",  q -> q.filter("fastestlaptime__@gt" => _utt_case_lap()),               "`CASE(…)`"),
-    ("alias Case > Date",     q -> (q.values("raceid", "c" => _utt_case_date()); q.filter("c__@gt" => Date(2009, 1, 1))), "`CASE(…)`"),
+    # No alias spelling: since #1506 an alias over a value that carries a JSON key is refused on every
+    # engine before this rule (asserted below), and a `Case` over a number and a date is refused by #1321.
     ("Q pair",                q -> q.filter(QB.Q("date__@lt" => F("meta__round"))),                  "`meta__round`"),
     ("When condition",        q -> q.values("w" => Case(When(F("meta__round") > F("date"), then = 1), default = 0)), "`meta__round`"),
   )
@@ -338,6 +341,18 @@ end
         end
       end
     end
+  end
+  # #1506: the alias over `Case(key | date)` carries an uncast JSON key, so its filter is refused on every
+  # engine as explicit intent, before this rule is asked (as #1483 does for arithmetic). PostgreSQL built
+  # it, and could not type `CASE` over a key's text and a date at the server.
+  for conn in (_UTT_PG, _UTT_SL)
+    q = UTT.Utt_race.objects
+    q.values("raceid", "c" => _utt_case_date())
+    q.filter("c__@gt" => Date(2009, 1, 1))
+    e = try inspect_query(q; connection = conn); nothing catch err; err end
+    @test (nameof(typeof(conn)), e isa PormG.FilterError && occursin("(#1506)", e.msg) &&
+           occursin("Cast(\"meta__round\", \"date\")", PormG._emsg(e.msg; color = false))) ==
+          (nameof(typeof(conn)), true)
   end
   # update(): the SET value is an F render of its own (`_set_update_query_typed`).
   upd = try

@@ -708,7 +708,9 @@ end
 #     by SQLSTATE `0A000` and the server routine that raises it, since `0A000` alone is every
 #     `feature_not_supported`. The routine is a C function name, never translated by `lc_messages`;
 #   * it is gone from the server (`DEALLOCATE ALL` or `DISCARD ALL` on the connection): `26000`.
-# Both are raised at Bind, before the statement runs.
+# A protocol-level stale statement is refused at Bind, before it runs. A SQL-level `EXECUTE` or
+# `DEALLOCATE` of a missing name also gives `26000` (at Execute, from the same routine, so the two
+# cannot be told apart): it is cleared and retried once, and fails the same way.
 _is_stale_cached_statement(e::Postgres.Error)::Bool =
   (e.code == "0A000" && e.routine == "RevalidateCachedQuery") || e.code == "26000"
 _is_stale_cached_statement(e)::Bool = false
@@ -719,7 +721,8 @@ _is_stale_cached_statement(e)::Bool = false
 # once more (asyncpg's rule for `InvalidCachedStatementError`). Inside one the server has already
 # aborted the transaction, so a second attempt could only raise 25P02 and hide the cause: the error
 # propagates, and the caller's retry of the transaction prepares afresh. A Close is accepted in an
-# aborted transaction; if the clear fails anyway, the original error propagates.
+# aborted transaction; if the clear fails anyway, the original error propagates, except for an
+# interrupt, which goes up bare so core sees the abandoned await (#315).
 #
 # PormG opens its transactions with a raw `BEGIN`, which the driver's `in_transaction` flag does not
 # see, so `server_in_transaction` is read instead: the status the last ReadyForQuery reported (a
@@ -738,7 +741,9 @@ function _execute(conn::Postgres.Connection, sql::String, params)
     cleared = try
       Postgres.clear_statement_cache!(conn)
       true
-    catch
+    catch clear_err
+      _interrupt_in_causes(clear_err) && throw(InterruptException())
+      @debug "PormG: clearing the Postgres.jl statement cache failed" exception = clear_err
       false
     end
     (in_transaction || !cleared) && rethrow()

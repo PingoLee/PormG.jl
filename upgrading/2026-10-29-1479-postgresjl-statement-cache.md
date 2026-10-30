@@ -18,8 +18,8 @@ What a call now does:
 | Call | before | now |
 |---|---|---|
 | Any connection or process, this one included, changes the columns of a table (`ADD COLUMN`), then a statement this connection cached for it (`SELECT *`, or `create()`'s `RETURNING *`) runs **outside** a transaction | the statement ran | unchanged: the statement runs (the cache is cleared and the statement prepared again) |
-| The same, **inside** a transaction | the statement ran | `StatementError` caused by SQLSTATE `0A000`, `cached plan must not change result type`. The transaction is aborted; the cache is cleared, so running the transaction again succeeds |
-| `DEALLOCATE ALL` or `DISCARD ALL` sent on the connection, then a cached statement runs inside a transaction | the statement ran | `StatementError` caused by SQLSTATE `26000`; the cache is cleared, so running the transaction again succeeds. Outside a transaction the statement runs |
+| The same, **inside** a transaction | the statement ran | `StatementError` caused by SQLSTATE `0A000`, `cached plan must not change result type`. The transaction is aborted. That connection's cache is cleared, so each pooled connection that cached the statement fails at most one transaction |
+| `DEALLOCATE ALL` or `DISCARD ALL` sent on the connection, then a cached statement runs inside a transaction (a `DEALLOCATE ALL` sent inside the transaction includes its own `COMMIT`) | the statement ran | `StatementError` caused by SQLSTATE `26000`, and the transaction is aborted; the connection's cache is cleared, so the next transaction on it prepares afresh. Outside a transaction the statement runs |
 | `fetch` of a hand-written statement with more or fewer values than its `$n` markers | `OperationalError` (the server's protocol error `08P01`) | `StatementError`: the driver refuses the call before sending it |
 
 ### Who this affects

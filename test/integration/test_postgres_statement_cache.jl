@@ -143,6 +143,8 @@ end
             DBInterface.execute(conn, "DEALLOCATE ALL")
             @test sc1479_ncols(sc1479_run(conn, SC1479_SELECT, [1])) == 3
 
+            # The heal above cleared the cache, so here it holds only the SELECT: `BEGIN` is prepared
+            # afresh and the stale SELECT is what meets 26000. A broken heal turns this red, never green.
             DBInterface.execute(conn, "DEALLOCATE ALL")
             sc1479_run(conn, "BEGIN")
             try

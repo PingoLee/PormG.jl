@@ -678,8 +678,54 @@ function _with_bare_interrupt(f)
   end
 end
 
+# #1479: a statement runs through the driver's per-connection cache of named prepared statements
+# (`statement_cache_maxsize`, an LRU of 100 by default), so a query shape the connection has seen
+# skips the Parse and Describe round trip; ~26% off a two-join read. A statement the connection has
+# not seen costs two extra round trips, once. `statement_cache_maxsize=0` in the connection string
+# keeps the unnamed statement on every call (a PgBouncer in transaction mode before 1.21 needs it):
+# `prepare` with no cache would make an uncached server statement per call instead.
+#
+# `close!` releases a handle the driver re-prepared outside the cache (an entry evicted between
+# `prepare` and `execute`); on a cached handle it is a no-op.
+function _execute_prepared(conn::Postgres.Connection, sql::String, params)
+  stmt = DBInterface.prepare(conn, sql)
+  try
+    return params === nothing ? DBInterface.execute(stmt) : DBInterface.execute(stmt, params)
+  finally
+    DBInterface.close!(stmt)
+  end
+end
+
+# A cached statement whose result columns changed under it — an `ADD COLUMN` on the table of a
+# cached `RETURNING *`, run by any process — is refused at Bind with `cached plan must not change
+# result type`. Recognised by its SQLSTATE and the server routine that raises it, as pgjdbc does
+# (`willHealViaReparse`): `0A000` alone is every `feature_not_supported`. The routine is a C
+# function name, never translated by `lc_messages`.
+_is_stale_cached_plan(e::Postgres.Error)::Bool = e.code == "0A000" && e.routine == "RevalidateCachedQuery"
+_is_stale_cached_plan(e)::Bool = false
+
+# Outside a transaction nothing ran, so the cache is cleared and the statement prepared again, once
+# (asyncpg's rule for `InvalidCachedStatementError`). Inside one the server has already aborted the
+# transaction, so a second attempt could only raise 25P02 and hide the cause: the error propagates.
+# PormG opens its transactions with a raw `BEGIN`, which the driver's `in_transaction` flag does not
+# see, so the server's ReadyForQuery status is read instead — `server_in_transaction`, a field of
+# `Postgres.Connection` from 2.2.2 through 2.4.0 that Postgres.jl's own pool reset reads the same
+# way. `test_postgresjl_statement_cache.jl` pins it.
+function _execute(conn::Postgres.Connection, sql::String, params)
+  if conn.statement_cache_maxsize == 0
+    return params === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, params)
+  end
+  try
+    return _execute_prepared(conn, sql, params)
+  catch e
+    (_is_stale_cached_plan(e) && !(@lock conn.lock conn.server_in_transaction)) || rethrow()
+    Postgres.clear_statement_cache!(conn)
+    return _execute_prepared(conn, sql, params)
+  end
+end
+
 _run(conn::Postgres.Connection, sql::String, params) = _with_bare_interrupt() do
-  params === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, params)
+  _execute(conn, sql, params)
 end
 
 PormG.backend_execute(pool::_Pool, conn::Postgres.Connection, sql::String, params) =

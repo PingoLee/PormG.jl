@@ -175,6 +175,13 @@ PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=I
 - `fetch_copy` reports the number of CSV records it sent rather than the server's `COPY n` count. That is exact for PormG's own `bulk_copy`, but can differ for a hand-written `COPY` with `HEADER true`, `FORMAT text` or `binary`, or a custom `QUOTE`.
 - `interval` values cast to text render in PostgreSQL's default style rather than ISO 8601.
 
+### Prepared statements under Postgres.jl
+
+Under Postgres.jl, each connection keeps the statements it runs prepared on the server, in the driver's least-recently-used cache of `statement_cache_maxsize` statements (100 unless the connection string says otherwise). A query PormG has already run on that connection skips parsing and planning: a two-join read on the F1 data took about a quarter less time. A statement the connection has not seen costs two extra round trips the first time. LibPQ prepares nothing and sends every statement as a new one.
+
+- **Turning it off.** Put `statement_cache_maxsize=0` in the connection string (`url:`) and every statement is sent unprepared, as LibPQ sends it. A PgBouncer in transaction-pooling mode before 1.21 needs this, because it hands each transaction a different server connection than the one that holds the statement.
+- **A schema change under a cached statement.** When another connection or process changes the columns a cached statement returns — say a deploy's `migrate` adds a column to a table that `create()` writes with `RETURNING *` — PostgreSQL refuses that statement with `cached plan must not change result type` (SQLSTATE `0A000`). Outside a transaction, PormG clears the connection's cache and runs the statement again, so the call succeeds. Inside a transaction, PostgreSQL has already aborted the transaction, so the error propagates as a `StatementError`; run the transaction again. LibPQ does not raise here.
+
 ### Where the two drivers return different values
 
 The rows `list()`, `list(:dict)`, `list(:json)`, `first` and `get` return hold the same Julia types under both drivers: every field of `Race`, `Driver`, `Result`, `Pit_stops` and `Constructor_results` was read under each. Where the drivers decode a value differently, the read path converts it to one type. A `DataFrame(query)` column and a raw `fetch` result are where the differences remain:

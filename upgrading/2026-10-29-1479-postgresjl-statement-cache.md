@@ -1,0 +1,57 @@
+## Postgres.jl driver: statements run through the driver's prepared-statement cache (#1479)
+
+- **Version**: Unreleased
+- **PormG ref**: #1479 ; `ext/PormGPostgresExt.jl` (`_execute`, `_execute_prepared`)
+- **Recorded**: 2026-10-29
+- **Severity**: behavior change. Under `postgres_driver: Postgres` only. A statement inside a transaction that another connection's schema change made stale now raises a `StatementError`, and a hand-written `fetch` with the wrong number of parameters raises a `StatementError` where it raised an `OperationalError`. LibPQ is unchanged.
+
+### What changed
+
+The Postgres.jl extension used to send every statement unnamed, so the server parsed and planned it
+on every call. Each connection now keeps the statements it runs prepared, in the driver's
+`statement_cache_maxsize` cache (100 by default). A two-join read on the F1 data took about a
+quarter less time. A statement the connection has not seen yet costs two extra round trips the
+first time.
+
+Two calls now end differently:
+
+| Call | before | now |
+|---|---|---|
+| Another connection or process changes the columns of a table (`ADD COLUMN`), then a statement this connection cached for it (`SELECT *`, or `create()`'s `RETURNING *`) runs **outside** a transaction | the statement ran | the statement runs (the cache is cleared and the statement prepared again) |
+| The same, **inside** a transaction | the statement ran | `StatementError` caused by SQLSTATE `0A000`, `cached plan must not change result type`. The transaction is aborted |
+| `fetch` of a hand-written statement with more or fewer values than its `$n` markers | `OperationalError` (the server's protocol error `08P01`) | `StatementError`: the driver refuses the call before sending it |
+
+### Who this affects
+
+Apps that set `postgres_driver: Postgres` (or `PORMG_POSTGRES_DRIVER=Postgres`) and either migrate
+a table while other processes are writing to it inside transactions, or connect through a PgBouncer
+in transaction-pooling mode older than 1.21, which cannot route a prepared statement to the server
+connection that holds it.
+
+### How to find the calls to migrate
+
+```bash
+grep -rnE 'postgres_driver|PORMG_POSTGRES_DRIVER' --include=*.yml --include=*.jl --include=*.toml .
+```
+
+### Migrate your app
+
+Behind a PgBouncer in transaction mode before 1.21, turn the cache off in the connection string:
+
+```yaml
+# ✗ before: prepared statements reach whichever server connection PgBouncer picks
+dev:
+  adapter: PostgreSQL
+  postgres_driver: Postgres
+  url: postgresql://my_user@pgbouncer:6432/f1
+
+# ✓ after: every statement is sent unprepared, as before
+dev:
+  adapter: PostgreSQL
+  postgres_driver: Postgres
+  url: postgresql://my_user@pgbouncer:6432/f1?statement_cache_maxsize=0
+```
+
+A transaction that can meet a concurrent deploy's schema change should be retried as a whole
+when it raises the `0A000` above. A `catch e isa OperationalError` around a hand-written `fetch` that
+counted on the old type should catch `PormG.DatabaseError`, the umbrella both types are under.

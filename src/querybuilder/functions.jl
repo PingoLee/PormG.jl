@@ -278,6 +278,10 @@ Over a `BooleanField` it answers "is any row true?" and reads back as a `Bool` o
 renders `BOOL_OR(x)` on PostgreSQL, which has no `max(boolean)`, and `MAX(x)` over SQLite's stored
 0/1 (#953).
 
+Over an uncast JSON key (`Max("metadata__wins")`) it raises `QueryBuildError` on every engine (#1491):
+the key's value has no declared type, so the query does not say whether it orders numbers or text.
+Write `Max(Cast("metadata__wins", "numeric"))` or `Max(Cast("metadata__wins", "text"))`.
+
 See also [`Min`](@ref), [Filters and Aggregates](@ref).
 """
 function Max(x)
@@ -291,7 +295,8 @@ _result_rule(::Val{:MAX}) = :operand
 Aggregate `MIN(x)` — the smallest value of `x` in the group. The mirror of [`Max`](@ref) in
 every respect: no `distinct` keyword, exempt from the fan-out guard (#74), and the result
 reads back as the column's own Julia type on both engines (#800). Over a `BooleanField` it answers
-"are all rows true?": `BOOL_AND(x)` on PostgreSQL, `MIN(x)` on SQLite (#953).
+"are all rows true?": `BOOL_AND(x)` on PostgreSQL, `MIN(x)` on SQLite (#953). Over an uncast JSON key
+it raises `QueryBuildError`, as `Max` does (#1491).
 
 See also [Filters and Aggregates](@ref).
 """

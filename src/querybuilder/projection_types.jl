@@ -910,9 +910,15 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 
 # #1483 — the one refusal for arithmetic, a `Sum` or an `Avg` over an uncast JSON key, on every engine.
 # Read after the operands render, so a joined path's column is resolved (#568's order). `what` opens the
-# message with the operation as the caller wrote it.
-function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String})
+# message with the operation as the caller wrote it. #1491: a `Max` or a `Min` (`ordering = true`)
+# computes nothing, but orders the value, and the query does not say whether as numbers or as text.
+function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false)
   flag = side[2]
+  ordering && throw(QueryBuildError(
+    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+    "so the query does not say whether it orders numbers or text (#1491). Say the type you mean: " *
+    "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m orders numbers on every engine, and " *
+    "\e[32mCast(\"$(flag)\", \"text\")\e[0m orders text."))
   throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say which number it computes on (#1483). Say the number type you mean: " *

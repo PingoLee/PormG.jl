@@ -220,6 +220,27 @@ end
             @test only(q.list())["v"] == 15
         end
 
+        # #1491: a `Max` or a `Min` over an uncast key orders a value the query does not type. On
+        # PostgreSQL `#>>` is text, so over 9 and 10 `Max` was `"9"`; SQLite's `json_extract` orders the
+        # numbers and gave 10. Expected: `QueryBuildError` on every engine when the query is built, naming
+        # both spellings, and no SQL sent. Each spelling reads back on every engine as what it names:
+        # `Cast(key, "numeric")` the number 15, `Cast(key, "text")` the text "15".
+        @testset "Max and Min over an uncast JSON key are refused on every engine (#1491)" begin
+            plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+            for expr in (Max("payload__points"), Min("payload__driver"))
+                q = base(); q.values("v" => expr)
+                e = try q.list(); nothing catch err; err end
+                @test e isa PormG.QueryBuildError
+                @test e !== nothing && occursin("(#1491)", plain(e)) && occursin("\"text\")", plain(e))
+            end
+            q = base(); q.values("v" => Max(Cast("payload__points", "numeric")))
+            @test only(q.list())["v"] == 15
+            q = base(); q.values("v" => Max(Cast("payload__points", "text")))
+            @test only(q.list())["v"] == "15"
+            q = base(); q.values("v" => Min(Cast("payload__driver", "text")))
+            @test only(q.list())["v"] == "hamilton"
+        end
+
         # #1472: a filter on a CTE column whose body projects a key lookup compares as the key lookup
         # does. Equality on text was refused by the document's JSON formatter, and an ordering bound
         # the number as text, so `points` (15) `> 9` compared `'15' > '9'` on PostgreSQL, false.

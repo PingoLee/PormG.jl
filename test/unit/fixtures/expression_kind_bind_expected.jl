@@ -8449,24 +8449,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    \"R2\".\"payload\" #>> '{\"n\"}' as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("json key | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    json_extract(\"R2\".\"payload\", '\$.n') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Max json key | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "MAX((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) > ?", params = [("\"10\"", "String")]),
-  ("Max json key | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "MAX(\"Tb\".\"payload\" #>> '{\"n\"}') > \$1", params = [("\"10\"", "String")]),
-  ("Max json key | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :having, sql = "MAX(json_extract(\"Tb\".\"payload\", '\$.n')) > ?", params = [("\"10\"", "String")]),
-  ("Max json key | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
-  ("Max json key | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"v\")::numeric > \$1", params = [("10", "Int64")]),
-  ("Max json key | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
-  ("Max json key | subquery", :mysql, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Max json key | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(\"R2\".\"payload\" #>> '{\"n\"}') as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
-  ("Max json key | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX(json_extract(\"R2\".\"payload\", '\$.n')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Round json key / 2 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(ROUND(CAST((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) AS DECIMAL(65,30)), ?) / ?) > ?", params = [("0", "Int64"), ("2", "Int64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Round json key / 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>

@@ -4,32 +4,45 @@ import ..Models
 import ..get_settings
 
 """
-    reload_module_contents!(existing_mod::Module, filepath::String)
+    reload_module_contents!(existing_mod::Module, filepath::String) -> Bool
 
 Re-evaluate the body of a module-defining file into an existing module object.
 
-Revise.jl can only hot-reload *function* definitions — it cannot re-evaluate
-global assignments or module-level expressions (which is how PormG models are
-defined: `Driver = Models.Model(...)`).
+This is the body of the Revise reload for a models file (#1487). Revise alone does not reload a
+model. In a file loaded with `includet` it re-evaluates only method definitions, and where it does
+re-evaluate an assignment (a package's own files), the new `Model` is unbound until `set_models`
+runs again.
 
-This helper parses the file, extracts the `module … end` body, and evaluates
-every expression inside the *original* module object so that existing references
-(e.g. `import .models as M`) remain valid.
+This helper parses the file, finds the `module` named like `existing_mod`, and evaluates every
+expression of its body inside the *original* module object, so that existing references
+(e.g. `import .models as M`) remain valid. It returns `false`, and evaluates nothing, when the file
+does not parse or defines no such module. An expression that fails to evaluate (a typo in a field)
+is logged with its line and leaves that binding at its previous value.
 """
-function reload_module_contents!(existing_mod::Module, filepath::String)
+function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
     content = read(filepath, String)
     top = Meta.parseall(content)
+    # A parse error anywhere is an `:error` node at the top level and no `module` at all.
+    any(e -> e isa Expr && e.head in (:error, :incomplete), top.args) && return false
     for expr in top.args
-        # Look for `module SomeName ... end`
-        if expr isa Expr && expr.head === :module
+        # The module the file defines for `existing_mod`, by name: evaluating another module's body
+        # into it (a wrong `source =`) would overwrite its bindings with unrelated ones.
+        if expr isa Expr && expr.head === :module && expr.args[2] === nameof(existing_mod)
             body_block = expr.args[3]           # the body block Expr
+            line = 0
             for sub in body_block.args
-                # Skip bare LineNumberNodes
-                sub isa LineNumberNode && continue
+                if sub isa LineNumberNode
+                    line = sub.line
+                    continue
+                end
                 try
                     Base.invokelatest(Core.eval, existing_mod, sub)
                 catch e
-                    # import / using of already-loaded packages may error; ignore
+                    # import / using of already-loaded packages may error; ignore those. Anything
+                    # else is the edit itself failing (a typo in a field), which leaves that binding
+                    # at its previous value, so say so rather than reload half a file in silence (#1487).
+                    sub isa Expr && sub.head in (:import, :using) && continue
+                    @warn "PormG: an expression in the reloaded models file failed; its binding keeps the previous value" file = filepath line = line exception = e
                 end
             end
             return true
@@ -46,34 +59,19 @@ function _default_includet(mod, path)
     Base.include(mod, path)
 end
 
-function _default_add_revise_callback(path, mod_obj, dir)
-    if isdefined(Main, :Revise) && isdefined(Main.Revise, :add_callback)
-        Main.Revise.add_callback() do
-            try
-                Base.invokelatest(reload_module_contents!, mod_obj, path)
-                # A reload is not a direct registration: it never loads a folder, even in a REPL (#1248).
-                Base.invokelatest(PormG.Models.set_models, mod_obj, dir; implicit = false)
-            catch
-            end
-        end
-    end
-end
+const _includet_hook = Base.RefValue{Function}(_default_includet)
 
-const _includet_hook = Ref{Function}(_default_includet)
-const _add_revise_callback_hook = Ref{Function}(_default_add_revise_callback)
-
+# `PormGReviseExt` installs both hooks from its `__init__`. The reload hook lives in `Models` (#1487),
+# because `set_models(…; source)` calls it and `Models` is included before this file.
 function set_revise_hooks!(; includet=nothing, add_revise_callback=nothing)
     _includet_hook[] = includet === nothing ? _default_includet : includet
-    _add_revise_callback_hook[] = add_revise_callback === nothing ? _default_add_revise_callback : add_revise_callback
+    Models._add_revise_callback_hook[] =
+        add_revise_callback === nothing ? Models._noop_add_revise_callback : add_revise_callback
     return nothing
 end
 
 function _includet(mod, path)
     return _includet_hook[](mod, path)
-end
-
-function _add_revise_callback(path, mod_obj, dir)
-    return _add_revise_callback_hook[](path, mod_obj, dir)
 end
 
 function resolve_import_models_path(source_file::AbstractString, import_path::AbstractString, calling_module::Module)
@@ -152,8 +150,8 @@ end
     _do_import_models(calling_module, source_file, import_path, alias)
 
 Runtime workhorse for the post-include phase of `@import_models`.
-Resolves the file path, injects `__init__`, registers a Revise callback,
-and calls `Models.set_models`.
+Resolves the file path, injects `__init__`, and calls `Models.set_models`
+with `source`, which registers the Revise reload.
 
 The actual `include` is issued as a separate top-level statement by the
 macro so that the submodule binding lands in the correct world age.
@@ -171,7 +169,6 @@ end
 # the Revise callback, and the registration (#1232 shares it between the macro and the function).
 function _setup_imported_models!(mod::Module, resolved_path::String)::Nothing
     dir_path = dirname(resolved_path)
-    is_precompiling = ccall(:jl_generating_output, Cint, ()) != 0
 
     # Inject __init__() into the submodule (a belt only — see the note on `ensure_models_init!`)
     try
@@ -180,13 +177,10 @@ function _setup_imported_models!(mod::Module, resolved_path::String)::Nothing
         @warn "PormG: Failed to inject __init__() for module $(string(nameof(mod)))" exception=e
     end
 
-    # Register a Revise hot-reload callback (skip during precompilation)
-    if !is_precompiling
-        _add_revise_callback(resolved_path, mod, dir_path)
-    end
-
-    # Register models with PormG
-    Models.set_models(mod, dir_path)
+    # Register models with PormG, and the Revise reload for their file (#1487: `set_models` skips the
+    # reload while precompiling, and registers it once the key is decided, so a `ModelDefinitionError`
+    # still leaves the file watched)
+    Models.set_models(mod, dir_path; source = resolved_path)
 
     return nothing
 end
@@ -208,14 +202,17 @@ The macro automatically:
 
 Users do NOT need to manually add an `__init__()` function to their model files.
 
+With Revise loaded, it also registers a reload of the file (`Models.set_models(…; source)`, #1487).
+It is the REPL / script form: in a package's module body it runs at precompile time, where no
+reload is registered, so a package binds its models from `__init__` with `Models.set_models`.
+
 # Example
 ```julia
-# In your package's main module:
+PormG.Configuration.load("db"; env = "dev")   # the configuration first
 PormG.@import_models "db/models.jl" models
 import .models as M
 
 # Now use M.Driver, M.Result, etc.
-# Models are automatically available here and after precompilation
 ```
 """
 macro import_models(path_expr, alias)

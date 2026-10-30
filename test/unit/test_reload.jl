@@ -81,9 +81,10 @@ println("MANIFEST_DRIFT:", join(sort([name for (name, v) in seeded if get(resolv
 
 # Run `script` in a fresh Julia with the scratch project active. stdout and stderr are merged so a
 # marker and the error that explains it land in one transcript. Returns (ok, output, timed_out).
-function _run_child_julia(pkg_root::String, script::String; timeout::Float64 = 300.0)
+function _run_child_julia(pkg_root::String, script::String; timeout::Float64 = 300.0,
+                          extra_args::Vector{String} = String[])
     seed_manifest = something(_parent_manifest_path(), "")
-    cmd = `$(Base.julia_cmd()) --project=$(pkg_root) -e $script $pkg_root $seed_manifest`
+    cmd = `$(Base.julia_cmd()) --project=$(pkg_root) -e $script $pkg_root $seed_manifest $extra_args`
     output_buffer = PipeBuffer()
     process = run(pipeline(ignorestatus(cmd), stdout=output_buffer, stderr=output_buffer), wait=false)
     wait_status = Base.timedwait(() -> !process_running(process), timeout)
@@ -98,6 +99,22 @@ function _run_child_julia(pkg_root::String, script::String; timeout::Float64 = 3
     return (process.exitcode == 0, String(take!(output_buffer)), false)
 end
 
+# A models file for the reload child (#1487). `edited` adds a field and a second model; only a reload
+# that re-runs `set_models` binds the new model to the folder's connection.
+function _reload_models_source(mod::String, model::String, edited::Bool)
+    added = edited ? ",\n        added = Models.IntegerField(default = 10)" : ""
+    extra = edited ? "\n    Extra = Models.Model(\"extra\", id = Models.IDField())" : ""
+    return """
+    module $(mod)
+        import PormG.Models
+        $(model) = Models.Model("$(lowercase(model))",
+            id = Models.IDField(),
+            name = Models.CharField()$(added)
+        )$(extra)
+    end
+    """
+end
+
 function _run_import_models_package_regression()
     mktempdir() do temp_root
         # This temporary package mirrors the failure mode reported by the user:
@@ -109,22 +126,36 @@ function _run_import_models_package_regression()
         # 2. The Revise extension mutated PormG.Utils during precompilation and
         #    Julia aborted with the closed-module incremental compilation error.
         # 3. Revise file watchers stayed open and precompilation hung.
+        #
+        # #1487: the same package also binds a second models file the run-time way (`include` in
+        # the body, `set_models(…; source)` in `__init__`), and the child session imports a third
+        # with `@import_models`, as a REPL would. The child edits both files and calls
+        # `Revise.revise()`. Neither path ever reloaded before: the callback was registered without
+        # the file it watches, a `MethodError` that a bare `catch` swallowed. The package's own
+        # `@import_models` is not edited: its body ran in the precompile worker, where no reload is
+        # registered, so in a package only the run-time bind can reload (the documented shape).
         pkg_name = "TempReloadPkg"
         pkg_root = joinpath(temp_root, pkg_name)
         src_dir = joinpath(pkg_root, "src")
         db_dir = joinpath(pkg_root, "db")
         db_sch_dir = joinpath(pkg_root, "db_sch")
+        db_rt_dir = joinpath(pkg_root, "db_rt")
         mkpath(src_dir)
         mkpath(db_dir)
         mkpath(db_sch_dir)
+        mkpath(db_rt_dir)
 
         _write_scratch_project(pkg_root, pkg_name, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
                                ["Pkg"    => "44cfe95a-1eb2-52ea-b672-e2afdf69b78f",
                                 "PormG"  => "7d8d7541-4d3d-4580-80a2-17064efb0993",
-                                "Revise" => "295af30f-e4ad-537b-8983-00126c2a3abe"])
+                                "Revise" => "295af30f-e4ad-537b-8983-00126c2a3abe",
+                                # `__init__` loads a SQLite configuration (#1487), and since #1232
+                                # `load` refuses one whose driver extension is not loaded.
+                                "SQLite" => "0aa819cd-b072-5ff4-a722-6bc24af294d9"])
 
         _write_reload_sqlite_connection(joinpath(db_dir, "connection.yml"))
         _write_reload_sqlite_connection(joinpath(db_sch_dir, "connection.yml"))
+        _write_reload_sqlite_connection(joinpath(db_rt_dir, "connection.yml"))
 
         open(joinpath(db_sch_dir, "sch_models.jl"), "w") do f
             write(f, """
@@ -138,11 +169,13 @@ function _run_import_models_package_regression()
             end
             """)
         end
+        write(joinpath(db_sch_dir, "repl_models.jl"), _reload_models_source("repl_models", "ReplThing", false))
+        write(joinpath(db_rt_dir, "rt_models.jl"), _reload_models_source("rt_models", "RtThing", false))
 
         open(joinpath(src_dir, "$(pkg_name).jl"), "w") do f
             write(f, """
             module $(pkg_name)
-            using PormG
+            using PormG, SQLite
 
             const PKG_ROOT = normpath(joinpath(@__DIR__, ".."))
 
@@ -153,6 +186,14 @@ function _run_import_models_package_regression()
             import .sch_models as SM
 
             const MODEL_OK = isdefined(SM, :SchThing) && basename(SM.SchThing.connect_key) == \"db_sch\"
+
+            # #1487: the run-time bind. The body reads no configuration; `__init__` loads it and binds.
+            include(\"../db_rt/rt_models.jl\")
+            function __init__()
+                PormG.Configuration.load(joinpath(PKG_ROOT, \"db_rt\"); env = \"test\")
+                PormG.Models.set_models(rt_models, joinpath(PKG_ROOT, \"db_rt\");
+                                        source = joinpath(PKG_ROOT, \"db_rt\", \"rt_models.jl\"))
+            end
             end
             """)
         end
@@ -162,12 +203,52 @@ function _run_import_models_package_regression()
         cd(ARGS[1])
         ENV[\"JULIA_PKG_PRECOMPILE_AUTO\"] = \"0\"
         $(_CHILD_SEED_AND_INSTANTIATE)
+        """ * raw"""
         using Revise
+        using PormG
         using TempReloadPkg
-        println(\"SUBPROCESS_OK:\", TempReloadPkg.MODEL_OK)
+        println("SUBPROCESS_OK:", TempReloadPkg.MODEL_OK)
+
+        # #1487: a session-level `@import_models` (the REPL shape; `cd` above makes the path resolve),
+        # then edit both models files and let Revise apply them. One marker per path, so a failure
+        # names the path that did not reload.
+        PormG.Configuration.load(joinpath(ARGS[1], "db_sch"); env = "test")
+        PormG.@import_models "db_sch/repl_models.jl" repl_models
+        const PKG = TempReloadPkg
+        println("RT_BOUND:", basename(PKG.rt_models.RtThing.connect_key) == "db_rt")
+        sleep(1.0)   # a new mtime, and the watchers are up
+        write(joinpath(ARGS[1], "db_sch", "repl_models.jl"), ARGS[3])
+        write(joinpath(ARGS[1], "db_rt", "rt_models.jl"), ARGS[4])
+        paths = (("MACRO", Base.invokelatest(getfield, Main, :repl_models), :ReplThing, "db_sch"),
+                 ("RUNTIME", PKG.rt_models, :RtThing, "db_rt"))
+        function markers()
+            map(paths) do (label, mod, thing, folder)
+                t = Base.invokelatest(getfield, mod, thing)
+                extra = isdefined(mod, :Extra) ? Base.invokelatest(getfield, mod, :Extra) : nothing
+                key = extra === nothing ? nothing : extra.connect_key   # `nothing` until `set_models` binds it
+                (label, haskey(t.fields, "added"), key !== nothing && basename(key) == folder)
+            end
+        end
+        # Poll rather than sleep a fixed time: a file event can take a while to reach Revise's queue
+        # on a loaded CI runner. The deadline only bounds a failure; a pass returns at once.
+        # `invokelatest`: this loop is one top-level statement, so it runs in the world it started in
+        # and would never see the `Extra` binding the reload creates.
+        deadline = time() + 30
+        while true
+            Revise.revise()
+            all(m -> m[2] && m[3], Base.invokelatest(markers)) && break
+            time() > deadline && break
+            sleep(0.25)
+        end
+        for (label, field, bound) in markers()
+            println("RELOAD_", label, "_FIELD:", field)
+            println("RELOAD_", label, "_NEW_MODEL_BOUND:", bound)
+        end
         """
 
-        return _run_child_julia(pkg_root, script)
+        return _run_child_julia(pkg_root, script;
+                                extra_args = [_reload_models_source("repl_models", "ReplThing", true),
+                                              _reload_models_source("rt_models", "RtThing", true)])
     end
 end
 
@@ -272,6 +353,12 @@ function _run_boot_pattern_regression()
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual Model Reload: `reload_module_contents!` plus `set_models`, called by hand
+# What it tests: re-evaluating an edited models file into the SAME module object adds the new field
+#   while `RM` (an `import … as` alias) stays valid, and the rebind keeps the folder's key. No SQL.
+# Why it matters: it is the body of the Revise reload callback (#1487), testable without Revise.
+# ─────────────────────────────────────────────────────────────────────────────
 @testset "Manual Model Reload (reload_module_contents!)" begin
     fixture_dir = joinpath(@__DIR__, "db_r")
     mkpath(fixture_dir)
@@ -323,16 +410,21 @@ end
     """)
     sleep(0.5)
 
-    if isdefined(Main, :Revise)
-        @info "Triggering Revise.revise()..."
-        Revise.revise()
-    end
+    # By hand, what the Revise callback does (#1487). This testset no longer branches on Revise: the
+    # unit suite does not load it, and a fallback after `Revise.revise()` made the assertions below
+    # pass whether or not Revise reloaded anything. The live reload is the package-regression child.
+    @test PormG.Utils.reload_module_contents!(RM, tmp_model_file)
+    PormG.Models.set_models(RM, dirname(tmp_model_file))
 
-    if !haskey(RM.ReloadTest.fields, "new_field")
-        @warn "Revise did not pick up file change, using manual reload_module_contents! fallback"
-        PormG.Utils.reload_module_contents!(RM, tmp_model_file)
-        PormG.Models.set_models(RM, dirname(tmp_model_file))
-    end
+    # #1487: a file that does not parse, or defines another module, reloads nothing and says so
+    # through `false` (the Revise callback turns it into a warning naming the file).
+    broken = joinpath(fixture_dir, "tmp_reload_broken.jl")
+    write(broken, "module reload_models\n    import PormG.Models\n    ReloadTest = Models.Model(\"reload_test\",\nend\n")
+    @test PormG.Utils.reload_module_contents!(RM, broken) == false
+    write(broken, "module other_models\n    ReloadTest = 1\nend\n")
+    @test PormG.Utils.reload_module_contents!(RM, broken) == false
+    @test RM.ReloadTest isa PormG.Models.Model_Type         # untouched by either
+    rm(broken)
 
     @test haskey(RM.ReloadTest.fields, "new_field")
     @test RM.ReloadTest.fields["new_field"].default == 10
@@ -342,6 +434,82 @@ end
     rm(tmp_model_file)
     PormG.Configuration.close_pool!(fixture_dir)
     pop!(PormG.config, fixture_dir, nothing)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Which bindings register a Revise reload, and with what (#1487)
+# What it tests: with a spy installed as the reload hook (`Utils.set_revise_hooks!`, what
+#   `PormGReviseExt` does), `set_models(mod, folder; source)` and `import_models` call it once with
+#   (absolute file, the module, the folder); `set_models` without `source` does not; and a refused
+#   `set_models` (folder not loaded) registers nothing. With the default hook restored, `source` is a
+#   no-op and the bind still works — the production path, where Revise is not loaded. No SQL.
+# Why it matters: before #1487 the reload was registered only by `@import_models`, never by the
+#   run-time bind a package uses, and the registration itself always failed in silence.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Revise reload registration: set_models(; source) and import_models (#1487)" begin
+    mktempdir() do root
+        dir = joinpath(root, "db_spy")
+        mkpath(dir)
+        _write_reload_sqlite_connection(joinpath(dir, "connection.yml"))
+        file = joinpath(dir, "spy_models.jl")
+        write(file, _reload_models_source("spy_models", "SpyThing", false))
+
+        calls = Tuple{String, Module, String}[]
+        spy(path::String, mod::Module, folder::String) = (push!(calls, (path, mod, folder)); nothing)
+        PormG.Configuration.load(dir; env = "test")
+        previous_includet = PormG.Utils._includet_hook[]       # restored, not reset: a session
+        previous_reload = PormG.Models._add_revise_callback_hook[]   # with Revise keeps its hooks
+        try
+            PormG.Utils.set_revise_hooks!(add_revise_callback = spy)
+
+            host = Module(:SpyHost)
+            mod = Base.include(host, file)
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            @test isempty(calls)                       # no `source`, no reload
+
+            Base.invokelatest(PormG.Models.set_models, mod, dir; source = file)
+            @test calls == [(file, mod, dir)]
+
+            imported = PormG.import_models(file; into = Module(:SpyImport))
+            @test length(calls) == 2
+            @test calls[2] == (file, imported, dir)    # the macro's path: the file's own folder
+
+            empty!(calls)
+            unloaded = joinpath(root, "db_unloaded")
+            @test_throws PormG.InvalidConfigurationError Base.invokelatest(
+                PormG.Models.set_models, mod, unloaded; implicit = false, source = file)
+            @test isempty(calls)                       # refused before anything was watched
+
+            # A model-definition error still leaves the file watched, so saving the fix reloads it.
+            bad = joinpath(dir, "bad_models.jl")
+            write(bad, """
+            module bad_models
+                import PormG.Models
+                Lap = Models.Model("lap", id = Models.IDField(),
+                    raceid = Models.ForeignKey("NoSuchRace", pk_field = "id", on_delete = "CASCADE"))
+            end
+            """)
+            bad_mod = Base.include(Module(:BadHost), bad)
+            @test_throws PormG.ModelDefinitionError Base.invokelatest(
+                PormG.Models.set_models, bad_mod, dir; source = bad)
+            @test calls == [(bad, bad_mod, dir)]
+        finally
+            PormG.Utils.set_revise_hooks!(includet = previous_includet, add_revise_callback = previous_reload)
+        end
+        @test PormG.Models._add_revise_callback_hook[] === previous_reload
+
+        # Production: no Revise (the unit suite does not load it), so `source` does nothing beyond the
+        # bind. Skipped where Revise is loaded, which would watch a file this test deletes.
+        if Base.get_extension(PormG, :PormGReviseExt) === nothing
+            @test PormG.Models._add_revise_callback_hook[] === PormG.Models._noop_add_revise_callback
+            mod2 = Base.include(Module(:NoReviseHost), file)
+            Base.invokelatest(PormG.Models.set_models, mod2, dir; source = file)
+            @test basename(Base.invokelatest(getfield, mod2, :SpyThing).connect_key) == "db_spy"
+        end
+
+        PormG.Configuration.close_pool!(dir)
+        pop!(PormG.config, dir, nothing)
+    end
 end
 
 @testset "@import_models Package Regression" begin
@@ -359,6 +527,18 @@ end
     @test !occursin("UndefVarError: `sch_models` not defined", output)
     @test !occursin("world prior to its definition world", output)
     @test !occursin("waiting for IO to finish", output)
+    # #1487: both binding paths reload under Revise — the edited field, and a model the edit added,
+    # bound to the folder's connection. The NEW_MODEL_BOUND markers are the discriminating ones: only
+    # a re-run `set_models` binds the new model. RUNTIME_FIELD alone is not — the run-time bind
+    # `include`s its file into the package, so Revise tracks it as package source and re-evaluates the
+    # edited assignment itself (measured: true with the pre-#1487 callback, the rest false).
+    @test occursin("RT_BOUND:true", output)
+    @test occursin("RELOAD_MACRO_FIELD:true", output)
+    @test occursin("RELOAD_MACRO_NEW_MODEL_BOUND:true", output)
+    @test occursin("RELOAD_RUNTIME_FIELD:true", output)
+    @test occursin("RELOAD_RUNTIME_NEW_MODEL_BOUND:true", output)
+    @test !occursin("could not register a Revise reload", output)
+    @test !occursin("reloading the edited models file failed", output)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

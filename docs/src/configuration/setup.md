@@ -82,33 +82,42 @@ The sequence is always the same three steps:
 2.  **Load** the database configuration folder.
 3.  **Import** your models.
 
-A **package or a service** does steps 1–2 in a helper, called from the module body **and** from
-`__init__`, with an explicit `root` so the key does not depend on the working directory:
+A **package or a service** binds its models at run time. The module body only `include`s the models
+file, so precompiling reads no `connection.yml`. `__init__` loads the configuration and binds the
+models. An explicit `root` keeps the key independent of the working directory:
 
 ```julia
 module RaceControl
 
 using PormG, LibPQ
 
-const DB_DIRS  = ["db"]
-const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+const DB_DIRS     = ["db"]
+const APP_ROOT    = normpath(joinpath(@__DIR__, ".."))
+const MODELS_FILE = joinpath(APP_ROOT, "db", "models.jl")
 
-_load_configs() =
-    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
-
-_load_configs()                                   # module body: @import_models binds to it
-PormG.@import_models "../db/models.jl" models
+include(MODELS_FILE)                              # defines `module models … end`; reads no configuration
 import .models as M
 
-__init__() = _load_configs()                      # runtime: the image's configuration does not survive
+function __init__()
+    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+    PormG.Models.set_models(models, "db"; source = MODELS_FILE)
+end
 
 end
 ```
 
-This is the default to write. The snippet under *Static Configuration* above is the **REPL /
-script** form: one process, no precompilation, so one `load` is enough. Why the package needs both
-loads, and what each one fixes, is in
-[The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard), under *Loading before `@import_models` is not enough for a package*.
+This is the default to write, and it is the same in development and production. `source` is the
+models file. With [Revise.jl](https://github.com/timholy/Revise.jl) loaded, an edit to it is applied
+before the next REPL command, and the models are bound again. Without Revise, `source` does nothing,
+so a service or a compiled image runs this boot unchanged (#1487).
+
+The snippet under *Static Configuration* above is the **REPL / script** form: one process, no
+precompilation, so `@import_models` can bind the models where it stands, and it registers the same
+reload. In a package, `@import_models` in the module body runs in the precompile worker. That needs
+the configuration loaded at precompile time, and the reload is never registered in the session.
+[One boot for development and production](advanced.md#One-boot-for-development-and-production)
+says why the package does not switch between the two shapes.
+
 The rules this sequence relies on:
 
 - registering models never loads a folder outside a REPL — it refuses, naming the `load` call;

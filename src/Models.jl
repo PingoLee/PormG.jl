@@ -1009,6 +1009,18 @@ function _pick_connect_key(candidates::Vector{Pair{String,Bool}}, path::Abstract
     return chosen
 end
 
+# The Revise reload hook (#1487). `PormGReviseExt` installs the real one through
+# `Utils.set_revise_hooks!`; without Revise loaded it stays this no-op, so `source =` costs nothing in
+# production. It lives here rather than in `Utils` because `set_models` calls it and `Models` is
+# included first. The default used to duck-type `Main.Revise`, which was dead (the extension loads
+# whenever Revise does) and broken: it called `Revise.add_callback` without the files it watches.
+_noop_add_revise_callback(path::String, mod::Module, folder::String) = nothing
+
+const _add_revise_callback_hook = Base.RefValue{Function}(_noop_add_revise_callback)
+
+_add_revise_callback(path::String, mod::Module, folder::String) =
+  _add_revise_callback_hook[](path, mod, folder)
+
 #
 # NOTE: keep this comment ABOVE the docstring. A comment between a docstring and the definition it
 # documents silently detaches it — `@doc` binds to the next expression, and the comment is not one,
@@ -1016,12 +1028,26 @@ end
 # still precompiles, and `checkdocs = :public` only verifies that docstrings which EXIST reach the
 # manual. It cost a debugging round in #295.
 """
-    set_models(_module::Module, path::String; implicit = isinteractive()) -> nothing
+    set_models(_module::Module, path::String; implicit = isinteractive(), source = nothing) -> nothing
 
 Register every model defined in `_module` against the database configuration folder `path`, and
-resolve the relationships between them. This is the manual model-loading path; prefer
-`PormG.@import_models` (or `PormG.@models_module` for inline definitions), which call it for you and
-also handle precompilation and Revise reloads.
+resolve the relationships between them. A package app calls it from its `__init__`, after loading
+its configuration, on a models module it `include`d in the module body — the run-time bind, which
+reads no `connection.yml` at precompile time (see `docs/src/configuration/setup.md`). In a REPL or a
+script, `PormG.@import_models` (or `PormG.@models_module` for inline definitions) calls it for you.
+
+`source` is the path of the file that defines `_module`. With Revise loaded, PormG registers a
+reload for it: after an edit to that file, the next `Revise.revise()` (before every REPL command)
+re-evaluates the module body into the same module and calls `set_models` again. Without Revise it
+does nothing, so the same boot runs in production (#1487). `@import_models` passes it for you.
+
+```julia
+include("../db/models.jl")    # module body: defines `module models … end`, reads no configuration
+function __init__()
+    PormG.Configuration.load("db"; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+    PormG.Models.set_models(models, "db"; source = joinpath(APP_ROOT, "db", "models.jl"))
+end
+```
 
 Until a model is registered it is inert: it has no connection and no reverse relations. Building a
 query still appears to work — `M.Driver.objects.filter(...)` returns a handler — but rendering or
@@ -1061,9 +1087,9 @@ Registration does four things:
    the aggregated report when present.
 
    Because the aggregated throw comes after every model is wired, a **swallowed** failure leaves a
-   fully-wired, queryable graph. The `__init__` that `@import_models` and `@models_module` inject,
-   and the Revise reload callback, all `catch` — though the first load of either macro still
-   surfaces the error. `delete()` keeps its own copy of both checks, and that is what still raises
+   fully-wired, queryable graph. The `__init__` that `@import_models` and `@models_module` inject
+   `catch` — though the first load of either macro still surfaces the error. The Revise reload
+   catches too, and logs the error with a warning naming the models file. `delete()` keeps its own copy of both checks, and that is what still raises
    for a contradiction the caller never saw.
 
 Calling it again is safe and is the supported way to pick up edits: reverse relations and
@@ -1094,7 +1120,8 @@ with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
 function set_models(_module::Module, path::String;
-                    implicit::Bool = Configuration._is_interactive())::Nothing
+                    implicit::Bool = Configuration._is_interactive(),
+                    source::Union{Nothing, String} = nothing)::Nothing
   @pormg_debug false
   # #550: ranked, unique-or-warn. This was a first-match `break` over `config`, which is a Dict —
   # so a folder-name match on an earlier-hashed key beat an exact path match on a later one.
@@ -1135,6 +1162,14 @@ function set_models(_module::Module, path::String;
     # an entry already held under another spelling of this folder instead of adding a second one,
     # so the key it registered is not necessarily the string we handed it.
     connect_key = something(_resolve_connect_key(path, config), path)
+  end
+
+  # #1487: after the key is decided, so a refused call (above) watches nothing; before the models are
+  # wired, so a `ModelDefinitionError` there (a bad foreign-key target) still leaves the file watched,
+  # and saving the fix reloads it. Not while precompiling: a file watcher opened in the precompile
+  # worker hangs it. The reload calls `set_models` without `source`, so it never re-registers itself.
+  if source !== nothing && ccall(:jl_generating_output, Cint, ()) == 0
+    _add_revise_callback(abspath(source), _module, path)
   end
 
   _register_models!(_module, path, connect_key)

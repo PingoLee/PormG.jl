@@ -146,6 +146,24 @@ The concrete type is `ObjectHandler`; its fluent methods are synthesized by `get
 they have no bindings of their own and `?query.filter` cannot work — the full method reference
 lives on `object` instead (`?object`).
 
+# A query is a Tables.jl table
+
+A query is a [Tables.jl](https://github.com/JuliaData/Tables.jl) source (#1344), so any Tables.jl
+sink reads it: `DataFrame(query)` after `using DataFrames`, `CSV.write(io, query)`,
+`Tables.rowtable(query)`. Each read executes the query once.
+
+The columns carry the same values `list()` returns: a temporal column or expression alias holds
+`ZonedDateTime` / `Date` / `Time` / `CompoundPeriod` values on every engine, not the driver's raw
+text (#582). To keep the engine's own text on purpose, project it as text: `ToChar(...)` or
+`Cast(F(col), "TEXT")`.
+
+```julia
+using DataFrames
+query = M.Result.objects.filter("raceid__year" => 2020).
+    values("driverid__forename", "constructorid__name", "laps")
+df = query |> DataFrame
+```
+
 See also [`SQLObject`](@ref) (the state it wraps).
 """
 abstract type SQLObjectHandler <: SQLObject end

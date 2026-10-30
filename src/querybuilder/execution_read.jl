@@ -1,7 +1,8 @@
 # Executing a read (#130): `query` and the statement it prints, `count` / `exists` / `aggregate`,
-# `inspect_query`, and the row-returning terminals — `list`, `query_list`, `DataFrame`, `first` /
-# `last` / `earliest` / `latest` and `get`. Writes are in `execution_write.jl`, bulk writes in
-# `execution_bulk.jl`, and rendering an `F(...)` expression in `expression_render.jl`.
+# `inspect_query`, the row-returning terminals — `list`, `query_list`, `first` / `last` / `earliest` /
+# `latest` and `get` — and the Tables.jl source `DataFrame(query)` reads (#1344). Writes are in
+# `execution_write.jl`, bulk writes in `execution_bulk.jl`, and rendering an `F(...)` expression in
+# `expression_render.jl`.
 
 function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, _SQLEngine}, model::Union{PormGModel, String}, operation::Symbol;
                           parameters::Union{Nothing, AbstractPormGParam} = nothing)
@@ -985,50 +986,52 @@ function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   return first(_execute_select(objct))
 end
 
-"""
-Creates a DataFrame directly from a SQLObjectHandler query.
+# #1344 — a query is a Tables.jl source. `DataFrame(query)` is DataFrames' own `DataFrame(table)`, and
+# `CSV.write(io, query)`, `Tables.rowtable(query)` or any other sink reads a query the same way, with no
+# PormG method on any of them. That is what lets `DataFrames` leave `[deps]` (#1344 phase 6). The contract
+# a user reads is on `SQLObjectHandler`'s docstring.
+#
+# Column access only: `Tables.rows` falls back to the columns, and the columns are the cheap read
+# (#1073 measured a row walk of a `LibPQ.Result` at 20× the column read). Each call executes the query
+# once; a source that executed on `istable` or `schema` would hit the database for a question about type.
+Tables.istable(::Type{<:SQLObjectHandler}) = true
+Tables.columnaccess(::Type{<:SQLObjectHandler}) = true
 
-This extends the DataFrame constructor to work directly with PormG query objects. Since #582 it
-applies the same read-side value coercion as `list()`: a temporal column or expression alias
-holds `ZonedDateTime` / `Date` / `Time` / `CompoundPeriod` values on both engines, not the
-driver's raw text on SQLite. PostgreSQL DataFrames are unchanged — the driver already delivers
-typed values there. To keep the engine's own text on purpose, project it as text: `ToChar(...)`
-or `Cast(F(col), "TEXT")`.
-
-# Arguments
-- `objct::SQLObjectHandler`: The SQL object handler containing the query
-
-# Returns
-- `DataFrames.DataFrame`: The query results as a DataFrame
-
-# Example
-```julia
-query = M.Result |> object
-query.filter("raceid__year" => 2020)
-query.values("driverid__forename", "constructorid__name", "laps")
-df = query |> DataFrame  # Direct conversion to DataFrame
-```
-"""
-function DataFrames.DataFrame(objct::SQLObjectHandler)
-  # #582 — this used to be `query_list(objct) |> DataFrame`, which bypassed the #564 coercion
-  # `_list_raw` applies, so `list()` and `DataFrame(query)` disagreed on the type of every temporal
-  # column on SQLite. Same executed build, same parser table, column-wise instead of row-wise.
+function Tables.columns(objct::SQLObjectHandler)
   result, built, connection = _execute_select(objct)
-  df = DataFrames.DataFrame(result)
+  columns = Tables.columns(result)
   parsers = _projection_parsers(built, connection)
-  parsers === nothing && return df          # nothing to coerce — PostgreSQL unless an INTERVAL is projected (#581)
-  for (name, parser) in parsers
-    # The wildcard recorder registers both a field's name and its `db_column`, and only one of them
-    # is in any given result — same guard as `_rows_from_result`'s lookup. `map` widens the column from
-    # `Union{Missing,String}` to `Union{Missing,T}`; the parsers pass `missing` through untouched.
-    hasproperty(df, name) && (df[!, name] = map(parser, df[!, name]))
+  # Nothing to coerce (PostgreSQL unless an INTERVAL, an ARRAY or a computed float is projected): the
+  # driver's own columns, exactly what `DataFrame(result)` read before #1344, so that frame is unchanged
+  # by construction.
+  parsers === nothing && return columns
+  return _parsed_columns(columns, parsers)
+end
+
+# #564 / #582 — the driver's columns with each parsed one replaced by `map(parser, column)`; the others
+# are passed through uncopied. A parser whose name is not a result column never fires: the wildcard
+# recorder registers both a field's name and its `db_column`, and only one of them is in any given
+# result (the same guard as `_rows_from_result`). `map` widens a column from `Union{Missing,String}` to
+# `Union{Missing,T}`; the parsers pass `missing` through untouched.
+#
+# Columns Tables.jl built from rows (SQLite's materialized result) arrive as `CopiedColumns`, which tells
+# a sink not to copy them again; rewrapping keeps that, so `DataFrame(query)` on SQLite copies nothing it
+# did not copy before. A driver's own columns (LibPQ, MySQL) are not copies and are not wrapped.
+function _parsed_columns(columns, parsers::Dict{Symbol,Function})
+  names = Tuple(Symbol(name) for name in Tables.columnnames(columns))
+  parsed = map(names) do name
+    column = Tables.getcolumn(columns, name)
+    parser = Base.get(parsers, name, nothing)
+    parser === nothing ? column : map(parser, column)
   end
-  return df
+  table = NamedTuple{names}(parsed)
+  return columns isa Tables.CopiedColumns ? Tables.CopiedColumns(table) : table
 end
 
 # #564 / #582 — which result-row columns need a read-side parser on THIS connection, or `nothing`
-# when none does. The one selection both row terminals (`_list_raw`) and the tabular terminal
-# (`DataFrame`) consult, so the two cannot disagree about what is coerced.
+# when none does. The one selection both row terminals (`_list_raw`) and the Tables.jl source
+# (`Tables.columns(query)`, which `DataFrame(query)` reads) consult, so the two cannot disagree about
+# what is coerced.
 #
 # The build records the canonical kind of each projection (`projection_kinds`), and the
 # representation table (`value_repr.jl`) says which parser undoes that kind on this backend. Django
@@ -1061,7 +1064,7 @@ function _list_raw(objct::SQLObjectHandler)
   # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
   # text, while PostgreSQL's driver delivered typed values for all of them.
   #
-  # The parser selection lives in `_projection_parsers` (above), shared with `DataFrame(query)`
+  # The parser selection lives in `_projection_parsers` (above), shared with the Tables.jl source
   # since #582 so the row and tabular terminals coerce the same columns.
   return _rows_from_result(result, _projection_parsers(built, connection))
 end

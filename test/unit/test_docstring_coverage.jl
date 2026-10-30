@@ -344,7 +344,9 @@ end
     @testset "the `public`-but-unexported surface is exactly the declared set" begin
         expected = Dict(
             PormG              => [:import_models, :install_ai_skills, :setup],
-            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :explain_query, :first,
+            # `DataFrame` left the set with #1344: a query is a Tables.jl source and DataFrames' own
+            # constructor reads it, so PormG owns no `DataFrame` binding to mark.
+            PormG.QueryBuilder => [:ObjectHandler, :delete, :earliest, :explain_query, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
             # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347),
@@ -381,7 +383,7 @@ end
                 # `public X` on a name the module cannot resolve creates a public-but-UNDEFINED
                 # entry — `names()` lists it, `mod.X` throws UndefVarError, and the docs build says
                 # nothing. `public DataFrame` did exactly this until `import DataFrames: DataFrame`
-                # was added, because only the module was imported. Aqua's `test_undefined_exports`
+                # was added, because only the module was imported (both went with #1344). Aqua's `test_undefined_exports`
                 # also catches it, but Aqua is an optional dep here (`HAS_AQUA` in runtests.jl), so
                 # a worktree without it runs green while CI fails. Check it where it belongs.
                 undefined = filter(s -> !isdefined(mod, s), actual)
@@ -408,10 +410,11 @@ end
                 # and PormG documents none of them. Declaring `public sort` would satisfy it while
                 # documenting nothing.
                 #
-                # Nor is the stricter `Binding(mod,s).mod === mod` form from :215 usable: three names
+                # Nor is the stricter `Binding(mod,s).mod === mod` form from :215 usable: two names
                 # already in the frozen set are legitimately FOREIGN bindings — `QueryBuilder`'s
-                # `Base.first`/`Base.last` and `DataFrames.DataFrame`, whose docstrings PormG owns and
-                # stores in its OWN doc dict. That form would fail them wrongly.
+                # `Base.first`/`Base.last`, whose docstrings PormG owns and stores in its OWN doc
+                # dict (`DataFrames.DataFrame` was a third until #1344). That form would fail them
+                # wrongly.
                 #
                 # Membership in the module's own `Docs.meta` is exactly right for both: it is where
                 # `@doc` files a docstring written in this module, whichever module the binding

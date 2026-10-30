@@ -735,3 +735,50 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1472: a filter on a CTE column over a JSON key lookup compares as the key lookup does
+# A CTE column whose body projects `payload__driver` (or `Max` of it) holds the key's value, which the
+# walk names `CJSONValue` (#1458). The outer filter bound through the column's field, the document's
+# JSONField: equality ran the JSON formatter and refused plain text ("The text is not valid JSON"), and
+# an ordering bound the number as text (`"R1_1"."k" > $1` with `'5'` on PostgreSQL, a text comparison;
+# `CAST(? AS JSON)` on MySQL). Expected, as `filter("payload__driver" => …)` binds (#1382):
+# PostgreSQL `"R1_1"."k" = $1` with `"hamilton"` and `("R1_1"."k")::numeric > $1` with `5`; SQLite
+# `"R1_1"."k" = ?` and `"R1_1"."k" > ?` with the native values; MySQL `` `R1_1`.`k` = ? `` and
+# `` `R1_1`.`k` > ? ``. A whole-document column keeps the JSON formatter (#1360): a document binds,
+# plain text is refused.
+# Why it matters: the equality was unusable, and the ordering returned the rows a text comparison picks.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1472: a filter on a CTE column over a JSON key binds as the key lookup does" begin
+  FN = PormG.Functions
+  function filtered(col, filt)
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => col)
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__k")
+    q.filter(filt)
+    return q
+  end
+  where(r) = replace(r[:sql_text], r"\s+" => " ")
+  for col in ("payload__driver", FN.Max("payload__driver"))
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_PG)
+    @test occursin("WHERE \"R1_1\".\"k\" = \$1", where(r)) && r[:parameters] == ["hamilton"]
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_SL)
+    @test occursin("WHERE \"R1_1\".\"k\" = ?", where(r)) && r[:parameters] == ["hamilton"]
+    r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_MY)
+    @test occursin("WHERE `R1_1`.`k` = ?", where(r)) && r[:parameters] == ["hamilton"]
+  end
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_PG)
+  @test occursin("WHERE (\"R1_1\".\"k\")::numeric > \$1", where(r)) && r[:parameters] == [5]
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_SL)
+  @test occursin("WHERE \"R1_1\".\"k\" > ?", where(r)) && r[:parameters] == [5]
+  r = _sql(filtered("payload__n", "g__k__@gt" => 5); conn = _JL_MY)
+  @test occursin("WHERE `R1_1`.`k` > ?", where(r)) && r[:parameters] == [5]
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test occursin("\"k\" IS NULL", replace(where(_sql(filtered("payload__driver", "g__k__@isnull" => true); conn = conn)), "`" => "\""))
+    # A whole-document column keeps the JSON formatter: a document binds, plain text is refused.
+    @test _sql(filtered("payload", "g__k" => """{"a": 1}"""); conn = conn) isa AbstractDict
+    @test_throws PormG.InvalidValueError _sql(filtered("payload", "g__k" => "hamilton"); conn = conn)
+  end
+end

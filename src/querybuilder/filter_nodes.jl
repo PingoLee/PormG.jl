@@ -1153,6 +1153,13 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.column, SQLTypeField) && memo_json_lookup(instruc, memo_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
   end
+  # #1472: a column that holds a key lookup's value without being one — a CTE column whose body
+  # projects `payload__driver` or `Max` of it, which the walk names `CJSONValue` (#1458) — compares as
+  # the key lookup does. Through the column's own field it ran the document's JSON formatter, which
+  # refused plain text, and bound a number as text (`"R1_1"."k" > '5'` on PostgreSQL, no `::numeric`).
+  # A whole-document column (`CJSON`) keeps the formatter (#1360).
+  isa(v.column, SQLTypeField) && !_expression_operand(v.values) && v.operator in _JSON_KEY_COMPARISON_OPERATORS &&
+    _json_key_lookup_operand(v.column.field, instruc) && return _render_json_lookup_comparison(v, column, instruc)
   # #1381: a `When` condition on a projection alias — every filter on one takes `_render_alias_predicate`
   # first, so only a `When` gets here. `alias_key` is set when the alias is projected; its value binds
   # as the alias's own filter binds it (`_bind_alias_value`, below), and a comparison on an alias over a

@@ -220,6 +220,23 @@ end
             @test only(q.list())["v"] == 15
         end
 
+        # #1472: a filter on a CTE column whose body projects a key lookup compares as the key lookup
+        # does. Equality on text was refused by the document's JSON formatter, and an ordering bound
+        # the number as text, so `points` (15) `> 9` compared `'15' > '9'` on PostgreSQL, false.
+        # Expected: the seeded row matches each filter, and a non-matching value matches none.
+        @testset "a filter on a CTE column over a JSON key matches as the key lookup does (#1472)" begin
+            function cte_filtered(col, filt)
+                body = base(); body.values("id", "k" => col)
+                q = base(); q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+                q.values("id", "g__k"); q.filter(filt)
+                return q
+            end
+            @test length(cte_filtered("payload__driver", "g__k" => "hamilton").list()) == 1
+            @test length(cte_filtered("payload__driver", "g__k" => "norris").list()) == 0
+            @test length(cte_filtered("payload__points", "g__k__@gt" => 9).list()) == 1
+            @test length(cte_filtered("payload__points", "g__k__@gt" => 20).list()) == 0
+        end
+
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────
         if requires(:jsonb_operators)
             @testset "containment and key operators" begin

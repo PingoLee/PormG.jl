@@ -422,6 +422,18 @@ q.values("name", "principal" => F("metadata__principal"))
 q.filter("principal" => "Toto Wolff")      # as filter("metadata__principal" => "Toto Wolff")
 ```
 
+A CTE column whose body projects a key (or `Max` of one) holds the key's value too, and a filter on
+it binds the same way (#1472):
+
+```julia
+body = M.Constructor.objects
+body.values("constructorid", "wins" => "metadata__wins")
+q = M.Constructor.objects
+q.with("m" => body, join_field = "constructorid" => "constructorid")
+q.values("name", "m__wins")
+q.filter("m__wins__@gt" => 100)            # a numeric comparison, as "metadata__wins__@gt" => 100
+```
+
 A path lookup compares the extracted value against a **value**. A column expression on the right
 (`"metadata__principal" => F("name")`) raises a `FilterError` on every backend. The engines extract
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison

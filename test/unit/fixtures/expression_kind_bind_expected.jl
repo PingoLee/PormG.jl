@@ -8312,11 +8312,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("json key | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "UnknownFieldError", message = "the column v not found in field_validation_scratch, that contains the fields: id, payload, uuid_token; and the declared "),
   ("json key | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > CAST(? AS JSON)", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("json key | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"v\")::numeric > \$1", params = [("10", "Int64")]),
   ("json key | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("json key | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("json key | subquery", :postgres, "w__@gt", "10") =>
@@ -8330,11 +8330,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Max json key | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "MAX(json_extract(\"Tb\".\"payload\", '\$.n')) > ?", params = [("\"10\"", "String")]),
   ("Max json key | cte", :mysql, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > CAST(? AS JSON)", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
   ("Max json key | cte", :postgres, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"v\")::numeric > \$1", params = [("10", "Int64")]),
   ("Max json key | cte", :sqlite, "g__v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10\"", "String")]),
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
   ("Max json key | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`R2`.`payload`, '\$.\"n\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)) as `t`\nFROM `field_validation_scratch` as `R2`\nWHERE `R2`.`id` = `Tb`.`id`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Max json key | subquery", :postgres, "w__@gt", "10") =>

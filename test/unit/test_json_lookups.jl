@@ -660,3 +660,78 @@ end
   # A comparison is not arithmetic: the key lookup's own filter binds it (#1382).
   @test _sql((q = JL.Json_scratch.objects; q.filter("payload__n__@gt" => 5); q); conn = _JL_PG) isa AbstractDict
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1482: arithmetic over a CTE column or a Subquery that carries an uncast JSON key is refused
+# A CTE body or a `Subquery` projection can carry a key's value with no arithmetic of its own, and its
+# column's kind need not say so: `Lag("id"; default = F(key))` is typed by `id`, an integer, though the
+# key is its value on the rows the default applies to; a `Subquery` is typed by its inner build. Outer
+# arithmetic over it computed on the key: on SQLite `(COALESCE("R1_1"."w", ?) / ?)` divided the integer
+# the document holds as one (`7 / 2` was `3`). Expected: the body records the key
+# (`CTEDivision.json_key`, `subquery_json_key`), and arithmetic over the column refuses as over the key
+# (#1483) on every engine, naming the CTE column or the Subquery, what its body is, and the key's cast.
+# The other routes in: a body column that IS the key's value (`Max(key)`, `NullIf(key, 0)`) refuses
+# through its kind (`CJSONValue`); a body that sums the key refuses itself (#1483); one that mixes the
+# key with a literal (`Coalesce(key, 0)`) is refused while the column is typed (#823). A body that casts
+# the key, or declares its number (`output_field`), builds outside.
+# Why it matters: the SQLite answer was a different value with nothing to say so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1482: arithmetic over a CTE column or a Subquery carrying a JSON key is refused" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  function withcte(colexpr, outer)
+    q = JL.Json_scratch.objects
+    body = JL.Json_scratch.objects
+    body.values("id", "w" => colexpr)
+    q.with("c" => body, join_field = "id" => "id")
+    q.values("v" => outer)
+    return q
+  end
+  sub(expr) = QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => 1); s.values("v" => expr); s))
+  proj(expr) = (q = JL.Json_scratch.objects; q.values("v" => expr); q)
+  refusal(q, conn) = try _sql(q; conn = conn); nothing catch err; err end
+  lag_default_key() = QB.Lag("id"; default = QB.F("payload__n"), over = QB.WindowOver(order_by = ["id"]))
+  half(col) = FN.Coalesce(col, 0) / 2
+  function refused_1483(q, conn, named)
+    e = refusal(q, conn)
+    @test e isa PormG.QueryBuildError
+    msg = e === nothing ? "" : plain(e)
+    @test occursin("(#1483)", msg)
+    @test occursin(named, msg)
+    @test occursin("Cast(\"", msg)
+    return msg
+  end
+  # The record: a window body whose kind is its integer column. (SQLite's mock renders no window
+  # function without its driver, so this route is pinned on PostgreSQL and MySQL.)
+  for conn in (_JL_PG, _JL_MY)
+    msg = refused_1483(withcte(lag_default_key(), half(PormG.CTE("c", "w"))), conn, "the CTE column `CTE(\"c\", \"w\")`")
+    @test occursin("`LAG(…)` over the JSON key `payload__n`", msg)
+    refused_1483(withcte(lag_default_key(), FN.Floor(PormG.CTE("c", "w")) + 1), conn, "the CTE column")
+    @test _sql(withcte(lag_default_key(), PormG.CTE("c", "w")); conn = conn) isa AbstractDict
+  end
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @testset "$(nameof(typeof(conn)))" begin
+      # The Subquery record: a projection carrying the key, or the key itself.
+      for inner in (FN.Coalesce("payload__n", 0), QB.F("payload__n"))
+        msg = refused_1483(proj(half(sub(inner))), conn, "a Subquery projecting")
+        @test occursin("JSON key `payload__n`", msg)
+        @test occursin("Cast(\"payload__n\", \"numeric\")", msg)
+      end
+      @test _sql(proj(half(sub(FN.Cast("payload__n", "numeric")))); conn = conn) isa AbstractDict
+      # Through the column's kind: a body column that is the key's value.
+      for body in (FN.Max("payload__n"), FN.NullIf("payload__n", 0))
+        refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "JSON key")
+      end
+      # A body that sums the key refuses itself; one that mixes it with a literal is refused as untyped.
+      e = refusal(withcte(FN.Sum("payload__n"), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && startswith(plain(e), "Sum over the JSON key `payload__n`")
+      e = refusal(withcte(FN.Coalesce("payload__n", 0), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && occursin("(#823)", plain(e))
+      # A body that names the number builds outside, as does one with no key.
+      for body in (FN.Cast("payload__n", "numeric"), FN.Coalesce("payload__n", 0; output_field = "integer"), FN.Coalesce("id", 0))
+        @test _sql(withcte(body, half(PormG.CTE("c", "w"))); conn = conn) isa AbstractDict
+      end
+    end
+  end
+end

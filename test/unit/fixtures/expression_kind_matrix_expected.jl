@@ -7736,6 +7736,42 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat json key | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Coalesce CTE json lag col / 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
+  ("Coalesce CTE json lag col / 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Coalesce CTE json lag col / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Coalesce CTE json lag col / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Coalesce Subquery json key / 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
+  ("Coalesce Subquery json key / 2 | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries

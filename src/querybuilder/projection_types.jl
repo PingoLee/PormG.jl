@@ -855,8 +855,22 @@ function _json_number_side(p::FExpression, instruc::SQLInstruction)
   side === nothing && (side = _json_number_side(p.operand, instruc))
   return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
 end
-_json_number_side(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction) =
+_json_number_side(p::Union{String,JoinedReference}, instruc::SQLInstruction) =
   _json_key_lookup_operand(p, instruc) ? ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p)) : nothing
+# #1482: a CTE column is the key when it projects one (its kind is `CJSONValue`), and carries it when
+# its body's expression does (`Coalesce(key, 0)`, a `Case` branch), which its kind cannot say: the body
+# records that (`CTEDivision.json_key`).
+function _json_number_side(p::CTEReference, instruc::SQLInstruction)
+  _json_key_lookup_operand(p, instruc) && return ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p))
+  side = _cte_division(p, instruc, :json_key)
+  return side === nothing ? nothing : ("the CTE column `$(_concat_operand_label(p))` ($(side[1]))", side[2])
+end
+# #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
+function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
+  instruc.subquery_json_key === nothing && return nothing
+  side = get(instruc.subquery_json_key, p, nothing)
+  return side === nothing ? nothing : ("a Subquery projecting $(side[1])", side[2])
+end
 function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
@@ -1736,6 +1750,19 @@ function _subquery_projection_whole_numeric(handler::SQLObjectHandler, inner::SQ
   length(vals) == 1 || return nothing
   v = only(vals)
   return _whole_numeric_operand(v isa SQLText ? v : v.field, inner)
+end
+# #1482 — and whether the same expression carries an uncast JSON key (`_json_number_side`).
+function _subquery_projection_json_key(handler::SQLObjectHandler, inner::SQLInstruction)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  v = only(vals)
+  return _json_number_side(v isa SQLText ? v : v.field, inner)
+end
+function _record_subquery_json_key!(instruc::SQLInstruction, p::SubqueryObject, side)
+  side isa Tuple{String,String} || return nothing
+  instruc.subquery_json_key === nothing && (instruc.subquery_json_key = IdDict{SubqueryObject,Tuple{String,String}}())
+  instruc.subquery_json_key[p] = side
+  return nothing
 end
 function _record_subquery_whole_numeric!(instruc::SQLInstruction, p::SubqueryObject, side)
   side isa Tuple{Symbol,String} || return nothing

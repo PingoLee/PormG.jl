@@ -1,7 +1,7 @@
-## Arithmetic, `Sum` and `Avg` over an uncast JSON key are refused on every engine (#1471, #1483)
+## Arithmetic, `Sum` and `Avg` over an uncast JSON key are refused on every engine (#1471, #1482, #1483)
 
 - **Version**: Unreleased
-- **PormG ref**: #1471, #1483 ; `src/querybuilder/projection_types.jl` (`_json_number_side`, `_refuse_json_key_arithmetic`), `src/querybuilder/expression_render.jl` (`_render_expr_node`), `src/querybuilder/select_nodes.jl` (`Sum`/`Avg`)
+- **PormG ref**: #1471, #1482, #1483 ; `src/querybuilder/projection_types.jl` (`_json_number_side`, `_refuse_json_key_arithmetic`), `src/querybuilder/ctes.jl` (`CTEDivision.json_key`), `src/querybuilder/expression_render.jl` (`_render_expr_node`), `src/querybuilder/select_nodes.jl` (`Sum`/`Avg`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change on every engine. A query that built now raises `QueryBuildError` when it is built. On SQLite and MySQL some of these returned a value. On PostgreSQL most raised a server error when the query ran, and `Floor(key) / 2` returned a value.
 
@@ -20,7 +20,10 @@ PormG now refuses, on every engine, arithmetic (`+`, `-`, `*`, `/`) with a side 
 JSON key, and a `Sum` or an `Avg` of one. "Carries" means the key itself, or a value that holds it:
 the functions whose value is their operand's (`Floor`, `Ceil`, `Abs`, `Max`, `Min`, `Coalesce`,
 `Greatest`, `Least`, `Lag` and its `default`), a `Case` branch, `NullIf`'s first operand, and
-arithmetic over any of them. The message names the cast to write. A value that names its number still
+arithmetic over any of them. A CTE column or a `Subquery` whose body carries the key carries it too,
+even where its type does not say so: a CTE column `Lag("id"; default = F("metadata__wins"))` is typed
+by `id`, and `Coalesce(CTE("c", "w"), 0) / 2` over it divided the key's integer as one on SQLite
+(#1482). The message names the cast to write. A value that names its number still
 builds: a `Cast`, an `output_field`, `Round`. A function over the key with nothing computed on it
 (`Floor("metadata__wins")`, `Max("metadata__wins")`) and a comparison
 (`"metadata__wins__@gte" => 100`) build as before.
@@ -37,6 +40,7 @@ too: on PostgreSQL they reach the same server error.
 | `values("v" => F("metadata__wins") + 1)` on SQLite or MySQL | `122` | `QueryBuildError` |
 | `values("v" => Sum("metadata__wins"))` on SQLite or MySQL | the sum | `QueryBuildError` |
 | `values("v" => Sum("metadata__wins"))` on PostgreSQL | server error (42883) | `QueryBuildError` |
+| `values("v" => Coalesce(Subquery(…values("w" => Coalesce("metadata__wins", 0))…), 0) / 2)` on SQLite | `60` | `QueryBuildError` |
 | `values("v" => Cast("metadata__wins", "numeric") / 2)` | `60.5` | `60.5` (unchanged) |
 | `values("v" => Max("metadata__wins"))` | the key's value | unchanged |
 

@@ -42,6 +42,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   inner_formatter = Ref{Any}(nothing)
   inner_textless = Ref{Any}(nothing)
   inner_whole_numeric = Ref{Any}(nothing)
+  inner_json_key = Ref{Any}(nothing)
   inner_kind = Ref{Any}(nothing)
   inner_unapplied = Ref(false)
   inner_sql = query(handler,
@@ -52,6 +53,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
                     built = inner -> (inner_formatter[] = _subquery_projection_formatter(handler, inner);
                                       inner_textless[] = _subquery_projection_textless(handler, inner);
                                       inner_whole_numeric[] = _subquery_projection_whole_numeric(handler, inner);
+                                      inner_json_key[] = _subquery_projection_json_key(handler, inner);
                                       inner_kind[] = _subquery_projection_kind(handler, inner);
                                       inner_unapplied[] = _subquery_projection_unapplied(handler, inner)))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
@@ -66,6 +68,8 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   _record_subquery_textless!(instruc, v, inner_textless[])
   # #1111: and whether dividing it splits the engines, for `_whole_numeric_operand`.
   _record_subquery_whole_numeric!(instruc, v, inner_whole_numeric[])
+  # #1482: and whether it carries an uncast JSON key, for `_json_number_side`.
+  _record_subquery_json_key!(instruc, v, inner_json_key[])
   # #1153: and its kind under every policy, for `_expression_kind`.
   _record_subquery_all_kind!(instruc, v, inner_kind[])
   # #1110: and whether its read kind is a declaration the engine left for the read path to apply.

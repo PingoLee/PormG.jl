@@ -1114,10 +1114,13 @@ function _record_cte_division!(divisions::Dict{String,CTEDivision}, key::String,
   # kind is the whole `CDecimal(p, 0)` and its field a zero-scale `DecimalField`, neither of which says
   # that SQLite keeps the operand's fraction (`_zero_scale_cast_textless`).
   quotient === nothing || quotient[1] in _DIVISION_KINDS || quotient[1] === :zero_scale_decimal || (quotient = nothing)
-  divided === nothing && quotient === nothing && return nothing
-  old = get(divisions, key, (divided = nothing, quotient = nothing))
+  # #1482: a column that carries an uncast JSON key's value, for arithmetic over it outside (#1483).
+  json_key = _json_number_side(source, instruct)
+  divided === nothing && quotient === nothing && json_key === nothing && return nothing
+  old = get(divisions, key, (divided = nothing, quotient = nothing, json_key = nothing))
   divisions[key] = (divided = something(divided, old.divided, Some(nothing)),
-                    quotient = something(quotient, old.quotient, Some(nothing)))
+                    quotient = something(quotient, old.quotient, Some(nothing)),
+                    json_key = something(json_key, old.json_key, Some(nothing)))
   return nothing
 end
 

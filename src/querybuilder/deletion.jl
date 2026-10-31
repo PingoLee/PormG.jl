@@ -979,7 +979,7 @@ _affected_row_count(connection::PormGPostgres, result, conn)::Int =
 function _affected_row_count(connection::PormGSQLite, result, conn)::Int
   _require_statement_conn(conn)
   changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
-  return Int((changes |> DataFrames.DataFrame)[1, 1])
+  return Int(first(Tables.rowtable(changes))[1])
 end
 # MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
 # DELETE's count is its rows, and an UPDATE's includes a row whose value did not change (#1130).

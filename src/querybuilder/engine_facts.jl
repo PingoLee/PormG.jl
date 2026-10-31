@@ -201,8 +201,8 @@ _update_row_count(conn::PormGPostgres, settings, sql, parameters) =
 function _update_row_count(conn::PormGSQLite, settings, sql, parameters)
   count_changes = () -> begin
     fetch(settings, sql, parameters)
-    rows = fetch(settings, "SELECT changes()") |> DataFrames.DataFrame
-    Int(rows[1, 1])
+    rows = fetch(settings, "SELECT changes()") |> Tables.rowtable
+    Int(first(rows)[1])
   end
   return transaction_connection_for(settings) !== nothing ? count_changes() :
          run_in_transaction(count_changes, settings)

@@ -347,9 +347,9 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
   owner_column = safe_column_identifier(manager.relation.owner_column, connection)
   related_column = safe_column_identifier(manager.relation.related_column, connection)
   sql = "SELECT $related_column FROM $table_name WHERE $owner_column = $owner_placeholder;"
-  df = fetch(settings, sql, parameters) |> DataFrames.DataFrame
-  DataFrames.nrow(df) == 0 && return Any[]
-  return Any[row[Symbol(manager.relation.related_column)] for row in DataFrames.eachrow(df)]
+  rows = fetch(settings, sql, parameters) |> Tables.rowtable
+  isempty(rows) && return Any[]
+  return Any[row[Symbol(manager.relation.related_column)] for row in rows]
 end
 
 function set(manager::ManyToManyManager, targets...)

@@ -405,9 +405,10 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
   @testset "check skips a generated column's expression" begin
     col(name, gen) = Dict{String, Any}("name" => name, "type" => "text", "notnull" => false,
                                        "default" => "lower('A'::text)", "generated" => gen)
-    frame = DataFrame(table_name = ["doc"], columns = [JSON.json([col("gen", "s"), col("plain", "")])],
-                      primary_keys = [JSON.json(String[])], foreign_keys = [missing])
-    found = Migrations._pg_expression_default_findings(frame; ignore_table = String[])
+    # The schema dump's rows, as `get_database_schema(::PormGPostgres)` returns them (#1344).
+    rows = [(table_name = "doc", columns = JSON.json([col("gen", "s"), col("plain", "")]),
+             primary_keys = JSON.json(String[]), foreign_keys = missing)]
+    found = Migrations._pg_expression_default_findings(rows; ignore_table = String[])
     @test [only(f.columns) for f in found] == ["plain"]
   end
 

@@ -779,17 +779,14 @@ _table_ident_literal(model::PormGModel)::String =
 
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
   table_literal = _table_ident_literal(model)
-  sequence_df = fetch(
+  rows = fetch(
     connection,
     "SELECT pg_get_serial_sequence('$(table_literal)', '$(_sql_literal(field))');";
     ignore_tx=ignore_tx,
-  ) |> DataFrames.DataFrame
+  ) |> Tables.rowtable
 
-  if size(sequence_df, 1) == 0 || !("pg_get_serial_sequence" in names(sequence_df))
-    return nothing
-  end
-
-  sequence_name = sequence_df[1, :pg_get_serial_sequence]
+  isempty(rows) && return nothing
+  sequence_name = get(first(rows), :pg_get_serial_sequence, nothing)
   return ismissing(sequence_name) || isnothing(sequence_name) ? nothing : sequence_name
 end
 
@@ -853,16 +850,16 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         # raising for a missing relation, so a vanished table degrades to zero rows and the
         # `continue` below.
         conventional = string(Models.model_table_name(model), "_", col, "_seq")
-        seqs_df = fetch(
+        seqs = fetch(
           connection,
           "SELECT n.nspname AS schemaname, c.relname AS sequencename " *
           "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " *
           "WHERE c.relkind = 'S' AND c.relname = '$(_sql_literal(conventional))' " *
           "AND c.relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = to_regclass('$(_table_ident_literal(model))'))";
           ignore_tx=ignore_tx,
-        ) |> DataFrames.DataFrame
+        ) |> Tables.rowtable
 
-        if size(seqs_df, 1) == 0
+        if isempty(seqs)
           # Not an error: a natural-key PK legitimately has no sequence, and `pk_exist` fires for
           # those too, so @debug rather than @warn keeps ordinary inserts quiet.
           #
@@ -875,8 +872,8 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         end
         # Quoted, not interpolated bare: `setval` takes regclass and case-folds unquoted parts, so
         # `public.Db_Table_id_seq` would be looked up as `public.db_table_id_seq` and fail.
-        sequence_name = string(_quote_ident_raw(seqs_df[1, :schemaname]), ".",
-                               _quote_ident_raw(seqs_df[1, :sequencename]))
+        sequence_name = string(_quote_ident_raw(first(seqs).schemaname), ".",
+                               _quote_ident_raw(first(seqs).sequencename))
       end
 
       safe_field_name = safe_column_identifier(col, connection)
@@ -953,8 +950,7 @@ end
 # keep in step: SQLite assigns the next rowid as `MAX(rowid) + 1`. Asked on every call rather than
 # cached, because an AUTOINCREMENT table created later in the session brings the table into being.
 function _sqlite_has_sequence_table(settings::PormGSettings)::Bool
-  df = fetch(settings, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';") |> DataFrames.DataFrame
-  return DataFrames.nrow(df) > 0
+  return !isempty(fetch(settings, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';") |> Tables.rowtable)
 end
 
 # sqlite_sequence.name has no UNIQUE constraint, so `INSERT OR REPLACE` appends a duplicate row
@@ -982,11 +978,10 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
     # the resolved physical name (db_table when set, #59), not a fold of the logical one.
     safe_table_literal = replace(Models.model_table_name(model), "'" => "''")
     max_id_query = "SELECT MAX($(safe_field_name)) as m FROM $(safe_table_name);"
-    # Execute query and convert to DataFrame to safely access the result
-    df = fetch(connection, max_id_query) |> DataFrames.DataFrame
-    
-    if size(df, 1) > 0
-      max_id = df[1, :m]
+    rows = fetch(connection, max_id_query) |> Tables.rowtable
+
+    if !isempty(rows)
+      max_id = first(rows).m
       if !ismissing(max_id) && !isnothing(max_id)
         # MAX(pk) is normally an Int64, but coerce defensively: a Float ("5.0") must still
         # resolve to its integer seq value instead of being silently skipped

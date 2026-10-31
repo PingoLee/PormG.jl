@@ -1507,7 +1507,7 @@ function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table:
     own_shape(match) = """(con.contype = 'c' AND array_length(con.conkey, 1) = 1 AND EXISTS (
               SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
                 AND $(match) AND $(_PG_UNMARKED_CHECK)))"""
-    rows = DataFrame(fetch(conn, """
+    rows = Tables.rowtable(fetch(conn, """
       SELECT (SELECT a.attname FROM pg_attribute a
               WHERE a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
                 AND array_length(con.conkey, 1) = 1) AS col,
@@ -1518,7 +1518,7 @@ function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table:
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE c.relname = \$1 AND con.conname = \$2 AND n.nspname = ANY(current_schemas(false));""",
       [string(catalog_table), String(name)]))
-    taken = any(r -> !_column_pass_frees(model, r), eachrow(rows))
+    taken = any(r -> !_column_pass_frees(model, r), rows)
   end
   taken && throw(InvalidMigrationError(
     "CheckConstraint name '$(name)' on table '$(table)' is already the name of another constraint on " *

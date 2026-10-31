@@ -1054,8 +1054,8 @@ function _live_column_exists(conn::PormGPostgres, table::AbstractString, column:
     SELECT count(*) AS n FROM pg_attribute
      WHERE attrelid = to_regclass(quote_ident(\$1)) AND attname = \$2
        AND attnum > 0 AND NOT attisdropped
-    """, [String(table), String(column)]) |> DataFrame
-  return nrow(rows) > 0 && rows[1, :n] > 0
+    """, [String(table), String(column)]) |> Tables.rowtable
+  return !isempty(rows) && first(rows).n > 0
 end
 
 _live_column_exists(conn::PormGSQLite, table::AbstractString, column::AbstractString)::Bool =
@@ -1063,14 +1063,14 @@ _live_column_exists(conn::PormGSQLite, table::AbstractString, column::AbstractSt
 
 function _live_column_exists(conn::PormGMySQL, table::AbstractString, column::AbstractString)::Bool
   rows = fetch(conn, "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
-               [String(table), String(column)]) |> DataFrame
-  return nrow(rows) > 0 && rows[1, :n] > 0
+               [String(table), String(column)]) |> Tables.rowtable
+  return !isempty(rows) && first(rows).n > 0
 end
 
 function _live_table_exists(conn::PormGPostgres, table::AbstractString)::Bool
   rows = fetch(conn, "SELECT count(*) AS n FROM pg_class WHERE oid = to_regclass(quote_ident(\$1))",
-               [String(table)]) |> DataFrame
-  return nrow(rows) > 0 && rows[1, :n] > 0
+               [String(table)]) |> Tables.rowtable
+  return !isempty(rows) && first(rows).n > 0
 end
 
 _live_table_exists(conn::PormGSQLite, table::AbstractString)::Bool =
@@ -1078,8 +1078,8 @@ _live_table_exists(conn::PormGSQLite, table::AbstractString)::Bool =
 
 function _live_table_exists(conn::PormGMySQL, table::AbstractString)::Bool
   rows = fetch(conn, "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-               [String(table)]) |> DataFrame
-  return nrow(rows) > 0 && rows[1, :n] > 0
+               [String(table)]) |> Tables.rowtable
+  return !isempty(rows) && first(rows).n > 0
 end
 
 # Does the live schema still describe what the finding is about? For a change to an existing column,
@@ -1210,8 +1210,8 @@ function _precheck_one(conn::_SQLEngine, f::LossyAlter;
   end
   q = _precheck_sql(conn, f; server_version = server_version)
   q === nothing && return f
-  counted = fetch(conn, q[1], q[2]) |> DataFrame
-  n = nrow(counted) == 0 ? 0 : Int(something(counted[1, :n], 0))
+  counted = fetch(conn, q[1], q[2]) |> Tables.rowtable
+  n = isempty(counted) ? 0 : Int(something(first(counted).n, 0))
   if n > 0 && f.kind === :text_cast && !_has_input_validity(conn, server_version) &&
      parse_canonical_type(f.new_type, conn) isa Union{CDate, CDateTime, CJSON}
     @warn("This PostgreSQL server is older than 16, so it cannot check which values would parse as the new type; every non-NULL value is counted as failing. Convert the column on PostgreSQL 16+, or with a hand-written step.",
@@ -1389,8 +1389,8 @@ file into an error. SQLite only: the PostgreSQL column is a real `timestamp`, wh
 representation is its type.
 """
 function _ensure_canonical_applied_at(connection::PormGSQLite)
-  legacy = DataFrame(fetch(connection, Dialect.legacy_applied_at_exists_sql(connection)))
-  nrow(legacy) > 0 && fetch(connection, Dialect.repair_migrations_applied_at_sql(connection))
+  legacy = Tables.rowtable(fetch(connection, Dialect.legacy_applied_at_exists_sql(connection)))
+  !isempty(legacy) && fetch(connection, Dialect.repair_migrations_applied_at_sql(connection))
   nothing
 end
 
@@ -1411,8 +1411,8 @@ and `mark_applied` all trigger). The PostgreSQL `ALTER` additionally keeps `IF N
 safe against a concurrent migration adding the column between this probe and the `ALTER`.
 """
 function _ensure_format_version_column(connection::_SQLEngine)
-  cols = DataFrame(fetch(connection, Dialect.migrations_table_info_sql(connection)))
-  has_col = nrow(cols) > 0 && "format_version" in string.(cols.name)
+  cols = Tables.rowtable(fetch(connection, Dialect.migrations_table_info_sql(connection)))
+  has_col = !isempty(cols) && any(r -> string(r.name) == "format_version", cols)
   has_col || fetch(connection, Dialect.add_format_version_column_sql(connection))
   nothing
 end
@@ -1435,10 +1435,10 @@ end
 # `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses. (`fetch(…; conn)` used
 # to release the connection it ran on, which would have handed the open transaction's handle back
 # to the pool; a passed `conn` is borrowed since #970, but this keeps the one idiom.)
-function _history_rows(connection::_SQLEngine, sql::String; conn = nothing)::DataFrame
-  conn === nothing && return DataFrame(fetch(connection, sql))
+function _history_rows(connection::_SQLEngine, sql::String; conn = nothing)
+  conn === nothing && return Tables.rowtable(fetch(connection, sql))
   rows, _ = with_transaction(connection, sql; conn = conn)
-  return DataFrame(rows)
+  return Tables.rowtable(rows)
 end
 
 """
@@ -1448,18 +1448,18 @@ Check whether the pormg_migrations table already exists in the database. With `c
 on that already-leased connection (see `_history_rows`).
 """
 function _migrations_table_exists(connection::PormGPostgres; conn = nothing)::Bool
-  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
-  return nrow(df) > 0 && df[1, 1] == true
+  rows = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
+  return !isempty(rows) && first(rows)[1] == true
 end
 
 function _migrations_table_exists(connection::PormGSQLite; conn = nothing)::Bool
-  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
-  return nrow(df) > 0 && df[1, 1] > 0
+  rows = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
+  return !isempty(rows) && first(rows)[1] > 0
 end
 
 function _migrations_table_exists(connection::PormGMySQL; conn = nothing)::Bool
-  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
-  return nrow(df) > 0 && df[1, 1] > 0
+  rows = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
+  return !isempty(rows) && first(rows)[1] > 0
 end
 
 """
@@ -1471,9 +1471,8 @@ function _get_applied_migrations(connection::_SQLEngine; conn = nothing)
   if !_migrations_table_exists(connection; conn = conn)
     return NamedTuple[]
   end
-  df = _history_rows(connection, Dialect.select_all_migrations_sql(connection); conn = conn)
-  # Convert DataFrame rows to NamedTuples for uniform access
-  return [NamedTuple(row) for row in eachrow(df)]
+  # Already one `NamedTuple` per record, on every engine.
+  return _history_rows(connection, Dialect.select_all_migrations_sql(connection); conn = conn)
 end
 
 """
@@ -1533,15 +1532,14 @@ function _get_live_table_names(connection::PormGPostgres)::Vector{String}
     WHERE c.relkind = 'r' AND n.nspname = 'public'
       $(ownable)
     ORDER BY c.relname;"""
-  df = DataFrame(fetch(connection, sql))
-  return String[string(r[:table_name]) for r in eachrow(df)]
+  return String[string(r.table_name) for r in Tables.rowtable(fetch(connection, sql))]
 end
 
 _get_live_table_names(connection::PormGSQLite)::Vector{String} = sort!(_sqlite_user_table_names(connection))
 
 # The base tables of the connection's database, as `read_live_schema(::PormGMySQL)` enumerates them.
 _get_live_table_names(connection::PormGMySQL)::Vector{String} =
-  sort!(String[_mysql_str(r.tbl) for r in eachrow(fetch(connection, _MYSQL_TABLES_SQL) |> DataFrame)])
+  sort!(String[_mysql_str(r.tbl) for r in Tables.rowtable(fetch(connection, _MYSQL_TABLES_SQL))])
 
 """
     _record_migration(connection, version, name, checksum, sql_content, status, is_destructive; conn)
@@ -2292,14 +2290,14 @@ function _expression_default_finding(table_name, col_name, raw_default, ctype, i
                             _EXPRESSION_DEFAULT_MESSAGE)
 end
 
-# The PostgreSQL arm. Pure over the frame `get_database_schema(::PormGPostgres)` returns, so it is
-# unit-testable against a synthetic `DataFrame` with no live database — the same trick the reader's
+# The PostgreSQL arm. Pure over the rows `get_database_schema(::PormGPostgres)` returns, so it is
+# unit-testable against a synthetic row vector with no live database — the same trick the reader's
 # own tests play with `_introspection_row`.
-function _pg_expression_default_findings(schemas::AbstractDataFrame;
+function _pg_expression_default_findings(schemas::AbstractVector{<:NamedTuple};
                                          ignore_table::Vector{String})::Vector{SchemaCheckFinding}
   findings = SchemaCheckFinding[]
   engine = _PostgresEngine()
-  for row in eachrow(schemas)
+  for row in schemas
     _is_ignored_table(row.table_name, ignore_table) && continue
     pk_set = Set{String}(String.(something(_pg_json(row, :primary_keys), Any[])))
     # The `foreign_keys` CTE already keeps single-column keys only, the way the reader does.
@@ -2335,19 +2333,19 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
     _is_ignored_table(table_name, ignore_table) && continue
 
     # The same bound pragma functions the live reader uses (#832).
-    cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> DataFrame
+    cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> Tables.rowtable
     # The reader SKIPS a composite foreign key rather than splitting it into N single-column
     # relations (#415), so such a child column has no relation and falls through to the
     # bare-`IDField` key arm when it is a key. `fk_cols` has to be filtered the same way or the arm
     # below would differ from the reader's. PostgreSQL needs no equivalent: its `foreign_keys` CTE
     # already filters on `array_length(con.conkey, 1) = 1`.
-    fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> DataFrame
+    fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> Tables.rowtable
     cols_per_fk = Dict{Any, Int}()
-    for r in eachrow(fks)
+    for r in fks
       cols_per_fk[r.id] = get(cols_per_fk, r.id, 0) + 1
     end
-    fk_cols = Set{String}(String(r.from) for r in eachrow(fks) if cols_per_fk[r.id] == 1)
-    for crow in eachrow(cols)
+    fk_cols = Set{String}(String(r.from) for r in fks if cols_per_fk[r.id] == 1)
+    for crow in cols
       col_name = String(crow.name)
       # The reader's own derivation of the type, through the reader's own helper.
       ctype = parse_canonical_type(_sqlite_declared_type(crow.type), db)
@@ -2373,7 +2371,7 @@ end
 # useless, and just as costly on writes, so it is reported too. Ordered by table, then index name:
 # `_sort_findings` is stable and ties on `(kind, table)` here, so this ORDER BY is the final order.
 function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public",
-                             server_version::Integer = _require_pg_introspection_floor(db))::DataFrame
+                             server_version::Integer = _require_pg_introspection_floor(db))
   schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
   params = schema === nothing ? String[] : String[schema]
   query = """
@@ -2393,7 +2391,7 @@ function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} =
       $(schema_clause)
     ORDER BY c.relname, ic.relname;
     """
-  return DataFrame(fetch(db, query, params))
+  return Tables.rowtable(fetch(db, query, params))
 end
 
 # The consequence and the remedy, with the name quoted and schema-qualified so the statement can be
@@ -2446,8 +2444,8 @@ function _pg_invalid_index_findings(db::PormGPostgres; ignore_table::Vector{Stri
                                     include_table::Union{Vector{String}, Nothing} = nothing)::Vector{SchemaCheckFinding}
   findings = SchemaCheckFinding[]
   rows = _pg_invalid_indexes(db)
-  nrow(rows) == 0 && return findings
-  for r in eachrow(rows)
+  isempty(rows) && return findings
+  for r in rows
     (r.table_name === missing || r.index_name === missing) && continue
     table_name = String(r.table_name)
     include_table === nothing || table_name in include_table || continue
@@ -2825,7 +2823,7 @@ _invalid_index_findings(::PormGMySQL; ignore_table, include_table) = SchemaCheck
 # `_clean_default` reads it, in declarable form. A generated column's expression is no default.
 function _expression_default_findings(connection::PormGMySQL; ignore_table, include_table)
   findings = SchemaCheckFinding[]
-  tables = String[_mysql_str(r.tbl) for r in eachrow(fetch(connection, _MYSQL_TABLES_SQL) |> DataFrame)]
+  tables = String[_mysql_str(r.tbl) for r in Tables.rowtable(fetch(connection, _MYSQL_TABLES_SQL))]
   columns = _mysql_rows_by_table(connection, _MYSQL_COLUMNS_SQL)
   fks = _mysql_rows_by_table(connection, _MYSQL_FOREIGN_KEYS_SQL)
   for table_name in tables
@@ -3246,9 +3244,9 @@ function _execute_statements_sqlite(connection::PormGSQLite, statements::Vector{
         # catch rolls the whole migration back. (PRAGMA foreign_key_check works inside a transaction,
         # unlike PRAGMA foreign_keys.)
         result, _ = with_transaction(connection, trimmed, conn=conn)
-        violations = DataFrame(result)
-        if nrow(violations) > 0
-          throw(InvalidMigrationError("Migration aborted: PRAGMA foreign_key_check found $(nrow(violations)) orphaned foreign-key row(s) after a SQLite table rebuild; rolling back."))
+        violations = Tables.rowtable(result)
+        if !isempty(violations)
+          throw(InvalidMigrationError("Migration aborted: PRAGMA foreign_key_check found $(length(violations)) orphaned foreign-key row(s) after a SQLite table rebuild; rolling back."))
         end
       else
         with_transaction(connection, trimmed, conn=conn)
@@ -4340,7 +4338,7 @@ end
 
 # `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection.
 _data_step_recorded(connection::_SQLEngine, step::String)::Bool =
-  nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
+  !isempty(Tables.rowtable(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step])))
 
 _record_data_step(connection::_SQLEngine, step::String, transactional::Bool) =
   fetch(connection, Dialect.insert_data_step_sql(connection); params = Any[step, transactional])
@@ -4348,12 +4346,12 @@ _record_data_step(connection::_SQLEngine, step::String, transactional::Bool) =
 # The recorded data steps for `status()`: empty when the table does not exist yet, which `status`
 # reports rather than creates — it is read-only.
 function _data_steps(connection::_SQLEngine)::Vector{NamedTuple}
-  exists = DataFrame(fetch(connection, Dialect.data_steps_table_exists_sql(connection)))[1, 1]
+  exists = first(Tables.rowtable(fetch(connection, Dialect.data_steps_table_exists_sql(connection))))[1]
   (exists === true || (exists isa Integer && exists > 0)) || return NamedTuple[]
-  rows = DataFrame(fetch(connection, Dialect.select_all_data_steps_sql(connection)))
+  rows = Tables.rowtable(fetch(connection, Dialect.select_all_data_steps_sql(connection)))
   # `transactional` as a Bool on both engines: SQLite stores the BOOLEAN as 0/1.
   return NamedTuple[(name = String(r.name), transactional = Bool(r.transactional), applied_at = r.applied_at)
-                    for r in eachrow(rows)]
+                    for r in rows]
 end
 
 # ── ensure_table!: one infrastructure table outside the migration flow (#1230) ──────────────────

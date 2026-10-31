@@ -531,8 +531,8 @@ function convertSQLToModel(sql::String)::PormGModel
       # name — the #837 symptom. The scratch database holds only what `sql` created, so a name it
       # lacks is a statement that did not create it. Case-insensitive, as SQLite resolves names.
       found = fetch(pool, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
-                    [table_name]) |> DataFrame
-      nrow(found) == 0 && throw(InvalidMigrationError("Cannot introspect: the statement did not create table \"$(table_name)\": $(first(sql, 120))"))
+                    [table_name]) |> Tables.rowtable
+      isempty(found) && throw(InvalidMigrationError("Cannot introspect: the statement did not create table \"$(table_name)\": $(first(sql, 120))"))
       return convertSQLToModel(pool, String(table_name))
     finally
       # Release the handle first, or Windows cannot remove the temp directory (WAL keeps it open).
@@ -585,8 +585,8 @@ end
 
 # The declared type as `PRAGMA table_info` reports it, upper-cased and stripped — the reader's own
 # derivation, shared with `check()` so the two cannot disagree about a column's type. A typeless
-# column reports `''`; `missing` is guarded as well as `nothing`, because a `DataFrame` cell is the
-# former.
+# column reports `''`; `missing` is guarded as well as `nothing`, because a SQL NULL read from a row
+# is the former.
 _sqlite_declared_type(x)::String =
   uppercase(String(strip((x === nothing || ismissing(x)) ? "" : String(x))))
 
@@ -627,13 +627,13 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   # The table-valued pragma functions, so the name is a bound parameter (#832): the statement form,
   # `PRAGMA table_info("…")`, put it inside a quoted identifier, and a `"` in the name — which
   # `db_table` accepts (#59) — made the statement a syntax error. The result columns are the same.
-  cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> DataFrame
-  fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> DataFrame
+  cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> Tables.rowtable
+  fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> Tables.rowtable
   # PRAGMA cannot see CHECK constraints, so they come from the stored DDL text (#296), bound for the
   # same reason: `table_name` is caller-supplied (`convertSQLToModel` is public). An exact `name = ?`
   # is correct only because the name was resolved to the catalog spelling above (#531).
-  ddl_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
-  create_sql = nrow(ddl_rows) == 0 || ismissing(ddl_rows[1, :sql]) ? nothing : ddl_rows[1, :sql]
+  ddl_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> Tables.rowtable
+  create_sql = isempty(ddl_rows) || ismissing(first(ddl_rows).sql) ? nothing : first(ddl_rows).sql
   checks = _sqlite_column_checks(create_sql)
   table_checks = _sqlite_table_checks(create_sql)   # #742
   unique_cols = _sqlite_single_column_unique_columns(db, table_name)
@@ -649,10 +649,10 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   parent_canon = Dict{String, String}()
   if !isempty(fks)
     columns_per_fk = Dict{Any, Int}()
-    for fk_row in eachrow(fks)
+    for fk_row in fks
       columns_per_fk[fk_row.id] = get(columns_per_fk, fk_row.id, 0) + 1
     end
-    for fk_row in eachrow(fks)
+    for fk_row in fks
       columns_per_fk[fk_row.id] > 1 && continue
       fk_map[String(fk_row.from)] = fk_row
     end
@@ -667,7 +667,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   end
 
   columns = OrderedDict{String, ColumnSpec}()
-  for col_row in eachrow(cols)
+  for col_row in cols
     col_name = String(col_row.name)
     raw_type = _sqlite_declared_type(col_row.type)
     ctype = parse_canonical_type(raw_type, db)
@@ -709,7 +709,7 @@ end
 # `INTEGER PRIMARY KEY`, `integer primary key` or `PRIMARY KEY (id)` at table level (each measured on
 # 3.53). `true` for a table with no key at all, so the caller asks it only of a key column.
 _sqlite_rowid_alias(db::PormGSQLite, table_name::String)::Bool =
-  nrow(fetch(db, "SELECT 1 FROM pragma_index_list(?) WHERE origin = 'pk'", [table_name]) |> DataFrame) == 0
+  isempty(Tables.rowtable(fetch(db, "SELECT 1 FROM pragma_index_list(?) WHERE origin = 'pk'", [table_name])))
 
 """
     convertSQLToModel(db::PormGSQLite, table_name) -> PormGModel
@@ -824,17 +824,17 @@ function _sqlite_user_table_names(db::PormGSQLite;
                                   sqlite_version::Integer = backend_sqlite_version(db))::Vector{String}
   # The query the readers always ran, so the scan order — and the order tables are read back in —
   # is the catalog's. The names compare exactly because both catalogs hold the `CREATE` spelling.
-  catalog = fetch(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
-  names = String[String(r.name) for r in eachrow(catalog)]
+  catalog = fetch(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';") |> Tables.rowtable
+  names = String[String(r.name) for r in catalog]
   kind = Dict{String, String}()          # name ⇒ "virtual" / "shadow" / "table"; absent ⇒ "table"
   # `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+: the
   # capability table's `:table_list` row (#1163).
   if _feature_at(typeof(db), :table_list, sqlite_version)
-    for r in eachrow(fetch(db, "SELECT name, type FROM pragma_table_list WHERE schema = 'main';") |> DataFrame)
+    for r in Tables.rowtable(fetch(db, "SELECT name, type FROM pragma_table_list WHERE schema = 'main';"))
       kind[String(r.name)] = String(r.type)
     end
   else
-    for r in eachrow(catalog)
+    for r in catalog
       sql = r.sql
       (sql === missing || sql === nothing) && continue
       Base.startswith(uppercase(lstrip(String(sql))), "CREATE VIRTUAL TABLE") && (kind[String(r.name)] = "virtual")
@@ -921,7 +921,7 @@ function read_live_views(db::PormGSQLite; ignore_table::Vector{String} = sqlite_
                          unreadable::Vector{String} = String[])::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
   out = LiveTable[]
-  for r in eachrow(fetch(db, "SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sqlite_%';") |> DataFrame)
+  for r in Tables.rowtable(fetch(db, "SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sqlite_%';"))
     view_name = String(r.name)
     include_table !== nothing && !any(included -> view_name == included, include_table) && continue
     _is_ignored_table(view_name, ignore_table) && continue
@@ -1313,9 +1313,9 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
       $(schema_clause)
     ORDER BY c.relname, ic.relname, k.ord;
     """
-  rows = DataFrame(fetch(db, query, params))
+  rows = Tables.rowtable(fetch(db, query, params))
   out = Dict{String, Vector{LiveComposite}}()
-  nrow(rows) == 0 && return out
+  isempty(rows) && return out
   # index name ⇒ its members, per table; `ORDER BY … k.ord` above means push order IS index order.
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
   grouped = OrderedDict{Tuple{String, String}, Vector{Union{_PgIndexMember, Nothing}}}()
@@ -1328,7 +1328,7 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
   as_text = Set{Tuple{String, String}}()
   texts = Dict{Tuple{String, String}, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
   includes = Dict{Tuple{String, String}, Vector{String}}()   # #934: the `INCLUDE (…)` payload, in order
-  for r in eachrow(rows)
+  for r in rows
     (r.table_name === missing || r.index_name === missing) && continue
     key = (string(r.table_name), string(r.index_name))
     unique = r.is_unique === true
@@ -1468,10 +1468,10 @@ function _pg_table_checks(db::PormGPostgres; schema::Union{String, Nothing} = "p
           AND $(_PG_UNMARKED_CHECK))
     ORDER BY c.relname, con.conname;
     """
-  rows = DataFrame(fetch(db, query, params))
+  rows = Tables.rowtable(fetch(db, query, params))
   out = Dict{String, Vector{LiveCheck}}()
-  nrow(rows) == 0 && return out
-  for r in eachrow(rows)
+  isempty(rows) && return out
+  for r in rows
     (r.table_name === missing || r.constraint_name === missing || r.def === missing) && continue
     comment = r.comment === missing ? nothing : string(r.comment)
     marker = comment === nothing ? nothing : match(CHECK_MARKER_RE, comment)
@@ -1521,7 +1521,7 @@ function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = post
   # #742: the table-level CHECKs, from their own query for the same reason.
   checks_by_table = _pg_table_checks(db; server_version = server_version)
   out = LiveTable[]
-  for schema in eachrow(schemas)
+  for schema in schemas
     table_name = String(schema.table_name)
     include_table !== nothing && !any(included -> table_name == included, include_table) && continue
     _is_ignored_table(table_name, ignore_table) && continue
@@ -1543,7 +1543,7 @@ function read_live_views(db::PormGPostgres; ignore_table::Vector{String} = postg
                          unreadable::Vector{String} = String[])::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
   out = LiveTable[]
-  for schema in eachrow(get_database_schema(db; views = true))
+  for schema in get_database_schema(db; views = true)
     view_name = String(schema.table_name)
     include_table !== nothing && !any(included -> view_name == included, include_table) && continue
     _is_ignored_table(view_name, ignore_table) && continue
@@ -1559,7 +1559,7 @@ end
 # is a constant so a mock connection keys on it exactly, as it does on `Dialect`'s history reads (#1211).
 const _PG_SERVER_VERSION_SQL = "SELECT current_setting('server_version_num')::integer AS v"
 _pg_server_version(db::PormGPostgres)::Int =
-  Int(DataFrame(fetch(db, _PG_SERVER_VERSION_SQL))[1, :v])
+  Int(first(Tables.rowtable(fetch(db, _PG_SERVER_VERSION_SQL))).v)
 _server_version(db::PormGPostgres)::Int = _pg_server_version(db)
 
 # Each schema operation asks for what IT needs (#1146), not one floor for the whole block. #1108 had set
@@ -2028,15 +2028,11 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     ORDER BY table_schema, table_name;
     """
 
-  df = DataFrame(fetch(db, query, params))
-  # @pormg_debug false
-  if nrow(df) == 0
+  rows = Tables.rowtable(fetch(db, query, params))
+  if isempty(rows)
       @warn("No tables found in the database.")
   end
-
-  # println(df)
-
-  return df
+  return rows
 end
 
 function get_database_schema(;pickup::Union{PormGSQLite, PormGPostgres} = connection())  
@@ -2080,11 +2076,11 @@ function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name:
     AND tc.table_schema = ANY(current_schemas(false))
   ORDER BY tc.constraint_name, tc.table_schema;
   """
-  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
-  if nrow(result) == 0
+  result = fetch(conn, query, [string(table_name), field_name]) |> Tables.rowtable
+  if isempty(result)
       return nothing
   end
-  return result[1, :constraint_name]
+  return first(result).constraint_name
 end
 
 # MySQL (#1130 phase 4b): a column's foreign key, and its `db_index` index — single-column, not unique, and
@@ -2093,8 +2089,8 @@ function get_constraints_fk(conn::PormGMySQL, table_name::Symbol, field_name::St
   rows = fetch(conn, """
     SELECT CONSTRAINT_NAME AS name FROM information_schema.KEY_COLUMN_USAGE
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
-     ORDER BY CONSTRAINT_NAME""", [String(table_name), field_name]) |> DataFrame
-  return nrow(rows) == 0 ? nothing : _mysql_str(rows[1, :name])
+     ORDER BY CONSTRAINT_NAME""", [String(table_name), field_name]) |> Tables.rowtable
+  return isempty(rows) ? nothing : _mysql_str(first(rows).name)
 end
 function get_constraints_index(conn::PormGMySQL, table_name::Symbol, field_name::String)::Union{String, Nothing}
   rows = fetch(conn, """
@@ -2106,8 +2102,8 @@ function get_constraints_index(conn::PormGMySQL, table_name::Symbol, field_name:
        AND NOT EXISTS (SELECT 1 FROM information_schema.REFERENTIAL_CONSTRAINTS r
                         WHERE r.CONSTRAINT_SCHEMA = s.TABLE_SCHEMA AND r.TABLE_NAME = s.TABLE_NAME
                           AND r.CONSTRAINT_NAME = s.INDEX_NAME)
-     ORDER BY s.INDEX_NAME""", [String(table_name), field_name]) |> DataFrame
-  return nrow(rows) == 0 ? nothing : _mysql_str(rows[1, :name])
+     ORDER BY s.INDEX_NAME""", [String(table_name), field_name]) |> Tables.rowtable
+  return isempty(rows) ? nothing : _mysql_str(first(rows).name)
 end
 
 # Whether dropping foreign key `constraint_name` leaves an index behind that PormG must drop with it:
@@ -2118,8 +2114,8 @@ function _foreign_key_leaves_index(conn::PormGMySQL, table_name, constraint_name
   rows = fetch(conn, """
     SELECT COUNT(*) AS n FROM information_schema.STATISTICS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?""",
-    [String(table_name), String(constraint_name)]) |> DataFrame
-  return nrow(rows) > 0 && rows[1, :n] > 0
+    [String(table_name), String(constraint_name)]) |> Tables.rowtable
+  return !isempty(rows) && first(rows).n > 0
 end
 
 # The views that read any of `tables`, and the foreign keys to them on a table outside `keep`, as
@@ -2131,16 +2127,16 @@ function _mysql_drop_table_dependents(conn::PormGMySQL, tables::Vector{String};
   rows = fetch(conn, """
     SELECT TABLE_NAME AS tbl, VIEW_NAME AS view FROM information_schema.VIEW_TABLE_USAGE
      WHERE TABLE_SCHEMA = DATABASE() AND VIEW_SCHEMA = DATABASE() AND TABLE_NAME IN ($(marks))
-     ORDER BY VIEW_NAME, TABLE_NAME""", Any[tables...]) |> DataFrame
-  found = Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in eachrow(rows)]
+     ORDER BY VIEW_NAME, TABLE_NAME""", Any[tables...]) |> Tables.rowtable
+  found = Tuple{String, String}[(_mysql_str(r.tbl), "view `$(_mysql_str(r.view))`") for r in rows]
   # Every key to a dropped table of this database, a child in another database's included.
   fks = fetch(conn, """
     SELECT REFERENCED_TABLE_NAME AS tbl, TABLE_NAME AS child, CONSTRAINT_NAME AS name,
            CONSTRAINT_SCHEMA AS sch, CONSTRAINT_SCHEMA = DATABASE() AS here
       FROM information_schema.REFERENTIAL_CONSTRAINTS
      WHERE UNIQUE_CONSTRAINT_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IN ($(marks))
-     ORDER BY CONSTRAINT_SCHEMA, TABLE_NAME, CONSTRAINT_NAME""", Any[tables...]) |> DataFrame
-  for r in eachrow(fks)
+     ORDER BY CONSTRAINT_SCHEMA, TABLE_NAME, CONSTRAINT_NAME""", Any[tables...]) |> Tables.rowtable
+  for r in fks
     child, here = _mysql_str(r.child), r.here == 1
     here && child in keep && continue
     on = here ? "`$(child)`" : "`$(_mysql_str(r.sch))`.`$(child)`"
@@ -2159,9 +2155,9 @@ function _leads_another_index(conn::PormGMySQL, table::AbstractString, column::A
     SELECT INDEX_NAME AS name FROM information_schema.STATISTICS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND SEQ_IN_INDEX = 1
        AND SUB_PART IS NULL AND INDEX_TYPE = 'BTREE'""",
-    [String(table), String(column)]) |> DataFrame
+    [String(table), String(column)]) |> Tables.rowtable
   skip = Set{String}(lowercase(n) for n in except)
-  return any(r -> !(lowercase(_mysql_str(r.name)) in skip), eachrow(rows))
+  return any(r -> !(lowercase(_mysql_str(r.name)) in skip), rows)
 end
 
 # What `MODIFY COLUMN` would reset on one column unless restated (measured on 8.4), as the catalog holds it
@@ -2178,9 +2174,9 @@ function _column_attributes(conn::PormGMySQL, table_name::AbstractString, column
       FROM information_schema.COLUMNS c
       JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
      WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = ? AND c.COLUMN_NAME = ?""",
-    [String(table_name), String(column)]) |> DataFrame
-  nrow(rows) == 0 && return nothing
-  r = rows[1, :]
+    [String(table_name), String(column)]) |> Tables.rowtable
+  isempty(rows) && return nothing
+  r = first(rows)
   extra = lowercase(something(_mysql_str(r.extra), ""))
   coll, dflt, ctype = _mysql_str(r.coll), _mysql_str(r.dflt), _mysql_str(r.ctype)
   # A collation name is an identifier the server printed; anything else is not restated.
@@ -2319,11 +2315,11 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
     AND $(_PG_UNMARKED_INDEX)
   ORDER BY ic.relname;
   """
-  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
-  if nrow(result) == 0
+  result = fetch(conn, query, [string(table_name), field_name]) |> Tables.rowtable
+  if isempty(result)
       return nothing
   end
-  return result[1, :indexname]
+  return first(result).indexname
 end
 
 function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name::String)
@@ -2350,12 +2346,12 @@ function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name
     LEFT JOIN sqlite_master AS sm ON sm.type = 'index' AND sm.name = il.name
     WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
     ORDER BY il.name, ii.seqno
-    """, [string(table_name)]) |> DataFrame
+    """, [string(table_name)]) |> Tables.rowtable
   # An empty frame's columns are eltype Missing, so guard before touching them.
-  nrow(rows) == 0 && return nothing
+  isempty(rows) && return nothing
   members = OrderedDict{String, Vector{Union{String, Nothing}}}()
   ddl = Dict{String, Union{String, Nothing}}()
-  for r in eachrow(rows)
+  for r in rows
     r.idx === missing && continue
     idx = string(r.idx)
     push!(get!(members, idx, Union{String, Nothing}[]), r.col === missing ? nothing : string(r.col))
@@ -2389,8 +2385,8 @@ function _sqlite_column_is_unique(conn::PormGSQLite, table_name, field_name::Str
     JOIN pragma_index_info(il.name) AS ii
     WHERE il."unique" = 1 AND ii.name = ?
     LIMIT 1
-    """, [string(table_name), field_name]) |> DataFrame
-  return nrow(rows) > 0
+    """, [string(table_name), field_name]) |> Tables.rowtable
+  return !isempty(rows)
 end
 
 """
@@ -2435,10 +2431,10 @@ function _sqlite_single_column_unique_columns(conn::PormGSQLite, table_name)::Se
     WHERE il."unique" = 1 AND il.origin = 'u' AND il.partial = 0
     GROUP BY il.name
     HAVING COUNT(*) = 1
-    """, [string(table_name)]) |> DataFrame
+    """, [string(table_name)]) |> Tables.rowtable
   # An empty frame's column is eltype Missing, so guard before touching `rows.col`.
-  nrow(rows) == 0 && return Set{String}()
-  return Set{String}(string(c) for c in rows.col if c !== missing)
+  isempty(rows) && return Set{String}()
+  return Set{String}(string(r.col) for r in rows if r.col !== missing)
 end
 
 """
@@ -2473,9 +2469,9 @@ the same discipline as `_sqlite_single_column_unique_columns` above.
 """
 function _sqlite_canonical_table_name(conn::PormGSQLite, name)::String
   rows = fetch(conn, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
-               [string(name)]) |> DataFrame
-  nrow(rows) == 0 && return string(name)
-  return string(rows[1, :name])
+               [string(name)]) |> Tables.rowtable
+  isempty(rows) && return string(name)
+  return string(first(rows).name)
 end
 
 """
@@ -2552,11 +2548,11 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
     WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
     GROUP BY il.name
     HAVING COUNT(*) = 1
-    """, [string(table_name)]) |> DataFrame
+    """, [string(table_name)]) |> Tables.rowtable
   # An empty frame's columns are eltype Missing, so guard before touching them.
-  nrow(rows) == 0 && return Dict{String, Vector{String}}()
+  isempty(rows) && return Dict{String, Vector{String}}()
   out = Dict{String, Vector{String}}()
-  for r in eachrow(rows)
+  for r in rows
     (r.col === missing || r.idx === missing) && continue
     # #847 (see the docstring). Both default to REFUSED on a NULL: an `origin = 'c'` index always has
     # its DDL in `sqlite_master`, so a missing one is unexpected, and an index is never read
@@ -2770,16 +2766,16 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveCo
     WHERE ii."key" = 1
       AND (il.origin = 'c' OR (il.origin = 'u' AND il."unique" = 1))
     ORDER BY il.name, ii.seqno
-    """, [string(table_name)]) |> DataFrame
+    """, [string(table_name)]) |> Tables.rowtable
   # An empty frame's columns are eltype Missing, so guard before touching them.
-  nrow(rows) == 0 && return LiveComposite[]
+  isempty(rows) && return LiveComposite[]
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
   grouped = OrderedDict{String, Vector{Union{Tuple{String, Bool}, Nothing}}}()   # ⇒ (column, descending)
   kind = Dict{String, Tuple{Bool, Bool}}()      # index ⇒ (unique, constraint-backed)
   ddl = Dict{String, Union{String, Nothing}}()
   partial = Set{String}()
   has_expression = Set{String}()
-  for r in eachrow(rows)
+  for r in rows
     r.idx === missing && continue
     idx = string(r.idx)
     unique = r.is_unique !== missing && r.is_unique != 0
@@ -3302,10 +3298,10 @@ Split out for [`get_secondary_index_ddls`](@ref), which needs BOTH this set and 
 rather than twice.
 """
 function _sqlite_index_pragma_members(conn::PormGSQLite, index_name::AbstractString)::Set{String}
-  rows = fetch(conn, "SELECT name FROM pragma_index_info(?)", [string(index_name)]) |> DataFrame
+  rows = fetch(conn, "SELECT name FROM pragma_index_info(?)", [string(index_name)]) |> Tables.rowtable
   members = Set{String}()
   isempty(rows) && return members
-  for c in rows.name
+  for c in (r.name for r in rows)
     c === missing || push!(members, string(c))
   end
   return members
@@ -3344,12 +3340,12 @@ function _sqlite_index_referenced_columns(conn::PormGSQLite, table_name::Union{S
   # inherit the exemption") — and these are new queries, so they never had the exemption. The
   # table-valued pragmas take a bound argument, which `get_constraints_index`'s SQLite arm already
   # relies on.
-  cols = fetch(conn, "SELECT name FROM pragma_table_info(?)", [string(table_name)]) |> DataFrame
+  cols = fetch(conn, "SELECT name FROM pragma_table_info(?)", [string(table_name)]) |> Tables.rowtable
   isempty(cols) && return referenced
   # lowercase ⇒ live spelling, so a mixed-case column (#57) is matched case-insensitively but
   # returned exactly as the catalog holds it.
   by_lower = Dict{String,String}()
-  for c in cols.name
+  for c in (r.name for r in cols)
     c === missing || (by_lower[lowercase(string(c))] = string(c))
   end
 
@@ -3496,11 +3492,11 @@ function _sqlite_indexes_referencing_column(conn::PormGSQLite, table_name::Union
   # then planned and SQLite refuses it, i.e. #519 silently un-fixed for a mixed-case table (#57). The
   # sibling probe in the same planner disjunct, `_sqlite_column_is_unique`, goes through
   # `PRAGMA index_list`, which is already case-insensitive; these two must agree.
-  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL ORDER BY name", [string(table_name)]) |> DataFrame
+  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL ORDER BY name", [string(table_name)]) |> Tables.rowtable
   isempty(rows) && return String[]
   target = lowercase(String(column_name))
   hits = String[]
-  for r in eachrow(rows)
+  for r in rows
     r.name === missing && continue
     sql = r.sql === missing ? nothing : string(r.sql)
     referenced = _sqlite_index_referenced_columns(conn, table_name, string(r.name), sql)
@@ -3548,10 +3544,10 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
   # exists to prevent. While both were blind they agreed and the deletion merely failed loudly. The
   # two name sources also differ (the probe gets the planner's key, this gets
   # `model_table_name(current_model)`), so agreement cannot be assumed from the callers.
-  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL", [string(table_name)]) |> DataFrame
+  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL", [string(table_name)]) |> Tables.rowtable
   isempty(rows) && return String[]
   ddls = String[]
-  for r in eachrow(rows)
+  for r in rows
     s = r.sql
     s === missing && continue
     stmt = strip(string(s))
@@ -3754,10 +3750,10 @@ each table's dependents from it.
 """
 function _sqlite_schema_objects(conn::PormGSQLite)::Vector{_SQLiteSchemaObject}
   rows = fetch(conn, "SELECT type, name, tbl_name, sql, rowid AS object_rowid FROM sqlite_master " *
-                     "WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid") |> DataFrame
+                     "WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid") |> Tables.rowtable
   isempty(rows) && return _SQLiteSchemaObject[]
   return _SQLiteSchemaObject[_SQLiteSchemaObject(string(r.type), string(r.name), string(r.tbl_name),
-                                                 string(r.sql), Int(r.object_rowid)) for r in eachrow(rows)]
+                                                 string(r.sql), Int(r.object_rowid)) for r in rows]
 end
 
 """
@@ -3768,9 +3764,9 @@ generated columns. A rebuild renders the table from the model, which declares no
 so one is among the columns the rebuild drops.
 """
 function _sqlite_table_xinfo_columns(conn::PormGSQLite, table::AbstractString)::Vector{String}
-  rows = fetch(conn, "SELECT name FROM pragma_table_xinfo(?)", [String(table)]) |> DataFrame
+  rows = fetch(conn, "SELECT name FROM pragma_table_xinfo(?)", [String(table)]) |> Tables.rowtable
   isempty(rows) && return String[]
-  return String[string(c) for c in rows.name if c !== missing]
+  return String[string(r.name) for r in rows if r.name !== missing]
 end
 
 # Whether the text strictly between byte `a` and byte `b` of `sql` is a single `.`, give or take
@@ -3980,9 +3976,9 @@ function _pg_drop_table_dependents(conn::PormGPostgres, tables::Vector{String}):
             WHEN x.classid = 'pg_class'::regclass THEN x.objid
           END, 0) NOT IN (SELECT oid FROM dropped)
     ORDER BY 1, 2"""
-  rows = fetch(conn, query, tables) |> DataFrame
+  rows = fetch(conn, query, tables) |> Tables.rowtable
   isempty(rows) && return Tuple{String, String}[]
-  return Tuple{String, String}[(string(r.dropped_table), string(r.dependent)) for r in eachrow(rows)]
+  return Tuple{String, String}[(string(r.dropped_table), string(r.dependent)) for r in rows]
 end
 
 """
@@ -4553,9 +4549,9 @@ compared case-insensitively, as SQLite resolves it (#57).
 function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractString;
                                             declared_checks::Set{String} = Set{String}())::Vector{String}
   rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
-               [String(table)]) |> DataFrame
-  (isempty(rows) || rows.sql[1] === missing) && return String[]
-  parts, tail = _sqlite_table_definition_parts(string(rows.sql[1]))
+               [String(table)]) |> Tables.rowtable
+  (isempty(rows) || first(rows).sql === missing) && return String[]
+  parts, tail = _sqlite_table_definition_parts(string(first(rows).sql))
   found = String[]
   for part in parts
     toks = _sqlite_identifier_tokens(part)
@@ -4634,11 +4630,11 @@ function get_constraints_pk(conn::PormGPostgres, table_name::String, field_name:
     AND tc.table_schema = ANY(current_schemas(false))
   ORDER BY array_position(current_schemas(false), tc.table_schema::name), tc.constraint_name;
   """
-  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  if nrow(result) == 0
+  result = fetch(conn, query, [table_name, field_name]) |> Tables.rowtable
+  if isempty(result)
       return nothing
   end
-  return result[1, :constraint_name]
+  return first(result).constraint_name
 end
 
 # Returns `nothing` when no UNIQUE constraint matches — the annotation must admit it, or Julia
@@ -4678,11 +4674,11 @@ function get_constraints_unique(conn::PormGPostgres, table_name::String, field_n
   HAVING COUNT(*) = 1 AND bool_or(kcu.column_name = \$2)
   ORDER BY array_position(current_schemas(false), tc.table_schema::name), tc.constraint_name;
   """
-  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  if nrow(result) == 0
+  result = fetch(conn, query, [table_name, field_name]) |> Tables.rowtable
+  if isempty(result)
       return nothing
   end
-  return result[1, :constraint_name]
+  return first(result).constraint_name
 end
 
 # The one query behind both CHECK droppers below (#747). They differ only in which clause is PormG's,
@@ -4724,8 +4720,8 @@ function _pg_single_column_check_names(conn::PormGPostgres, table_name::String, 
     AND $(_PG_UNMARKED_CHECK)
   ORDER BY array_position(current_schemas(false), n.nspname), con.conname;
   """
-  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  return String[string(r.constraint_name) for r in eachrow(result)]
+  result = fetch(conn, query, [table_name, field_name]) |> Tables.rowtable
+  return String[string(r.constraint_name) for r in result]
 end
 
 # Find the non-negative CHECK constraints backing a positive integer column.
@@ -4767,11 +4763,11 @@ function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::
   query = """
   SELECT pg_get_serial_sequence(\$1, \$2);
   """
-  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  if nrow(result) == 0
+  result = fetch(conn, query, [table_name, field_name]) |> Tables.rowtable
+  if isempty(result)
       return nothing
   end
-  return result[1, :pg_get_serial_sequence]
+  return first(result).pg_get_serial_sequence
 end
 
 # ---
@@ -4789,8 +4785,8 @@ end
 # One aggregate, parsed. `missing` — which the LEFT JOINs produce for a table with no keys, no
 # foreign keys or no indexes — degrades to `nothing`, and every caller reads that as "none".
 #
-# An ABSENT column degrades the same way. `convertSQLToModel(::DataFrameRow)` is exported, so a row
-# may come from somewhere other than the current `get_database_schema` — that is how #292's addition
+# An ABSENT column degrades the same way. `convertSQLToModel(row)` is exported and takes any Tables.jl
+# row, so a row may come from somewhere other than the current `get_database_schema` — that is how #292's addition
 # of `delete_rules` reached a caller holding an older row. No in-repo producer omits a column today;
 # this is the reader's "degrade, never abort a whole schema read" policy, not a live shape.
 #
@@ -4798,9 +4794,20 @@ end
 # an ordinary consequence of an odd-but-legal schema, so the reader degraded and warned; under JSON
 # there is no legal schema that produces an unparseable aggregate, so one means PormG built bad SQL.
 # A parse failure propagates out of `makemigrations` and `check()` as the read's own error (#1018).
-function _pg_json(row, key::Symbol)
-  (key in propertynames(row) && !ismissing(row[key])) || return nothing
-  return JSON.parse(String(row[key]))
+function _pg_json(row::NamedTuple, key::Symbol)
+  haskey(row, key) || return nothing
+  value = row[key]
+  ismissing(value) && return nothing
+  return JSON.parse(String(value))
+end
+
+# The edge where a row of any Tables.jl type enters the PostgreSQL reader: a `NamedTuple` (what the
+# dump holds since #1344) passes through, and anything else (a caller's `DataFrameRow`) is copied into
+# one, once. Past this, the reader works on one shape (#1346).
+_pg_row(row::NamedTuple) = row
+function _pg_row(row)
+  names = Tuple(Tables.columnnames(row))
+  return NamedTuple{names}(Tuple(Tables.getcolumn(row, n) for n in names))
 end
 
 # `_pg_single_quoted_literal`, `_PG_TRAILING_CAST`, `_pg_strip_trailing_casts` and `_pg_clean_default`
@@ -4823,9 +4830,10 @@ The two readers must describe one schema the same way (#409): the key arms and t
 `_key_arm`'s on both, `unique` and `null` follow the same per-arm rules, and the same coercion
 lands each default on the value a declaration stores.
 """
-function _pg_live_table(row::DataFrameRow)::LiveTable
+_pg_live_table(row)::LiveTable = _pg_live_table(_pg_row(row))
+function _pg_live_table(row::NamedTuple)::LiveTable
   engine = _PostgresEngine()
-  table_name = String(row[:table_name])
+  table_name = String(row.table_name)
   # `primary_keys` is missing for keyless tables. No de-quoting anywhere since #455: JSON carries a
   # name as a string, not as a SQL identifier, so every name here is already the physical one.
   pk_set = Set{String}(String.(something(_pg_json(row, :primary_keys), Any[])))
@@ -4912,14 +4920,14 @@ function _pg_live_table(row::DataFrameRow)::LiveTable
 end
 
 """
-    convertSQLToModel(row::DataFrameRow; conn = _PostgresEngine()) -> PormGModel
+    convertSQLToModel(row; conn = _PostgresEngine()) -> PormGModel
 
 The model `inspectdb` writes for one row of `get_database_schema(::PormGPostgres)`:
-`_pg_live_table` compiled through `model_from_live`. Exported, so a row may come
-from a caller's own frame; `conn` only picks the engine's struct choices and touches no connection.
+`_pg_live_table` compiled through `model_from_live`. `row` is any Tables.jl row with the dump's
+columns: the `NamedTuple` the dump holds, or a `DataFrameRow` of a caller's own frame. `conn` only
+picks the engine's struct choices and touches no connection.
 """
-convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index};
-                  conn::Union{PormGPostgres, PormGSQLite} = _PostgresEngine())::PormGModel =
+convertSQLToModel(row; conn::Union{PormGPostgres, PormGSQLite} = _PostgresEngine())::PormGModel =
   model_from_live(_pg_live_table(row), conn)
 
 # ---
@@ -5241,7 +5249,7 @@ _mysql_str(x) = (x === nothing || ismissing(x)) ? nothing :
 # The rows of one `information_schema` read, grouped by table name.
 function _mysql_rows_by_table(db::PormGMySQL, sql::AbstractString)::Dict{String, Vector{Any}}
   out = Dict{String, Vector{Any}}()
-  for r in eachrow(fetch(db, sql) |> DataFrame)
+  for r in Tables.rowtable(fetch(db, sql))
     push!(get!(out, _mysql_str(r.tbl), Any[]), r)
   end
   return out
@@ -5250,7 +5258,7 @@ end
 function read_live_schema(db::PormGMySQL; ignore_table::Vector{String} = mysql_ignore_table,
                           include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  tables = String[_mysql_str(r.tbl) for r in eachrow(fetch(db, _MYSQL_TABLES_SQL) |> DataFrame)]
+  tables = String[_mysql_str(r.tbl) for r in Tables.rowtable(fetch(db, _MYSQL_TABLES_SQL))]
   columns = _mysql_rows_by_table(db, _MYSQL_COLUMNS_SQL)
   stats = _mysql_rows_by_table(db, _MYSQL_STATISTICS_SQL)
   fks = _mysql_rows_by_table(db, _MYSQL_FOREIGN_KEYS_SQL)
@@ -5281,12 +5289,12 @@ end
 
 function _warn_mysql_undeclarable(db::PormGMySQL, tables::Vector{LiveTable})::Nothing
   names = Set{String}(t.name for t in tables)
-  for r in eachrow(fetch(db, _MYSQL_GENERATED_SQL) |> DataFrame)
+  for r in Tables.rowtable(fetch(db, _MYSQL_GENERATED_SQL))
     _mysql_str(r.tbl) in names || continue
     @warn "inspectdb: a generated column made by hand is declared as a plain field; PormG declares no " *
           "generated column on MySQL, and leaves this one's expression as it is." table = _mysql_str(r.tbl) column = _mysql_str(r.col) expression = _mysql_catalog_sql(something(_mysql_str(r.gen), ""))
   end
-  for r in eachrow(fetch(db, _MYSQL_UNREAD_INDEXES_SQL) |> DataFrame)
+  for r in Tables.rowtable(fetch(db, _MYSQL_UNREAD_INDEXES_SQL))
     _mysql_str(r.tbl) in names || continue
     type = something(_mysql_str(r.index_type), "BTREE")
     kind = type != "BTREE" ? "a $(type) index" : r.prefix == 1 ? "an index over a column prefix" :
@@ -5317,7 +5325,7 @@ function read_live_views(db::PormGMySQL; ignore_table::Vector{String} = mysql_ig
                          include_table::Union{Vector{String}, Nothing} = nothing,
                          unreadable::Vector{String} = String[])::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  views = String[_mysql_str(r.tbl) for r in eachrow(fetch(db, _MYSQL_VIEWS_SQL) |> DataFrame)]
+  views = String[_mysql_str(r.tbl) for r in Tables.rowtable(fetch(db, _MYSQL_VIEWS_SQL))]
   columns = _mysql_rows_by_table(db, _MYSQL_COLUMNS_SQL)
   out = LiveTable[]
   for view_name in views
@@ -5393,9 +5401,9 @@ function _mysql_column_checks(conn::PormGMySQL, table_name::AbstractString, colu
       JOIN information_schema.CHECK_CONSTRAINTS cc
         ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
      WHERE tc.TABLE_SCHEMA = DATABASE() AND tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'CHECK'
-     ORDER BY cc.CONSTRAINT_NAME""", [String(table_name)]) |> DataFrame
+     ORDER BY cc.CONSTRAINT_NAME""", [String(table_name)]) |> Tables.rowtable
   out = String[]
-  for r in eachrow(rows)
+  for r in rows
     m = match(shape, strip(something(_mysql_str(r.clause), "")))
     m === nothing && continue
     lowercase(replace(m[1], "``" => "`")) == lowercase(String(column)) && push!(out, _mysql_str(r.name))
@@ -5409,8 +5417,8 @@ function _mysql_check_name_holders(conn::PormGMySQL, name::AbstractString)::Vect
   rows = fetch(conn, """
     SELECT TABLE_NAME AS tbl FROM information_schema.TABLE_CONSTRAINTS
      WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'CHECK' AND CONSTRAINT_NAME = ?
-     ORDER BY TABLE_NAME""", [String(name)]) |> DataFrame
-  return String[_mysql_str(t) for t in rows.tbl]
+     ORDER BY TABLE_NAME""", [String(name)]) |> Tables.rowtable
+  return String[_mysql_str(r.tbl) for r in rows]
 end
 
 get_constraints_checks(conn::PormGMySQL, table_name::String, field_name::String)::Vector{String} =

@@ -70,16 +70,25 @@ const _TSRC_QUERIES = [
     "race_empty" => () -> M.Race.objects.filter("raceid" => -1).values("raceid", "date", "time", "start_at"),
 ]
 
+# Julia prints a type qualified (`TimeZones.ZonedDateTime`) unless the module it prints relative to
+# sees the name, and that is `Main` by default. In the full suite another file runs `using TimeZones`,
+# so the same frame printed `ZonedDateTime` there and `TimeZones.ZonedDateTime` standalone, where it was
+# recorded. Printing relative to this module, which sees exactly what the recording's `Main` saw
+# (`using Dates`), makes the text the same in both runs.
+module _TSRCPrintContext
+using Dates
+end
+
 # One line per column: its name, its element type, and every value. `repr` keeps a `Date` and the string
 # "2009-03-29" apart, and an `Int32` and an `Int64`.
 function _tsrc_snapshot(df::DataFrame)
-    io = IOBuffer()
+    io = IOContext(IOBuffer(), :module => _TSRCPrintContext)
     println(io, "rows=", DataFrames.nrow(df))
     for name in names(df)
         col = df[!, name]
-        println(io, name, " :: ", eltype(col), " = ", repr(collect(col)))
+        println(io, name, " :: ", eltype(col), " = ", repr(collect(col); context = io))
     end
-    return String(take!(io))
+    return String(take!(io.io))
 end
 
 const _TSRC_FIXTURE = joinpath(@__DIR__, "fixtures", "tables_source_expected.jl")

@@ -431,3 +431,170 @@ PormG.backend_is_permanent_connect_error(::LeakyMockPG657, e) = false   # take t
   @test !occursin("backst0pSECRET", julia_text)
   @test !occursin("backst0pSECRET", sprint(showerror, err))
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #1518 — a caller whose connect failed retries the connect; it does not wait for a handoff.
+#
+# After a server restart, a caller whose connects were refused used to park as a `PoolWaiter` while
+# every slot was free. A waiter is woken only by a release or a discard, and nothing was leased, so
+# it waited out `pool_timeout` after the server was back (the #1072 soak's `stranded` gate). Now it
+# parks with a retry timer (50 ms doubling to 0.5 s) and connects again, one attempt per pass, until
+# its deadline. Deterministic and DB-free: the mock's connect fails `fail_times` times, with an
+# ambiguous (not permanent) error, then succeeds. Nothing is ever released, so before the fix every
+# case below waited out its whole `timeout_seconds`.
+# ═════════════════════════════════════════════════════════════════════════════
+
+mutable struct FakeConn1518
+  id::Int
+  closed::Bool
+end
+Base.close(c::FakeConn1518) = (c.closed = true; nothing)
+
+# PostgresConnectionPool's fields (as the sibling handoff mocks) + a failing-connect budget.
+mutable struct MockPG1518 <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  fail_times::Int                # connects still to refuse; counts down, so a test can arm it later
+  connects::Int
+  at::Vector{Float64}            # when each connect was attempted
+end
+MockPG1518(n::Int; fail_times::Int) =
+  MockPG1518(Any[nothing for _ in 1:n], fill(true, n), "mock://pg1518", n, ReentrantLock(), fail_times, 0, Float64[])
+
+# SQLiteConnectionPool's fields + the same budget.
+mutable struct MockSQLite1518 <: PormG.PormGSQLite
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  split_read_write::Bool
+  writer_slot::Int
+  reader_cursor::Int
+  lock::ReentrantLock
+  write_lock::ReentrantLock
+  fail_times::Int
+  connects::Int
+  at::Vector{Float64}
+end
+MockSQLite1518(n::Int; fail_times::Int) =
+  MockSQLite1518(Any[nothing for _ in 1:n], fill(true, n), "mock://sqlite1518", n, false, 1, 0,
+                 ReentrantLock(), ReentrantLock(), fail_times, 0, Float64[])
+
+const _Mock1518 = Union{MockPG1518, MockSQLite1518}
+function PormG.backend_connect(p::_Mock1518; kwargs...)
+  p.connects += 1
+  push!(p.at, time())
+  if p.fail_times > 0
+    p.fail_times -= 1
+    error("mock: connection refused")                             # a restart, as the client sees it
+  end
+  return FakeConn1518(p.connects, false)
+end
+
+# The shortest time between two consecutive connects. Under "one connect attempt per pass" each
+# failed connect is followed by a backoff of at least 50 ms before the next; trying every free slot
+# (and an expansion) in one pass puts several connects microseconds apart. The connect COUNT cannot
+# tell the two apart: it is `fail_times + 1` however the attempts are grouped into passes.
+_min_gap_1518(p) = minimum(diff(p.at))
+PormG.backend_is_alive(::_Mock1518, c) = c isa FakeConn1518 && !c.closed
+PormG.backend_is_permanent_connect_error(::_Mock1518, e) = false   # ambiguous: never fast-failed
+
+@testset "the connect backoff doubles from 50 ms to a 0.5 s cap, never past the deadline (#1518)" begin
+  # The schedule itself: what bounds both how late a caller notices the server is back and how many
+  # connects an outage costs the server.
+  @test CP._connect_retry_backoff(1) == 0.05
+  @test CP._connect_retry_backoff(2) == 0.1
+  @test CP._connect_retry_backoff(4) == 0.4
+  @test CP._connect_retry_backoff(5) == 0.5
+  @test CP._connect_retry_backoff(10_000) == 0.5          # no overflow past the cap
+
+  far = time() + 60.0
+  # A saturated pool (no failed connect) waits to its deadline, as before #1518.
+  sentinel, wake = CP._waiter_wake(far, 0)
+  @test sentinel === CP._POOL_WAIT_TIMEOUT && 59.0 < wake <= 60.0
+  # After a failed connect it is due to retry after the backoff.
+  @test CP._waiter_wake(far, 1) == (CP._POOL_WAIT_RETRY, 0.05)
+  # A backoff that would reach the deadline delivers the timeout: no connect past the deadline.
+  sentinel, wake = CP._waiter_wake(time() + 0.02, 1)
+  @test sentinel === CP._POOL_WAIT_TIMEOUT && wake <= 0.02
+  @test CP._waiter_wake(time() - 1.0, 3) == (CP._POOL_WAIT_TIMEOUT, 0.0)
+end
+
+@testset "PG: a caller whose connects fail gets a connection once they succeed, nothing released (#1518)" begin
+  # Expected: 4 refused connects, then the 5th succeeds after ~0.75 s of backoff (0.05+0.1+0.2+0.4),
+  # far inside the 10 s budget. Before #1518 the caller parked after the first pass and, with nothing
+  # leased to release, raised PoolConnectError after 10 s.
+  pool = MockPG1518(3; fail_times = 4)
+  t0 = time()
+  conn = CP.acquire_connection(pool; timeout_seconds = 10)
+  elapsed = time() - t0
+  @test conn isa FakeConn1518
+  @test elapsed < 5.0                                      # MUTATION GATE: not the 10 s deadline
+  @test pool.connects == 5                                 # four refused, the fifth taken
+  # One connect attempt per pass, a backoff apart: not every free slot plus an expansion at once.
+  @test _min_gap_1518(pool) >= 0.04
+  @test CP.pool_stats(pool).waiting == 0                   # the retry left no waiter behind
+  @test CP.pool_stats(pool).in_use == 1
+  CP.release_connection(pool, conn)
+end
+
+@testset "SQLite: the same retry in the SQLite acquire (#1518)" begin
+  pool = MockSQLite1518(2; fail_times = 3)
+  t0 = time()
+  conn = CP.acquire_connection(pool; timeout_seconds = 10)
+  @test conn isa FakeConn1518
+  @test time() - t0 < 5.0                                  # MUTATION GATE: not the 10 s deadline
+  @test pool.connects == 4
+  @test _min_gap_1518(pool) >= 0.04                        # one attempt per pass here too
+  @test CP.pool_stats(pool).waiting == 0
+  CP.release_connection(pool, conn)
+end
+
+@testset "a connect that never succeeds still raises PoolConnectError at the deadline, paced (#1518)" begin
+  # The deadline still bounds the retry, and it raises the truthful cause. Paced, not a busy loop:
+  # over 1.5 s the schedule allows ~0, 0.05, 0.15, 0.35, 0.75, 1.25 → 6 attempts.
+  pool = MockPG1518(3; fail_times = typemax(Int))
+  t0 = time()
+  err = try
+    CP.acquire_connection(pool; timeout_seconds = 1.5)
+    nothing
+  catch e; e end
+  elapsed = time() - t0
+  @test err isa PormG.PoolConnectError
+  @test occursin("connection refused", sprint(showerror, err.cause))
+  @test elapsed >= 1.3                                     # it used its budget
+  @test 3 <= pool.connects <= 12                           # paced: no busy loop
+  @test CP.pool_stats(pool).waiting == 0
+end
+
+@testset "paced connect retries do not spend max_retries (#1518)" begin
+  # `max_retries` bounds scan passes. Counting the time-paced retries against it would end a long
+  # `pool_timeout` early. max_retries = 3 allows the `before_connect` detour (one pass) and two scan
+  # passes; counted naively, four refused connects would raise PoolConnectError after the 2nd.
+  pool = MockPG1518(1; fail_times = 4)
+  conn = CP.acquire_connection(pool; timeout_seconds = 10, max_retries = 3)
+  @test conn isa FakeConn1518
+  @test pool.connects == 5
+  CP.release_connection(pool, conn)
+end
+
+@testset "every slot leased and the expansion refused: the caller still retries (#1518)" begin
+  # The other way into the strand: no free slot at all, so the scan connects nothing and only the
+  # expansion (C) fails. Before #1518 that parked with a deadline-only timer, woken only if a holder
+  # released. Here nothing is released while the expansion is refused three times, then accepted.
+  for pool in (MockPG1518(1; fail_times = 0), MockSQLite1518(1; fail_times = 0))
+    held = CP.acquire_connection(pool; timeout_seconds = 5)  # every base slot leased
+    pool.fail_times = 3                                      # the server goes away for new connects
+    t0 = time()
+    conn = CP.acquire_connection(pool; timeout_seconds = 10)
+    @test conn isa FakeConn1518 && conn !== held
+    @test time() - t0 < 5.0                                  # MUTATION GATE: not the 10 s deadline
+    @test pool.connects == 5                                 # the lease, three refusals, the expansion
+    @test CP.pool_stats(pool).in_use == 2
+    CP.release_connection(pool, conn)
+    CP.release_connection(pool, held)
+  end
+end

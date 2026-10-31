@@ -136,7 +136,7 @@ _allocate_ids(model, conn::PormGSQLite, pk, n, settings) = _allocate_sqlite_ids(
 # MySQL has no sequence, and AUTO_INCREMENT cannot be reserved ahead of the INSERT (#1266).
 _allocate_ids(model, conn::PormGMySQL, pk, n, settings) =
   throw(_capability_error(conn, :preallocated_keys, "allocating $(model.name)'s primary keys";
-    why = "Let the INSERT generate them, or supply them in the DataFrame."))
+    why = "Let the INSERT generate them, or supply them in the table."))
 # SQLite's allocator reads and writes `sqlite_sequence`, so it runs inside a transaction; PostgreSQL's
 # `nextval` needs none.
 _allocates_ids_in_transaction(::PormGPostgres) = false

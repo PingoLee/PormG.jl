@@ -379,8 +379,9 @@ end
         Driver.objects.create("driverid" => 2, "forename" => "Alain", "surname" => "Prost")
         PormG.run_in_transaction(key) do
           Constructor.objects.create("constructorid" => 1, "name" => "McLaren")
-          QB.bulk_insert(Result.objects, PormG.DataFrames.DataFrame(
-            resultid = [1, 2], driverid = [1, 2], constructorid = [1, 1], grid = [1, 2], points = [9.0, 6.0]))
+          # Any Tables.jl table (#1344); the pipeline past `_bulk_frame` does not specialize on its type.
+          QB.bulk_insert(Result.objects,
+            (resultid = [1, 2], driverid = [1, 2], constructorid = [1, 1], grid = [1, 2], points = [9.0, 6.0]))
         end
 
         # ── Reads: every list() format, over a plain and a joined projection ──

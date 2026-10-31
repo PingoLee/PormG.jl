@@ -512,7 +512,7 @@ end
 const _EXPECTED_LOG_NOISE = (
     "The migration plan has been saved",   # migrations/planner.jl — one per makemigrations
     "No tables found in the database",     # migrations/introspection.jl, importers.jl
-    "the DataFrame is empty",              # bulk_insert / bulk_update / bulk_copy empty-DF guards
+    "the table is empty",                  # bulk_insert / bulk_update / bulk_copy empty-input guards
 )
 
 Logging.min_enabled_level(l::QuietIntegrationLogger) = Logging.min_enabled_level(l.sink)

@@ -40,7 +40,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, IntegerField, CharField, DateTimeField, UUIDField
 using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
-using PormG.QueryBuilder: _prepare_bulk_df!, _normalize_bulk_columns, _bulk_working_frame
+using PormG.QueryBuilder: _prepare_bulk_df!, _normalize_bulk_columns, _bulk_frame, _bulk_column
 using PormG.QueryBuilder: _BULK_FILL_PREFIX, _is_injected_fill_column
 using UUIDs
 import DataFrames
@@ -140,7 +140,7 @@ end
 # `bulk_copy` (which returns before its row loop) that frame is the only place the values are
 # observable at this layer.
 function bfcc_prepare(model, df_o, columns, operation)
-    df = _bulk_working_frame(df_o)
+    df = _bulk_frame(df_o, "bulk_$(operation)")
     mapping, fields_df, pk_exist, pk_field =
         _prepare_bulk_df!(df, model, _normalize_bulk_columns(columns), operation, nothing)
     return df, mapping, fields_df, pk_exist, pk_field
@@ -212,10 +212,10 @@ end
 
         # The Pair's mapping is untouched — `pit_stops` still reads the frame's "laps".
         @test mapping["pit_stops"] == "laps"
-        @test df[!, mapping["pit_stops"]] == [3, 5]
+        @test _bulk_column(df, mapping["pit_stops"]) == [3, 5]
         # ...and `laps`'s own fill went somewhere the caller did not name.
         @test _is_injected_fill_column(mapping["laps"])
-        @test df[!, mapping["laps"]] == [0, 0]
+        @test _bulk_column(df, mapping["laps"]) == [0, 0]
         @test sort(fields_df) == ["driver", "laps", "pit_stops"]
     end
 
@@ -263,7 +263,7 @@ end
         # Fields the caller DID map keep pointing at the caller's own columns.
         @test mapping["driver"] == "driver"
         @test mapping["pit_stops"] == "laps"
-        @test df[!, mapping["pit_stops"]] == [7, 9]
+        @test _bulk_column(df, mapping["pit_stops"]) == [7, 9]
         # `id` is an auto pk with nothing to fill — it stays out of the write entirely.
         @test !("id" in fields_df)
     end
@@ -281,8 +281,8 @@ end
 
         # The fill stepped aside rather than overwriting the caller's cells.
         @test mapping["pit_stops"] != squatter
-        @test df[!, squatter] == [99]
-        @test df[!, mapping["pit_stops"]] == [0]
+        @test _bulk_column(df, squatter) == [99]
+        @test _bulk_column(df, mapping["pit_stops"]) == [0]
     end
 
     # ─────────────────────────────────────────────────────────────────────────────

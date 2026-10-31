@@ -4,8 +4,8 @@ Unit coverage for the non-mutating bulk pipeline (#132).
 The bulk operations used to `deepcopy` the input DataFrame (`copy=true` default) because
 the pipeline mutates its working frame: `_prepare_bulk_df!` injects auto-populated columns
 (`auto_now`, static defaults) for every model field the DataFrame does not carry.
-#132 replaced the deepcopy with a zero-copy wrapper (`_bulk_working_frame`,
-`select(df_o, :; copycols=false)`): the wrapper shares the caller's column vectors, and
+#132 replaced the deepcopy with a zero-copy wrapper (since #1344 the `_BulkFrame` built from
+any Tables.jl table by `_bulk_frame`): the wrapper shares the caller's column vectors, and
 because every internal write is a whole-column replacement/addition, nothing ever reaches
 the caller's frame — unconditionally, with no `copy=` knob.
 
@@ -152,16 +152,17 @@ end
         @test !occursin("\"pit_stops\"", res[:sql_text])
     end
 
-    @testset "allocate_primary_keys clone=true: independent copy, pk on the returned frame only" begin
-        # DB-free path: explicit ids present → returns before any backend call, but the
-        # clone is already built. Unlike the bulk ops' INTERNAL working frames, this frame
-        # is RETURNED to the caller, so clone=true must mean genuinely independent columns
-        # (#132 review) — a zero-copy wrapper here would be user-visible aliasing.
+    @testset "allocate_primary_keys returns an independent table, pk on the returned table only" begin
+        # DB-free path: explicit ids present → returns before any backend call, as a copy. Unlike
+        # the bulk ops' INTERNAL working frames, this table is RETURNED to the caller, so it must
+        # have genuinely independent columns (#132 review) — a zero-copy wrapper here would be
+        # user-visible aliasing. Since #1344 that is the only mode: there is no `clone` keyword.
         df = DataFrames.DataFrame(id = [10, 20], surname = ["Lauda", "Hunt"])
         snap = snapshot(df)
         out = PormG.allocate_primary_keys(Bnm_result.objects, df)
 
         assert_untouched(df, snap)
+        @test out isa DataFrames.DataFrame   # the caller's own kind of table (#1344 decision 3)
         @test out[!, "id"] == [10, 20]
         @test out[!, "surname"] !== df[!, "surname"]   # independent vectors…
         @test out[!, "surname"] == df[!, "surname"]    # …with equal values

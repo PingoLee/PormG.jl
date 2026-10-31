@@ -499,7 +499,7 @@ INS_PREALLOCATES && @testset "allocate_primary_keys" begin
 
         # Must have returned a new column without mutating the original
         @test "id" in names(df_with_ids)
-        @test !("id" in names(df_no_col))   # original is untouched (clone=true default)
+        @test !("id" in names(df_no_col))   # original is untouched (the result is a new table, #1344)
         @test length(df_with_ids.id) == 2
         @test all(id -> id isa Integer && id > 0, df_with_ids.id)
         @test length(unique(df_with_ids.id)) == 2
@@ -1036,5 +1036,77 @@ end
         cleanup_ids = created_pk[] === nothing ? [status_id] : [status_id, created_pk[]]
         q = M.Status.objects.filter("statusid__@in" => cleanup_ids)
         q.exists() && q.delete()
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The bulk writers take any Tables.jl table (#1344 phase 3)
+#
+# `bulk_insert`, `bulk_update`, `bulk_copy` and `allocate_primary_keys` accepted only a `DataFrame`.
+# They now take any Tables.jl table, converted once into PormG's own frame. What matters to a user is
+# that the same rows write the same values whatever kind of table carries them, so each write below
+# runs twice, once from a `DataFrame` and once from another kind of table, and the rows read back are
+# compared. The rendered statements are compared, hermetically, in test/unit/test_bulk_tables_input_1344.jl.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk writers take any Tables.jl table (#1344)" begin
+    T = PormG.QueryBuilder.Tables
+    model = M.Django_contract_scratch
+    prefix = "t1344-"
+    clear() = (q = model.objects.filter("label__@startswith" => prefix); q.exists() && q.delete())
+    # The values a write leaves, without the columns that differ between two writes by design.
+    read_back(labels) = [(split(row[:label], "-")[end], row[:event_date], row[:price])
+                         for row in model.objects.filter("label__@in" => labels).order_by("label").
+                           values("label", "event_date", "price").list()]
+    clear()
+    try
+        frame(tag) = DataFrame(label = ["$(prefix)$(tag)-a", "$(prefix)$(tag)-b"],
+                               event_date = Union{Date, Missing}[Date(1988, 4, 3), missing],
+                               price = Union{Float64, Missing}[12.5, missing])
+        @testset "bulk_insert from a $(kind) writes what a DataFrame writes" for (kind, tag, make) in (
+                ("Vector of NamedTuples", "rt", df -> T.rowtable(df)),
+                ("NamedTuple of vectors", "ct", df -> T.columntable(df)))
+            df_labels = ["$(prefix)d$(tag)-a", "$(prefix)d$(tag)-b"]
+            @test bulk_insert(model.objects, frame("d$(tag)")).count == 2
+            @test bulk_insert(model.objects, make(frame(tag))).count == 2
+            @test isequal(read_back(["$(prefix)$(tag)-a", "$(prefix)$(tag)-b"]), read_back(df_labels))
+        end
+
+        @testset "bulk_update from a Vector of NamedTuples" begin
+            rows = [(label = "$(prefix)rt-a", price = 99.25), (label = "$(prefix)rt-b", price = 1.5)]
+            @test bulk_update(model.objects, rows; columns = ["label", "price"], match_on = ["label"]).count == 2
+            prices = model.objects.filter("label__@in" => ["$(prefix)rt-a", "$(prefix)rt-b"]).
+                order_by("label").values("price").list()
+            @test [Float64(row[:price]) for row in prices] == [99.25, 1.5]
+        end
+
+        if requires(:copy)
+            @testset "bulk_copy from a Vector of NamedTuples writes what a DataFrame writes" begin
+                @test bulk_copy(model.objects, frame("dcp")).count == 2
+                @test bulk_copy(model.objects, T.rowtable(frame("cp"))).count == 2
+                @test isequal(read_back(["$(prefix)cp-a", "$(prefix)cp-b"]), read_back(["$(prefix)dcp-a", "$(prefix)dcp-b"]))
+            end
+        end
+
+        if requires(:preallocated_keys)
+            @testset "allocate_primary_keys returns the caller's kind of table, ids filled" begin
+                rows = [(label = "$(prefix)al-a",), (label = "$(prefix)al-b",)]
+                PormG.run_in_transaction(PORMG_DB_FOLDER) do
+                    out = allocate_primary_keys(model.objects, rows)
+                    @test out isa Vector{<:NamedTuple}
+                    @test [r.label for r in out] == [r.label for r in rows]
+                    ids = [r.id for r in out]
+                    @test fieldtype(eltype(out), :id) === Int64   # on every engine, LibPQ included
+                    @test ids[2] == ids[1] + 1
+                    @test !haskey(rows[1], :id)   # the caller's rows are untouched
+                    @test bulk_insert(model.objects, out).count == 2
+                    stored = model.objects.filter("label__@in" => [r.label for r in rows]).
+                        order_by("label").values("id").list()
+                    @test [row[:id] for row in stored] == ids
+                end
+            end
+        end
+    finally
+        clear()
     end
 end

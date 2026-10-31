@@ -880,3 +880,81 @@ end
     q.values("driverid")
     @test nrow(q |> DataFrame) == 1
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A subquery declaring its own CTE, against the F1 data (#1292)
+# `Subquery(...)` and `__@in` over a query with its own `.with(...)` render the WITH inside their
+# parentheses — `"driverid" IN (WITH "fast" AS (… WHERE "milliseconds" < ?) SELECT … WHERE
+# "fastlaps" >= ?)` — and bind its values where their text sits. #433 refused both on every engine
+# after measuring SQLite binding them ahead of earlier text; #1292 measured the binding correct and
+# lifted the refusal. Each shape below puts a bound value BEFORE the nested CTE in the text, which is
+# what made #433's misbind visible: bound out of order, `nationality` would be compared against
+# 75000 and the row set would be empty or wrong. Every expected value is computed in Julia from
+# plain queries, never through the shape under test. `Exists` still refuses: it renders no WITH.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a subquery declaring its own CTE binds in text order (#1292)" begin
+    fast_q() = begin
+        fast = M.Lap_times.objects
+        fast.filter("milliseconds__@lt" => 75_000)
+        fast.values("raceid", "fastlaps" => Count("milliseconds"))   # one row per race
+        fast
+    end
+    fast_races = Set(r[:raceid] for r in M.Lap_times.objects.filter("milliseconds__@lt" => 75_000).values("raceid").list())
+    brazilian = Set(r[:driverid] for r in M.Driver.objects.filter("nationality" => "Brazilian").values("driverid").list())
+    results = M.Result.objects.filter("driverid__@in" => collect(brazilian)).values("driverid", "raceid", "grid").list()
+    @test !isempty(fast_races) && !isempty(brazilian)
+
+    @testset "__@in after a WHERE value" begin
+        inner = M.Result.objects
+        inner.with("fast" => fast_q(), join_field = "raceid" => "raceid")
+        inner.filter("fast__fastlaps__@gte" => 1)
+        inner.values("driverid")
+        q = M.Driver.objects
+        q.filter("nationality" => "Brazilian", "driverid__@in" => inner)
+        q.values("driverid")
+        got = Set(r[:driverid] for r in q.list())
+        oracle = Set(r[:driverid] for r in results if r[:raceid] in fast_races)
+        @test !isempty(oracle)
+        @test got == oracle
+    end
+
+    @testset "a projected Subquery with a CTE, after one without" begin
+        poles = M.Result.objects
+        poles.filter("driverid" => OuterRef("driverid"), "grid" => 1)
+        poles.values("n" => Count("resultid"))
+        in_fast = M.Result.objects
+        in_fast.with("fast" => fast_q(), join_field = "raceid" => "raceid")
+        in_fast.filter("driverid" => OuterRef("driverid"), "fast__fastlaps__@gte" => 1)
+        in_fast.values("n" => Count("resultid"))
+        q = M.Driver.objects
+        q.filter("nationality" => "Brazilian")
+        q.values("driverid", "poles" => Subquery(poles), "fast_starts" => Subquery(in_fast))
+        df = q |> DataFrame
+        @test nrow(df) == length(brazilian)
+        for row in eachrow(df)
+            mine = [r for r in results if r[:driverid] == row.driverid]
+            @test row.poles == count(r -> r[:grid] == 1, mine)
+            @test row.fast_starts == count(r -> r[:raceid] in fast_races, mine)
+        end
+        @test any(>(0), df.poles) && any(>(0), df.fast_starts)   # neither column is trivially zero
+    end
+
+    @testset "Exists over the same subquery is refused" begin
+        inner = M.Result.objects
+        inner.with("fast" => fast_q(), join_field = "raceid" => "raceid")
+        inner.filter("driverid" => OuterRef("driverid"), "fast__fastlaps__@gte" => 1)
+        q = M.Driver.objects
+        q.filter(Exists(inner))
+        q.values("driverid")
+        err = try
+            q.list()
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.QueryBuildError
+        # This guard's message, not `build_joins.jl`'s "emits no WITH clause" fallback, which is a
+        # QueryBuildError too and is what the shape reaches without it.
+        @test occursin("is rendered without a", sprint(showerror, err))
+    end
+end

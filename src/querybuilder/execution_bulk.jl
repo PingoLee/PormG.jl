@@ -2608,7 +2608,7 @@ end
 # #665: the handler state a bulk UPDATE cannot express. `update()`'s three guards (limit/offset/
 # order_by, distinct, aggregates) apply unchanged, plus two that only this terminal needs:
 # - a CTE: the statement never renders the handler's `WITH`, so a filter naming it would reach
-#   the database dangling, and a nested WITH binds into `:cte` ahead of the chunk rows (#433).
+#   the database dangling (#433).
 #   UnsafeMutationError, as in `delete()`, because the axis is "this is a mutation".
 # - a `cjoin`/`on`/`cjoin_on` join: build() always emits it, and the join guard in the chunk
 #   builder would then blame a `__` path the caller never wrote.

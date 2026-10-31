@@ -196,12 +196,13 @@ function delete(objct::SQLObjectHandler;
   # whether the target model happened to have a reverse relation — an invisible, schema-dependent
   # split. (The root statement emits no `WITH` either, so a CTE has nowhere to live there.)
   #
-  # Refusing rather than exempting is deliberate. An exemption scoped to "anything rendered under a
-  # delete" was measured to re-open the very misbind #433 exists to prevent: with a filter bound
-  # before the nested CTE, SQLite bound ["CTEVAL","INNERVAL","NOTEVAL"] against a text order of
-  # NOTEVAL, CTEVAL, INNERVAL — a silent WRONG DELETE, the worst failure mode in the package. A
-  # narrower origin-tracking exemption is possible but is the same "trust where this subquery came
-  # from" reasoning that produced this bug class.
+  # What the refusal rests on is the ROOT statement: the `DELETE` emits no `WITH`, so a CTE the
+  # queryset declares — and any filter through it — has nowhere to be declared. #433 also measured an
+  # exemption re-opening a misbind: with a filter bound before the nested CTE, SQLite bound
+  # ["CTEVAL","INNERVAL","NOTEVAL"] against a text order of NOTEVAL, CTEVAL, INNERVAL — a silent
+  # WRONG DELETE. That half no longer holds: a nested `WITH` in a scoping subquery now binds in text
+  # order (#1292, `test_nested_cte_guard.jl` pins one under `delete()`), so lifting this refusal would
+  # need a `WITH` on the DELETE itself, not a binding fix.
   #
   # UnsafeMutationError, not the QueryBuildError the rest of the #433 family throws. The
   # discriminator is not the query SHAPE — the identical query is legal on a read path and renders
@@ -214,10 +215,9 @@ function delete(objct::SQLObjectHandler;
   if !isempty(objct.object.ctes)
     throw(UnsafeMutationError(
       "Cannot call \e[4m\e[32mdelete()\e[0m on a query that declares a CTE " *
-      "(\e[4m\e[31m$(join(collect(keys(objct.object.ctes)), ", "))\e[0m). The delete re-uses this " *
-      "query as a scoping subquery, where a nested \e[4m\e[32mWITH\e[0m binds into the " *
-      "\e[4m\e[31m:cte\e[0m bucket ahead of values whose text comes first — on SQLite that deletes " *
-      "the wrong rows with no error.\n  " *
+      "(\e[4m\e[31m$(join(collect(keys(objct.object.ctes)), ", "))\e[0m). A " *
+      "\e[4m\e[32mDELETE\e[0m statement emits no \e[4m\e[31mWITH\e[0m clause, so the CTE would " *
+      "never be declared for the rows it removes.\n  " *
       "Resolve the CTE first and filter on its result, e.g. " *
       "\e[4m\e[32m.filter(\"pk__@in\" => ids)\e[0m (#433)."
     ))

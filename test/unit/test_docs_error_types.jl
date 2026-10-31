@@ -1026,11 +1026,10 @@ const DOCERR_CASES = [
     # route, but nine shapes were built against it after the change and none reached it — so there
     # is no producer to pin here. Re-add a case the moment one exists.
     (
-        # #433. A subquery consumed by @in / Subquery / Exists must not declare a CTE: the nested
-        # WITH binds into the `:cte` bucket, which flattens ahead of `:select`/`:where`, so on
-        # SQLite its values overtake any value whose text comes first. Refused on both backends so
-        # the same query does not build on one and misbind on the other.
-        "read/subqueries_and_ctes.md — a subquery consumed by @in cannot declare its own .with(...)",
+        # #433, narrowed by #1292. An `Exists(...)` subquery must not declare a CTE: `Exists`
+        # renders no WITH clause, so the CTE would never be declared. `@in` and `Subquery` do render
+        # one, and #1292 measured them binding in text order on every engine, so they build.
+        "read/subqueries_and_ctes.md — an Exists(...) subquery cannot declare its own .with(...)",
         QueryBuildError,
         () -> begin
             fast = DOCERR_STATUS_PG.objects
@@ -1038,10 +1037,10 @@ const DOCERR_CASES = [
             inner = DOCERR_RESULT_PG.objects
             inner.with("fast" => fast, join_field = "statusid" => "statusid")
             inner.filter(CTE("fast", "status") => "Finished")
-            inner.values("driverid")
+            inner.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"))
             q = DOCERR_DRIVER_PG.objects
             q.values("driverid")
-            q.filter("driverid__@in" => inner)
+            q.filter(PormG.QueryBuilder.Exists(inner))
             q.list(show_query = :dict)
         end,
     ),

@@ -58,9 +58,9 @@ end
 # Context: every value lands in `:join`, under one `with_bucket` that restores the caller's bucket
 # on return (#936, #939). It used to be set ungated per row, a belt-and-braces switch: the nested
 # renders a condition can hold already restored the bucket by hand. They now restore through
-# `with_bucket` structurally, so one scope covers the loop. A subquery consumed by `@in`,
-# `Subquery(...)` or `Exists(...)` may not declare its own CTE (#433): that was the one shape whose
-# values went to `:cte` while its markers sat in this text.
+# `with_bucket` structurally, so one scope covers the loop. A subquery in a condition may declare its
+# own CTE (#1292): its `:cte` values are lifted with the rest of its run into this bucket, where its
+# markers sit (`test_parameter_alignment_nested.jl`, Rep B). `Exists(...)` refuses one (#433).
 function build_row_join_sql_text(instruc::SQLInstruction)
   @pormg_debug false
   with_bucket(instruc, :join) do

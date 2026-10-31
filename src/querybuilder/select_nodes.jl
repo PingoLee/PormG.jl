@@ -1327,48 +1327,33 @@ end
 # mis-resolved either. The guard's other premise, the nested parameter order, is #432's
 # `nested_parameter_mark` / `detach_nested_run!` since.
 
-# #433: a `.with(...)` declared INSIDE a Subquery / Exists / `__@in` subquery is refused, because
-# no backend renders it correctly today. The three call sites fail in two different ways, and the
-# guard is deliberately wider than either break:
+# #433, narrowed by #1292: an `Exists(...)` subquery that declares its own `.with(...)` is refused,
+# because `_build_exists_query` renders no `WITH` for it. That renderer hand-rolls its own SELECT
+# rather than going through `query()`, so it emits no `WITH` prefix and never materializes the CTE's
+# model — the first path resolving `<cte>__col` would reach the "emits no WITH clause" refusal in
+# `build_joins.jl`, which names `update()` and is about a different statement. The shape is one a
+# caller is entitled to write; what is missing is a render step, and the refusal stays until it exists.
 #
-#   - `Exists(...)` never rendered it AT ALL. `_build_exists_query` hand-rolls its own SELECT rather
-#     than going through `query()`, so it emits no `WITH` prefix and never materializes the CTE's
-#     model — the first path resolving `<cte>__col` reached the "internal error … please report it"
-#     in `build_joins.jl`, for a shape the user was always entitled to write. That message is for a
-#     broken invariant; this was a missing render step.
-#   - `Subquery(...)` and `"col__@in" => sub` DO render an inline `WITH`, and on PostgreSQL they are
-#     correct. On SQLite they can misbind: `build_cte_clause` binds unconditionally into the `:cte`
-#     bucket, `:cte` is flattened FIRST (`get_final_parameters`), and the subquery's text sits in
-#     SELECT or WHERE. Any value whose TEXT precedes the nested CTE but whose bucket flattens later
-#     ends up bound behind it. Measured on this fixture:
-#         filter("note" => "A", "parent__@in" => <sub declaring .with("gv" => …)>)
-#         PostgreSQL ["A", "CTEVAL", "INNERVAL"]   SQLite ["CTEVAL", "INNERVAL", "A"]
-#     — wrong rows, no error. It is conditional, not universal: with no earlier parameter to jump,
-#     the same shapes bind correctly, which is why this survived so long.
-#
-# The misbind is PormG's, not an engine's: values bind in bucket order, and a backend that binds by
-# position (`?`) reads them in text order. Refused on EVERY engine for now (#1167), as a gap in PormG:
-# firing it only where values bind by position is a follow-up, since the expression-kind matrix pins
-# this refusal on both engines. The removal of the working PostgreSQL shapes is recorded in the
-# upgrade log.
-#
-# NOT guarded, on purpose: a CTE declared inside a CTE **body**. That renders through
-# `build_cte_clause` → `query(…, cte=…)`, so its values bind in `:cte` during the same pass that
-# emits their text, all of it inside the leading `WITH` — measured correct on both backends. The
-# guard therefore belongs at these three filter/projection sites and nowhere else.
-function _guard_no_nested_cte(handler::SQLObjectHandler, what::AbstractString)
+# `Subquery(...)` and `"col__@in" => sub` are NOT refused (#1292). They render through `query()`, so
+# the nested `WITH` prints inside their parentheses, and `build_cte_clause` binds its values under a
+# scoped `:cte` bucket (#936, #939) that the consumer's `detach_nested_run!` lifts with the rest of
+# the subquery's values as one clause-ordered run (#432) — `:cte` first, which is where its text sits.
+# #433 refused all three consumers on a measured SQLite misbind, `["CTEVAL", "INNERVAL", "A"]`
+# against a text order of `A, CTEVAL, INNERVAL`; on the same shapes the run now binds in text order
+# on every engine (`test_nested_cte_guard.jl` pins them), so the refusal had no defect left behind it.
+function _refuse_exists_nested_cte(handler::SQLObjectHandler)
   ctes = handler.object.ctes
   isempty(ctes) && return nothing
   names = join(collect(keys(ctes)), ", ")
   throw(QueryBuildError(
-    "$what does not support a subquery that declares its own \e[4m\e[32m.with(...)\e[0m; " *
+    "Exists(...) does not support a subquery that declares its own \e[4m\e[32m.with(...)\e[0m; " *
     "this one declares \e[4m\e[31m$(names)\e[0m.\n  " *
-    "A nested CTE renders inside the subquery's parentheses, but PormG binds its values into the " *
-    "\e[4m\e[31m:cte\e[0m parameter bucket, which is flattened ahead of \e[4m\e[31m:select\e[0m " *
-    "and \e[4m\e[31m:where\e[0m — on a backend that binds parameters by position, ahead of any " *
-    "value whose text comes first, silently matching the wrong rows.\n  " *
-    "Fold the CTE's predicate into the subquery's own \e[4m\e[32m.filter(...)\e[0m, or declare " *
-    "the CTE on a query that is not nested inside a filter or a projection (#433)."))
+    "An EXISTS subquery is rendered without a \e[4m\e[31mWITH\e[0m clause, so a CTE it declares " *
+    "would be missing from the SQL.\n  " *
+    "Fold the CTE's predicate into the subquery's own \e[4m\e[32m.filter(...)\e[0m, or test " *
+    "membership instead: project the correlated column and filter with " *
+    "\e[4m\e[32m\"<column>__@in\" => subquery\e[0m, which renders a nested " *
+    "\e[4m\e[32mWITH\e[0m, as \e[4m\e[32mSubquery(...)\e[0m does (#433, #1292)."))
 end
 
 _projection_is_aggregate(v)::Bool =

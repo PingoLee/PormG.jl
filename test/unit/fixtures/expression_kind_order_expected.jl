@@ -5437,6 +5437,12 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64")]),
   ("Cast CTE scale 1 col to scale 2 | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64")]),
+  ("Cast CTE scale 1 col to scale 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("3", "Int64"), ("1", "Int64")]),
+  ("Cast CTE scale 1 col to scale 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64"), ("1", "Int64")]),
+  ("Cast CTE scale 1 col to scale 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64"), ("1", "Int64")]),
   ("Cast CTE scale 3 col to scale 2 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("3", "Int64")]),
   ("Cast CTE scale 3 col to scale 2 | alone", :postgres, "v") =>
@@ -5449,6 +5455,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64")]),
   ("Cast CTE scale 3 col to scale 2 | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64")]),
+  ("Cast CTE scale 3 col to scale 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("3", "Int64"), ("1", "Int64")]),
+  ("Cast CTE scale 3 col to scale 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("3", "Int64"), ("1", "Int64")]),
   ("Cast CTE decimal col to scale 2 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast CTE decimal col to scale 2 | alone", :postgres, "v") =>
@@ -5467,6 +5477,12 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast CTE decimal col to scale 2 | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast CTE decimal col to scale 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Cast CTE decimal col to scale 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast CTE decimal col to scale 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast CTE decimal col to scale 1 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast CTE decimal col to scale 1 | alone", :postgres, "v") =>
@@ -5479,6 +5495,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast CTE decimal col to scale 1 | cte", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast CTE decimal col to scale 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Cast CTE decimal col to scale 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast interval int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast interval int | cte", :postgres, "g__v") =>

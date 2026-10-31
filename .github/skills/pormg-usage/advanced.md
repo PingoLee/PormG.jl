@@ -22,8 +22,8 @@ M.Result.objects.
     values("resultid", "driverid__surname", "statusid__status")
 ```
 
-A two-column subquery raises `FilterError`. Narrow it with `values("one_field")`. A subquery may not
-declare its own CTE (`QueryBuildError`).
+A two-column subquery raises `FilterError`. Narrow it with `values("one_field")`. A subquery may
+declare its own CTE with `.with(...)`, except one inside `Exists(...)` (`QueryBuildError`).
 
 ## Correlated subqueries: `Subquery`, `OuterRef`, `Exists`
 

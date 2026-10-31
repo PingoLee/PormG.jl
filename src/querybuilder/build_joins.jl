@@ -874,8 +874,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     #
     # The message deliberately does NOT name `update()` as the only culprit: `_build_exists_query`
     # is a READ-path renderer that also emits no `WITH`, so "reads render a CTE" would be a lie on
-    # that route. It is currently unreachable only because `_guard_no_nested_cte` refuses a nested
-    # CTE earlier with a better message — a single-point dependency worth not encoding into text.
+    # that route. It is currently unreachable only because `_refuse_exists_nested_cte` refuses an
+    # `Exists` subquery's own CTE earlier with a better message — a single-point dependency worth not
+    # encoding into text. (`Subquery` and `__@in` render through `query()`, which does emit it, #1292.)
     if !haskey(cte_dict, "model")
       throw(QueryBuildError(
         "The CTE \e[4m\e[31m$(cte_name)\e[0m is referenced here, but the statement being built " *

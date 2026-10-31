@@ -1180,6 +1180,13 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter(PormG.Functions.Coalesce("payload__wins", 0) > 100).list(show_query = :dict),
     ),
+    # #1510 — *Arithmetic over a key* and `NullIf`'s docstring say `NullIf` over an uncast key raises
+    # `QueryBuildError` on every engine. PostgreSQL built `NULLIF(#>> …, $1::bigint)`, a server error.
+    (
+        "read/filters_and_aggregates.md — NullIf over a JSON key (#1510)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("w" => PormG.Functions.NullIf("payload__wins", 0)).list(show_query = :dict),
+    ),
     # #1483 — *Arithmetic over a key* says arithmetic over a value carrying an uncast JSON key, and a
     # `Sum` of one, raise `QueryBuildError` on every engine. SQLite divided the key's integer as one
     # (#1471); PostgreSQL built the SQL and its server rejected the text.

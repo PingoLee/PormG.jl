@@ -7773,23 +7773,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F json key * 1.0 / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("NullIf id json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("Cast json key integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast json key integer | alone", :sqlite) =>

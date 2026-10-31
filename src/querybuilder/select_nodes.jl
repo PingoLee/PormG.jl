@@ -997,6 +997,16 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       _refuse_json_key_ordering(operand, instruc, "`$(_ONE_OF_NAMES[v.function_name])`")
     end
   end
+  # #1510: `NullIf` compares its operands for equality, and the query does not say whether a key's value
+  # compares as a number or as text: PostgreSQL's `NULLIF(#>> …, $1::bigint)` is `text = bigint`, a server
+  # error, while SQLite compares `json_extract`'s native value. Each operand, as for `Greatest`: an
+  # `output_field` casts the result, after the comparison.
+  if v.function_name == "NULLIF"
+    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+      side = _json_number_side(operand, instruc)
+      side === nothing || _refuse_json_key_operand("`NullIf`", side; comparing = true)
+    end
+  end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's
   # `_computed_kind` answers the same kind from the same operand walk, so the SQL and the type agree.

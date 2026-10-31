@@ -558,7 +558,7 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("F json key + 1 / 2",      :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") + 1) / 2),
   ("Cast json key numeric / 2", :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "numeric") / 2),
   # #1471 review: a `Case` branch carries the key; a float literal beside it makes SQLite compute a REAL;
-  # `NullIf`'s value is its first operand only.
+  # `NullIf`'s value is its first operand only, but it compares the key, so #1510 refuses it.
   ("Case json key branch / 2", :Field_validation_scratch, m -> _EKM_FN.Case([_EKM_FN.When("id" => 1, then = _EKM_Q.F("payload__n"))], default = 0) / 2),
   ("F json key * 1.0 / 2",    :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") * 1.0) / 2),
   ("NullIf id json key / 2",  :Field_validation_scratch, m -> _EKM_FN.NullIf("id", "payload__n") / 2),

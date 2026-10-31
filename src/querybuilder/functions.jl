@@ -1585,6 +1585,10 @@ when the expression is built (#705).
 
 The value is `field1`'s, so it reads back as `field1`'s own Julia type on both engines: `NullIf("date",
 "fp1_date")` is a `Date`, not SQLite's stored text (#824).
+
+Over an uncast JSON key in either operand (`NullIf("metadata__wins", 0)`) it raises `QueryBuildError`
+on every engine (#1510): a key's value has no declared type, so the query does not say whether the
+comparison is between numbers or text. Cast the key: `NullIf(Cast("metadata__wins", "numeric"), 0)`.
 """
 function NullIf(x, y)
   column = Any[_function_operand(x), _function_operand(y)]   # #705

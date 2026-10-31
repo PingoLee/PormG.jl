@@ -918,8 +918,15 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 # #1497: so does an ordering term or a `Greatest`/`Least`, which name their own `issue`; an `order_by`
 # term takes a path or a projected name, not an expression, so it adds the `projected` spelling.
 function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false,
-                                  issue::AbstractString = "#1491", projected::Bool = false)
+                                  issue::AbstractString = "#1491", projected::Bool = false,
+                                  comparing::Bool = false)
   flag = side[2]
+  # #1510: `NullIf` compares the value, and the query does not say whether as a number or as text.
+  comparing && throw(QueryBuildError(
+    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+    "so the query does not say whether it compares numbers or text (#1510). Say the type you mean: " *
+    "\e[32mNullIf(Cast(\"$(flag)\", \"numeric\"), 0)\e[0m compares numbers on every engine, and " *
+    "\e[32mNullIf(Cast(\"$(flag)\", \"text\"), Value(\"\"))\e[0m compares text."))
   ordering && throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *

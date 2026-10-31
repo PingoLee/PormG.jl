@@ -78,55 +78,60 @@ WHERE "Tb"."driverid" IN (
 
 ---
 
-## A Subquery Cannot Declare Its Own CTE
+## A Subquery Can Declare Its Own CTE
 
-A subquery consumed by `@in` / `@nin`, `Subquery(...)` or `Exists(...)` **must not declare a CTE of its own**. PormG raises a `QueryBuildError` naming the CTE:
+A subquery consumed by `@in` / `@nin` or `Subquery(...)` can declare a CTE of its own. The `WITH` renders inside the subquery's parentheses, and its values bind where their text sits, on every backend:
 
 ```julia
 fast_laps = M.Lap_times.objects
-fast_laps.filter("milliseconds__@lt" => 90_000)      # sub-90-second laps
+fast_laps.filter("milliseconds__@lt" => 75_000)      # sub-75-second laps
 fast_laps.values("raceid", "milliseconds")
 
 inner = M.Result.objects
 inner.with("fast" => fast_laps, join_field = "raceid" => "raceid")   # ← CTE inside the subquery
-inner.filter("fast__milliseconds__@lt" => 90_000)
+inner.filter("fast__milliseconds__@isnull" => false)                 # a race that had one
 inner.values("driverid")
 
 query = M.Driver.objects
-query.filter("driverid__@in" => inner)     # QueryBuildError: names "fast"
-```
-
-A nested CTE renders inside the subquery's parentheses, but its bind values are collected into the `:cte` parameter bucket, which is flattened *ahead of* `:select` and `:where`. On a backend that binds parameters by position (SQLite, MySQL) that puts them in front of any value whose text comes earlier in the statement, and the query then matches the wrong rows with no error at all. Until PormG binds those values in text order, it refuses the shape on every backend.
-
-**Instead**, fold the CTE's predicate into the subquery's own `filter(...)`:
-
-```julia
-inner = M.Lap_times.objects
-inner.filter("milliseconds__@lt" => 90_000)   # no nested CTE
-inner.values("driverid")
-
-query = M.Driver.objects
-query.filter("driverid__@in" => inner)
+query.filter("nationality" => "Brazilian", "driverid__@in" => inner)
 query.values("driverid", "surname")
 ```
 
+Generated SQL (SQLite), bound `["Brazilian", 75000]`:
+```sql
+SELECT "Tb"."driverid" AS "driverid", "Tb"."surname" AS "surname"
+FROM "driver" AS "Tb"
+WHERE "Tb"."nationality" = ? AND
+   "Tb"."driverid" IN (WITH "fast" AS (
+      SELECT "R1"."raceid" AS "raceid", "R1"."milliseconds" AS "milliseconds"
+      FROM "lap_times" AS "R1"
+      WHERE "R1"."milliseconds" < ?
+   )
+   SELECT "R2"."driverid" AS "driverid"
+   FROM "result" AS "R2"
+   LEFT JOIN "fast" AS "R2_1" ON "R2"."raceid" = "R2_1"."raceid"
+   WHERE "R2_1"."milliseconds" IS NOT NULL)
+```
+
+`Exists(...)` is the exception. It renders its subquery without a `WITH` clause, so an `Exists` subquery that declares its own `.with(...)` raises a `QueryBuildError` naming the CTE rather than building SQL that never declares it. Test membership with `"driverid__@in" => inner`, as above, or fold the CTE's predicate into the subquery's own `filter(...)`.
+
 !!! note
-    Declaring a CTE **inside another CTE's body** is fine and stays supported — `with("outer" => q)` where `q` itself calls `with("inner" => ...)` renders a nested `WITH` and binds correctly on both backends. The restriction is only on subqueries used in a filter or a projection.
+    Up to #1292 PormG refused a nested CTE in every one of these consumers (#433), because its values bound ahead of earlier text on a backend that binds parameters by position. They now bind in text order on every backend, so only `Exists` refuses. A CTE declared **inside another CTE's body** was always supported: it renders in the leading `WITH`.
 
 Likewise, a CTE can only be referenced by a statement that actually emits a `WITH` clause. Reads (`list`, `first`, `count`, `exists`) do; `update(...)` does not, so referencing a CTE from it raises a `QueryBuildError` rather than building SQL against a relation the statement never declares. `bulk_update(...)` does not emit one either, and refuses a handler that declares a CTE up front with an `UnsafeMutationError` — the type `delete()` uses below, because the refusal is about the statement being a mutation.
 
-`delete()` refuses a CTE-scoped queryset for a related reason: the `DELETE` it emits declares no `WITH` of its own, and every cascade statement re-uses the query you are deleting as a scoping subquery (`"<fk>" IN (<your query>)`), which puts the `WITH` in exactly the nested position described above. Resolve the CTE first and filter on its result:
+`delete()` refuses a CTE-scoped queryset with an `UnsafeMutationError`: the `DELETE` it emits declares no `WITH` of its own, so the CTE would never be declared for the rows it removes. Resolve the CTE first and filter on its result:
 
 ```julia
 # ✗ refused
 query = M.Result.objects
 query.with("fast" => fast_laps, join_field = "raceid" => "raceid")
-query.filter("fast__milliseconds__@lt" => 90_000)
+query.filter("fast__milliseconds__@isnull" => false)   # a race with a sub-75-second lap
 query.delete()
 
 # ✓ filter on the ids instead
 fast_race_ids = M.Lap_times.objects
-fast_race_ids.filter("milliseconds__@lt" => 90_000)
+fast_race_ids.filter("milliseconds__@lt" => 75_000)
 fast_race_ids.values("raceid")
 
 query = M.Result.objects
@@ -397,8 +402,8 @@ The rules are those of a projected scalar subquery (below), with two differences
     A window function is not an aggregate here: it runs after grouping, so a subquery in its argument is checked.
 
     One deliberate strictness: PostgreSQL also accepts correlating on *any* column of a table whose **primary key** is grouped (every column is then functionally dependent on it), but PormG does not infer that dependency: it asks the query to name the column it groups by, on every engine — add the correlated column to `values(...)` if you hit it.
-- **A CTE and a subquery.** Declare CTEs on the outermost query; a subquery can neither declare one nor see one.
-    - A `Subquery`, `Exists` or `__@in`/`__@nin` subquery that declares its own `.with(...)` raises a `QueryBuildError` naming the CTE (#433). A nested CTE would render inside the subquery's parentheses while its values bind in the statement's leading CTE slot, which on a backend that binds parameters by position (SQLite, MySQL) matches the wrong rows. PormG refuses it on every backend until it binds those values in text order. Fold the CTE's predicate into the subquery's own `.filter(...)` instead.
+- **A CTE and a subquery.** A subquery sees only the CTEs it declares itself, and an `Exists` subquery cannot declare one.
+    - A `Subquery` or `__@in`/`__@nin` subquery may declare its own `.with(...)`: the `WITH` renders inside its parentheses and binds in text order on every backend (#1292). An `Exists` subquery may not: `Exists` renders no `WITH`, so it raises a `QueryBuildError` naming the CTE (#433). Use `__@in`, or fold the CTE's predicate into the subquery's own `.filter(...)`.
     - A subquery has its own CTE namespace, so it cannot reference a CTE its *enclosing* query declares — `CTE("ev", "status")` and `"ev__status"` inside it both raise an `UnknownFieldError` that says the CTE belongs to the enclosing query (#444). Put that condition in the enclosing query's `filter(...)`.
     - A CTE declared on the outer query **beside** a projected subquery that does not reference it is ordinary and builds on every backend.
     - A CTE declared inside another CTE's **body** is also legal: it renders in the leading `WITH`, where its values bind in text order.

@@ -17,9 +17,6 @@ end
 # projected column, its values bound as one
 # clause-ordered run in the ambient bucket.
 function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::String
-  # #433: renders an inline WITH that binds into `:cte` while its text sits in SELECT or WHERE.
-  _guard_no_nested_cte(v.query, "Subquery(...)")
-
   # query() mutates the handler's parameters, and SQLField deepcopy is shallow on `.field`, so the same
   # SubqueryObject can be shared across list()/count() deepcopies — copy before rendering.
   handler = deepcopy(v.query)
@@ -90,8 +87,8 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # #433 — before the deepcopy: this renderer emits no `WITH` prefix at all, so a CTE declared on
   # the subquery would be dropped from the SQL while still being resolvable by path. Guarding here
   # covers `Exists` in BOTH positions, because the projected form (`_get_select_query`) delegates
-  # to the filter form.
-  _guard_no_nested_cte(subquery, "Exists(...)")
+  # to the filter form. `Subquery` and `__@in` render the nested `WITH` and are not guarded (#1292).
+  _refuse_exists_nested_cte(subquery)
   q = deepcopy(subquery)
   # #1066: the projection is kept, and probed, when it decides the subquery's rows — as `exists()`.
   keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
@@ -1318,8 +1315,6 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       throw(FilterError("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
-    # #433: renders an inline WITH that binds into `:cte` while its text sits in the WHERE clause.
-    _guard_no_nested_cte(v.values, "A membership filter (__@in / __@nin)")
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
     nested_mark = nested_parameter_mark(instruc)
     # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.

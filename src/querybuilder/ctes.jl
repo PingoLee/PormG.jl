@@ -664,7 +664,10 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
     # Same treatment as the other three sites: let the body file its values under its own clauses,
     # then lift them and re-emit as one clause-ordered run in `:cte`, where this text lives — so the
     # run appears before the main query's parameters in the final SQL order. The `:cte` bucket is a
-    # scope (#936, #939): this function binds with no instruction, and its caller set `:cte` already.
+    # scope (#936, #939): this function binds with no instruction. At top level `query()` set `:cte`
+    # already; for a NESTED render (a `Subquery` or `__@in` whose query declares its own `.with`,
+    # #1292) it did not, and this scope is what files the body's run under `:cte`, so the consumer's
+    # `detach_nested_run!` lifts it first — where its text sits, ahead of the subquery's own SELECT.
     cte_sql = with_bucket(parameters, :cte) do
       nested_mark = nested_parameter_mark(parameters)
       # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially

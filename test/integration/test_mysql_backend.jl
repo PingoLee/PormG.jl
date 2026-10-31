@@ -283,8 +283,7 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
     # the slot renewed or released — rather than leaving a slot whose driver is still busy.
     # SQL: `SELECT SLEEP(20) AS abandoned_1130` through `fetch_async`, the awaiting task interrupted.
     # Why: #315 on MySQL. The interrupt lands on the awaiting task here, which is recognised over TLS
-    # too. An interrupt that lands inside the driver's own read under TLS is lost by MySQL.jl 2.0
-    # (JuliaDatabases/MySQL.jl#247); that shape is pinned as broken below.
+    # too. An interrupt that lands inside the driver's own TLS read is the next testset.
     @testset "an abandoned await is recovered and its statement stopped (#315)" begin
         sql = "SELECT SLEEP(20) AS abandoned_1130"
         running() = rows("SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO = ?"; params = Any[sql]).n[1]
@@ -303,21 +302,46 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test rows("SELECT 1 AS one").one[1] == 1
     end
 
+    # What: an interrupt that lands inside the driver's own TLS read is recognised as an abandoned
+    # await, and the statement is stopped on the server by `KILL QUERY` from a side connection.
+    # SQL: `SELECT SLEEP(20) AS abandoned_tls_1130` through `fetch_async`, the driver task interrupted
+    # one second in; then `information_schema.PROCESSLIST` must lose the statement within 10 s, long
+    # before `SLEEP(20)` would end on its own, so only the kill can empty it.
+    # Why: MySQL.jl#247. Before Reseau 1.6.2 (JuliaServices/Reseau.jl#207) the TLS layer wrapped the
+    # interrupt and MySQL.jl turned it into a `ProtocolError` without it, so core took the lost-
+    # connection path and the statement ran to its end. MySQL.jl's compat admits Reseau 1.4.1, so the
+    # resolved Reseau decides which answer is expected; PormG sets no floor on it (#1502).
     @testset "an interrupt inside the driver's TLS read is recognised (MySQL.jl#247)" begin
         tls = rows("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
         if size(tls, 1) == 1 && !isempty(something(tls[1, 2], ""))
-            sql = "SELECT SLEEP(8) AS abandoned_tls_1130"
+            reseau = get(Base.loaded_modules, Base.PkgId(Base.UUID("802f3686-a58f-41ce-bb0c-3c43c75bba36"), "Reseau"), nothing)
+            fixed = reseau !== nothing && pkgversion(reseau) >= v"1.6.2"
+            sql = "SELECT SLEEP(20) AS abandoned_tls_1130"
+            running() = rows("SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO = ?"; params = Any[sql]).n[1]
             ft = PormG.fetch_async(pool, sql)
             sleep(1.0)
+            @test running() == 1
             schedule(ft.async_result, InterruptException(); error = true)
             e = try PormG.await_result(ft); nothing catch err; err end
-            # Flips to `@test` once MySQL.jl keeps the interrupt as the TLS failure's cause.
-            @test_broken PormG.ConnectionPool._await_abandoned(e)
-            deadline = time() + 15
-            while rows("SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE INFO = ?"; params = Any[sql]).n[1] > 0 &&
-                  time() < deadline
-                sleep(0.5)
+            deadline = time() + 10
+            while running() > 0 && time() < deadline
+                sleep(0.25)
             end
+            stopped = running() == 0
+            if fixed
+                @test PormG.ConnectionPool._await_abandoned(e)
+                @test ft.abandoned === true
+                @test stopped
+            else
+                @test_broken PormG.ConnectionPool._await_abandoned(e)
+                @test_broken stopped
+                # Let the statement end on its own so it does not hold a server thread past the testset.
+                deadline = time() + 25
+                while running() > 0 && time() < deadline
+                    sleep(0.5)
+                end
+            end
+            @test rows("SELECT 1 AS one").one[1] == 1
         end
     end
 

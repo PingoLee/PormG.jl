@@ -18,8 +18,6 @@
 #     "refused before send" (JuliaDatabases/MySQL.jl#248);
 #   * closing a socket does not stop a statement on the server, so cancellation is `KILL QUERY` from a
 #     second connection;
-#   * under TLS an interrupt arrives as a `ProtocolError` with the `InterruptException` dropped
-#     (JuliaDatabases/MySQL.jl#247), so an abandoned await is recognised only without TLS until then;
 #   * the ERR packet carries an error number, a SQLSTATE and a text — no constraint, table or column
 #     field — and several texts quote the value or the statement, so the text is shown only for an
 #     allow-list of error numbers.
@@ -352,10 +350,11 @@ function _ok_info(cursor)::String
   return ok === nothing ? "" : String(ok.info)
 end
 
-# An interrupt that lands during a read can reach us wrapped in the transport's error with the
-# `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`
-# (#315), so it is rethrown bare — the Postgres.jl extension's rule, on the same socket layer. Under
-# TLS, MySQL.jl 2.0 drops the cause (JuliaDatabases/MySQL.jl#247), and nothing here can recover it.
+# Core recognises an abandoned await by the `InterruptException` (#315). MySQL.jl returns an interrupt
+# during a read as is, after closing the connection, and Reseau 1.6.2 and later rethrow one from a TLS
+# read bare (with an older Reseau, MySQL.jl turns it into a `ProtocolError` without it, MySQL.jl#247).
+# This guards a transport error that keeps the interrupt as its `cause`, rethrowing it bare: the
+# Postgres.jl extension's rule, on the same socket layer.
 function _interrupt_in_causes(e, depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false

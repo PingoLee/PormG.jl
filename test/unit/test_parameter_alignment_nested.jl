@@ -204,44 +204,49 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Rep B is refused, not fixed (#432 / #433)
+# Rep B binds in text order (#432, #433, #1292)
 # The issue's second reproduction is `__@in` over a subquery declaring its own `.with(...)`, nested
-# in a `cjoin_on` ON list. #433's guard refuses any subquery that declares a CTE, so that shape can
-# no longer be built and its acceptance criterion is met by REFUSAL rather than by correct binding.
+# in a `cjoin_on` ON list. #433's guard refused it, and this testset pinned the refusal as "the only
+# thing keeping a WITH rendered inline inside a subquery's parentheses unreachable". #1292 measured
+# that shape with the guard removed and found it binding in text order: `build_cte_clause` binds
+# under a scoped `:cte` bucket (#936, #939), so the nested WITH's values belong to the subquery's run,
+# and the `__@in` render lifts that run into the ON clause's position like any other (#432). The
+# guard went, and this pins the binding instead. A WHERE value is added so a run that jumped ahead of
+# — or fell behind — another clause's value is visible.
 #
-# Pinned deliberately: if that guard is ever relaxed, this fails here rather than silently restoring
-# a misbind. A CTE BODY's own parameters are now routed correctly (`build_cte_clause` marks and
-# re-emits them the same way, which fixed a live shape nothing refused — a plain `.with(...)` whose
-# body carries a parameterized join). What is still unhandled is narrower: a `WITH` rendered INLINE
-# inside a subquery's parentheses, where the values belong in the parent's clause rather than `:cte`.
-# #433's guard is the only thing keeping that unreachable.
+# Expected SQL: `INNER JOIN … ON … AND … > ? AND … IN (WITH "gv" AS (… = ?) SELECT … = ?) WHERE … = ?`,
+# bound `[7, "GVBODY", "CTEVAL", "WHEREVAL"]`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Rep B stays refused by #433's guard (#432)" begin
+@testset "Rep B, a nested WITH in a cjoin_on ON list, binds in text order (#432, #1292)" begin
   sub_with_cte = () -> begin
     gv = PAN.Pan_grand.objects
     gv.values("id", "code")
+    gv.filter("code" => "GVBODY")
     s = PAN.Pan_parent.objects
     s.with("gv" => gv, join_field = "grandparent" => "id")
     s.filter(CTE("gv", "code") => "CTEVAL")
     s.values("id")
     s
   end
-
-  for (backend, conn, _) in _PAN_BACKENDS
-    err = try
-      q = PAN.Pan_child.objects
-      q.values("note")
-      q.cjoin_on("Pan_parent", alias = "b2",
-                 on = [Joined("b2", "sku") == F("note"), "id__@gt" => 7,
-                       "parent__@in" => sub_with_cte()])
-      inspect_query(q; connection = conn)
-      nothing
-    catch e
-      e
-    end
-    @test err isa PormG.QueryBuildError
-    @test occursin("gv", sprint(showerror, err))
+  rep_b = () -> begin
+    q = PAN.Pan_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.cjoin_on("Pan_parent", alias = "b2",
+               on = [Joined("b2", "sku") == F("note"), "id__@gt" => 7,
+                     "parent__@in" => sub_with_cte()])
+    q
   end
+  text_order = Any[7, "GVBODY", "CTEVAL", "WHEREVAL"]
+
+  pg = inspect_query(rep_b(); connection = _PAN_PG)
+  sl = inspect_query(rep_b(); connection = _PAN_SL)
+  for (insp, kind) in ((pg, :postgres), (sl, :sqlite))
+    @test occursin("IN (WITH \"gv\" AS", insp[:sql_text])
+    assert_marker_count(insp, kind)
+  end
+  @test _pg_text_order(pg) == text_order       # the oracle is the shape this case claims
+  assert_bound_in_text_order(sl, _pg_text_order(pg))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -173,7 +173,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Column Expressions in Value Slots (#808)" include("unit/test_expression_kwarg_slots.jl")
     @testset "Column Expressions on Value-Shaped Lookups (#811/#793)" include("unit/test_column_rhs_lookups.jl")
     @testset "CTE Table Names & Alias Reservation (#479/#480)" include("unit/test_cte_table_name_and_alias_reservation.jl")
-    @testset "Nested CTE Guard (#433)" include("unit/test_nested_cte_guard.jl")
+    @testset "Nested CTE in subqueries (#433, #1292)" include("unit/test_nested_cte_guard.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")
     @testset "JSON Containment Operators (#27)" include("unit/test_json_operators.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")

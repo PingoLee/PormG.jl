@@ -1,53 +1,53 @@
 """
-Unit coverage for the nested-CTE guard (#433): a `.with(...)` declared INSIDE a subquery that is
-consumed by `Exists(...)`, `Subquery(...)` or a `__@in` / `__@nin` membership filter is refused at
-query-build time, on BOTH backends.
+Unit coverage for a `.with(...)` declared INSIDE a subquery (#433, narrowed by #1292).
 
-Why the guard is wider than the reported crash. The three consumers failed in two different ways:
+The contract, per consumer:
 
-  - `Exists(...)` never rendered a nested CTE at all. `_build_exists_query` hand-rolls its own
-    SELECT rather than routing through `query()`, so it emits no `WITH` prefix and never
-    materializes the CTE's model. The first path resolving `<cte>__col` then reached an
-    "internal error … please report it" — a message reserved for a broken invariant, raised for a
-    query shape the user was entitled to write. That is what #433 reported.
-  - `Subquery(...)` and `"col__@in" => sub` DO render an inline `WITH`, and on PostgreSQL they are
-    correct. On SQLite they can MISBIND, because `build_cte_clause` binds unconditionally into the
-    `:cte` bucket and `:cte` is flattened ahead of `:select` and `:where`. Measured on this
-    fixture before the guard landed:
+  - `Subquery(...)` and `"col__@in" => sub` / `__@nin` BUILD. The nested `WITH` renders inside the
+    subquery's parentheses, and its values bind in text order on every engine: `build_cte_clause`
+    binds under a scoped `:cte` bucket (#936, #939) and the consumer lifts the subquery's whole run,
+    `:cte` first, into the clause its text sits in (#432, `detach_nested_run!`).
+  - `Exists(...)` is REFUSED with a `QueryBuildError` naming the CTE. `_build_exists_query`
+    hand-rolls its own SELECT rather than routing through `query()`, so it renders no `WITH`: the
+    first path resolving `<cte>__col` reached an "internal error … please report it" before #433,
+    and would now reach `build_joins.jl`'s "emits no WITH clause" refusal, which is about
+    `update()`. That is a missing render step, and the refusal stays until the step exists.
 
-        filter("note" => "WHEREVAL", "parent__@in" => <sub declaring .with("gv" => ...)>)
-            PostgreSQL  ["WHEREVAL", "CTEVAL", "INNERVAL"]     <- matches the text
-            SQLite      ["CTEVAL", "INNERVAL", "WHEREVAL"]     <- wrong rows, no error
+History, because the receipts below are #433's. #433 refused all three consumers on every engine,
+after measuring a SQLite misbind on this fixture:
 
-        values("a" => Subquery(plain), "b" => Subquery(<sub with .with>))
-            PostgreSQL  ["PLAINVAL", "CTEVAL", "INNERVAL"]
-            SQLite      ["CTEVAL", "INNERVAL", "PLAINVAL"]
+    filter("note" => "WHEREVAL", "parent__@in" => <sub declaring .with("gv" => ...)>)
+        PostgreSQL  ["WHEREVAL", "CTEVAL", "INNERVAL"]     <- matches the text
+        SQLite      ["CTEVAL", "INNERVAL", "WHEREVAL"]     <- wrong rows, no error
 
-    The misbind is CONDITIONAL, not universal: it needs a value whose text precedes the nested CTE
-    but whose bucket flattens later. With no such value the same shapes bind correctly, which is
-    why this survived undetected. PostgreSQL never misbinds — its `\$N` numbering has no buckets.
+    values("a" => Subquery(plain), "b" => Subquery(<sub with .with>))
+        PostgreSQL  ["PLAINVAL", "CTEVAL", "INNERVAL"]
+        SQLite      ["CTEVAL", "INNERVAL", "PLAINVAL"]
 
-Refusing on BOTH backends is the "keep PostgreSQL and SQLite aligned" rule, not a claim that
-PostgreSQL is broken: a query that builds on one engine and is refused on the other is a worse
-trap than one refused on both. `UPGRADING.md` records the removal of the working PG shapes.
+#1292 re-measured both with the guard removed: every engine now binds the text order. Those two
+shapes are pinned here as the regression, beside every position a nested `WITH` can sit in.
 
-What is pinned here (deterministic, DB-free — rendered via `inspect_query`, both dialects):
-  - Each of the consumers refuses a subquery carrying its own `.with(...)`, with a
-    `QueryBuildError` that names the offending CTE and never says "internal"/"report".
-  - `Exists` is refused in the PROJECTED position too, not only in a filter.
-  - BOUNDARY: a CTE declared inside a CTE **body** still renders, on both backends, with its
-    values in text order. This is the control that stops the guard being written one level too
-    high — that nesting is correct today and must stay legal.
+What is pinned here (deterministic, DB-free — rendered via `inspect_query` on mock connections):
+  - Each built shape on PostgreSQL, SQLite and MySQL: the exact parameter vector in text order, the
+    marker count, and the positional engines checked against PostgreSQL's `\$N` read back in text
+    order (`_pg_text_order`, the cross-backend differential — a source that is neither the test nor
+    the change).
+  - `Exists` is refused in the filter AND the projected position, with a message that names the
+    missing render and the spellings that do render a nested `WITH`.
+  - BOUNDARY: a CTE declared inside a CTE **body** renders, with its values in text order.
+  - The mutation-path audits #433 found (`update()` with a CTE reference, `delete()` of a
+    CTE-scoped queryset) keep refusing — they are about the OUTER query's `.with()`, not a nested one.
   - CONTROLS: the same consumers with no nested CTE still render unchanged.
   - #566, the other half of "a CTE inside a subquery": a subquery that REFERENCES a CTE only its
-    enclosing query declares is refused too (#444: each query has its own CTE namespace), in both
+    enclosing query declares is refused (#444: each query has its own CTE namespace), in both
     spellings, and the message names that rule. A CTE on the outer query beside a subquery that
-    does not reference it is legal. Together with the #433 testsets these pin every shape the
-    *Rules and limitations* list in `docs/src/read/subqueries_and_ctes.md` states.
+    does not reference it is legal. Together these pin every shape the *Rules and limitations*
+    list in `docs/src/read/subqueries_and_ctes.md` states.
 
 Sibling coverage:
-  - `test_cte_ergonomics.jl` (#44)  -> CROSS-joined CTEs and `F()` correlation.
-  - `test_alignment_sqlite.jl`      -> the positional bucket contract these values ride on.
+  - `test_cte_ergonomics.jl` (#44)            -> CROSS-joined CTEs and `F()` correlation.
+  - `test_alignment_sqlite.jl`                -> the positional bucket contract these values ride on.
+  - `test_parameter_alignment_nested.jl` (#432) -> Rep B, a nested `WITH` inside a `cjoin_on` ON list.
 """
 # julia --project=test/integration test/unit/test_nested_cte_guard.jl
 
@@ -61,8 +61,13 @@ import Logging
 # selects SQLite `?` vs PostgreSQL `$N` rendering.
 struct NcgMockSQLite <: PormG.PormGSQLite end
 struct NcgMockPostgres <: PormG.PormGPostgres end
+struct NcgMockMySQL <: PormG.PormGMySQL end
 const _NCG_SL = NcgMockSQLite()
 const _NCG_PG = NcgMockPostgres()
+const _NCG_MY = NcgMockMySQL()
+# A mock has no driver to ask: a render that reads the SQLite version raises "requires SQLite" on a
+# mock connection without this (the ordered-by-Subquery shape below reaches one).
+PormG.backend_sqlite_version(::NcgMockSQLite) = 3045000
 
 PormG.config["ncg_mock"] = PormG.Configuration.Settings(
   connections = _NCG_SL,
@@ -98,9 +103,14 @@ PormG.Models.set_models(@__MODULE__, "ncg_mock")
 end
 
 const NCG = NcgModels
-import PormG.QueryBuilder: F, Exists, Subquery, inspect_query
+import PormG.QueryBuilder: F, Exists, Subquery, Count, Case, When, inspect_query
+
+include("helper_marker_alignment.jl")
 
 const _NCG_BACKENDS = (("PostgreSQL", _NCG_PG), ("SQLite", _NCG_SL))
+# The engines that bind by position (`?`), where a nested run out of text order would match the wrong
+# rows (#1292). MySQL is in the binding-order checks only; every other testset runs on `_NCG_BACKENDS`.
+const _NCG_POSITIONAL = (("SQLite", _NCG_SL), ("MySQL", _NCG_MY))
 
 # A CTE body. Carries its own parameter ("CTEVAL") so bucket order is observable.
 _ncg_grand_cte() = begin
@@ -143,127 +153,226 @@ _ncg_sql(build, conn) = Logging.with_logger(Logging.NullLogger()) do
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The consumers refuse a subquery that declares its own .with(...) (#433)
-# Driven from one table so a fourth consumer added later inherits the same assertions rather than
-# getting its own hand-written near-copy. Each entry names the spelling the message must open
-# with, so a guard wired to the wrong site fails loudly instead of passing on a sibling's message.
+# Exists(...) refuses a subquery that declares its own .with(...) (#433, #1292)
+# Both positions: the projected form delegates to the filter form, so guarding `_build_exists_query`
+# covers both. Without the projected case, a guard placed in `_get_filter_query` instead would pass
+# every other assertion in this file.
 # ─────────────────────────────────────────────────────────────────────────────
-const _NCG_CONSUMERS = [
-  (
-    "Exists(...) in a filter", "Exists(...)",
-    () -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note")
-      q.filter(Exists(_ncg_inner_with_cte()))
-      q
-    end,
-  ),
-  (
-    "Exists(...) projected in values()", "Exists(...)",
-    () -> begin
-      q = NCG.Ncg_child.objects
-      # The projected form delegates to the filter form, so guarding `_build_exists_query` covers
-      # both positions. Without this case, a guard placed in `_get_filter_query` instead would
-      # pass every other assertion in this file.
-      q.values("note", "has_parent" => Exists(_ncg_inner_with_cte()))
-      q
-    end,
-  ),
-  (
-    "Subquery(...) projected in values()", "Subquery(...)",
-    () -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note", "pid" => Subquery(_ncg_inner_with_cte()))
-      q
-    end,
-  ),
-  (
-    "__@in membership filter", "A membership filter",
-    () -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note")
-      q.filter("parent__@in" => _ncg_inner_with_cte())
-      q
-    end,
-  ),
-  (
-    "__@nin membership filter", "A membership filter",
-    () -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note")
-      q.filter("parent__@nin" => _ncg_inner_with_cte())
-      q
-    end,
-  ),
+const _NCG_EXISTS_CONSUMERS = [
+  ("Exists(...) in a filter", () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter(Exists(_ncg_inner_with_cte()))
+    q
+  end),
+  ("Exists(...) projected in values()", () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note", "has_parent" => Exists(_ncg_inner_with_cte()))
+    q
+  end),
 ]
 
-@testset "a subquery declaring its own .with(...) is refused (#433)" begin
-  for (label, opening, build_q) in _NCG_CONSUMERS
+@testset "Exists(...) over a subquery declaring its own .with(...) is refused, naming the missing WITH (#433, #1292)" begin
+  # Expected: QueryBuildError, no SQL. Why: `_build_exists_query` renders no WITH, so the CTE would
+  # never be declared — #433's reported crash. The message names that reason (a missing render step,
+  # not a binding order, which #1292 measured correct) and the spellings that do render it.
+  for (label, build_q) in _NCG_EXISTS_CONSUMERS
     @testset "$label" begin
       for (backend, conn) in _NCG_BACKENDS
         err = _ncg_err(build_q, conn)
-
-        # Before the fix this was an `ErrorException` for Exists and NO error at all for
-        # Subquery/@in, so the type assertion is meaningful in both directions.
+        # Before #433 this was an `ErrorException` ("internal error … please report it").
         @test err isa PormG.QueryBuildError
         msg = sprint(showerror, err)
-
-        # Names the consumer the caller actually wrote, so the message points at the line to edit.
-        @test occursin(opening, msg)
-        # Names the offending CTE by the name the caller gave it — per-consumer on purpose; a
-        # hardcoded name would not notice a message that reported the wrong one.
+        @test occursin("Exists(...)", msg)
+        # Names the offending CTE by the name the caller gave it.
         @test occursin("gv", msg)
-        # Points at the API that caused it and at the remedy.
         @test occursin(".with(", msg)
+        # The true reason — and never #433's positional-binding one, which #1292 retired.
+        @test occursin("is rendered without a", msg)
+        @test !occursin("binds parameters by position", msg)
+        # The remedies: fold the predicate, or a consumer that renders a nested WITH.
         @test occursin(".filter(", msg)
-        # Never blames the caller for a PormG bug: this is a user-writable shape, and the message
-        # it replaced was exactly the "internal ... please report it" antipattern (#424's lesson).
+        @test occursin("__@in\" => subquery", msg) && occursin("Subquery(...)", msg)
         @test !occursin("internal", lowercase(msg))
         @test !occursin("report", lowercase(msg))
-        # #1167: the misbind is PormG's binding order, named as such — refused on every engine, so
-        # the message names the mechanism (positional binding), never an engine.
-        @test occursin("on a backend that binds parameters by position", msg)
-        @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
+        @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg) && !occursin("MySQL", msg)
       end
     end
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The reported reproduction, and the two measured misbind shapes, are each refused
-# These are the exact queries from #433 and from the bucket measurement in this file's header.
-# Pinning them separately from the table above means a future narrowing of the guard (say, to
-# SQLite only, or to Exists only) fails here rather than silently re-opening a wrong-rows bug.
+# Subquery(...) and __@in / __@nin build over a subquery declaring its own .with(...) (#1292)
+# Every position a nested WITH can sit in, each with the values listed IN TEXT ORDER. Three checks
+# per engine, which fail independently: the vector itself (the order a reader of the SQL expects),
+# the marker count (#441's half), and — on the positional engines — equality with PostgreSQL's `$N`
+# read back in text order (`_pg_text_order`), the cross-backend differential.
+#
+# G and H are #433's measured misbinds. With the guard removed and the binding unfixed, SQLite bound
+# them `["CTEVAL", "INNERVAL", "WHEREVAL"]` / `["CTEVAL", "INNERVAL", "PLAINVAL"]`; these rows are the
+# regression for that.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "the reported and misbinding shapes are refused (#433)" begin
-  for (backend, conn) in _NCG_BACKENDS
-    # #433's reproduction: Exists(sub) where sub declares .with(...).
-    @test _ncg_err(() -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note")
-      q.filter(Exists(_ncg_inner_with_cte()))
-      q
-    end, conn) isa PormG.QueryBuildError
+const _NCG_BUILT_SHAPES = [
+  ("G: a WHERE value, then __@in (#433's misbind)", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.filter("parent__@in" => _ncg_inner_with_cte())
+    q
+  end),
+  ("H: a plain Subquery, then one with a CTE (#433's misbind)", ["PLAINVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note",
+             "a" => Subquery(_ncg_inner_plain("PLAINVAL")),
+             "b" => Subquery(_ncg_inner_with_cte()))
+    q
+  end),
+  ("a WHERE value, then __@nin", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL", "parent__@nin" => _ncg_inner_with_cte())
+    q
+  end),
+  ("__@in, then a WHERE value", ["CTEVAL", "INNERVAL", "AFTERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("parent__@in" => _ncg_inner_with_cte())
+    q.filter("note" => "AFTERVAL")
+    q
+  end),
+  ("Subquery(...) in a filter", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL", "parent" => Subquery(_ncg_inner_with_cte()))
+    q
+  end),
+  ("Subquery(...) in HAVING", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL")
+    q.values("note", "n" => Count("id"))
+    q.filter("n__@gt" => Subquery(_ncg_inner_with_cte()))
+    q
+  end),
+  ("__@in inside a When condition", ["CTEVAL", "INNERVAL", 1, 0, "WHEREVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL")
+    q.values("note", "flag" => Case(When("parent__@in" => _ncg_inner_with_cte(), then = 1), default = 0))
+    q
+  end),
+  ("a projected Subquery(...) the query orders by", ["CTEVAL", "INNERVAL", "WHEREVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL")
+    q.values("note", "s" => Subquery(_ncg_inner_with_cte()))
+    q.order_by("-s")
+    q
+  end),
+  # ON prints before WHERE, so the nested run comes first in the text; PostgreSQL numbers the WHERE
+  # value `$1` because it binds first, which is why the vectors differ there and only the text-order
+  # readback is compared.
+  ("__@in in an on() join condition", ["CTEVAL", "INNERVAL", "WHEREVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL")
+    q.on("parent", "parent__id__@in" => _ncg_inner_with_cte())
+    q.values("note", "parent__sku")
+    q
+  end),
+  ("__@in over a subquery whose own __@in declares the CTE", ["WHEREVAL", "MIDVAL", "CTEVAL", "INNERVAL"], () -> begin
+    mid = NCG.Ncg_parent.objects
+    mid.filter("sku" => "MIDVAL", "id__@in" => _ncg_inner_with_cte())
+    mid.values("id")
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL", "parent__@in" => mid)
+    q.values("note")
+    q
+  end),
+  # The nested query binds in its SELECT list as well as its WHERE. Its CTE body's value must come
+  # first: that is what the `:cte` scope in `build_cte_clause` gives a nested render, where `query()`
+  # does not set `:cte` itself. Without it the body's value would file under the ambient `:where`
+  # and be lifted AFTER the projection's `"PROJVAL", 1, 0`.
+  ("__@in over a CTE subquery that binds in its own SELECT", ["WHEREVAL", "CTEVAL", "PROJVAL", 1, 0, "INNERVAL"], () -> begin
+    s = NCG.Ncg_parent.objects
+    s.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+    s.filter(CTE("gv", "code") => "INNERVAL")
+    s.values("v" => Case(When("sku" => "PROJVAL", then = 1), default = 0))
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL", "parent__@in" => s)
+    q
+  end),
+  # The nested name shadows the outer one. Each query has its own CTE namespace (#444), and SQL
+  # scopes a WITH name to its own SELECT, so both resolve to their own declaration.
+  ("a nested CTE named like the outer query's", ["CTEVAL", "OUTERVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_parent.objects
+    q.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+    q.filter("gv__code" => "OUTERVAL", "id__@in" => _ncg_inner_with_cte())
+    q.values("sku")
+    q
+  end),
+  ("__@in with a nested CTE, inside a CTE body", ["BODYVAL", "CTEVAL", "INNERVAL", "MAINVAL"], () -> begin
+    body = NCG.Ncg_child.objects
+    body.filter("note" => "BODYVAL", "parent__@in" => _ncg_inner_with_cte())
+    body.values("id", "parent")
+    q = NCG.Ncg_parent.objects
+    q.with("cb" => body, join_field = "id" => "parent")
+    q.filter("sku" => "MAINVAL")
+    q.values("sku", "cb__id")
+    q
+  end),
+]
 
-    # Misbind shape G: a WHERE value textually PRECEDES the nested CTE, so on SQLite it was
-    # bound behind it — `note` was matched against "CTEVAL" and `gv.code` against "WHEREVAL".
-    @test _ncg_err(() -> begin
+const _NCG_NESTED_WITH = r"\(WITH [\"`]gv[\"`] AS"
+
+@testset "Subquery(...) / __@in over a subquery declaring its own .with(...) build, values in text order (#1292)" begin
+  # Expected SQL: `… IN (WITH "gv" AS (SELECT … WHERE code = ?) SELECT … WHERE "gv".code = ?)` with
+  # the nested WITH inside the consumer's parentheses, and every value bound where its marker prints.
+  # Why: #433 refused these on every engine for a misbind that no longer exists; a regression in the
+  # nested-run lift would bind them out of text order on SQLite and MySQL, silently.
+  for (label, expected, build_q) in _NCG_BUILT_SHAPES
+    @testset "$label" begin
+      pg = _ncg_sql(build_q, _NCG_PG)
+      @test occursin(_NCG_NESTED_WITH, pg[:sql_text])
+      assert_marker_count(pg, :postgres)
+      @test _pg_text_order(pg) == expected
+      for (backend, conn) in _NCG_POSITIONAL
+        insp = _ncg_sql(build_q, conn)
+        @test occursin(_NCG_NESTED_WITH, insp[:sql_text])
+        assert_marker_count(insp, :sqlite)
+        assert_bound_in_text_order(insp, expected)
+        @test insp[:parameters] == _pg_text_order(pg)
+      end
+    end
+  end
+end
+
+@testset "the read and write terminals bind a nested CTE in text order (#1292)" begin
+  # Expected: `count`/`exists` render `… WHERE note = ? AND parent IN (WITH "gv" AS …)`, and the
+  # UPDATE/DELETE carry the same nested WITH in their WHERE (or in SET). Why: each terminal renders
+  # its own statement around the same filter render, so a terminal-specific bucket switch would
+  # misbind only there. On the model's own SQLite connection, the engine whose order is at stake.
+  _filtered(note) = begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => note, "parent__@in" => _ncg_inner_with_cte())
+    q
+  end
+  for (label, expected, run) in [
+    ("count()", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> _filtered("WHEREVAL").count(show_query = :inspection)),
+    ("exists()", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> _filtered("WHEREVAL").exists(show_query = :inspection)),
+    ("update(), the CTE in WHERE", ["SETVAL", "WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered("WHEREVAL").update("note" => "SETVAL", show_query = :inspection)),
+    ("update(), the CTE in SET", ["CTEVAL", "INNERVAL", "WHEREVAL"], () -> begin
       q = NCG.Ncg_child.objects
-      q.values("note")
       q.filter("note" => "WHEREVAL")
-      q.filter("parent__@in" => _ncg_inner_with_cte())
-      q
-    end, conn) isa PormG.QueryBuildError
-
-    # Misbind shape H: a plain Subquery in the SELECT list textually precedes the one carrying
-    # the CTE, and its `:select` value was flattened after the nested CTE's `:cte` values.
-    @test _ncg_err(() -> begin
-      q = NCG.Ncg_child.objects
-      q.values("note",
-               "a" => Subquery(_ncg_inner_plain("PLAINVAL")),
-               "b" => Subquery(_ncg_inner_with_cte()))
-      q
-    end, conn) isa PormG.QueryBuildError
+      q.update("parent" => Subquery(_ncg_inner_with_cte()), show_query = :inspection)
+    end),
+    ("delete()", ["WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered("WHEREVAL").delete(show_query = :inspection, connection = _NCG_SL)),
+  ]
+    @testset "$label" begin
+      insp = Logging.with_logger(run, Logging.NullLogger())
+      @test occursin(_NCG_NESTED_WITH, insp[:sql_text])
+      assert_marker_count(insp, :sqlite)
+      assert_bound_in_text_order(insp, expected)
+    end
   end
 end
 
@@ -380,15 +489,17 @@ end
         # neighbouring guards in `delete()` use.
         #
         # The leaf path RENDERED successfully before this guard, so the type assertion is the
-        # load-bearing half there. On the CASCADE path the pre-guard behaviour was the `__@in`
-        # guard's QueryBuildError, so the type assertion discriminates there too — but
-        # `occursin("delete()")` is what pins that it came from THIS guard. Do not "tidy" that line
-        # away: a mutation test showed the cascade arm drops to 6 pass / 2 fail without the guard,
-        # and that single assertion is one of the two.
+        # load-bearing half there. On the CASCADE path, without this guard, the root statement reaches
+        # `build_joins.jl`'s "emits no WITH clause" QueryBuildError (the `__@in` refusal that used to
+        # fire first was lifted by #1292), so the type assertion discriminates there too — and
+        # `occursin("delete()")` pins that it came from THIS guard, not that fallback.
         @test err isa PormG.UnsafeMutationError
         msg = sprint(showerror, err)
         @test occursin("delete()", msg)
         @test occursin("gv", msg)
+        # #1292: the reason is the statement (a DELETE renders no WITH), not a binding order.
+        @test occursin("never be declared", msg)
+        @test !occursin(":cte", msg)
         @test !occursin("internal", lowercase(msg))
       end
     end

@@ -4893,11 +4893,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE scale 1 col to scale 2 | cte", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | alone", :sqlite) =>
@@ -4911,11 +4911,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE scale 3 col to scale 2 | cte", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
   ("Cast CTE scale 3 col to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :sqlite) =>
@@ -4929,11 +4929,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | alone", :sqlite) =>
@@ -4947,11 +4947,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
     (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :ok, read = "CDecimal(10, 1)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | alone", :sqlite) =>
@@ -6045,11 +6045,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("DATE CTE interval col | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
   ("DATE CTE interval col | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
   ("DATE CTE interval col | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
   ("DATE CTE interval col | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "The date part reads a calendar date, so its column must be a DateField or a DateTimeField; PormG.QueryBuilder.CTEReferen"),
   ("WEEK_DAY Sum interval | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The week_day part over a duration is not supported: a duration has no calendar date on any engine, so the part has no me"),
   ("WEEK_DAY Sum interval | alone", :sqlite) =>
@@ -7839,11 +7839,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce CTE json lag col / 2 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
   ("Coalesce CTE json lag col / 2 | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
   ("Coalesce CTE json lag col / 2 | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
   ("Coalesce CTE json lag col / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+    (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over the CTE column `CTE(\"c\", \"w\")` (`LAG(…)` over the JSON key `payload__n`) is not supported: a"),
   ("Coalesce Subquery json key / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
   ("Coalesce Subquery json key / 2 | alone", :sqlite) =>

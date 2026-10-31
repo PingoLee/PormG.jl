@@ -285,12 +285,6 @@ end
 @testset "#926: lookups a scalar Subquery cannot serve are refused" begin
   for (backend, mod) in _SQ_MODELS
     two_cols = Subquery(mod.Result.objects.filter("raceid" => OuterRef("raceid")).values("grid", "raceid"))
-    nested_cte = begin
-      inner = mod.Result.objects
-      inner.with("ev" => mod.Result.objects.values("raceid", "grid"), join_field = "raceid" => "raceid")
-      inner.values("m" => Min("grid"))
-      Subquery(inner)
-    end
     cases = (
       ("@in", q -> q.filter("grid__@in" => _sq_best(mod)), FilterError,
        "'in' takes the query itself, not a scalar Subquery(...)"),
@@ -304,8 +298,6 @@ end
        "'range' operator requires exactly 2 values, got 1"),
       ("two projected columns", q -> q.filter("grid" => two_cols), QueryBuildError,
        "Subquery(...) must project exactly one column; it currently projects 2"),
-      ("a subquery declaring its own CTE", q -> q.filter("grid" => nested_cte), QueryBuildError,
-       "does not support a subquery that declares its own"),
     )
     @testset "$backend: $label" for (label, setup, T, needle) in cases
       err = try
@@ -319,6 +311,31 @@ end
       @test err isa T
       @test occursin(needle, sprint(showerror, err))
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A filter-position Subquery may declare its own CTE (#1292)
+# #433 refused it, on a misbind #1292 measured gone: the nested WITH renders inside the parentheses
+# and its value binds with the subquery's run, where its text sits. Expected SQL:
+# `WHERE "Tb"."driverid" > ? AND "Tb"."grid" = (WITH "ev" AS (… WHERE … = ?) SELECT MIN(…) …)`. The
+# WHERE value comes first in the text, so a CTE run left in `:cte` (flattened first) would show here.
+# The full position matrix is `test_nested_cte_guard.jl`'s; this pins the #926 filter arm.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1292: a filter-position Subquery declaring its own CTE builds, values in text order" begin
+  for (backend, mod) in _SQ_MODELS
+    inner = mod.Result.objects
+    inner.with("ev" => mod.Result.objects.filter("grid" => 20).values("raceid", "grid"),
+               join_field = "raceid" => "raceid")
+    inner.values("m" => Min("grid"))
+    q = mod.Result.objects
+    q.filter("driverid__@gt" => 10, "grid" => Subquery(inner))
+    q.values("resultid")
+    insp = inspect_query(q)
+    @test occursin("(WITH \"ev\" AS", insp[:sql_text])
+    # PostgreSQL's `$N` read back in text order; SQLite's flattened vector is already text order.
+    @test (backend === :postgres ? _pg_text_order(insp) : insp[:parameters]) == [10, 20]
+    assert_marker_count(insp, backend)
   end
 end
 

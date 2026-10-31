@@ -559,6 +559,39 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# (13b) LibPQ.jl's own "socket closed" is a lost connection, decided by its type (#1519).
+#
+# When the socket under a running statement closes, LibPQ.jl's result loop raises
+# `JLConnectionError("PostgreSQL connection socket was unexpectedly closed")` — no SQLSTATE, and not
+# a `PQResultError`. The #1072 soak probe caught it around every `cut` and `restart` fault: the
+# classifier returned `:unknown`, so the caller got `StatementError` (the SQL was refused) instead of
+# `OperationalError`, and the dead handle was neither renewed nor swept. Expected: a lost connection,
+# classified `:operational`, and NOT retry-safe (the statement may already have reached the server).
+# The decision is the type, so any message LibPQ.jl raises it with counts, and no message is read.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "LibPQ's JLConnectionError is a lost connection, never retried (#1519)" begin
+  pg = CP.PostgresConnectionPool("host=localhost dbname=x user=y")
+  E = LibPQ.Errors
+
+  closed_socket = E.JLConnectionError("PostgreSQL connection socket was unexpectedly closed")
+  @test PormG.backend_is_connection_error(pg, closed_socket)
+  @test PormG.backend_classify_error(pg, closed_socket) === :operational
+  @test !PormG.backend_is_retry_safe(pg, closed_socket)
+
+  # Type, not text: another of LibPQ.jl's messages for the same type is a lost connection too.
+  timed_out = E.JLConnectionError("Connection process timed out")
+  @test PormG.backend_is_connection_error(pg, timed_out)
+  @test !PormG.backend_is_retry_safe(pg, timed_out)
+
+  # Its sibling about RESULTS is not a lost connection: the match is this one type, not
+  # `JLClientException`.
+  @test !PormG.backend_is_connection_error(pg, E.JLResultError("Result has no rows"))
+
+  # Inside a multi-result failure, the recursion in step (0) still finds it.
+  @test PormG.backend_is_connection_error(pg, CompositeException([closed_socket]))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (10) The retry never renews a slot it could not claim (#584).
 #
 # `await_result`'s finally releases the failed connection BEFORE `fetch`'s catch runs, so a parked

@@ -15,9 +15,8 @@
 # Known gaps, documented rather than worked around: multi-statement SQL handed to `fetch` (Postgres.jl
 # runs every statement over the extended protocol — JuliaDatabases/Postgres.jl#23; the migration
 # runner cuts its plan entries into single statements for exactly that reason, #841),
-# `passfile`/`hostaddr`/Unix sockets (unsupported by Postgres.jl), no COPY row count from the
-# driver (counted here instead), and Ctrl-C not cancelling a running statement: `fetch` raises the
-# interrupt once the statement has finished (#1512; `test/performance/sigint_query_probe.jl`).
+# `passfile`/`hostaddr`/Unix sockets (unsupported by Postgres.jl), and no COPY row count from the
+# driver (counted here instead).
 # ==============================================================================
 
 module PormGPostgresExt

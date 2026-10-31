@@ -263,6 +263,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Transaction Context Scoped To Its Own Pool (#831)" include("unit/test_tx_context_pool_scope.jl")
     @testset "Task Outliving Its Transaction Block (#839)" include("unit/test_tx_context_leaked_task.jl")
     @testset "Abandoned Await Never Releases a Dirty Connection (#315)" include("unit/test_await_result_interrupt.jl")
+    @testset "Ctrl-C Reaches an Await While the Statement Runs (#1512)" include("unit/test_await_interrupt_delivery.jl")
     @testset "Interrupted Transaction / Advisory Lock Recovers Its Connection (#322)" include("unit/test_transaction_interrupt.jl")
     @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
     @testset "Direct-Handoff Pool Wait (#124)" include("unit/test_connection_pool_handoff.jl")

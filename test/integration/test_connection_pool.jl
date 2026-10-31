@@ -200,7 +200,7 @@ if only_on(:postgres, "DSN quoting is libpq's connection string (SQLite connects
                     @test occursin("passfile='$passfile'", pool.connection_string)
                     if PormG.postgres_driver(pool) === :postgres
                         # Postgres.jl does not support `passfile` — a documented gap of the
-                        # experimental driver (#788). The pool refuses it at once and names the
+                        # Postgres.jl driver (#788). The pool refuses it at once and names the
                         # parameter, never the password.
                         err = try; _select_one(pool); nothing; catch e; e; end
                         @test err isa PormG.ConnectionPool.PoolConnectError

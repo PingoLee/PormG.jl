@@ -37,7 +37,7 @@ flowchart TD
   BK["Backend.jl<br/>backend_* generics (no driver type named)"]
   subgraph EXT["weakdep extensions — ext/"]
     PG["PormGLibPQExt.jl → LibPQ"]
-    PJ["PormGPostgresExt.jl → Postgres (experimental)"]
+    PJ["PormGPostgresExt.jl → Postgres"]
     SL["PormGSQLiteExt.jl → SQLite"]
     MY["PormGMySQLExt.jl → MySQL"]
   end

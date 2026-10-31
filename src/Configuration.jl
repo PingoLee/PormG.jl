@@ -1925,7 +1925,7 @@ neither gets `InvalidConfigurationError`, before any pool is built or replaced. 
 (`set_connection_resolver`) states it with an `"env"` entry in the `Dict` it returns.
 
 `postgres_driver` picks the driver of a PostgreSQL pool, as the `postgres_driver:` key does in
-`connection.yml`: `"LibPQ"` or `"Postgres"` (experimental). Unset, it falls back to the
+`connection.yml`: `"LibPQ"` or `"Postgres"`. Unset, it falls back to the
 `PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
 """
 function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing)

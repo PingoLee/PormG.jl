@@ -1,5 +1,5 @@
 # ==============================================================================
-# PormGPostgresExt — PostgreSQL through Postgres.jl (experimental, #788)
+# PormGPostgresExt — PostgreSQL through Postgres.jl (#788; supported, no longer experimental, since #1072)
 #
 # Loaded when the user runs `using Postgres`. Implements the backend generics declared in
 # `src/Backend.jl` for pools built with `postgres_driver: Postgres` — `PostgresConnectionPool{:postgres}`.
@@ -15,8 +15,9 @@
 # Known gaps, documented rather than worked around: multi-statement SQL handed to `fetch` (Postgres.jl
 # runs every statement over the extended protocol — JuliaDatabases/Postgres.jl#23; the migration
 # runner cuts its plan entries into single statements for exactly that reason, #841),
-# `passfile`/`hostaddr`/Unix sockets (unsupported by Postgres.jl), and no COPY row count from the
-# driver (counted here instead).
+# `passfile`/`hostaddr`/Unix sockets (unsupported by Postgres.jl), no COPY row count from the
+# driver (counted here instead), and Ctrl-C not cancelling a running statement: `fetch` raises the
+# interrupt once the statement has finished (#1512; `test/performance/sigint_query_probe.jl`).
 # ==============================================================================
 
 module PormGPostgresExt
@@ -620,7 +621,6 @@ function _open_connection(pool::_Pool)::Postgres.Connection
     close(conn)
     rethrow()
   end
-  @info "PormG: the Postgres.jl PostgreSQL driver is experimental (postgres_driver: Postgres)" maxlog = 1
   return conn
 end
 

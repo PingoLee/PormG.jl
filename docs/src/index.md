@@ -58,7 +58,7 @@ Pkg.add("MySQL")     # MySQL backend (MySQL 8.4 or newer)
 ```
 
 PostgreSQL can also run on the pure-Julia [Postgres.jl](https://github.com/JuliaDatabases/Postgres.jl) driver, as an
-**experimental** opt-in: install `Postgres`, load it with `using PormG, Postgres`, and set
+opt-in: install `Postgres`, load it with `using PormG, Postgres`, and set
 `postgres_driver: Postgres` — see [Choosing the PostgreSQL driver](configuration/connection_yml.md#Choosing-the-PostgreSQL-driver).
 
 Load the driver alongside PormG (`using PormG, LibPQ`, `using PormG, SQLite` or `using PormG, MySQL`). A bare

@@ -141,7 +141,7 @@ expression that reflects the specific scenario you are investigating:
    ```
    julia -t auto --project=test/integration test/integration/runtests.jl
    ```
-   That runs PostgreSQL through LibPQ, the default driver. Postgres.jl (experimental) is in use
+   That runs PostgreSQL through LibPQ, the default driver. Postgres.jl is in use
    too, so a change that reaches either driver's extension, or how results are decoded, runs the
    suite again through it, after the first run, never at the same time (the two reseed the same
    fixture):

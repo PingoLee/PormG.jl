@@ -91,6 +91,7 @@ const _AGG_WRAPPERS = Dict{Symbol,Function}(
   :RTrim    => inner -> RTrim(inner),
   :LPad     => inner -> LPad(inner, 3, "0"),   # #122
   :RPad     => inner -> RPad(inner, 3, "0"),
+  :Substr   => inner -> Substr(inner, 1, 3),   # #1332
   :Floor    => inner -> Floor(inner),
   :Ceil     => inner -> Ceil(inner),
   :Sqrt     => inner -> Sqrt(inner),
@@ -248,6 +249,7 @@ end
                  :Length => "surname", :Replace => "surname", :Trim => "surname",
                  :LTrim => "surname", :RTrim => "surname", :Concat => "surname",
                  :LPad => "surname", :RPad => "surname",   # #122: a number is refused
+                 :Substr => "surname",   # #1332: text only, as LPad
                  :Cast => "raceid",   # #1028: a float cast to an integer is refused
                  :Round => "raceid")
   for (backend, Model_) in _AGG_FLAG_MODELS

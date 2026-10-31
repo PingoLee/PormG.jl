@@ -237,7 +237,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_GETFIELD = r"(?<!`)\bget(?:field|property|global)\b(?:\(|\s*,)\s*[@\w.]+\s*,\s*Symbol\("
 const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
-  # #1346 baseline (19 sites); 20 since #1333.
+  # #1346 baseline (19 sites); 20 since #1333; 19 since #1332.
   "src/Models.jl" => 2,                          # a relation's target model by binding name (#211)
   "src/migrations/importers.jl" => 3,            # a field constructor by its name, from introspection
   "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
@@ -248,7 +248,8 @@ const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
   "src/querybuilder/filter_nodes.jl" => 1,       # Dialect operator by name
   "src/querybuilder/filter_operators.jl" => 3,   # Dialect operators by name
   "src/querybuilder/join_conditions.jl" => 5,    # a related model by binding name (#211)
-  "src/querybuilder/select_nodes.jl" => 2,       # Dialect function by name
+  "src/querybuilder/select_nodes.jl" => 1,       # Dialect function by name; the two call sites share
+                                                 # `_function_sql` since #1332
 )
 
 @testset "#1346: getfield(<x>, Symbol(…)) sites match the reviewed counts" begin

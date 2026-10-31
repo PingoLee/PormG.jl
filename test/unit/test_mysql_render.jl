@@ -1487,6 +1487,10 @@ end
   @test proj(() -> D.objects.values("v" => QB.Replace("surname", "enn", "X"))) == ("REPLACE(`Tb`.`surname`, ?, ?)", Any["enn", "X"])
   @test proj(() -> D.objects.values("v" => QB.LPad("surname", 10, "*"))) == ("LPAD(`Tb`.`surname`, ?, ?)", Any[10, "*"])
   @test proj(() -> D.objects.values("v" => QB.RPad("surname", 10, "ab"))) == ("RPAD(`Tb`.`surname`, ?, ?)", Any[10, "ab"])
+  # #1332: `SUBSTR` agrees with PostgreSQL's for a position from 1 and a length from 0, the only
+  # range `Substr` builds; both bound, in text order, with the length optional.
+  @test proj(() -> D.objects.values("v" => QB.Substr("surname", 2, 3))) == ("SUBSTR(`Tb`.`surname`, ?, ?)", Any[2, 3])
+  @test proj(() -> D.objects.values("v" => QB.Substr("surname", 4))) == ("SUBSTR(`Tb`.`surname`, ?)", Any[4])
   # An empty fill pads nothing: the cut alone, its marker still bound where it prints.
   @test proj(() -> D.objects.values("v" => QB.LPad("surname", 3, ""))) == ("CONCAT(LEFT(`Tb`.`surname`, ?), ?)", Any[3, ""])
   @test proj(() -> D.objects.values("v" => QB.RPad("surname", 3, ""))) == ("CONCAT(LEFT(`Tb`.`surname`, ?), ?)", Any[3, ""])

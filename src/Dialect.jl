@@ -1784,6 +1784,16 @@ end
 LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("LPAD", columns, format)
 RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("RPAD", columns, format)
 
+# #1332: `Substr`, as `SUBSTR(x, pos[, len])`. PostgreSQL has `substr(text, integer[, integer])` and no
+# `bigint` form, so the bound position and length are cast, as `LPAD`'s length is; `Substr` refuses
+# either past `typemax(Int32)` when it is built. No option bag (#1346): `_function_sql` calls it with
+# the rendered arguments alone.
+function SUBSTR(columns::Vector{Any}, conn::PormGPostgres)
+  len = length(columns) == 3 ? ", ($(columns[3]))::integer" : ""
+  return "SUBSTR($(columns[1]), ($(columns[2]))::integer$(len))"
+end
+SUBSTR(columns::Vector{Any}, conn::Union{PormGSQLite,PormGMySQL}) = "SUBSTR($(join(columns, ", ")))"
+
 function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "TRIM($(column))"
 end

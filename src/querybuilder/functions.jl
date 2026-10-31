@@ -1705,6 +1705,58 @@ the query is built, and a `len` below 0 or above 268435454 raises `InvalidValueE
 RPad(x, len::Integer, fill = " ") = _pad_function("RPAD", x, len, fill)
 _result_rule(::Val{:RPAD}) = CText()
 
+# #1332 — `Substr`. Like `LPad`, every argument stays in `column`, in text order, so `pos` and `len`
+# bind as they are written. The engines agree only on a position from 1 and a length from 0: a
+# negative position counts from the end on SQLite and MySQL and gives `''` on PostgreSQL, and a
+# negative length raises on PostgreSQL while SQLite returns the characters before `pos`. Django refuses
+# `pos <= 0` too. Both are bound as `bigint` and cast to PostgreSQL's `integer` (`Dialect.SUBSTR`), so
+# the upper bound is `typemax(Int32)`: past it PostgreSQL raises where SQLite answers `''`. A `Bool` is
+# an `Integer` to Julia, and never a position.
+const _SUBSTR_MAX = Int(typemax(Int32))
+function _substr_bound(label::String, what::String, n, low::Int)
+  n isa Integer && !(n isa Bool) || throw(InvalidValueError(
+    "\e[31mSubstr\e[0m: `$(label)` is $(what) written as an integer, not a $(nameof(typeof(n))) (#1332).", :type))
+  low <= n <= _SUBSTR_MAX || throw(InvalidValueError(
+    "\e[31mSubstr\e[0m: `$(label)` is $(what) from $(low) to $(_SUBSTR_MAX); the engines disagree outside " *
+    "that range (#1332).", :range))
+  return Value(Int(n))
+end
+
+"""
+    Substr(column, pos, len = nothing)
+
+Returns part of a string: `len` characters starting at position `pos`, counted from 1, or every
+character from `pos` on when `len` is omitted. `Substr("surname", 1, 3)` over `"Hamilton"` is
+`"Ham"`, and `Substr("surname", 4)` is `"ilton"`. A `pos` past the end gives `""`, and a NULL string is
+NULL. The same on PostgreSQL, SQLite and MySQL (`SUBSTR`), with `pos` and `len` bound as parameters.
+
+`pos` is an integer from 1 and `len` an integer from 0, both at most 2147483647; anything else — a
+`pos` of 0 or below, a negative `len`, a `Bool`, a float, a column — raises `InvalidValueError` when the
+expression is built. Outside that range the engines disagree: a negative position counts from the end
+on SQLite and MySQL and gives `""` on PostgreSQL, and a negative length raises on PostgreSQL while SQLite
+returns the characters before `pos`. Pass the position you mean, counted from the start.
+
+`column` is a column path or an expression, and it must be text: a number, a date, a time, a
+timestamp, a boolean, a uuid or a JSON document raises `QueryBuildError` when the query is built, on
+every engine. Convert it to text first — an integer, a date, a time or a uuid with [`Cast`](@ref)
+(`Cast(x, "text")`), a timestamp with [`ToChar`](@ref), a boolean with a [`Case`](@ref). A key inside
+a JSON document (`"payload__name"`) is text and is accepted.
+
+Filling the driver code from the surname, in one statement:
+
+```julia
+M.Driver.objects.
+    filter("code__@isnull" => true).
+    update("code" => Upper(Substr("surname", 1, 3)))
+```
+"""
+function Substr(x, pos, len = nothing)
+  column = Any[_function_operand(x), _substr_bound("pos", "a character position", pos, 1)]
+  len === nothing || push!(column, _substr_bound("len", "a number of characters", len, 0))
+  return FObject(function_name = "SUBSTR", column = column, aggregate = _any_agg(column))
+end
+_result_rule(::Val{:SUBSTR}) = CText()
+
 """
     Floor(column)
 

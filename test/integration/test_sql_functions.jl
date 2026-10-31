@@ -105,6 +105,78 @@ struct _Lpad122Rollback <: Exception end   # top level: Julia rejects a `struct`
     @test only(M.Driver.objects.filter("driverid" => 1).values("code").list(:dict))[:code] == "HAM"
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Substr: part of a string on a real engine (#1332)
+# `SUBSTR(x, pos[, len])` on every engine, `pos`/`len` bound (cast to `integer` on PostgreSQL). The
+# rows the engines agree on: a length given, the length omitted, a position past the end (`""`), a
+# NULL operand (NULL). Then a filter against a column and a `cjoin_on` condition over `Joined(...)`,
+# each checked against a set computed in Julia from the fetched columns, and the update the issue
+# asks for, rolled back so the shared fixture keeps its codes.
+# Why: before #1332 a string prefix needed raw SQL, and a misbound position is a silent wrong value.
+# ─────────────────────────────────────────────────────────────────────────────
+struct _Substr1332Rollback <: Exception end   # top level: Julia rejects a `struct` inside `@testset`
+@testset "Substr (#1332)" begin
+    q = M.Driver.objects
+    q.filter("driverid__@in" => [1, 2])   # Hamilton (number 44), Heidfeld (no number)
+    q.values("driverid",
+             "first3" => Substr("surname", 1, 3),
+             "rest"   => Substr("surname", 4),
+             "past"   => Substr("surname", 50, 2),
+             "num"    => Substr(Cast("number", "text"), 1, 1))
+    q.order_by("driverid")
+    rows = q.list(:dict)
+    @test [r[:first3] for r in rows] == ["Ham", "Hei"]
+    @test [r[:rest] for r in rows] == ["ilton", "dfeld"]
+    @test [r[:past] for r in rows] == ["", ""]
+    @test rows[1][:num] == "4"
+    @test rows[2][:num] === missing || rows[2][:num] === nothing   # NULL in, NULL out
+
+    # A filter against a column. SQLite's UPPER changes ASCII letters only, so the oracle reads the
+    # drivers whose first three letters are ASCII, where every engine agrees.
+    everyone = M.Driver.objects.values("driverid", "surname", "code").list(:dict)
+    ascii3 = Set(r[:driverid] for r in everyone if isascii(first(r[:surname], 3)))
+    oracle = Set(r[:driverid] for r in everyone if r[:driverid] in ascii3 && r[:code] isa AbstractString &&
+                 uppercase(first(r[:surname], 3)) == r[:code])
+    matched = Set(r[:driverid] for r in
+                  M.Driver.objects.filter(Upper(Substr("surname", 1, 3)) == F("code")).values("driverid").list(:dict))
+    @test !isempty(oracle)
+    @test intersect(matched, ascii3) == oracle
+
+    # Two prefixes compared, the issue's first example: drivers whose forename and surname start with
+    # the same letter, through an alias and a filter pair (the `==` operator takes no function on its
+    # right). Equality of one character each: every engine agrees, accented letters included.
+    same = M.Driver.objects
+    same.values("driverid", "initial" => Substr("forename", 1, 1))
+    same.filter("initial" => Substr("surname", 1, 1))
+    names = M.Driver.objects.values("driverid", "forename", "surname").list(:dict)
+    initials = Set(r[:driverid] for r in names if first(r[:forename], 1) == first(r[:surname], 1))
+    @test !isempty(initials)
+    @test Set(r[:driverid] for r in same.list(:dict)) == initials
+
+    # A `cjoin_on` condition over a joined copy: the results of drivers whose surname starts "Ham".
+    j = M.Result.objects
+    j.cjoin_on("Driver", alias = "d",
+               on = [Joined("d", "driverid") == F("driverid"), Substr(Joined("d", "surname"), 1, 3) == "Ham"])
+    j.values("resultid", "rest" => Substr(Joined("d", "surname"), 4))
+    joined = j.list(:dict)
+    surnames = M.Result.objects.values("resultid", "driverid__surname").list(:dict)
+    @test Set(r[:resultid] for r in joined) ==
+          Set(r[:resultid] for r in surnames if startswith(r[:driverid__surname], "Ham"))
+    @test all(r -> r[:rest] in ("ilton", "pshire"), joined)   # Hamilton, Hampshire
+
+    # The update, rolled back by the sentinel thrown at the end of the block.
+    try
+        PormG.run_in_transaction(PORMG_DB_FOLDER) do
+            M.Driver.objects.filter("driverid" => 2).update("code" => Upper(Substr("surname", 2, 3)))
+            @test only(M.Driver.objects.filter("driverid" => 2).values("code").list(:dict))[:code] == "EID"
+            throw(_Substr1332Rollback())
+        end
+    catch e
+        e isa _Substr1332Rollback || rethrow()
+    end
+    @test only(M.Driver.objects.filter("driverid" => 2).values("code").list(:dict))[:code] == "HEI"
+end
+
 @testset "Range Filter Modifier" begin
     # Logic: Test the "__range" modifier which translates to SQL "BETWEEN".
     # Expected SQL: SELECT ... FROM ... WHERE "driverid" BETWEEN 1 AND 5

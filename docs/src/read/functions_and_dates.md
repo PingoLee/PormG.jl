@@ -662,6 +662,96 @@ These are refused when the query is built, on every engine:
 - **A `len` below 0 or above 268435454** raises `InvalidValueError`. 268435454 is PostgreSQL's own
   limit in a UTF-8 database, which refuses anything longer as "requested length too large".
 
+### Part of a string: `Substr`
+
+`Substr(x, pos, len = nothing)` returns `len` characters of a string, starting at position `pos`
+counted from 1. With no `len`, it returns everything from `pos` to the end. It works in `values()`,
+`filter()`, `update()` and join conditions, like the other string functions:
+
+```julia
+using PormG.Functions: Substr
+
+q = M.Driver.objects
+q.filter("driverid__@in" => [1, 4, 20, 830])
+q.values("surname", "code",
+         "first3" => Substr("surname", 1, 3),
+         "rest"   => Substr("surname", 4),
+         "past"   => Substr("surname", 50, 2))
+q.order_by("driverid")
+df = q |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+SELECT "Tb"."surname" AS "surname",
+       "Tb"."code"    AS "code",
+       SUBSTR("Tb"."surname", ($1::bigint)::integer, ($2::bigint)::integer) AS "first3",
+       SUBSTR("Tb"."surname", ($3::bigint)::integer)                        AS "rest",
+       SUBSTR("Tb"."surname", ($4::bigint)::integer, ($5::bigint)::integer) AS "past"
+FROM "driver" AS "Tb"
+WHERE "Tb"."driverid" = ANY($6)
+ORDER BY "Tb"."driverid" ASC NULLS LAST
+-- parameters: [1, 3, 4, 50, 2, [1, 4, 20, 830]]
+```
+
+Output:
+```
+4×5 DataFrame
+ Row │ surname     code    first3  rest     past
+     │ String      String  String  String   String
+─────┼─────────────────────────────────────────────
+   1 │ Hamilton    HAM     Ham     ilton
+   2 │ Alonso      ALO     Alo     nso
+   3 │ Vettel      VET     Vet     tel
+   4 │ Verstappen  VER     Ver     stappen
+```
+
+A `pos` past the end gives `""`, and a NULL string gives NULL. In a filter, `Substr` compares with a
+literal, a column (`F(...)`) or, in a `cjoin_on` condition, a joined column (`Joined(...)`). This finds the drivers whose code
+is the first three letters of their surname:
+
+```julia
+using PormG.Functions: Substr, Upper
+
+M.Driver.objects.filter(Upper(Substr("surname", 1, 3)) == F("code")).count()
+```
+
+SQLite's `UPPER` changes only ASCII letters, so a surname that starts with an accented letter can
+compare differently there than on PostgreSQL. In `update()`, `Substr` derives a column from another in one
+statement:
+
+```julia
+M.Driver.objects.
+    filter("code__@isnull" => true).
+    update("code" => Upper(Substr("surname", 1, 3)))
+```
+
+To compare two prefixes, name one in `values()` and filter on the name. The right-hand side of a
+filter pair can be a function. These are the drivers whose forename and surname start with the same
+letter:
+
+```julia
+q = M.Driver.objects
+q.values("forename", "surname", "initial" => Substr("forename", 1, 1))
+q.filter("initial" => Substr("surname", 1, 1))
+```
+
+The `==` operator cannot take a function on its right yet, so
+`Substr("forename", 1, 1) == Substr("surname", 1, 1)` raises `QueryBuildError`, as
+`Lower(a) == Lower(b)` does.
+
+PostgreSQL, SQLite and MySQL give the same value only for a position from 1 and a length from 0, over
+text. Everything else is refused when the expression or the query is built, on every engine:
+
+- **A `pos` below 1 or a negative `len`** raises `InvalidValueError`. Outside that range the engines
+  disagree. A negative position counts from the end on SQLite and MySQL and gives `""` on PostgreSQL.
+  A negative length raises on PostgreSQL, while SQLite returns the characters before `pos`. A `pos`
+  or `len` above 2147483647, a `Bool`, a float or a column raises `InvalidValueError` too.
+- **A value that is not text** raises `QueryBuildError`: a number, a date, a time, a timestamp, an
+  interval, a boolean, a uuid or a whole JSON document. A JSON key lookup (`"payload__driver"`) is
+  text and passes. Convert the rest to text first, as for `LPad`: `Cast(x, "text")` for an integer,
+  a date, a time or a uuid, `ToChar` for a timestamp, a `Case` for a boolean.
+
 ---
 
 ## Mathematical Functions

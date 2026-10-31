@@ -775,6 +775,38 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
+        # #1332. The engines agree on `substr` only from position 1, for a length from 0, over text.
+        "read/functions_and_dates.md + Substr docstring — a Substr position below 1 raises (#1332)",
+        InvalidValueError,
+        () -> PormG.Functions.Substr("surname", 0, 2),
+    ),
+    (
+        "read/functions_and_dates.md + Substr docstring — a negative Substr length raises (#1332)",
+        InvalidValueError,
+        () -> PormG.Functions.Substr("surname", 1, -1),
+    ),
+    (
+        "read/functions_and_dates.md + Substr docstring — a Substr position above 2147483647 raises (#1332)",
+        InvalidValueError,
+        () -> PormG.Functions.Substr("surname", 2_147_483_648),
+    ),
+    (
+        "read/functions_and_dates.md + Substr docstring — a Bool as the Substr position raises (#1332)",
+        InvalidValueError,
+        () -> PormG.Functions.Substr("surname", true, 2),
+    ),
+    (
+        "read/functions_and_dates.md + Substr docstring — Substr over a non-text column raises (#1332)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("x" => PormG.Functions.Substr("points", 1, 2)).
+            list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a function on the right of the == operator raises (#1332)",
+        QueryBuildError,
+        () -> PormG.Functions.Substr("forename", 1, 1) == PormG.Functions.Substr("surname", 1, 1),
+    ),
+    (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
         "read/functions_and_dates.md — Greatest with fewer than two arguments raises (#859)",

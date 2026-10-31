@@ -9,10 +9,9 @@
 
 A filter on a projection alias over a JSON key (`values("wins" => F("metadata__wins"))`) compares as
 the key lookup does (#1382). An alias over a value that *carries* the key without being it did not:
-`Coalesce("metadata__wins", 0)`, a `Case` branch, `NullIf("metadata__wins", …)`, `Abs`/`Floor`/`Ceil`
-of the key, or a `Subquery` projecting one of these. A `Subquery` or CTE column over `NullIf` of the
-key is the exception: it still compares as the key (#1492, #1472), while the alias over the same
-`NullIf` is refused. That difference is open as #1510. The compared value was bound through the
+`Coalesce("metadata__wins", 0)`, a `Case` branch, `Abs`/`Floor`/`Ceil` of the key, or a `Subquery`
+projecting one of these. (`NullIf` over the key is refused earlier, where it is built, by #1510's
+entry, so no alias, CTE column or `Subquery` holds it any more.) The compared value was bound through the
 alias's own formatter, as text. SQLite's `json_extract` hands over the integer, and an integer is never equal to
 or greater than text, so the filter matched no row and raised no error. On PostgreSQL
 `COALESCE(text, bigint)` is a server error. A key that holds text, with a text default
@@ -35,7 +34,7 @@ on the same alias was already refused earlier in this train (#1497), and so was 
 
 ### Who this affects
 
-Code that filters an alias over `Coalesce`, `Case`, `NullIf`, `Abs`, `Floor` or `Ceil` with a
+Code that filters an alias over `Coalesce`, `Case`, `Abs`, `Floor` or `Ceil` with a
 JSONField path among its operands, or a `Subquery` alias projecting one.
 
 ### How to find the calls to migrate

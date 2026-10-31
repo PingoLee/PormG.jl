@@ -63,6 +63,20 @@ Lap_scratch = Models.Model("lap_scratch",
 PormG.Models.set_models(@__MODULE__, "json_lookup_when_mock")
 end
 const JW = JsonWhenModels
+
+# #1511: a JSON column on a joined row, for a comparison over its key in an ON clause.
+PormG.config["json_lookup_join_mock"] = PormG.Configuration.Settings(
+  connections = _JL_SL, change_data = true, db_def_folder = "json_lookup_join_mock",
+)
+module JsonJoinModels
+import PormG
+import PormG.Models
+Json_team = Models.Model("json_team", id = Models.IDField(), payload = Models.JSONField(null = true))
+Json_entry = Models.Model("json_entry", id = Models.IDField(),
+  team = Models.ForeignKey(Json_team, on_delete = "CASCADE", related_name = "entries"))
+PormG.Models.set_models(@__MODULE__, "json_lookup_join_mock")
+end
+const JJ = JsonJoinModels
 import PormG.QueryBuilder: inspect_query, Case, When
 
 # Resolve a query's SQL under a specific dialect (default = mock SQLite).
@@ -527,11 +541,12 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     counted = (q = JL.Json_scratch.objects; q.values("name", "n" => PormG.QueryBuilder.Count("id")); q.filter("n" => 2); q)
     my_n = _sql(counted; conn = _JL_MY)[:sql_text]
     @test occursin("HAVING COUNT(`Tb`.`id`) = ?", my_n) && !occursin("CAST(? AS JSON)", my_n)
-    # A key lookup is that key's text, not a document: bare on MySQL, `::text` on PostgreSQL as before.
+    # A key lookup is that key's text, not a document: bare on MySQL, and on PostgreSQL the bare marker
+    # the filter pair binds (#1511: it was the generic path's `$1::text` before).
     # (The extraction itself holds `CAST('null' AS JSON)`, so the needle is the bound marker.)
     my_key = _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_MY)[:sql_text]
     @test !occursin("CAST(? AS JSON)", my_key) && occursin("utf8mb4_0900_bin) = ?)", my_key)
-    @test occursin("= \$1::text)", _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_PG)[:sql_text])
+    @test occursin("#>> '{\"driver\"}' = \$1)", _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_PG)[:sql_text])
   end
 
 end
@@ -571,18 +586,22 @@ end
 
       # Under a CTE: the body records each column's kind, so the outer query reads the same answers.
       body = JL.Json_scratch.objects
-      body.values("id", "d" => "payload", "k" => "payload__n", "m" => QB.NullIf("payload__n", 0))
+      body.values("id", "d" => "payload", "k" => "payload__n")
       outer = JL.Json_scratch.objects
       outer.with("g" => body, join_field = "id" => "id", join_type = "INNER")
-      outer.values("id", "gd" => "g__d", "gk" => "g__k", "gm" => "g__m")
-      ctek = asked(outer, i -> Tuple(QB._expression_kind(node(i, n), i) for n in ("gd", "gk", "gm")))
-      @test ctek == (PormG.CJSON(), QB.CJSONValue(), QB.CJSONValue())
+      outer.values("id", "gd" => "g__d", "gk" => "g__k")
+      ctek = asked(outer, i -> Tuple(QB._expression_kind(node(i, n), i) for n in ("gd", "gk")))
+      @test ctek == (PormG.CJSON(), QB.CJSONValue())
 
-      # A function whose value is the key's (`NullIf`'s first operand), through a CTE, is the key's value:
-      # it joins text and sits beside it. (`Max` was the seed until #1491 refused it over an uncast key.)
+      # A CTE column that is the key's value joins text and sits beside it. (`Max` was the seed until #1491
+      # refused it over an uncast key, and `NullIf(key, 0)` until #1510 did; the bare key is what is left.)
       lifted(expr) = (o = JL.Json_scratch.objects;
-        o.with("g" => JL.Json_scratch.objects.values("id", "v" => QB.NullIf("payload__n", 0)), join_field = "id" => "id", join_type = "INNER");
+        o.with("g" => JL.Json_scratch.objects.values("id", "v" => "payload__n"), join_field = "id" => "id", join_type = "INNER");
         o.values("id", "w" => expr); o)
+      nullif_body = (o = JL.Json_scratch.objects;
+        o.with("g" => JL.Json_scratch.objects.values("id", "v" => QB.NullIf("payload__n", 0)), join_field = "id" => "id", join_type = "INNER");
+        o.values("id", "g__v"); o)
+      @test_throws PormG.QueryBuildError _sql(nullif_body; conn = conn)
       @test occursin("\"v\"", replace(_sql(lifted(PormG.Functions.Concat(PormG.Functions.Value("n="), "g__v")); conn = conn)[:sql_text], "`" => "\""))
       @test occursin("COALESCE(", _sql(lifted(PormG.Functions.Coalesce("g__v", PormG.Functions.Value("x"))); conn = conn)[:sql_text])
       # `LPad` reads the same answer (`_pad_textless`): it raised #122 ("the JSONField … is not text").
@@ -607,7 +626,7 @@ end
 # and no engine. A value that names its number builds on every engine: `Cast(key, "numeric") / 2`
 # renders `(CAST(CAST(json_extract(…) AS NUMERIC) AS REAL) / ?)` on SQLite and
 # `((… #>> '{"n"}')::decimal / $1::bigint)` on PostgreSQL; `Round` (a `numeric` function) and
-# `NullIf("id", key)`, whose value is the integer `id`, build too, and so does a function over the key
+# `NullIf("id", Cast(key, "numeric"))`, whose value is the integer `id`, build too, and so does a function over the key
 # with nothing computed on it (`Floor(key)`). An extremum over the key is #1491's, below.
 # Why it matters: the SQLite answer was a different value with nothing to say so, and PostgreSQL's
 # error, raised only when the query ran, named neither the key nor the cast to write.
@@ -661,9 +680,10 @@ end
     # A function over the key with nothing computed on it is the key's own value.
     @test _sql(proj(FN.Floor("payload__n")); conn = conn) isa AbstractDict
   end
-  # `NullIf`'s value is its first operand, here the integer `id`, whose quotient is the meaning.
-  @test occursin("(NULLIF(\"Tb\".\"id\", json_extract(\"Tb\".\"payload\", '\$.n')) / ?)",
-                 _sql(proj(FN.NullIf("id", "payload__n") / 2); conn = _JL_SL)[:sql_text])
+  # `NullIf`'s value is its first operand, here the integer `id`, whose quotient is the meaning. It
+  # compares `id` with the key, though, so the key states its type (#1510; uncast it is refused, below).
+  @test occursin("(NULLIF(\"Tb\".\"id\", CAST(json_extract(\"Tb\".\"payload\", '\$.n') AS NUMERIC)) / ?)",
+                 _sql(proj(FN.NullIf("id", FN.Cast("payload__n", "numeric")) / 2); conn = _JL_SL)[:sql_text])
   # A comparison is not arithmetic: the key lookup's own filter binds it (#1382).
   @test _sql((q = JL.Json_scratch.objects; q.filter("payload__n__@gt" => 5); q); conn = _JL_PG) isa AbstractDict
   # Wherever the arithmetic renders: a filter value, a CTE body, an `update()` value. (`order_by` takes
@@ -691,7 +711,7 @@ end
 # `MAX("Tb"."payload" #>> '{"n"}')` was `"9"` (`'9' > '10'`) and `MIN` was `"10"`; SQLite's
 # `json_extract` hands over the number, so it answered `10` and `9`. Same query, different values,
 # nothing reported. Expected: `Max`/`Min` over the key, or over a value that carries it (`Floor`, a
-# `Case` branch, `NullIf`'s first operand, a CTE column projecting it), raises `QueryBuildError` on PostgreSQL,
+# `Case` branch, a CTE column projecting it), raises `QueryBuildError` on PostgreSQL,
 # SQLite and MySQL alike (explicit intent, as #1483), naming the key and both spellings:
 # `Cast(key, "numeric")` orders numbers, `Cast(key, "text")` orders text. Each spelling builds
 # (PostgreSQL `MAX(("Tb"."payload" #>> '{"n"}')::decimal)`), and so does `Max` over a typed column.
@@ -711,7 +731,6 @@ end
       ("Min", "Min", () -> FN.Min("payload__n")),
       ("Max over Floor", "Max", () -> FN.Max(FN.Floor("payload__n"))),
       ("Min over a Case branch", "Min", () -> FN.Min(QB.Case([QB.When("id" => 1, then = QB.F("payload__n"))], default = QB.F("payload__n")))),
-      ("Max over NullIf", "Max", () -> FN.Max(FN.NullIf("payload__n", 0))),
       ("Max / 2", "Max", () -> FN.Max("payload__n") / 2))
     @testset "$label on $(nameof(typeof(conn)))" for conn in (_JL_PG, _JL_SL, _JL_MY)
       e = refusal(proj(expr()), conn)
@@ -752,8 +771,9 @@ end
 # the document holds as one (`7 / 2` was `3`). Expected: the body records the key
 # (`CTEDivision.json_key`, `subquery_json_key`), and arithmetic over the column refuses as over the key
 # (#1483) on every engine, naming the CTE column or the Subquery, what its body is, and the key's cast.
-# The other routes in: a body column that IS the key's value (`NullIf(key, 0)`) refuses through its
-# kind (`CJSONValue`); a body that sums or orders the key refuses itself (#1483, #1491); one that mixes the
+# The other routes in: a body column that IS the key's value (the key itself) refuses through its
+# kind (`CJSONValue`); a body that sums, orders or compares the key refuses itself (#1483, #1491,
+# #1510's `NullIf`); one that mixes the
 # key with a literal (`Coalesce(key, 0)`) is refused while the column is typed (#823). A body that casts
 # the key, or declares its number (`output_field`), builds outside.
 # Why it matters: the SQLite answer was a different value with nothing to say so.
@@ -810,9 +830,11 @@ end
       end
       @test _sql(proj(half(sub(FN.Cast("payload__n", "numeric")))); conn = conn) isa AbstractDict
       # Through the column's kind: a body column that is the key's value.
-      refused_1483(withcte(FN.NullIf("payload__n", 0), half(PormG.CTE("c", "w"))), conn, "JSON key")
-      # A body that sums or orders the key refuses itself; one that mixes it with a literal is refused
-      # as untyped.
+      refused_1483(withcte("payload__n", half(PormG.CTE("c", "w"))), conn, "JSON key")
+      # A body that sums, orders or compares the key refuses itself; one that mixes it with a literal is
+      # refused as untyped.
+      e = refusal(withcte(FN.NullIf("payload__n", 0), half(PormG.CTE("c", "w"))), conn)
+      @test e isa PormG.QueryBuildError && startswith(plain(e), "`NullIf` over the JSON key `payload__n`")
       e = refusal(withcte(FN.Sum("payload__n"), half(PormG.CTE("c", "w"))), conn)
       @test e isa PormG.QueryBuildError && startswith(plain(e), "Sum over the JSON key `payload__n`")
       e = refusal(withcte(FN.Max("payload__n"), half(PormG.CTE("c", "w"))), conn)
@@ -825,7 +847,7 @@ end
       end
       # The spelling names the body's key path, where the cast goes, whether the body computed over the
       # key or projected it bare (never a `"<flag>"` placeholder); the spelled body then builds outside.
-      for body in (FN.NullIf("payload__n", 0), "payload__n")
+      for body in ("payload__n",)
         msg = refused_1483(withcte(body, half(PormG.CTE("c", "w"))), conn, "the CTE column")
         @test occursin("Cast(\"payload__n\", \"numeric\")", msg) && !occursin("<flag>", msg)
       end
@@ -836,7 +858,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1472: a filter on a CTE column over a JSON key lookup compares as the key lookup does
-# A CTE column whose body projects `payload__driver` (or `NullIf` of it) holds the key's value, which the
+# A CTE column whose body projects `payload__driver` holds the key's value, which the
 # walk names `CJSONValue` (#1458). The outer filter bound through the column's field, the document's
 # JSONField: equality ran the JSON formatter and refused plain text ("The text is not valid JSON"), and
 # an ordering bound the number as text (`"R1_1"."k" > $1` with `'5'` on PostgreSQL, a text comparison;
@@ -859,7 +881,7 @@ end
     return q
   end
   where(r) = replace(r[:sql_text], r"\s+" => " ")
-  for col in ("payload__driver", FN.NullIf("payload__driver", "name"))
+  for col in ("payload__driver",)   # (`NullIf` of it was the second until #1510 refused it, below)
     r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_PG)
     @test occursin("WHERE \"R1_1\".\"k\" = \$1", where(r)) && r[:parameters] == ["hamilton"]
     r = _sql(filtered(col, "g__k" => "hamilton"); conn = _JL_SL)
@@ -1025,8 +1047,8 @@ end
 @testset "#1506: a filter on an alias over a carrier of an uncast JSON key is refused on every engine" begin
   FN = PormG.Functions
   QB = PormG.QueryBuilder
+  # (`NullIf(key, …)` was a carrier here until #1510 refused it at the projection, below.)
   carriers = (("Coalesce", () -> FN.Coalesce("payload__n", 0)),
-              ("NullIf", () -> FN.NullIf("payload__n", 0)),
               ("Case", () -> Case([When("id" => 1, then = F("payload__n"))], default = 0)),
               ("Abs", () -> FN.Abs("payload__n")),
               ("Ceil", () -> FN.Ceil("payload__n")))
@@ -1038,12 +1060,9 @@ end
   for conn in (_JL_PG, _JL_SL, _JL_MY), (label, src) in carriers
     @testset "$label on $(nameof(typeof(conn)))" begin
       for filt in ("w" => 9, "w__@gt" => 9, "w__@ne" => 9, "w__@gt" => F("id"))
-        # A `Subquery` over `NullIf(key, …)` is left out: the walk types it as the key's value
-        # (`CJSONValue`, `NullIf` takes its first operand's type), so it compares as the key (#1492),
-        # as a CTE column over it does (#1472). The two answers for one value are #1510.
         handles = (("alias", aliased(src(), filt)), ("Q", aliased(src(), QB.Q(filt))),
-                   ("Qor", aliased(src(), QB.Qor(filt, "name" => "Senna"))))
-        label == "NullIf" || (handles = (handles..., ("Subquery", aliased(QB.Subquery(sub(src())), filt))))
+                   ("Qor", aliased(src(), QB.Qor(filt, "name" => "Senna"))),
+                   ("Subquery", aliased(QB.Subquery(sub(src())), filt)))
         for (handle, q) in handles
           e = refusal(q, conn)
           @test (handle, e isa PormG.FilterError) == (handle, true)
@@ -1135,6 +1154,140 @@ end
   for (handle, mk, name) in handles
     @test (handle, 9 in _sql(mk("$(name)__@gt" => 9); conn = _JL_SL)[:parameters]) == (handle, true)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1510: NullIf over an uncast JSON key is refused on every engine, where it is built
+# `NullIf` compares its operands for equality, and a key's value has no declared type. The walk typed
+# `NullIf(key, 0)` as the key's value, so the same expression answered three ways by the handle it sat
+# behind: a filter on its projection alias was refused as a carrier (#1506), while a CTE column or a
+# `Subquery` over it compared as the key (#1472, #1492). The projection itself was a server error on
+# PostgreSQL (`NULLIF(#>> '{"n"}', $1::bigint)`, `text = bigint`) and compared the native value on
+# SQLite. Expected: `QueryBuildError` naming `(#1510)`, the cast written where the key sits
+# (`NullIf(Cast("payload__n", "numeric"), 0)`, or `NullIf(…, Cast(…))` for the second operand) and
+# the text cast, on PostgreSQL, SQLite and MySQL, for the key or a carrier of it in either operand and in
+# a projection, a CTE body, a `Subquery`, a filter value and under `Max`. Each cast spelling builds:
+# PostgreSQL `NULLIF(("Tb"."payload" #>> '{"n"}')::decimal, $1::bigint)`. A `NullIf` with no key builds.
+# Why it matters: one value answered three ways, and nothing said which one the query meant.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1510: NullIf over an uncast JSON key is refused on every engine" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  proj(x) = (q = JL.Json_scratch.objects; q.values("id", "m" => x); q)
+  cte(x) = (q = JL.Json_scratch.objects;
+    q.with("g" => JL.Json_scratch.objects.values("id", "w" => x), join_field = "id" => "id", join_type = "INNER");
+    q.values("id", "g__w"); q.filter("g__w__@gt" => 5); q)
+  sub(x) = (q = JL.Json_scratch.objects;
+    q.values("id", "w" => QB.Subquery((s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("v" => x); s)));
+    q.filter("w__@gt" => 5); q)
+  filtered(x) = (q = JL.Json_scratch.objects; q.values("id"); q.filter("id" => x); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  # The spelling casts the key where it sits: in the second position, a cast moved to the first would
+  # change which value `NullIf` returns (review).
+  first_spelling(k) = "NullIf(Cast(\"$(k)\", \"numeric\"), 0)"
+  shapes = (("the key first", () -> FN.NullIf("payload__n", 0), "the JSON key `payload__n`", first_spelling("payload__n")),
+            ("a text key", () -> FN.NullIf("payload__s", FN.Value("")), "the JSON key `payload__s`", first_spelling("payload__s")),
+            ("the key second", () -> FN.NullIf("id", "payload__n"), "the JSON key `payload__n`",
+             "NullIf(…, Cast(\"payload__n\", \"numeric\"))"),
+            ("a carrier", () -> FN.NullIf(FN.Coalesce("payload__n", 0), 0), "`COALESCE(…)` over the JSON key `payload__n`",
+             first_spelling("payload__n")))
+  handles = (("projection", proj), ("CTE body", cte), ("Subquery", sub), ("filter value", filtered),
+             ("under Max", x -> proj(FN.Max(x))))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (shape, mk, named, spelling) in shapes, (handle, h) in handles
+    e = refusal(h(mk()), conn)
+    @test (shape, handle, e isa PormG.QueryBuildError) == (shape, handle, true)
+    msg = e === nothing ? "" : plain(e)
+    @test (shape, handle, startswith(msg, "`NullIf` over $(named) is not supported") && occursin("(#1510)", msg)) ==
+          (shape, handle, true)
+    @test (shape, handle, occursin(spelling, msg)) == (shape, handle, true)
+  end
+  # The explicit spellings build on every engine, and so does a `NullIf` over no key.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test _sql(proj(FN.NullIf(FN.Cast("payload__n", "numeric"), 0)); conn = conn)[:parameters] == [0]
+    @test _sql(proj(FN.NullIf(FN.Cast("payload__s", "text"), FN.Value(""))); conn = conn)[:parameters] == [""]
+    @test _sql(proj(FN.NullIf("id", 0)); conn = conn)[:parameters] == [0]
+  end
+  @test occursin("NULLIF((\"Tb\".\"payload\" #>> '{\"n\"}')::decimal, \$1::bigint)",
+                 _sql(proj(FN.NullIf(FN.Cast("payload__n", "numeric"), 0)); conn = _JL_PG)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1511: an expression comparison over a JSON key compares as the key lookup does
+# `F("payload__n") == 5` rendered through the generic operator path, which bound the text `"5"` on every
+# engine and put no `::numeric` on a PostgreSQL ordering. Expected: the predicate the filter pair
+# `"payload__n" => 5` renders, in parentheses, with the same parameters (SQLite `json_extract(…) = ?`
+# binding `5`; PostgreSQL `#>> '{"n"}' = $1` binding `"5"`, and `(#>> …)::numeric > $1` binding `5`),
+# through `F`, `Q`, a `When` and a projection. A column or a field path on the right of the key, and a
+# carrier on the left (`Coalesce(key, 0)`), raise `FilterError`, as the key lookup (#811) and its alias
+# (#1506) do. A key on the right of a column renders as the pair `"id" => F("payload__n")` does, and a
+# cast key keeps the generic path.
+# Why it matters: on SQLite the integer `json_extract` hands over never equals text, so the filter
+# matched no row with no error, and on PostgreSQL `9` sorted above `10`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1511: an expression comparison over a JSON key compares as the key lookup does" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  where_of(sql) = strip(split(sql, "WHERE ")[end])
+  pair(path) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(path); q)
+  expr(f) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(f); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  cases = (("==", "payload__n", 5, f -> f == 5), ("!=", "payload__n__@ne", 5, f -> f != 5),
+           (">", "payload__n__@gt", 5, f -> f > 5), ("<=", "payload__n__@lte", 2.5, f -> f <= 2.5))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (op, path, value, cmp) in cases
+    @testset "F $op on $(nameof(typeof(conn)))" begin
+      ref = _sql(pair(path => value); conn = conn)
+      for (label, q) in (("F", expr(cmp(F("payload__n")))), ("Q", expr(QB.Q(cmp(F("payload__n"))))))
+        got = _sql(q; conn = conn)
+        @test (label, occursin("(" * where_of(ref[:sql_text]) * ")", got[:sql_text])) == (label, true)
+        @test (label, got[:parameters]) == (label, ref[:parameters])
+      end
+      # A projection and a `When` condition bind the same value (the `When` binds THEN/ELSE after it).
+      proj = (q = JL.Json_scratch.objects; q.values("id", "b" => cmp(F("payload__n"))); q)
+      @test _sql(proj; conn = conn)[:parameters] == ref[:parameters]
+      when = (q = JL.Json_scratch.objects; q.values("id", "b" => Case([When(cmp(F("payload__n")), then = 1)], default = 0)); q)
+      @test _sql(when; conn = conn)[:parameters][1:1] == ref[:parameters]
+    end
+  end
+  # The values themselves, per engine: the bug was the bound type, so the oracle is the parameter.
+  @test _sql(expr(F("payload__n") == 5); conn = _JL_SL)[:parameters] == Any[5]
+  @test _sql(expr(F("payload__n") == 5); conn = _JL_PG)[:parameters] == Any["5"]
+  @test occursin("((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric > \$1)", _sql(expr(F("payload__n") > 5); conn = _JL_PG)[:sql_text])
+  @test _sql(expr(F("payload__n") > 5); conn = _JL_PG)[:parameters] == Any[5]
+  column_rhs = "a JSON path lookup compares the extracted value against a value, not a column expression"
+  refused = (("a column on the right", F("payload__n") > F("id"), "Error in filter 'payload__n': $column_rhs"),
+             ("a field path on the right", F("payload__n") == "name", "Error in filter 'payload__n': $column_rhs"),
+             ("a carrier on the left", FN.Coalesce("payload__n", 0) > 5, "it holds `COALESCE(…)` over the JSON key `payload__n`"),
+             ("NaN", F("payload__n") == NaN, "A numeric JSON comparison requires a finite number"))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (label, f, msg) in refused
+    e = refusal(expr(f), conn)
+    @test (label, e isa Union{PormG.FilterError,PormG.InvalidValueError}) == (label, true)
+    e === nothing || @test (label, occursin(msg, plain(e))) == (label, true)
+  end
+  # An ON clause: `on("team", F("payload__n") > 5)` names the joined row's key, and binds as the pair
+  # `on("team", "payload__n__@gt" => 5)` does (review: the entry and docs list the join condition).
+  on_pred = Dict(_JL_PG => "AND ((\"Tb_1\".\"payload\" #>> '{\"n\"}')::numeric > \$1)",
+                 _JL_SL => "AND (json_extract(\"Tb_1\".\"payload\", '\$.n') > ?)",
+                 _JL_MY => "COLLATE utf8mb4_0900_bin) > ?)")
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    joined(cond) = (q = JJ.Json_entry.objects; q.on("team", cond); q.values("id", "team__id"); _sql(q; conn = conn))
+    got, ref = joined(F("payload__n") > 5), joined("payload__n__@gt" => 5)
+    @test got[:parameters] == ref[:parameters] == Any[5]
+    @test occursin(on_pred[conn], replace(got[:sql_text], r"\s+" => " "))
+  end
+  # Control: a key on the RIGHT of a column is the filter pair `"id" => F("payload__n")`'s business, and
+  # the operator form renders as that pair does, so the two spellings cannot disagree.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    ref = where_of(_sql(pair("id" => F("payload__n")); conn = conn)[:sql_text])
+    @test occursin(ref, _sql(expr(F("id") == F("payload__n")); conn = conn)[:sql_text])
+  end
+  # Control: a cast key states its type, so it keeps the generic path (`::decimal`, no key binding).
+  @test occursin("::decimal > \$1::bigint", _sql(expr(FN.Cast("payload__n", "numeric") > 5); conn = _JL_PG)[:sql_text])
+  # Control: a whole document is not a key, and keeps its JSON bind (#1360).
+  @test occursin("CAST(? AS JSON)", _sql(expr(F("payload") == "{\"a\": 1}"); conn = _JL_MY)[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -143,8 +143,8 @@ struct _Substr1332Rollback <: Exception end   # top level: Julia rejects a `stru
     @test intersect(matched, ascii3) == oracle
 
     # Two prefixes compared, the issue's first example: drivers whose forename and surname start with
-    # the same letter, through an alias and a filter pair (the `==` operator takes no function on its
-    # right). Equality of one character each: every engine agrees, accented letters included.
+    # the same letter, through an alias and a filter pair (the `==` spelling is #1514's, below).
+    # Equality of one character each: every engine agrees, accented letters included.
     same = M.Driver.objects
     same.values("driverid", "initial" => Substr("forename", 1, 1))
     same.filter("initial" => Substr("surname", 1, 1))
@@ -175,6 +175,50 @@ struct _Substr1332Rollback <: Exception end   # top level: Julia rejects a `stru
         e isa _Substr1332Rollback || rethrow()
     end
     @test only(M.Driver.objects.filter("driverid" => 2).values("code").list(:dict))[:code] == "HEI"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A function on the right of a comparison operator, on a real engine (#1514)
+# `Substr("forename", 1, 1) == Substr("surname", 1, 1)`, `Lower("forename") == Lower("surname")` and
+# `F("points") > Coalesce("grid", 0)` raised `QueryBuildError` before #1514. Expected: each returns the
+# rows a set computed in Julia from the fetched columns names, and the same rows as its filter-pair
+# spelling; a function on the right of a `cjoin_on` condition joins the rows it names.
+# Why: the two spellings of one comparison must not build in one and raise in the other, and a
+# misbound or mis-sided operand is a silent wrong row.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a function on the right of a comparison operator (#1514)" begin
+    names = M.Driver.objects.values("driverid", "forename", "surname").list(:dict)
+    ids(q) = Set(r[:driverid] for r in q.values("driverid").list(:dict))
+    initials = Set(r[:driverid] for r in names if first(r[:forename], 1) == first(r[:surname], 1))
+    @test !isempty(initials)
+    @test ids(M.Driver.objects.filter(Substr("forename", 1, 1) == Substr("surname", 1, 1))) == initials
+    # ASCII names only for `Lower`: SQLite lowers ASCII letters only, where every engine agrees.
+    ascii = Set(r[:driverid] for r in names if isascii(r[:forename]) && isascii(r[:surname]))
+    same = Set(r[:driverid] for r in names if r[:driverid] in ascii && lowercase(r[:forename]) == lowercase(r[:surname]))
+    @test intersect(ids(M.Driver.objects.filter(Lower("forename") == Lower("surname"))), ascii) == same
+
+    # Hamilton's results: points above the grid slot (0 when there is none), against the pair spelling.
+    hamilton() = (q = M.Result.objects; q.filter("driverid" => 1); q)
+    rows = hamilton().values("resultid", "points", "grid").list(:dict)
+    above = Set(r[:resultid] for r in rows if r[:points] !== missing && r[:points] !== nothing &&
+                r[:points] > something(coalesce(r[:grid], 0), 0))
+    @test !isempty(above)
+    resultids(q) = Set(r[:resultid] for r in q.values("resultid").list(:dict))
+    @test resultids((q = hamilton(); q.filter(F("points") > Coalesce("grid", 0)); q)) == above
+    @test resultids((q = hamilton(); q.filter("points__@gt" => Coalesce("grid", 0)); q)) == above
+
+    # A function on the right of a `cjoin_on` condition naming the BASE row: the joined driver's surname
+    # length (8, "Hamilton") against the result's own grid slot. An INNER join keeps the results whose
+    # grid is below 8 (0 when there is none), so the base row's column is the one compared.
+    j = hamilton()
+    j.cjoin_on("Driver", alias = "d",
+               on = [Joined("d", "driverid") == F("driverid"), Length(Joined("d", "surname")) > Coalesce("grid", 0)])
+    j.values("resultid", "s" => Joined("d", "surname"))
+    joined = j.list(:dict)
+    below8 = Set(r[:resultid] for r in rows if something(coalesce(r[:grid], 0), 0) < 8)
+    @test !isempty(below8) && length(below8) < length(rows)
+    @test Set(r[:resultid] for r in joined) == below8
+    @test all(r -> r[:s] == "Hamilton", joined)
 end
 
 @testset "Range Filter Modifier" begin

@@ -327,6 +327,39 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Join-column recorder: a function on the right of an ON comparison is the right side (#1514)
+# `on("driverid", F("number") > Abs(F("grid")))`: the hop's `number` on the left, the base row's `grid`
+# inside a function on the right. Expected: `"Tb_1"."number" > ABS("Tb"."grid")`. The operand renders
+# through `_render_operand_typed`, whose `_on_join_right` mark is what lets the right side name the base
+# row. Mutant: a function operand that skips the mark (a more specific method). The base row's column is
+# then checked as if on the left, and the recorder refuses it instead of passing it through, so the mark
+# is load-bearing and its loss is loud, not a wrong row. A window function on the right is refused in an
+# ON clause (#917), as one on the left is.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Join-column recorder: a function on the right of an ON comparison (#1514)" begin
+    build() = (q = JcrModels.Result.objects; q.on("driverid", F("number") > Abs(F("grid")));
+               q.values("resultid", "driverid__code"); q)
+    @test occursin("(\"Tb_1\".\"number\" > ABS(\"Tb\".\"grid\"))", _jcr_sql(build()))
+
+    unmarked() = @eval JCR_QB function _render_operand_typed(operand::FObject, field_name::Any, operation::String,
+                                                             instruc::SQLInstruction; left_kind::TemporalKind = nothing)
+        return _render_function_operand_typed(operand, instruc)
+    end
+    _jcr_with_mutant(unmarked, JCR_QB._render_operand_typed) do
+        err = _jcr_err(build())
+        @test err isa PormG.FilterError
+        @test err isa PormG.FilterError && occursin("\"Tb\".\"grid\"", _jcr_msg(err))
+    end
+    @test occursin("ABS(\"Tb\".\"grid\")", _jcr_sql(build()))
+
+    window = (q = JcrModels.Result.objects;
+              q.on("driverid", F("number") > JCR_QB.Rank(over = JCR_QB.WindowOver(order_by = ["grid"])));
+              q.values("resultid", "driverid__code"); q)
+    err = _jcr_err(window)
+    @test err isa PormG.QueryBuildError && occursin("a window function cannot appear in a join's ON clause", _jcr_msg(err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Join-column recorder: every operator's right side may name the base row
 # Each lookup family renders its right side through its own arm, and each arm must render it as the
 # RIGHT side. One arm that does not checks a base-row `F(...)` against the hop alone and refuses a legal

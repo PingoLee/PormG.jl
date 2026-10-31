@@ -707,8 +707,8 @@ Output:
 ```
 
 A `pos` past the end gives `""`, and a NULL string gives NULL. In a filter, `Substr` compares with a
-literal, a column (`F(...)`) or, in a `cjoin_on` condition, a joined column (`Joined(...)`). This finds the drivers whose code
-is the first three letters of their surname:
+literal, a column (`F(...)`), another function or, in a `cjoin_on` condition, a joined column
+(`Joined(...)`). This finds the drivers whose code is the first three letters of their surname:
 
 ```julia
 using PormG.Functions: Substr, Upper
@@ -726,19 +726,21 @@ M.Driver.objects.
     update("code" => Upper(Substr("surname", 1, 3)))
 ```
 
-To compare two prefixes, name one in `values()` and filter on the name. The right-hand side of a
-filter pair can be a function. These are the drivers whose forename and surname start with the same
-letter:
+A comparison can take a function on either side (#1514). These are the drivers whose forename and
+surname start with the same letter:
+
+```julia
+M.Driver.objects.filter(Substr("forename", 1, 1) == Substr("surname", 1, 1)).count()
+```
+
+The filter pair spells the same comparison through a projected name, since its right-hand side can be
+a function too:
 
 ```julia
 q = M.Driver.objects
 q.values("forename", "surname", "initial" => Substr("forename", 1, 1))
 q.filter("initial" => Substr("surname", 1, 1))
 ```
-
-The `==` operator cannot take a function on its right yet, so
-`Substr("forename", 1, 1) == Substr("surname", 1, 1)` raises `QueryBuildError`, as
-`Lower(a) == Lower(b)` does.
 
 PostgreSQL, SQLite and MySQL give the same value only for a position from 1 and a length from 0, over
 text. Everything else is refused when the expression or the query is built, on every engine:

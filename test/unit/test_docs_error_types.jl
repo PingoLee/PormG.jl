@@ -801,11 +801,8 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("x" => PormG.Functions.Substr("points", 1, 2)).
             list(show_query = :dict),
     ),
-    (
-        "read/functions_and_dates.md — a function on the right of the == operator raises (#1332)",
-        QueryBuildError,
-        () -> PormG.Functions.Substr("forename", 1, 1) == PormG.Functions.Substr("surname", 1, 1),
-    ),
+    # (A case pinned "a function on the right of the == operator raises (#1332)" here; #1514 admitted it,
+    # and the page now shows the operator spelling, run in test/integration/test_sql_functions.jl.)
     (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
@@ -1166,6 +1163,26 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a JSON path lookup against a column expression",
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__wins" => F("points")).list(show_query = :dict),
+    ),
+    # #1511 — the same section says the comparison operators over a key compare as the path lookup does,
+    # so a column on the right of the key, and a value carrying it, raise the same `FilterError`. They
+    # built through the generic operator path (`text > bigint` on PostgreSQL, a server error).
+    (
+        "read/filters_and_aggregates.md — a comparison of a JSON key with a column (#1511)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(F("payload__wins") > F("points")).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a comparison of a value carrying a JSON key (#1511)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(PormG.Functions.Coalesce("payload__wins", 0) > 100).list(show_query = :dict),
+    ),
+    # #1510 — *Arithmetic over a key* and `NullIf`'s docstring say `NullIf` over an uncast key raises
+    # `QueryBuildError` on every engine. PostgreSQL built `NULLIF(#>> …, $1::bigint)`, a server error.
+    (
+        "read/filters_and_aggregates.md — NullIf over a JSON key (#1510)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("w" => PormG.Functions.NullIf("payload__wins", 0)).list(show_query = :dict),
     ),
     # #1483 — *Arithmetic over a key* says arithmetic over a value carrying an uncast JSON key, and a
     # `Sum` of one, raise `QueryBuildError` on every engine. SQLite divided the key's integer as one

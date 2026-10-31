@@ -462,6 +462,18 @@ A path lookup compares the extracted value against a **value**. A column express
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison
 against a column means the same thing on all of them.
 
+The comparison operators over a path lookup compare the same way, in a filter, a `Q`, a `When`, a
+projection or a join condition (#1511):
+
+```julia
+M.Constructor.objects.filter(F("metadata__wins") > 100)    # as filter("metadata__wins__@gt" => 100)
+```
+
+A column on the right of the key (`F("metadata__wins") > F("constructorid")`) raises the same
+`FilterError`. So does a value that carries the key (`Coalesce("metadata__wins", 0) > 100`), as a
+filter on its alias does. Cast the key to say what it compares:
+`Cast("metadata__wins", BigIntegerField()) > F("constructorid")`.
+
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
     array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that
@@ -495,8 +507,8 @@ number it computes on, and the engines answer differently: SQLite's `json_extrac
 the document holds, so it would divide `121 / 2` as integers and return `60`, and PostgreSQL extracts
 the key as text, which its `+`, `/` and `sum` reject when the query runs. The same holds for a value
 that carries the key into the arithmetic: the functions whose value is their operand's (`Floor`,
-`Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case`
-branch and `NullIf`'s first operand, so `Floor("metadata__wins") / 2` raises too. It also holds wherever
+`Ceil`, `Abs`, `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`) and a `Case`
+branch, so `Floor("metadata__wins") / 2` raises too. It also holds wherever
 the arithmetic appears: a projection, a filter value (`"constructorid__@gt" => F("metadata__wins") / 2`),
 an `update()` value, an ordering, a CTE body or a `Subquery`.
 
@@ -524,6 +536,16 @@ q.order_by("-wins")                                                   # 10 befor
 
 q = M.Constructor.objects
 q.values("name", "most" => Greatest(Cast("metadata__wins", "numeric"), "constructorid"))
+```
+
+`NullIf` over an uncast key, in either operand, raises `QueryBuildError` on every engine as well
+(#1510). It compares its operands, and the query does not say whether as numbers or as text:
+PostgreSQL would compare the key's text with a number and fail when the query runs, where SQLite
+compares the number the document holds. Cast the key:
+
+```julia
+q = M.Constructor.objects
+q.values("name", "wins" => NullIf(Cast("metadata__wins", "numeric"), 0))     # NULL for no wins
 ```
 
 A function over the key with nothing computed on it builds (`Floor("metadata__wins")`), and so does a

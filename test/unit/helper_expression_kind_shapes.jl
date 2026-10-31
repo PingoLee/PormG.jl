@@ -77,6 +77,11 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # #1460 (review): the day count with a date literal on the right
   ("F date - date literal",   :Race,                m -> _EKM_Q.F("date") - Date(2009, 3, 1)),
   ("F comparison",            :Result,              m -> _EKM_Q.F("grid") > _EKM_Q.F("points")),
+  # #1514: a function on the right of a comparison, which the side typing now sees: a date, an interval
+  # and a number, each against its own kind.
+  ("F date > Coalesce date",  :Race,                m -> _EKM_Q.F("date") > _EKM_FN.Coalesce("date", Date(2009, 3, 1))),
+  ("F interval > Coalesce interval", :Result,            m -> _EKM_Q.F("fastestlaptime") > _EKM_FN.Coalesce("fastestlaptime", _EKM_Q.F("fastestlaptime"))),
+  ("F int > Abs int",         :Result,              m -> _EKM_Q.F("grid") > _EKM_FN.Abs("grid")),
   # #1476: operands that raised a `MethodError` before any query existed
   ("F int + Value(1)",        :Result,              m -> _EKM_Q.F("grid") + _EKM_FN.Value(1)),
   ("F float * Float32",       :Result,              m -> _EKM_Q.F("points") * Float32(2.5)),
@@ -558,7 +563,7 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("F json key + 1 / 2",      :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") + 1) / 2),
   ("Cast json key numeric / 2", :Field_validation_scratch, m -> _EKM_FN.Cast("payload__n", "numeric") / 2),
   # #1471 review: a `Case` branch carries the key; a float literal beside it makes SQLite compute a REAL;
-  # `NullIf`'s value is its first operand only.
+  # `NullIf`'s value is its first operand only, but it compares the key, so #1510 refuses it.
   ("Case json key branch / 2", :Field_validation_scratch, m -> _EKM_FN.Case([_EKM_FN.When("id" => 1, then = _EKM_Q.F("payload__n"))], default = 0) / 2),
   ("F json key * 1.0 / 2",    :Field_validation_scratch, m -> (_EKM_Q.F("payload__n") * 1.0) / 2),
   ("NullIf id json key / 2",  :Field_validation_scratch, m -> _EKM_FN.NullIf("id", "payload__n") / 2),

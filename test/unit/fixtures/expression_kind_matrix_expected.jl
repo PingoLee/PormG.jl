@@ -668,6 +668,60 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CDate()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CDate()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CDate()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | cte", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | cte", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date > Coalesce date | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CInterval()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CInterval()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = "rooted: CInterval()", formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | cte", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | cte", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F interval > Coalesce interval | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | alone", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | cte", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | cte", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | subquery", :postgres) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F int > Abs int | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F int + Value(1) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int + Value(1) | alone", :sqlite) =>
@@ -7773,23 +7827,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F json key * 1.0 / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not say "),
   ("NullIf id json key / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("NullIf id json key / 2 | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`NullIf` over the JSON key `payload__n` is not supported: a JSON key's value has no declared type, so the query does not"),
   ("Cast json key integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast json key integer | alone", :sqlite) =>

@@ -24,7 +24,7 @@ raises the #1499 refusal, as on the key.
 This reverses one sentence of the #1382 entry (0.9.0): "An expression on the right
 (`filter("principal" => F("name"))`) renders as it did." For an alias over a JSON key, it is now
 refused. An alias over any other column still compares with an expression. The expression comparison
-`F("metadata__wins") == F("constructorid")` is not one of these handles and still builds (#1511).
+`F("metadata__wins") == F("constructorid")` is refused the same way (#1511).
 
 | filter, an alias `wins => F("metadata__wins")` | before | now |
 |---|---|---|

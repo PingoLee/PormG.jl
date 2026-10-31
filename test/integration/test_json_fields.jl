@@ -324,6 +324,28 @@ end
             @test length(q.list()) == 1
         end
 
+        # #1511: the comparison operators over a key compare as the key lookup does. `F("payload__points")
+        # == 15` bound the text "15", which SQLite's `json_extract` integer never equals (no row), and
+        # `> 9` compared text on PostgreSQL ('15' > '9' is false). Expected: each comparison matches the
+        # seeded row exactly when its filter pair does, on every engine; a column on the right of the key
+        # raises `FilterError` before any SQL is sent. (A key on the RIGHT of a column is left as the filter
+        # pair renders it; that side is a follow-up.)
+        @testset "a comparison over a JSON key matches as the key lookup does (#1511)" begin
+            expr(f) = (q = base(); q.filter(f); q)
+            for (f, pair_filter, hits) in ((F("payload__points") == 15, "payload__points" => 15, 1),
+                                           (F("payload__points") == 99, "payload__points" => 99, 0),
+                                           (F("payload__points") > 9, "payload__points__@gt" => 9, 1),
+                                           (F("payload__points") > 20, "payload__points__@gt" => 20, 0),
+                                           (F("payload__driver") == "hamilton", "payload__driver" => "hamilton", 1),
+                                           (F("payload__driver") != "hamilton", "payload__driver__@ne" => "hamilton", 0))
+                pq = base(); pq.filter(pair_filter)
+                @test (string(pair_filter), length(expr(f).list()), length(pq.list())) == (string(pair_filter), hits, hits)
+            end
+            @test length(expr(Q(F("payload__points") >= 15)).list()) == 1
+            @test_throws PormG.FilterError expr(F("payload__points") > F("id")).list()
+            @test length(expr(Cast("payload__points", "numeric") > 9).list()) == 1
+        end
+
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────
         if requires(:jsonb_operators)
             @testset "containment and key operators" begin

@@ -1764,6 +1764,13 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # temporal column as `nothing` and silently drops it to plain arithmetic.
     left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
 
+    # #1511 — a comparison over a JSON key lookup compares as the key lookup does, read once the left
+    # has rendered (the record of rendered key lookups is what names it).
+    if v.operation in _COMPARISON_OPERATIONS
+      keyed = _render_json_key_expression_comparison(v, left_side, instruc)
+      keyed === nothing || return keyed, nothing
+    end
+
     # #568 — A BARE INTEGER ON ± OVER A TEMPORAL LEFT IS WHOLE DAYS, rendered by the one temporal
     # renderer rather than by a second implementation. Ahead of the operand bind below, because that
     # bind is what used to break PostgreSQL: it stamped `$n::bigint` on the parameter before anything

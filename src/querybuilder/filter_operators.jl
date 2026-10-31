@@ -44,49 +44,58 @@ _json_finite(value::AbstractFloat) = isfinite(value) ? value :
 # It renders `ISNULL`, `=`, `!=`/`<>` and the four orderings, and refuses every other operator
 # (`_json_key_operator_refusal`) — for the key and for everything that holds its value (#1499).
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
-  op = v.operator
   # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at
   # parse made it reachable here — and this is the one arm where it was SILENT: the PostgreSQL branch
   # does `string(v.values)`, which stringified the payload's Julia `repr` into
   # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error. A JSON value is never a
   # byte payload, so the refusal is unconditional.
   _guard_vector_equality(v, nothing)
+  return _render_json_key_comparison(v.operator, v.values, column, _filter_path_label(v), instruc)
+end
+
+# The comparison itself, for the filter pair above and for an expression comparison over the key
+# (`F("payload__n") == 5`, #1511), so the two cannot bind or refuse differently. `label` names the key
+# in a refusal.
+function _render_json_key_comparison(op::AbstractString, value, column::String, label::String,
+                                     instruc::SQLInstruction)::String
   # #811: the same silent arm, reached by a column expression. `"payload__kind" => F("grid")` bound
   # the `FExpression`'s `repr` as text on PostgreSQL — zero rows, no error — while SQLite refused it as
   # an unbindable value. Comparing extracted JSON against a column needs a per-engine cast nobody has
   # designed, so it is refused on both engines. It has to be here, not at parse: whether a path is a
   # JSON path is only known once its column resolves. `@isnull` never gets this far (#808's parse check).
-  v.values isa SQLType && throw(FilterError(
-    "Error in filter '$(_filter_path_label(v))': a JSON path lookup compares the extracted value " *
-    "against a value, not a column expression"))
+  value isa SQLType && throw(_json_key_column_rhs_refusal(label))
   as_text = _json_path_extracts_text(instruc.connection)
   if op == "ISNULL"
     # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
     # legitimate SQLite json_extract(...) expression trips.
-    return string(column, v.values == true ? " IS NULL" : " IS NOT NULL")
+    return string(column, value == true ? " IS NULL" : " IS NOT NULL")
   elseif op in ("=", "!=", "<>")
     # #1091: `<> NaN` is not a JSON comparison either (as text it is every row, as `NULL` none).
-    v.values isa AbstractFloat && try
-      _json_finite(v.values)
+    value isa AbstractFloat && try
+      _json_finite(value)
     catch e
-      _locate_filter_refusal(e, _filter_path_label(v), nothing)
+      _locate_filter_refusal(e, label, nothing)
     end
     # PG: bind text (LHS is text). SQLite: bind the native value (LHS keeps its JSON type).
-    ph = add_parameter!(instruc, as_text ? string(v.values) : v.values)
+    ph = add_parameter!(instruc, as_text ? string(value) : value)
     return string(column, " ", op, " ", ph)
   elseif op in (">", ">=", "<", "<=")
     lhs = _json_numeric_operand(instruc.connection, column)
     rhs = try
-      _json_numeric_rhs(v.values)
+      _json_numeric_rhs(value)
     catch e
-      _locate_filter_refusal(e, _filter_path_label(v), nothing)
+      _locate_filter_refusal(e, label, nothing)
     end
     ph = add_parameter!(instruc, rhs)
     return string(lhs, " ", op, " ", ph)
   else
-    throw(_json_key_operator_refusal(op, _filter_path_label(v)))
+    throw(_json_key_operator_refusal(op, label))
   end
 end
+
+_json_key_column_rhs_refusal(label::AbstractString) = FilterError(
+  "Error in filter '$(label)': a JSON path lookup compares the extracted value against a value, not a " *
+  "column expression")
 
 # The lookup a caller wrote for an internal operator (`"BETWEEN"` → `"@range"`), for a refusal.
 function _operator_spelling(op::AbstractString)::String

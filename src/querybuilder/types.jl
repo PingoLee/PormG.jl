@@ -1311,7 +1311,8 @@ const _SubqueryOperand = SubqueryObject
   #
   # `_DurationOperand` is the other half and is NOT part of `_CompareOperand`: those are the operands
   # #25 added for date ARITHMETIC (`F("seen") + Day(1)`), not for comparison. Conflating the two was
-  # the whole of #494. `SQLTypeFunction` likewise — `F("x") * Sum("y")` is arithmetic.
+  # the whole of #494. `SQLTypeFunction` came for arithmetic (`F("x") * Sum("y")`); since #1514 its two
+  # members, `FObject` and `WindowFunction`, are comparison operands too, named in `_CompareOperand`.
   operand::Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,_DurationOperand,SQLTypeFunction,FExpression,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""

@@ -918,8 +918,21 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 # #1497: so does an ordering term or a `Greatest`/`Least`, which name their own `issue`; an `order_by`
 # term takes a path or a projected name, not an expression, so it adds the `projected` spelling.
 function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false,
-                                  issue::AbstractString = "#1491", projected::Bool = false)
+                                  issue::AbstractString = "#1491", projected::Bool = false,
+                                  comparing::Int = 0)
   flag = side[2]
+  # #1510: `NullIf` compares the value, and the query does not say whether as a number or as text.
+  # `comparing` is the operand's position, so the spelling casts the key where it sits: a cast in the
+  # first position would change which value `NullIf` returns.
+  if comparing > 0
+    spell(type, other) = comparing == 1 ? "NullIf(Cast(\"$(flag)\", \"$(type)\"), $(other))" :
+                                          "NullIf(…, Cast(\"$(flag)\", \"$(type)\"))"
+    throw(QueryBuildError(
+      "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+      "so the query does not say whether it compares numbers or text (#1510). Cast the key where it sits: " *
+      "\e[32m$(spell("numeric", "0"))\e[0m compares numbers on every engine, and " *
+      "\e[32m$(spell("text", "Value(\"\")"))\e[0m compares text."))
+  end
   ordering && throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *
@@ -973,6 +986,31 @@ function _refuse_json_key_carrier_filter(v::SQLTypeOper, source, label::Abstract
   side === nothing || throw(_json_key_carrier_refusal(label, side))
   return nothing
 end
+
+# #1511 — an expression comparison whose LEFT is a JSON key lookup (`F("payload__n") == 5`, or the same
+# path on a joined row in an ON clause) compares as the key lookup does (`_render_json_key_comparison`): the value
+# bound native on SQLite and as text elsewhere, `::numeric` on a PostgreSQL ordering, a column on the
+# right refused (#811). Through the generic operator path it bound the text `"5"`, which SQLite's
+# `json_extract` integer never equals, and PostgreSQL ordered text. A left that carries a key without
+# being it (`Coalesce(key, 0) > 5`) is refused, as its alias's filter is (#1506). Read after the left
+# renders; `nothing` when the left holds no key.
+function _render_json_key_expression_comparison(v::FExpression, left_side::String,
+                                                instruc::SQLInstruction)::Union{String,Nothing}
+  if _json_key_lookup_operand(v.field_name, instruc)
+    label = _json_key_operand_label(v.field_name)
+    # A field path on the right is a column (`_set_update_query_operand`'s String rule), as `F` is.
+    v.operand isa String && _is_field_path(v.operand, instruc) && throw(_json_key_column_rhs_refusal(label))
+    return string("(", _render_json_key_comparison(v.operation, v.operand, left_side, label, instruc), ")")
+  end
+  side = _json_number_side(v.field_name, instruc)
+  side === nothing || throw(_json_key_carrier_refusal("the comparison (`$(v.operation)`)", side))
+  return nothing
+end
+
+# A key on the RIGHT (`F("id") == F("payload__n")`) is left as the filter pair `"id" => F("payload__n")`
+# renders it, so the two spellings of one comparison answer alike.
+
+_json_key_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "the expression" : l)
 
 # #1127, #1034 phase 3 step 2c — the classification of a CTE column, from what its body recorded:
 # - an integer quotient an engine departs on (`_DIVISION_KINDS`), from the division record

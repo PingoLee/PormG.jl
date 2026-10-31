@@ -191,7 +191,12 @@ end
 # before it cleared the owner: that leaves count 0 with this task named, and an unguarded loop would
 # underflow the count. `locked_by` and `reentrancy_cnt` are fields of Base's `ReentrantLock`; the
 # #1521 test reads both, so a rename fails there.
+#
+# SQLite.jl took no Julia-side lock before 1.9.0 (`DB` has no `lock` field there; PormG's floor is
+# 1.6.1), so there is nothing to leak and nothing to release. `hasfield` on the type is a constant,
+# so the check costs nothing at run time.
 function _release_leaked_db_lock!(conn::SQLite.DB)
+  hasfield(SQLite.DB, :lock) || return nothing
   l = conn.lock
   while l.locked_by === current_task() && l.reentrancy_cnt > 0
     unlock(l)

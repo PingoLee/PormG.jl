@@ -149,7 +149,10 @@ const PINNED_FIELDS = _FieldPin[
   (type = LibPQ.Errors.PQConnectionError, fields = [:msg], status = :internal, reader = "PormG.backend_is_retry_safe"),
   (type = LibPQ.Errors.PQResultError, fields = [:msg], status = :internal, reader = "PormG.backend_error_fields"),
   # SQLite.jl
-  (type = SQLite.DB, fields = [:handle, :lock], status = :internal, reader = "PormG.backend_cancel_query!, _release_leaked_db_lock!"),
+  # `:lock` (read by `_release_leaked_db_lock!`, #1521) is not pinned: SQLite.jl added it in 1.9.0, and
+  # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
+  # test_connection_pool_liveness.jl reads it whenever it exists, so a rename still fails there.
+  (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
    reader = "PormG.backend_classify_error, backend_error_fields"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that

@@ -311,6 +311,30 @@ Base.:(==)(::JoinedReference, operand::Missing) = throw(_unsupported_compare_ope
 Base.:(==)(::JoinedReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
 Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
+# #1529 — the same six comparisons with a CTE column handle on the LEFT. Without them
+# `CTE("g", "v") == 5` fell through to `Base.==` and answered `false`, which `filter` then reported, and
+# `CTE("g", "v") > 5` was a raw `MethodError` from `isless` — the #536 defect class, closed then for
+# `F`, `Joined` and the functions, while `CTEReference` got neither family. As the right side
+# (`F("x") == CTE(…)`, #444) it already worked. Built exactly as the `JoinedReference` family above, and
+# for the same reasons: the node is an `FExpression` (a `FilterType`, the `F`-on-the-left render path),
+# every comparison constructs (the handle is immutable), the operand union is the shared
+# `_CompareOperand`, and an ordering direction is refused because it means nothing in a predicate.
+# `isequal(::CTEReference, …)` (`types.jl`) stays total for hashed containers. No arithmetic: a CTE
+# column in arithmetic is still `F("<cte>__col")`'s or a function's (`Sum(CTE(…))` is refused).
+for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
+  @eval function Base.$op(c::CTEReference, operand::_CompareOperand)
+    _reject_cte_desc(c, "a comparison")
+    return FExpression(field_name=c, operation=$sym, operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
+  end
+  @eval function Base.$op(x::CTEReference, operand)
+    operand isa AbstractString && return Base.$op(x, String(operand))
+    throw(_unsupported_compare_operand($sym, operand))
+  end
+end
+Base.:(==)(::CTEReference, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::CTEReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::CTEReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
+
 function Base.:+(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end

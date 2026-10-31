@@ -122,6 +122,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Expression-Kind Matrix (#1034)" include("unit/test_expression_kind_matrix.jl")
     @testset "Function Result Rules (#1034)" include("unit/test_expression_kind_rules.jl")
     @testset "One Refusal Point for an Uncast JSON Key (#1531)" include("unit/test_json_key_refusal_point.jl")
+    @testset "CTE Handle on the Left of a Comparison (#1529)" include("unit/test_cte_left_comparison.jl")
     @testset "Formatter From the Type Walk (#1034)" include("unit/test_formatter_from_walk.jl")
     @testset "MySQL Interval Alias Filter Binds Microseconds (#1456)" include("unit/test_mysql_interval_alias_filter.jl")
     @testset "Extract EPOCH Is a Decimal (#1457)" include("unit/test_extract_epoch_type.jl")

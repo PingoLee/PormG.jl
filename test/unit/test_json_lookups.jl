@@ -468,15 +468,17 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     # where the generic arm refused a `json_extract(…)` column (FilterError).
     @test occursin("WHEN json_extract(\"Tb\".\"payload\", '\$.driver') IS NULL THEN",
                    _sql(when_q("k", F("payload__driver"), "k__@isnull", true); conn = _JL_SL)[:sql_text])
-    # A column expression on the right is a column comparison, as it was: no value to bind or check.
+    # #1507: a column expression on the right of an alias over a key is refused as on the key (#811). It
+    # rendered as a column comparison, which on PostgreSQL compared the key's text with a bigint.
     for conn in (_JL_PG, _JL_SL, _JL_MY)
+      q = projected("k", F("payload__driver")); q.filter("k" => F("id"))
+      @test_throws PormG.FilterError _sql(q; conn = conn)
+      @test_throws PormG.FilterError _sql(when_q("k", F("payload__driver"), "k", F("id")); conn = conn)
+      # An alias over a column that is not a key still compares with a column: no value to bind or check.
       qt = conn isa PormG.PormGMySQL ? "`" : "\""
       idcol = "= $(qt)Tb$(qt).$(qt)id$(qt)"
-      q = projected("k", F("payload__driver")); q.filter("k" => F("id"))
-      r = _sql(q; conn = conn)
-      @test (typeof(conn), occursin(idcol, r[:sql_text]), r[:parameters]) == (typeof(conn), true, Any[])
-      w = _sql(when_q("k", F("payload__driver"), "k", F("id")); conn = conn)
-      @test (typeof(conn), occursin(idcol, w[:sql_text]), length(w[:parameters])) == (typeof(conn), true, 3)
+      w = _sql(when_q("n", F("laps"), "n", F("id")); conn = conn)
+      @test (typeof(conn), occursin(idcol, w[:sql_text])) == (typeof(conn), true)
       # A queryset on the right keeps its refusal: it needs a membership operator.
       @test_throws PormG.FilterError _sql(when_q("k", F("payload__driver"), "k", JL.Json_scratch.objects); conn = conn)
     end
@@ -1006,6 +1008,133 @@ end
   # Controls: the comparisons the key lookup renders still build on the alias.
   @test _sql(aliased("w__@gte" => 9); conn = _JL_PG)[:parameters] == [9]
   @test isempty(_sql(aliased("w__@isnull" => true); conn = _JL_SL)[:parameters])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1506: a filter on an alias over a value that CARRIES an uncast JSON key is refused on every engine
+# #1382 compares an alias over the key as the key lookup does; an alias over `Coalesce(key, 0)`, a
+# `Case` branch, `NullIf(key, …)`, `Abs(key)`, or a `Subquery` projecting one, is not the key, and bound
+# its value through its own formatter: `COALESCE(json_extract(…), ?) > ?` with `"9"` as text on SQLite,
+# where an integer is never greater than text, so the filter matched no row with no error;
+# `COALESCE(#>> …, $2::bigint)` on PostgreSQL is a server error. Expected: `FilterError` naming `(#1506)`
+# and the cast inside the expression, under `=`, `@gt`, `@ne` and a column on the right, on the alias's
+# filter, a `Q`, a `When` condition and a `Subquery` alias. `@isnull` keeps its own arm; the cast inside
+# the carrier builds and binds the number. Why it matters: the rows silently differed by engine (#1497
+# already refuses an `order_by` on this same alias, #1483 arithmetic over it).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1506: a filter on an alias over a carrier of an uncast JSON key is refused on every engine" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  carriers = (("Coalesce", () -> FN.Coalesce("payload__n", 0)),
+              ("NullIf", () -> FN.NullIf("payload__n", 0)),
+              ("Case", () -> Case([When("id" => 1, then = F("payload__n"))], default = 0)),
+              ("Abs", () -> FN.Abs("payload__n")),
+              ("Ceil", () -> FN.Ceil("payload__n")))
+  sub(src) = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => src); s)
+  aliased(src, filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => src); q.filter(filt); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (label, src) in carriers
+    @testset "$label on $(nameof(typeof(conn)))" begin
+      for filt in ("w" => 9, "w__@gt" => 9, "w__@ne" => 9, "w__@gt" => F("id"))
+        # A `Subquery` over `NullIf(key, …)` is left out: the walk types it as the key's value
+        # (`CJSONValue`, `NullIf` takes its first operand's type), so it compares as the key (#1492),
+        # as a CTE column over it does (#1472). The two answers for one value are #1510.
+        handles = (("alias", aliased(src(), filt)), ("Q", aliased(src(), QB.Q(filt))),
+                   ("Qor", aliased(src(), QB.Qor(filt, "name" => "Senna"))))
+        label == "NullIf" || (handles = (handles..., ("Subquery", aliased(QB.Subquery(sub(src())), filt))))
+        for (handle, q) in handles
+          e = refusal(q, conn)
+          @test (handle, e isa PormG.FilterError) == (handle, true)
+          e isa PormG.FilterError && @test occursin("A filter on w is not supported", plain(e)) &&
+            occursin("(#1506)", plain(e)) && occursin("Cast(\"payload__n\", \"numeric\")", plain(e))
+        end
+      end
+      # A `When` condition on the alias refuses as the alias's filter does.
+      q = JL.Json_scratch.objects
+      q.values("name", "w" => src())
+      q.filter(Case([When("w__@gt" => 9, then = 1)], default = 0) == 1)
+      e = refusal(q, conn)
+      @test e isa PormG.FilterError && occursin("(#1506)", plain(e))
+      # `@isnull` binds nothing and is not this refusal: it renders `IS NULL`, or its own arm refuses a
+      # function expression under it, as before #1506.
+      q = aliased(src(), "w__@isnull" => true)
+      e = refusal(q, conn)
+      @test (label, e === nothing ? occursin("IS NULL", _sql(q; conn = conn)[:sql_text]) :
+                    e isa PormG.FilterError && occursin("Error in ISNULL", plain(e))) == (label, true)
+    end
+  end
+  # The explicit spelling: the cast inside the carrier binds the number on every engine.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    r = _sql(aliased(FN.Coalesce(FN.Cast("payload__n", "numeric"), 0), "w__@gt" => 9); conn = conn)
+    @test r[:parameters] == [0, 0, 9]
+  end
+  # Control: an alias that IS the key still compares as the key lookup (#1382).
+  @test _sql(aliased(F("payload__n"), "w__@gt" => 9); conn = _JL_SL)[:parameters] == [9]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1507: an expression on the right of an alias, CTE column or Subquery over a JSON key is refused as
+# on the key (#811)
+# The key lookup refuses a column expression on the right ("a JSON path lookup compares the extracted
+# value against a value, not a column expression"); the #1382/#1472/#1492 routing skipped any expression
+# or queryset on the right, so the alias, CTE column and `Subquery` alias rendered a column comparison:
+# `"Tb"."payload" #>> '{"n"}' > "Tb"."id"` on PostgreSQL, text against a bigint, a server error. Expected:
+# the key's own `FilterError` on every handle, engine and right side (`F`, a function, a `Subquery`), with
+# the handle's name; a queryset under `@in` gets #1499's refusal on every handle, as on the key. Why it
+# matters: the alias stands for the key lookup, and the two answered differently on this one shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1507: an expression on the right of a handle over a JSON key is refused as on the key" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  sub(src) = (s = JL.Json_scratch.objects; s.filter("id" => QB.OuterRef("id")); s.values("w" => src); s)
+  key(filt) = (q = JL.Json_scratch.objects; q.values("name"); q.filter(filt); q)
+  aliased(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => F("payload__n")); q.filter(filt); q)
+  q_wrapped(filt) = aliased(QB.Q(filt))
+  subquery(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => QB.Subquery(sub("payload__n"))); q.filter(filt); q)
+  function cte(filt)
+    body = JL.Json_scratch.objects
+    body.values("id", "w" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "g__w")
+    q.filter(filt)
+    return q
+  end
+  when(filt) = (q = JL.Json_scratch.objects; q.values("name", "w" => F("payload__n"));
+                q.filter(Case([When(filt, then = 1)], default = 0) == 1); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  column_rhs = "a JSON path lookup compares the extracted value against a value, not a column expression"
+  rights = (("F", (n -> "$(n)__@gt" => F("id"))), ("F, equality", (n -> n => F("id"))),
+            ("a function", (n -> "$(n)__@lte" => FN.Abs("id"))),
+            ("a Subquery", (n -> "$(n)__@gt" => QB.Subquery(sub("id")))))
+  handles = (("the key", key, "payload__n"), ("an alias", aliased, "w"), ("a Q on the alias", q_wrapped, "w"),
+             ("a Subquery alias", subquery, "w"), ("a CTE column", cte, "g__w"), ("a When on the alias", when, "w"))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (right, filt_for) in rights
+    @testset "$right on $(nameof(typeof(conn)))" begin
+      for (handle, mk, name) in handles
+        e = refusal(mk(filt_for(name)), conn)
+        @test (handle, e isa PormG.FilterError) == (handle, true)
+        e isa PormG.FilterError &&
+          @test (handle, occursin("Error in filter '$name': $column_rhs", plain(e))) == (handle, true)
+      end
+    end
+  end
+  # A queryset under `@in` is a membership list, which the key lookup refuses (#1499); so do the others.
+  members() = (s = JL.Json_scratch.objects; s.values("id"); s)
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (handle, mk, name) in handles
+    e = refusal(mk("$(name)__@in" => members()), conn)
+    @test (handle, e isa PormG.FilterError && occursin("The @in lookup is not supported on $name", plain(e))) ==
+          (handle, true)
+  end
+  # Control: a value on the right still compares as the key lookup on every handle (a `When` binds its
+  # THEN and ELSE values after it).
+  for (handle, mk, name) in handles
+    @test (handle, 9 in _sql(mk("$(name)__@gt" => 9); conn = _JL_SL)[:parameters]) == (handle, true)
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

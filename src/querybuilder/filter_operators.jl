@@ -109,6 +109,16 @@ _json_key_operator_refusal(op::AbstractString, label::AbstractString) = FilterEr
   "\e[32mCast(<the key path>, \"text\")\e[0m for text, then " *
   "\e[32mfilter(\"n__$(_operator_spelling(op))\" => …)\e[0m.")
 
+# #1506: the refusal of a filter on a value that carries an uncast JSON key without being it
+# (`_refuse_json_key_carrier_filter`). `side` is `_json_number_side`'s `(what, key path)`; the explicit
+# spelling casts the key inside the expression, where the type is decided.
+_json_key_carrier_refusal(label::AbstractString, side::Tuple{String,String}) = FilterError(
+  "A filter on \e[31m$(label)\e[0m is not supported: it holds $(side[1]), and a JSON key's value has no " *
+  "declared type, so the query does not say what the comparison means (#1506). Cast the key inside the " *
+  "expression, to the type you mean: \e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every " *
+  "engine (for example \e[32mCoalesce(Cast(\"$(side[2])\", \"numeric\"), 0)\e[0m), " *
+  "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
+
 # #27: render a JSONB containment/overlap operator (@>, ?, ?|, ?&). The LHS must be a JSON COLUMN
 # (terminal), not a nested key path. Binds the RHS per operator (jsonb document / text key /
 # text[] key array) and dispatches to the per-dialect Dialect renderer (PG emits the operator;

@@ -1159,7 +1159,9 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # refused plain text, and bound a number as text (`"R1_1"."k" > '5'` on PostgreSQL, no `::numeric`).
   # A whole-document column (`CJSON`) keeps the formatter (#1360). #1499: under every operator, as the
   # key lookup above is: the ones it refuses (a membership list, a range, a pattern) are refused here.
-  isa(v.column, SQLTypeField) && !_expression_operand(v.values) &&
+  # #1507: and with a column expression on the right, which the key lookup refuses (#811) — a CTE
+  # column or a `Subquery` over the key rendered it as a column comparison, `text > bigint` on PostgreSQL.
+  isa(v.column, SQLTypeField) &&
     _json_key_lookup_operand(v.column.field, instruc) && return _render_json_lookup_comparison(v, column, instruc)
   # #1381: a `When` condition on a projection alias — every filter on one takes `_render_alias_predicate`
   # first, so only a `When` gets here. `alias_key` is set when the alias is projected; its value binds
@@ -1167,8 +1169,14 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # key lookup renders as the key lookup does (#1382).
   alias_key = (alias !== nothing && _projected_source(memo_key(:base, alias), instruc) !== nothing) ?
               memo_key(:base, alias) : nothing
-  alias_key !== nothing && _alias_projects_json_key(alias_key, instruc) && !_expression_operand(v.values) &&
-    return _render_json_lookup_comparison(v, column, instruc)
+  if alias_key !== nothing
+    if _alias_projects_json_key(alias_key, instruc)
+      return _render_json_lookup_comparison(v, column, instruc)
+    else
+      # #1506: an alias that carries a key without being it, refused as its filter is.
+      _refuse_json_key_carrier_filter(v, _projected_source(alias_key, instruc), alias, instruc)
+    end
+  end
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
   # all get it. #903: a `When` condition on a projection alias renders here too, and has no field —
   # the alias's formatter is what says it projects a network column.

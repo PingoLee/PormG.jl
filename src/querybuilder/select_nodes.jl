@@ -746,15 +746,35 @@ function _check_pad_operands(v::SQLTypeFunction, instruc::SQLInstruction)
   for (i, slot) in ((1, "the value it pads"), (3, "its fill"))
     what = _pad_textless(v.column[i], instruc)
     what === nothing && continue
-    advice = v.column[i] isa SQLText ?
-      "Write the literal as a string: \e[4m\e[32mstring(x)\e[0m" :
-      "Convert it to text first: \e[4m\e[32mCast(x, \"text\")\e[0m for an integer, a date, a time or a " *
-      "uuid, \e[4m\e[32mToChar\e[0m for a timestamp, a \e[4m\e[32mCase\e[0m for a boolean; a float, a " *
-      "decimal, an interval or a JSON document reads differently on each engine, so format it in Julia"
     throw(QueryBuildError(
       "\e[4m\e[31m$(name)\e[0m pads TEXT, and $(slot), $(what), is not text: PostgreSQL has no " *
-      "$(lowercase(v.function_name)) over it. $(advice) (#122)."))
+      "$(lowercase(v.function_name)) over it. $(_text_operand_advice(v.column[i])) (#122)."))
   end
+end
+
+# #1332: `Substr` reads TEXT, under the same allow list. PostgreSQL has no `substr` over a number
+# and SQLite and MySQL take part of whatever text the value converts to, so the query does not say
+# which text it means: explicit intent, refused on every engine, naming the conversion that says it.
+function _check_substr_operand(v::SQLTypeFunction, instruc::SQLInstruction)
+  what = _pad_textless(v.column[1], instruc)
+  what === nothing && return nothing
+  throw(QueryBuildError(
+    "\e[4m\e[31mSubstr\e[0m takes part of TEXT, and the value it reads, $(what), is not text. " *
+    "$(_text_operand_advice(v.column[1])) (#1332)."))
+end
+
+_text_operand_advice(operand) = operand isa SQLText ?
+  "Write the literal as a string: \e[4m\e[32mstring(x)\e[0m" :
+  "Convert it to text first: \e[4m\e[32mCast(x, \"text\")\e[0m for an integer, a date, a time or a " *
+  "uuid, \e[4m\e[32mToChar\e[0m for a timestamp, a \e[4m\e[32mCase\e[0m for a boolean; a float, a " *
+  "decimal, an interval or a JSON document reads differently on each engine, so format it in Julia"
+
+# The Dialect renderer of a scalar function, by its name. A function added since #1346 takes no
+# `Dict{String,Any}` option bag and is called with its typed arguments (`Substr`, #1332); the rest are
+# looked up by name and handed `kwargs`, the one lookup left here for `test_type_ratchet.jl` to count.
+function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, conn::_SQLEngine)
+  name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
+  return getfield(Dialect, Symbol(name))(column, kwargs, conn)
 end
 
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
@@ -905,6 +925,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   end
   # #122: `LPad`/`RPad` over a typed operand that is not text, read at the same point.
   v.function_name in ("LPAD", "RPAD") && _check_pad_operands(v, instruc)
+  # #1332: `Substr` over a typed operand that is not text, at the same point.
+  v.function_name == "SUBSTR" && _check_substr_operand(v, instruc)
   # #1028: a declared cast — `Cast(x, CharField())`, `Cast(x, IntegerField())`, `Cast(x, "numeric(p,
   # s)")`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply — over an operand on which
   # this engine departs from what the cast means (#1147 step 2). Read at the same point, so a `Concat`
@@ -1083,14 +1105,14 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
                (v.function_name != "CAST" || resolved_column isa AbstractString) ?
     _guarded_integer_type(v, instruc.connection) : nothing
   if declared_sql === nothing && guard_type === nothing
-    sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
+    sql = _function_sql(v.function_name, resolved_column, resolved_kwargs, instruc.connection)
   else
     # The function with no declaration (`Cast`'s is the operand itself), handed to the decided form, or
     # to the integer guard, which casts it to the declared type itself.
     undeclared = copy(resolved_kwargs)
     delete!(undeclared, "output_field")
     x = v.function_name == "CAST" ? resolved_column :
-        getfield(Dialect, Symbol(v.function_name))(resolved_column, undeclared, instruc.connection)
+        _function_sql(v.function_name, resolved_column, undeclared, instruc.connection)
     sql = guard_type === nothing ? declared_sql(x) :
           _integer_cast_guard(x, guard_type, cast_marks, instruc, String(v.function_name))
   end

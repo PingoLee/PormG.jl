@@ -334,7 +334,7 @@ end
 # `ToChar` (`EXTRACT_DATE`) is text too, but it is not listed: `PormGTypeField` types it, and that is
 # checked first. #851 listed it here while the table keyed `TO_CHAR`, a name no node carries; #862
 # keyed the table by the node's name instead, so the type has one home.
-const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "LPAD", "RPAD")
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "LPAD", "RPAD", "SUBSTR")
 
 # #1070: a date part's formatter holds a value to the part's RANGE — an hour 0–23, a month 1–12, a
 # `"YYYY-MM"` label. The range belongs to the part, not to an expression computed from it: `hour + 1`

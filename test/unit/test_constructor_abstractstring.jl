@@ -218,6 +218,8 @@ end
         @test node.column[1] isa String && node.column[1] == "code"
         @test node.column[3].field isa String && node.column[3].field == "0"
       end
+      # #1332: `Substr` stores its operand as a path.
+      @test Substr(probe("code"), 1, 2).column[1] isa String && Substr(probe("code"), 1, 2).column[1] == "code"
     end
 
     # `Concat`'s vector ELEMENTS, and the container that holds them.

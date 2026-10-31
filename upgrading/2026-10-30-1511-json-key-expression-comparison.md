@@ -1,7 +1,7 @@
 ## A comparison expression over a JSON key compares as the key lookup does (#1511)
 
 - **Version**: Unreleased
-- **PormG ref**: #1511 ; `src/querybuilder/expression_render.jl` (`_render_expr_node_sql`), `src/querybuilder/projection_types.jl` (`_render_json_key_expression_comparison`, `_refuse_json_key_compared_operand`), `src/querybuilder/filter_operators.jl` (`_render_json_key_comparison`)
+- **PormG ref**: #1511 ; `src/querybuilder/expression_render.jl` (`_render_expr_node_sql`), `src/querybuilder/projection_types.jl` (`_render_json_key_expression_comparison`), `src/querybuilder/filter_operators.jl` (`_render_json_key_comparison`, `_json_key_carrier_refusal`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. A comparison over a key returns different rows on SQLite and PostgreSQL. A comparison of the key with a column on its right, or of a value that carries the key, now raises `FilterError` where it built.
 

@@ -919,14 +919,20 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 # term takes a path or a projected name, not an expression, so it adds the `projected` spelling.
 function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false,
                                   issue::AbstractString = "#1491", projected::Bool = false,
-                                  comparing::Bool = false)
+                                  comparing::Int = 0)
   flag = side[2]
   # #1510: `NullIf` compares the value, and the query does not say whether as a number or as text.
-  comparing && throw(QueryBuildError(
-    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
-    "so the query does not say whether it compares numbers or text (#1510). Say the type you mean: " *
-    "\e[32mNullIf(Cast(\"$(flag)\", \"numeric\"), 0)\e[0m compares numbers on every engine, and " *
-    "\e[32mNullIf(Cast(\"$(flag)\", \"text\"), Value(\"\"))\e[0m compares text."))
+  # `comparing` is the operand's position, so the spelling casts the key where it sits: a cast in the
+  # first position would change which value `NullIf` returns.
+  if comparing > 0
+    spell(type, other) = comparing == 1 ? "NullIf(Cast(\"$(flag)\", \"$(type)\"), $(other))" :
+                                          "NullIf(…, Cast(\"$(flag)\", \"$(type)\"))"
+    throw(QueryBuildError(
+      "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+      "so the query does not say whether it compares numbers or text (#1510). Cast the key where it sits: " *
+      "\e[32m$(spell("numeric", "0"))\e[0m compares numbers on every engine, and " *
+      "\e[32m$(spell("text", "Value(\"\")"))\e[0m compares text."))
+  end
   ordering && throw(QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *
@@ -981,8 +987,8 @@ function _refuse_json_key_carrier_filter(v::SQLTypeOper, source, label::Abstract
   return nothing
 end
 
-# #1511 — an expression comparison whose LEFT is a JSON key lookup (`F("payload__n") == 5`, a `Joined`
-# or CTE column over a key) compares as the key lookup does (`_render_json_key_comparison`): the value
+# #1511 — an expression comparison whose LEFT is a JSON key lookup (`F("payload__n") == 5`, or the same
+# path on a joined row in an ON clause) compares as the key lookup does (`_render_json_key_comparison`): the value
 # bound native on SQLite and as text elsewhere, `::numeric` on a PostgreSQL ordering, a column on the
 # right refused (#811). Through the generic operator path it bound the text `"5"`, which SQLite's
 # `json_extract` integer never equals, and PostgreSQL ordered text. A left that carries a key without

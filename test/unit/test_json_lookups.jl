@@ -63,6 +63,20 @@ Lap_scratch = Models.Model("lap_scratch",
 PormG.Models.set_models(@__MODULE__, "json_lookup_when_mock")
 end
 const JW = JsonWhenModels
+
+# #1511: a JSON column on a joined row, for a comparison over its key in an ON clause.
+PormG.config["json_lookup_join_mock"] = PormG.Configuration.Settings(
+  connections = _JL_SL, change_data = true, db_def_folder = "json_lookup_join_mock",
+)
+module JsonJoinModels
+import PormG
+import PormG.Models
+Json_team = Models.Model("json_team", id = Models.IDField(), payload = Models.JSONField(null = true))
+Json_entry = Models.Model("json_entry", id = Models.IDField(),
+  team = Models.ForeignKey(Json_team, on_delete = "CASCADE", related_name = "entries"))
+PormG.Models.set_models(@__MODULE__, "json_lookup_join_mock")
+end
+const JJ = JsonJoinModels
 import PormG.QueryBuilder: inspect_query, Case, When
 
 # Resolve a query's SQL under a specific dialect (default = mock SQLite).
@@ -1149,7 +1163,8 @@ end
 # behind: a filter on its projection alias was refused as a carrier (#1506), while a CTE column or a
 # `Subquery` over it compared as the key (#1472, #1492). The projection itself was a server error on
 # PostgreSQL (`NULLIF(#>> '{"n"}', $1::bigint)`, `text = bigint`) and compared the native value on
-# SQLite. Expected: `QueryBuildError` naming `(#1510)`, `NullIf(Cast("payload__n", "numeric"), 0)` and
+# SQLite. Expected: `QueryBuildError` naming `(#1510)`, the cast written where the key sits
+# (`NullIf(Cast("payload__n", "numeric"), 0)`, or `NullIf(…, Cast(…))` for the second operand) and
 # the text cast, on PostgreSQL, SQLite and MySQL, for the key or a carrier of it in either operand and in
 # a projection, a CTE body, a `Subquery`, a filter value and under `Max`. Each cast spelling builds:
 # PostgreSQL `NULLIF(("Tb"."payload" #>> '{"n"}')::decimal, $1::bigint)`. A `NullIf` with no key builds.
@@ -1169,19 +1184,24 @@ end
   quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
   refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
   plain(e) = PormG._emsg(sprint(showerror, e); color = false)
-  shapes = (("the key first", () -> FN.NullIf("payload__n", 0), "the JSON key `payload__n`"),
-            ("a text key", () -> FN.NullIf("payload__s", FN.Value("")), "the JSON key `payload__s`"),
-            ("the key second", () -> FN.NullIf("id", "payload__n"), "the JSON key `payload__n`"),
-            ("a carrier", () -> FN.NullIf(FN.Coalesce("payload__n", 0), 0), "`COALESCE(…)` over the JSON key `payload__n`"))
+  # The spelling casts the key where it sits: in the second position, a cast moved to the first would
+  # change which value `NullIf` returns (review).
+  first_spelling(k) = "NullIf(Cast(\"$(k)\", \"numeric\"), 0)"
+  shapes = (("the key first", () -> FN.NullIf("payload__n", 0), "the JSON key `payload__n`", first_spelling("payload__n")),
+            ("a text key", () -> FN.NullIf("payload__s", FN.Value("")), "the JSON key `payload__s`", first_spelling("payload__s")),
+            ("the key second", () -> FN.NullIf("id", "payload__n"), "the JSON key `payload__n`",
+             "NullIf(…, Cast(\"payload__n\", \"numeric\"))"),
+            ("a carrier", () -> FN.NullIf(FN.Coalesce("payload__n", 0), 0), "`COALESCE(…)` over the JSON key `payload__n`",
+             first_spelling("payload__n")))
   handles = (("projection", proj), ("CTE body", cte), ("Subquery", sub), ("filter value", filtered),
              ("under Max", x -> proj(FN.Max(x))))
-  for conn in (_JL_PG, _JL_SL, _JL_MY), (shape, mk, named) in shapes, (handle, h) in handles
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (shape, mk, named, spelling) in shapes, (handle, h) in handles
     e = refusal(h(mk()), conn)
     @test (shape, handle, e isa PormG.QueryBuildError) == (shape, handle, true)
     msg = e === nothing ? "" : plain(e)
     @test (shape, handle, startswith(msg, "`NullIf` over $(named) is not supported") && occursin("(#1510)", msg)) ==
           (shape, handle, true)
-    @test (shape, handle, occursin("NullIf(Cast(\"payload__", msg) && occursin("\"numeric\"), 0)", msg)) == (shape, handle, true)
+    @test (shape, handle, occursin(spelling, msg)) == (shape, handle, true)
   end
   # The explicit spellings build on every engine, and so does a `NullIf` over no key.
   for conn in (_JL_PG, _JL_SL, _JL_MY)
@@ -1246,6 +1266,17 @@ end
     e = refusal(expr(f), conn)
     @test (label, e isa Union{PormG.FilterError,PormG.InvalidValueError}) == (label, true)
     e === nothing || @test (label, occursin(msg, plain(e))) == (label, true)
+  end
+  # An ON clause: `on("team", F("payload__n") > 5)` names the joined row's key, and binds as the pair
+  # `on("team", "payload__n__@gt" => 5)` does (review: the entry and docs list the join condition).
+  on_pred = Dict(_JL_PG => "AND ((\"Tb_1\".\"payload\" #>> '{\"n\"}')::numeric > \$1)",
+                 _JL_SL => "AND (json_extract(\"Tb_1\".\"payload\", '\$.n') > ?)",
+                 _JL_MY => "COLLATE utf8mb4_0900_bin) > ?)")
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    joined(cond) = (q = JJ.Json_entry.objects; q.on("team", cond); q.values("id", "team__id"); _sql(q; conn = conn))
+    got, ref = joined(F("payload__n") > 5), joined("payload__n__@gt" => 5)
+    @test got[:parameters] == ref[:parameters] == Any[5]
+    @test occursin(on_pred[conn], replace(got[:sql_text], r"\s+" => " "))
   end
   # Control: a key on the RIGHT of a column is the filter pair `"id" => F("payload__n")`'s business, and
   # the operator form renders as that pair does, so the two spellings cannot disagree.

@@ -1002,9 +1002,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # error, while SQLite compares `json_extract`'s native value. Each operand, as for `Greatest`: an
   # `output_field` casts the result, after the comparison.
   if v.function_name == "NULLIF"
-    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+    for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
       side = _json_number_side(operand, instruc)
-      side === nothing || _refuse_json_key_operand("`NullIf`", side; comparing = true)
+      side === nothing || _refuse_json_key_operand("`NullIf`", side; comparing = i)
     end
   end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would

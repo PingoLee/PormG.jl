@@ -28,7 +28,7 @@ path string on the right (`F("name") == "metadata__principal"`).
 | `F("date") > F("metadata__round")` on SQLite | `QueryBuildError` (#1310) | `FilterError` |
 | `F("date") > F("metadata__round")` on PostgreSQL | `date > text`, a server error | `FilterError` |
 | `F("grid") > Coalesce("metadata__wins", 0)` on PostgreSQL | `COALESCE(text, bigint)`, a server error | `FilterError` |
-| `"constructorid" => Subquery(<a queryset projecting "metadata__wins">)`, and `F("constructorid") == Subquery(…)` | compared the key's text (PostgreSQL) or native value (SQLite) | `FilterError` |
+| `"constructorid" => Subquery(<a queryset projecting "metadata__wins">)`, and `F("constructorid") == Subquery(…)` | as the operator above: a server error on PostgreSQL against a non-text column, the native value on SQLite | `FilterError` |
 | `"constructorid" => CTE("c", "wins")`, where the CTE column projects the key | the same | `FilterError` |
 | `"constructorid" => OuterRef("metadata__wins")` inside a `Subquery` or an `Exists` | the same | `FilterError` |
 | a join condition, `on("constructorid", "constructorid" => F("metadata__wins"))` | the same | `FilterError` |

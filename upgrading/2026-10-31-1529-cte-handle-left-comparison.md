@@ -40,8 +40,10 @@ with `in`, now gets a predicate or an error. Use `isequal` (or `any(isequal(h), 
 
 ```bash
 grep -rnE 'CTE\([^)]*\) *(==|!=|<=|>=|<|>)' --include=*.jl src/ test/
-grep -rnE '\bin +\[?[A-Za-z_]*(cte|CTE)' --include=*.jl src/ test/   # `in` over handles
 ```
+
+A container lookup over handles (`h in handles`) has no reliable textual pattern: look for collections
+of `CTE(...)` values your code builds and checks.
 
 ### Migrate your app
 

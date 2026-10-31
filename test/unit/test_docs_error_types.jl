@@ -1167,6 +1167,19 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__wins" => F("points")).list(show_query = :dict),
     ),
+    # #1511 — the same section says the comparison operators over a key compare as the path lookup does,
+    # so a column on the right of the key, and a value carrying it, raise the same `FilterError`. They
+    # built through the generic operator path (`text > bigint` on PostgreSQL, a server error).
+    (
+        "read/filters_and_aggregates.md — a comparison of a JSON key with a column (#1511)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(F("payload__wins") > F("points")).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a comparison of a value carrying a JSON key (#1511)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(PormG.Functions.Coalesce("payload__wins", 0) > 100).list(show_query = :dict),
+    ),
     # #1483 — *Arithmetic over a key* says arithmetic over a value carrying an uncast JSON key, and a
     # `Sum` of one, raise `QueryBuildError` on every engine. SQLite divided the key's integer as one
     # (#1471); PostgreSQL built the SQL and its server rejected the text.

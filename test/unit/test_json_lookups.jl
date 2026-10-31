@@ -527,11 +527,12 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     counted = (q = JL.Json_scratch.objects; q.values("name", "n" => PormG.QueryBuilder.Count("id")); q.filter("n" => 2); q)
     my_n = _sql(counted; conn = _JL_MY)[:sql_text]
     @test occursin("HAVING COUNT(`Tb`.`id`) = ?", my_n) && !occursin("CAST(? AS JSON)", my_n)
-    # A key lookup is that key's text, not a document: bare on MySQL, `::text` on PostgreSQL as before.
+    # A key lookup is that key's text, not a document: bare on MySQL, and on PostgreSQL the bare marker
+    # the filter pair binds (#1511: it was the generic path's `$1::text` before).
     # (The extraction itself holds `CAST('null' AS JSON)`, so the needle is the bound marker.)
     my_key = _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_MY)[:sql_text]
     @test !occursin("CAST(? AS JSON)", my_key) && occursin("utf8mb4_0900_bin) = ?)", my_key)
-    @test occursin("= \$1::text)", _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_PG)[:sql_text])
+    @test occursin("#>> '{\"driver\"}' = \$1)", _sql(compared(F("payload__driver") == "hamilton"); conn = _JL_PG)[:sql_text])
   end
 
 end
@@ -1135,6 +1136,72 @@ end
   for (handle, mk, name) in handles
     @test (handle, 9 in _sql(mk("$(name)__@gt" => 9); conn = _JL_SL)[:parameters]) == (handle, true)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1511: an expression comparison over a JSON key compares as the key lookup does
+# `F("payload__n") == 5` rendered through the generic operator path, which bound the text `"5"` on every
+# engine and put no `::numeric` on a PostgreSQL ordering. Expected: the predicate the filter pair
+# `"payload__n" => 5` renders, in parentheses, with the same parameters (SQLite `json_extract(…) = ?`
+# binding `5`; PostgreSQL `#>> '{"n"}' = $1` binding `"5"`, and `(#>> …)::numeric > $1` binding `5`),
+# through `F`, `Q`, a `When` and a projection. A column or a field path on the right of the key, and a
+# carrier on the left (`Coalesce(key, 0)`), raise `FilterError`, as the key lookup (#811) and its alias
+# (#1506) do. A key on the right of a column renders as the pair `"id" => F("payload__n")` does, and a
+# cast key keeps the generic path.
+# Why it matters: on SQLite the integer `json_extract` hands over never equals text, so the filter
+# matched no row with no error, and on PostgreSQL `9` sorted above `10`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1511: an expression comparison over a JSON key compares as the key lookup does" begin
+  FN = PormG.Functions
+  QB = PormG.QueryBuilder
+  where_of(sql) = strip(split(sql, "WHERE ")[end])
+  pair(path) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(path); q)
+  expr(f) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(f); q)
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  cases = (("==", "payload__n", 5, f -> f == 5), ("!=", "payload__n__@ne", 5, f -> f != 5),
+           (">", "payload__n__@gt", 5, f -> f > 5), ("<=", "payload__n__@lte", 2.5, f -> f <= 2.5))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (op, path, value, cmp) in cases
+    @testset "F $op on $(nameof(typeof(conn)))" begin
+      ref = _sql(pair(path => value); conn = conn)
+      for (label, q) in (("F", expr(cmp(F("payload__n")))), ("Q", expr(QB.Q(cmp(F("payload__n"))))))
+        got = _sql(q; conn = conn)
+        @test (label, occursin("(" * where_of(ref[:sql_text]) * ")", got[:sql_text])) == (label, true)
+        @test (label, got[:parameters]) == (label, ref[:parameters])
+      end
+      # A projection and a `When` condition bind the same value (the `When` binds THEN/ELSE after it).
+      proj = (q = JL.Json_scratch.objects; q.values("id", "b" => cmp(F("payload__n"))); q)
+      @test _sql(proj; conn = conn)[:parameters] == ref[:parameters]
+      when = (q = JL.Json_scratch.objects; q.values("id", "b" => Case([When(cmp(F("payload__n")), then = 1)], default = 0)); q)
+      @test _sql(when; conn = conn)[:parameters][1:1] == ref[:parameters]
+    end
+  end
+  # The values themselves, per engine: the bug was the bound type, so the oracle is the parameter.
+  @test _sql(expr(F("payload__n") == 5); conn = _JL_SL)[:parameters] == Any[5]
+  @test _sql(expr(F("payload__n") == 5); conn = _JL_PG)[:parameters] == Any["5"]
+  @test occursin("((\"Tb\".\"payload\" #>> '{\"n\"}')::numeric > \$1)", _sql(expr(F("payload__n") > 5); conn = _JL_PG)[:sql_text])
+  @test _sql(expr(F("payload__n") > 5); conn = _JL_PG)[:parameters] == Any[5]
+  column_rhs = "a JSON path lookup compares the extracted value against a value, not a column expression"
+  refused = (("a column on the right", F("payload__n") > F("id"), "Error in filter 'payload__n': $column_rhs"),
+             ("a field path on the right", F("payload__n") == "name", "Error in filter 'payload__n': $column_rhs"),
+             ("a carrier on the left", FN.Coalesce("payload__n", 0) > 5, "it holds `COALESCE(…)` over the JSON key `payload__n`"),
+             ("NaN", F("payload__n") == NaN, "A numeric JSON comparison requires a finite number"))
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (label, f, msg) in refused
+    e = refusal(expr(f), conn)
+    @test (label, e isa Union{PormG.FilterError,PormG.InvalidValueError}) == (label, true)
+    e === nothing || @test (label, occursin(msg, plain(e))) == (label, true)
+  end
+  # Control: a key on the RIGHT of a column is the filter pair `"id" => F("payload__n")`'s business, and
+  # the operator form renders as that pair does, so the two spellings cannot disagree.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    ref = where_of(_sql(pair("id" => F("payload__n")); conn = conn)[:sql_text])
+    @test occursin(ref, _sql(expr(F("id") == F("payload__n")); conn = conn)[:sql_text])
+  end
+  # Control: a cast key states its type, so it keeps the generic path (`::decimal`, no key binding).
+  @test occursin("::decimal > \$1::bigint", _sql(expr(FN.Cast("payload__n", "numeric") > 5); conn = _JL_PG)[:sql_text])
+  # Control: a whole document is not a key, and keeps its JSON bind (#1360).
+  @test occursin("CAST(? AS JSON)", _sql(expr(F("payload") == "{\"a\": 1}"); conn = _JL_MY)[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

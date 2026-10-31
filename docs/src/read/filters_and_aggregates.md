@@ -462,6 +462,18 @@ A path lookup compares the extracted value against a **value**. A column express
 different types (PostgreSQL and MySQL text, SQLite the native JSON type), so no single comparison
 against a column means the same thing on all of them.
 
+The comparison operators over a path lookup compare the same way, in a filter, a `Q`, a `When`, a
+projection or a join condition (#1511):
+
+```julia
+M.Constructor.objects.filter(F("metadata__wins") > 100)    # as filter("metadata__wins__@gt" => 100)
+```
+
+A column on the right of the key (`F("metadata__wins") > F("constructorid")`) raises the same
+`FilterError`. So does a value that carries the key (`Coalesce("metadata__wins", 0) > 100`), as a
+filter on its alias does. Cast the key to say what it compares:
+`Cast("metadata__wins", BigIntegerField()) > F("constructorid")`.
+
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
     array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that

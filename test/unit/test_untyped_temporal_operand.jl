@@ -18,8 +18,11 @@ after a review found it. #1310 refuses the shape instead, when the walk has not 
 
 Since #1483, arithmetic over an uncast JSON key (`F("meta__round") * 2`, a `Case`, `Coalesce` or `Lag`
 holding one) is refused on every engine as explicit intent, before this rule is asked, so the
-arithmetic shapes here assert that refusal; the orderings over a key are still this rule's. Since
-#1506 so is a filter on an alias over a value that carries a key (`Case(key | date)`).
+arithmetic shapes here assert that refusal. Since #1506 so is a filter on an alias over a value that
+carries a key (`Case(key | date)`). Since #1511 a comparison over a key compares as the key lookup
+does, on every engine and before this rule is asked: a column on either side of the key (a date, an
+interval) raises #811's `FilterError`, and a `Date` value the key lookup's own `InvalidValueError`, so
+those orderings assert that refusal too.
 
 Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders the conditionals
 (`Case`, `Coalesce`) since #1130 phase 2c-1, so those shapes are checked live on MySQL below; JSON key
@@ -110,15 +113,19 @@ _utt_case_year_date() = Case(When("year" => 2009, then = F("year")), default = F
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A side the walk cannot name beside a date or an interval: refused on SQLite, unchanged on PostgreSQL.
-# Expected SQL on PostgreSQL (each built before #1310 and still does):
-#   F("date") * F("meta__round")            -> ("Tb"."date" * "Tb"."meta" #>> '{"round"}')
-#   F("meta__round") > F("date")             -> WHERE ("Tb"."meta" #>> '{"round"}' > "Tb"."date")
+# A JSON key lookup beside a date or an interval.
+# A key on the RIGHT of a temporal column: refused on SQLite, unchanged on PostgreSQL (as the filter pair
+# `"date__@gt" => F("meta__round")` is, below). Expected SQL on PostgreSQL:
+#   F("date") > F("meta__round")             -> WHERE ("Tb"."date" > "Tb"."meta" #>> '{"round"}')
 #   F("fastestlaptime") > F("meta__round")   -> WHERE ("Tb"."fastestlaptime" > "Tb"."meta" #>> '{"round"}')
-#   F("meta__round") > Date(2009, 1, 1)      -> WHERE ("Tb"."meta" #>> '{"round"}' > $1), ["2009-01-01"]
-# On SQLite each built the generic `(l op r)` before #1310: a JSON value against a date's text, or
-# against an interval's `HH:MM:SS` text, where every number sorts before every text. Now each is a
-# `QueryBuildError` naming the operator and the side, the key path as the caller wrote it.
+# On SQLite each built the generic `(l op r)` before #1310: a JSON value against a date's text, or an
+# interval's `HH:MM:SS` text, where every number sorts before every text. Now each is a `QueryBuildError`
+# naming the operator and the side, the key path as the caller wrote it.
+# A key on the LEFT is the key lookup's comparison since #1511, on every engine and before this rule is
+# asked: a column on its right raises #811's `FilterError` (as `"meta__round__@gt" => F("date")` does;
+# PostgreSQL built `text > date`, a server error), and a `Date` value the key lookup's own
+# `InvalidValueError`, as `"meta__round__@gt" => Date(2009, 1, 1)` does (it bound `"2009-01-01"` as text).
+# Arithmetic over the key raises #1483's `QueryBuildError` first.
 # Why it matters: the SQL for a temporal value is chosen by its type, and the JSON key's type is the
 # data's; SQLite's answer depends on what the document happens to hold.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,20 +135,14 @@ end
     e = _utt_refusal(F("date") * F("meta__round"); conn = conn)
     @test e isa QueryBuildError && occursin("(#1483)", e.msg)
   end
-  @test _utt_sql(F("meta__round") > F("date"); conn = _UTT_PG, filter = true) ==
-        "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (\"Tb\".\"meta\" #>> '{\"round\"}' > \"Tb\".\"date\")"
+  @test _utt_sql(F("date") > F("meta__round"); conn = _UTT_PG, filter = true) ==
+        "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (\"Tb\".\"date\" > \"Tb\".\"meta\" #>> '{\"round\"}')"
   @test _utt_sql(F("fastestlaptime") > F("meta__round"); conn = _UTT_PG, filter = true) ==
         "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (\"Tb\".\"fastestlaptime\" > \"Tb\".\"meta\" #>> '{\"round\"}')"
-  @test _utt_render(F("meta__round") > Date(2009, 1, 1); conn = _UTT_PG, filter = true) ==
-        ("SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (\"Tb\".\"meta\" #>> '{\"round\"}' > \$1)",
-         Any["2009-01-01"])
 
   for (label, expr, filter, op) in (
-      ("key > date",       F("meta__round") > F("date"),           true,  ">"),
       ("date > key",       F("date") > F("meta__round"),           true,  ">"),
-      ("key > duration",   F("meta__round") > F("fastestlaptime"), true,  ">"),
       ("duration <= key",  F("fastestlaptime") <= F("meta__round"), true, "<="),
-      ("key < Date",       F("meta__round") < Date(2009, 1, 1),    true,  "<"),
     )
     @testset "$label" begin
       e = _utt_refusal(expr; conn = _UTT_SL, filter)
@@ -150,6 +151,18 @@ end
       @test occursin("with `meta__round` on one side", e.msg)
       @test occursin("not supported on SQLite", e.msg)
     end
+  end
+
+  # #1511: the key on the left.
+  column_rhs = "Error in filter 'meta__round': a JSON path lookup compares the extracted value against a value, not a column expression"
+  for conn in (_UTT_PG, _UTT_SL, _UTT_MY), (label, expr) in (("key > date", F("meta__round") > F("date")),
+                                                             ("key > duration", F("meta__round") > F("fastestlaptime")))
+    e = _utt_refusal(expr; conn = conn, filter = true)
+    @test (label, e isa PormG.FilterError && occursin(column_rhs, e.msg)) == (label, true)
+  end
+  for conn in (_UTT_PG, _UTT_SL, _UTT_MY), op in (>, <)
+    e = _utt_refusal(op(F("meta__round"), Date(2009, 1, 1)); conn = conn, filter = true)
+    @test e isa PormG.InvalidValueError && occursin("A numeric JSON comparison requires a base-10 number", e.msg)
   end
 end
 
@@ -192,23 +205,12 @@ end
         @test occursin(issue, m.msg)
     end
   end
-  for (label, expr, filter, op, named) in (
-      ("Case(key | duration) > 2",  _utt_case_lap() > 2,                         true,  ">", "`CASE(…)`"),
-    )
-    @testset "$label" begin
-      @test _utt_refusal(expr; conn = _UTT_PG, filter) === nothing
-      e = _utt_refusal(expr; conn = _UTT_SL, filter)
-      @test e isa QueryBuildError
-      @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side", e.msg)
-      # #1130 phase 2c-1: MySQL renders the conditionals, so a shape with no JSON key, math or window
-      # function reaches its refusal live, naming MySQL.
-      if !any(w -> occursin(w, label), ("key", "Floor", "Lag"))
-        m = _utt_refusal(expr; conn = _UTT_MY, filter)
-        @test m isa QueryBuildError
-        @test occursin("`$(op)` beside a date, a timestamp or an interval, with $(named) on one side, is not " *
-                       "supported on MySQL", m.msg)
-      end
-    end
+  # #1511: a comparison whose left carries the key (`Case(key | duration) > 2`) is refused on every engine
+  # before this rule is asked, as a filter on its alias is (#1506). PostgreSQL built it, and could not type
+  # `CASE` over a key's text and an interval at the server; SQLite took this rule.
+  for conn in (_UTT_PG, _UTT_SL)
+    e = _utt_refusal(_utt_case_lap() > 2; conn = conn, filter = true)
+    @test e isa PormG.FilterError && occursin("it holds `CASE(…)` over the JSON key `meta__round`", e.msg)
   end
   # #1321: a `Case` or a `Coalesce` over a number and a date is a mix of two types the walk names, so
   # it is refused when it is built, on every engine and before any arithmetic over it, naming #1321.
@@ -226,8 +228,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # What keeps building on SQLite: where the value only passes, or the type is named.
-# Expected: each builds on SQLite, as before #1310. A JSON key ordered against a number; a JSON key
-# compared for EQUALITY with a date; a
+# Expected: each builds on SQLite, as before #1310. A JSON key ordered against a number; a
 # function that names its own result over a date (`Count`, `Extract(…, "YEAR")`); the remedies the
 # message gives — a `Cast` of the `Case` to a date, and the arithmetic inside each branch.
 # Why it matters: the rule is positional, not global. (Arithmetic over a JSON key beside a number,
@@ -238,11 +239,13 @@ end
     e = _utt_refusal(expr; conn = _UTT_SL)
     @test e isa QueryBuildError && occursin("(#1483)", e.msg)
   end
-  @test _utt_sql(F("meta__round") == F("date"); conn = _UTT_SL, filter = true) ==
-        "SELECT \"Tb\".\"raceid\" as \"raceid\" FROM \"utt_race\" as \"Tb\" WHERE (json_extract(\"Tb\".\"meta\", '\$.round') = \"Tb\".\"date\")"
+  # #1511: the key compared for equality with a date column built here, and so did a comparison over a
+  # `Case` carrying the key. The first is the key lookup's comparison now, which refuses a column (#811),
+  # and the second carries an uncast key (#1506); both are refused on every engine before this rule.
+  @test _utt_refusal(F("meta__round") == F("date"); conn = _UTT_SL, filter = true) isa PormG.FilterError
+  @test _utt_refusal(_utt_case_date() == 2; conn = _UTT_SL, filter = true) isa PormG.FilterError
   for (label, expr, filter) in (
       ("key > 2",                       F("meta__round") > 2,                              true),
-      ("Case(key | date) == 2",         _utt_case_date() == 2,                             true),
       ("Count(date) * 2",               Count("date") * 2,                                 false),
       ("Extract(date, YEAR) * 2",       Extract("date", "YEAR") * 2,                       false),
       ("Cast(Case(key | date)) + 1",    Cast(_utt_case_date(), "date") + 1,                false),
@@ -310,9 +313,10 @@ end
 # Every spelling of an ordering takes the rule: a filter pair, an alias, a `Q`, a `When` condition, and
 # an `update()` value.
 # Expected on SQLite: `filter("date__@gt" => F("meta__round"))`, `filter("fastestlaptime__@gt" =>
-# <Case(key | duration)>)`, the same pair inside `Q(...)`, a `When` comparing the key with a date, and
+# <Case(key | duration)>)`, the same pair inside `Q(...)`, a `When` comparing a date with the key, and
 # `update("date" => Case(key | date) + 1)` each raise the refusal; PostgreSQL builds each. A projected
-# `Case(key | date)` filtered by its alias against a date is refused earlier, on every engine, by #1506.
+# `Case(key | date)` filtered by its alias against a date is refused earlier, on every engine, by #1506,
+# and a `When` with the key on the left of the date by #1511 (#811's `FilterError`).
 # A typed alias (`F("date") + 1`) filtered against a date, and `"date__@range" => [Date, Date]`, build
 # on SQLite.
 # Why it matters: one comparison spelled two ways must not build in one and be refused in the other
@@ -326,8 +330,15 @@ end
     # No alias spelling: since #1506 an alias over a value that carries a JSON key is refused on every
     # engine before this rule (asserted below), and a `Case` over a number and a date is refused by #1321.
     ("Q pair",                q -> q.filter(QB.Q("date__@lt" => F("meta__round"))),                  "`meta__round`"),
-    ("When condition",        q -> q.values("w" => Case(When(F("meta__round") > F("date"), then = 1), default = 0)), "`meta__round`"),
+    ("When condition",        q -> q.values("w" => Case(When(F("date") > F("meta__round"), then = 1), default = 0)), "`meta__round`"),
   )
+  # #1511: a `When` with the key on the LEFT of the date is the key lookup's comparison, which refuses a
+  # column on every engine (#811); PostgreSQL built `text > date`, a server error.
+  for conn in (_UTT_PG, _UTT_SL)
+    q = UTT.Utt_race.objects
+    q.values("w" => Case(When(F("meta__round") > F("date"), then = 1), default = 0))
+    @test (try inspect_query(q; connection = conn); nothing catch err; err end) isa PormG.FilterError
+  end
   for (label, build, named) in refused
     @testset "$label" begin
       for (conn, refuses) in ((_UTT_PG, false), (_UTT_SL, true))
@@ -440,15 +451,19 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1323: a value the walk cannot name beside a time, or holding one, is #1310's refusal
-# `F("meta__round") > F("time")` compared a JSON value with the time's text on SQLite. With a time of
+# `F("time") > F("meta__round")` compared the time's text with a JSON value on SQLite. With a time of
 # day among #1310's kinds it is refused there as a date is, naming a time of day. A `Case` or a
 # `Coalesce` holding a time beside a number is refused before that, on every engine, as #1321's mix.
 # Comparing a time with a `Time` literal keeps building on every engine: `HH:MM:SS` text sorts in time
-# order. Expected SQL on PostgreSQL (unchanged):
-#   F("meta__round") > F("time") -> WHERE ("Tb"."meta" #>> '{"round"}' > "Tb"."time")
+# order. (With the key on the LEFT, `F("meta__round") > F("time")` is the key lookup's comparison since
+# #1511, which refuses a column on every engine, #811.) Expected SQL on PostgreSQL (unchanged):
+#   F("time") > F("meta__round") -> WHERE ("Tb"."time" > "Tb"."meta" #>> '{"round"}')
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1323: a time of day beside a value the walk cannot name" begin
-  for (label, expr, op) in (("key > time", F("meta__round") > F("time"), ">"),
+  for conn in (_UTT_PG, _UTT_SL, _UTT_MY)
+    @test _utt_refusal(F("meta__round") > F("time"); conn = conn, filter = true) isa PormG.FilterError   # #1511
+  end
+  for (label, expr, op) in (("time > key", F("time") > F("meta__round"), ">"),
                             ("time @gt key", "time__@gt" => F("meta__round"), ">"))
     @testset "$label" begin
       @test _utt_refusal(expr; conn = _UTT_PG, filter = true) === nothing

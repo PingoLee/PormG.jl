@@ -974,6 +974,31 @@ function _refuse_json_key_carrier_filter(v::SQLTypeOper, source, label::Abstract
   return nothing
 end
 
+# #1511 — an expression comparison whose LEFT is a JSON key lookup (`F("payload__n") == 5`, a `Joined`
+# or CTE column over a key) compares as the key lookup does (`_render_json_key_comparison`): the value
+# bound native on SQLite and as text elsewhere, `::numeric` on a PostgreSQL ordering, a column on the
+# right refused (#811). Through the generic operator path it bound the text `"5"`, which SQLite's
+# `json_extract` integer never equals, and PostgreSQL ordered text. A left that carries a key without
+# being it (`Coalesce(key, 0) > 5`) is refused, as its alias's filter is (#1506). Read after the left
+# renders; `nothing` when the left holds no key.
+function _render_json_key_expression_comparison(v::FExpression, left_side::String,
+                                                instruc::SQLInstruction)::Union{String,Nothing}
+  if _json_key_lookup_operand(v.field_name, instruc)
+    label = _json_key_operand_label(v.field_name)
+    # A field path on the right is a column (`_set_update_query_operand`'s String rule), as `F` is.
+    v.operand isa String && _is_field_path(v.operand, instruc) && throw(_json_key_column_rhs_refusal(label))
+    return string("(", _render_json_key_comparison(v.operation, v.operand, left_side, label, instruc), ")")
+  end
+  side = _json_number_side(v.field_name, instruc)
+  side === nothing || throw(_json_key_carrier_refusal("the comparison (`$(v.operation)`)", side))
+  return nothing
+end
+
+# A key on the RIGHT (`F("id") == F("payload__n")`) is left as the filter pair `"id" => F("payload__n")`
+# renders it, so the two spellings of one comparison answer alike.
+
+_json_key_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "the expression" : l)
+
 # #1127, #1034 phase 3 step 2c — the classification of a CTE column, from what its body recorded:
 # - an integer quotient an engine departs on (`_DIVISION_KINDS`), from the division record
 #   (`CTEDivision`): the walk names no kind for it;

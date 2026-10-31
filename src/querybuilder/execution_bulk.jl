@@ -495,9 +495,9 @@ allocate_primary_keys(model::PormGModel, @nospecialize(src)) = allocate_primary_
 # #1344 decision 3: what `allocate_primary_keys` returns — a new table of the caller's own kind
 # (`Tables.materializer`: a DataFrame for a DataFrame, a `Vector` of `NamedTuple`s for one, a
 # `NamedTuple` of vectors when its package defines none), with `pk_field` set to `ids` when given:
-# in its own place when the table carries it, appended otherwise. Every column is copied first, because a materializer may
-# keep the vectors it is handed (`Tables.columntable` does) and the result must never alias the
-# caller's data.
+# in its own place when the table carries it, appended otherwise. Every column is copied first,
+# because a materializer may keep the vectors it is handed (`Tables.columntable` does) and the
+# result must never alias the caller's data.
 function _allocated_table(@nospecialize(src), frame::_BulkFrame, pk_field::Union{Nothing, String} = nothing,
                           ids::AbstractVector = Int64[])
   names = copy(frame.names)

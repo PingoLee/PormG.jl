@@ -66,6 +66,7 @@ allocate_primary_keys(M.Driver.objects, drivers_df; clone = false)
 drivers_df = allocate_primary_keys(M.Driver.objects, drivers_df)
 
 # ✓ also possible now: no DataFrame at all
+using Dates
 rows = [(driverref = "lindblad", code = "LIN", forename = "Arvid", surname = "Lindblad",
          dob = Date(2007, 8, 8), nationality = "British", url = ""),
         (driverref = "browning", code = "BRO", forename = "Luke", surname = "Browning",
@@ -75,5 +76,5 @@ bulk_insert(M.Driver.objects, rows)
 
 # ✓ or, in place of that bulk_insert, ask for the written rows: they come back in the same kind
 r = bulk_insert(M.Driver.objects, rows; returning = ["driverid", "code"])
-r.rows[1].driverid                                       # a Vector of NamedTuples
+r.rows[1].driverid                                       # r.rows is a Vector of NamedTuples
 ```

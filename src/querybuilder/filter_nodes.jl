@@ -1171,7 +1171,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       return _render_json_lookup_comparison(v, column, instruc)
     else
       # #1506: an alias that carries a key without being it, refused as its filter is.
-      _refuse_json_key_carrier_filter(v, _projected_source(alias_key, instruc), alias, instruc)
+      _refuse_uncast_json_key(_JSONKeyCarrierFilter(alias, v.operator), _projected_source(alias_key, instruc), instruc)
     end
   end
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS

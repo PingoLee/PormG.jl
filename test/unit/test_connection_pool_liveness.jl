@@ -649,3 +649,64 @@ end
   for c in held[2:end]; CP.release_connection(pool, c); end
   @test count(!, pool.available) == 0                     # nothing leaked
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (14) A statement that fails while the worker still holds SQLite.jl's DB lock gives it back (#1521).
+#
+# Under `julia -t 1`, a Ctrl-C during a long SQLite statement stays pending through `sqlite3_step`
+# (a ccall), and the first safepoint after it is the entry of `unlock` in SQLite.jl's
+# `Base.@lock db.lock …` — so the `InterruptException` is thrown by the very `unlock` that was
+# meant to release `db.lock`, and the global worker kept it for good. The next query's checkout
+# probe (`backend_is_alive`) on that handle then waited on the lock forever (captured with a
+# SIGUSR1 dump and the exception's backtrace). The leak point cannot be hit deterministically, so
+# this test leaves the same state behind by hand: the task holds `db.lock` when the statement
+# fails. Expected: after `backend_execute` raises, the task holds no part of `db.lock`, and another
+# task can use the handle. A hold by ANOTHER task is never touched. Reverting the fix leaves the
+# lock held, and the probe from another task times out.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a failed statement leaves no hold on the DB's lock behind (#1521)" begin
+  pool = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+  db = CP.acquire_connection(pool; timeout_seconds = 5)
+  try
+    # The leaked hold, as the interrupted `unlock` leaves it: owned by this task, count 1.
+    lock(db.lock)
+    @test db.lock.locked_by === current_task() && db.lock.reentrancy_cnt == 1   # the fields the fix reads
+    err = try
+      PormG.backend_execute(pool, db, "SELECT * FROM no_such_table_1521", nothing)
+      nothing
+    catch e; e end
+    @test err isa SQLite.SQLiteException                  # the failure itself still propagates
+    @test !islocked(db.lock)                              # the leaked hold is given back
+
+    # Another task can now use the handle: the checkout probe that hung in #1521.
+    probe = Threads.@spawn PormG.backend_is_alive(pool, db)
+    @test timedwait(() -> istaskdone(probe), 5.0) === :ok
+    @test istaskdone(probe) && fetch(probe) === true      # never `fetch` a probe still blocked
+    # Should the hold have survived (the regression), drop it here so the rest of the testset
+    # reports instead of hanging behind it.
+    while db.lock.locked_by === current_task(); unlock(db.lock); end
+    wait(probe)
+
+    # A hold by another task is not this task's to release, and is left alone.
+    holding, release = Channel{Nothing}(1), Channel{Nothing}(1)
+    holder = @async begin
+      lock(db.lock)
+      put!(holding, nothing)
+      take!(release)
+      unlock(db.lock)
+    end
+    take!(holding)
+    ext = Base.get_extension(PormG, :PormGSQLiteExt)
+    ext._release_leaked_db_lock!(db)
+    @test islocked(db.lock) && db.lock.locked_by === holder
+    put!(release, nothing)
+    wait(holder)
+    @test !islocked(db.lock)
+
+    # The success path is unchanged.
+    @test PormG.backend_execute(pool, db, "SELECT 2 AS two", nothing) == [(two = 2,)]
+  finally
+    CP.release_connection(pool, db)
+    CP.close_pool!(pool)
+  end
+end

@@ -149,7 +149,7 @@ const PINNED_FIELDS = _FieldPin[
   (type = LibPQ.Errors.PQConnectionError, fields = [:msg], status = :internal, reader = "PormG.backend_is_retry_safe"),
   (type = LibPQ.Errors.PQResultError, fields = [:msg], status = :internal, reader = "PormG.backend_error_fields"),
   # SQLite.jl
-  (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
+  (type = SQLite.DB, fields = [:handle, :lock], status = :internal, reader = "PormG.backend_cancel_query!, _release_leaked_db_lock!"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
    reader = "PormG.backend_classify_error, backend_error_fields"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that

@@ -127,21 +127,31 @@ _json_number_side(::Any, ::SQLInstruction) = nothing
 
 abstract type _JSONKeyPosition end
 
+# A position is built on every render that asks, and refuses on few, so it holds the name as the
+# render has it and the refusal spells it: `:plain` as is, `:quoted` in backticks (`` `+` ``), `:titled`
+# title-cased (`SUM` → `Sum`). Building the spelling up front allocated a string on every arithmetic
+# node and every aggregate, where the helpers this file replaced formatted only on a refusal.
+_json_key_spelling(name::String, style::Symbol)::String =
+  style === :quoted ? string("`", name, "`") : style === :titled ? titlecase(name) : name
+
 # #1483 — arithmetic (`+ - * /`) over the value, and a `Sum`/`Avg` of it: the query does not say which
-# number it computes on. `what` is the operation as the caller wrote it (`` `+` ``, `Sum`).
+# number it computes on. `name` is the operation as the caller wrote it (`+`, quoted; `SUM`, titled).
 struct _JSONKeyArithmetic <: _JSONKeyPosition
-  what::String
+  name::String
+  style::Symbol
 end
 # #1491 — a `Max`/`Min` computes nothing, but orders the value, and the query does not say whether as
 # numbers or as text.
 struct _JSONKeyExtremum <: _JSONKeyPosition
-  what::String
+  name::String
+  style::Symbol
 end
 # #1497 — an ordering term (`order_by`, a window's `order_by`) or a `Greatest`/`Least` operand, which
 # orders the value as `Max` does. An `order_by` term takes a path or a projected name, not an
 # expression, so it adds the `projected` spelling.
 struct _JSONKeyOrdering <: _JSONKeyPosition
-  what::String
+  name::String
+  style::Symbol
   projected::Bool
 end
 # #1510 — `NullIf` compares its operands for equality. `comparing` is the operand's position, so the
@@ -157,10 +167,13 @@ end
 # no row; and PostgreSQL's `COALESCE(text, bigint)` is a server error. EXPLICIT INTENT, refused on every
 # engine and whatever the right side is. The caller asks for the key first: a handle that IS the key
 # compares as the key lookup (#1382). `@isnull` binds nothing and keeps its own arm.
+# `comparison`: the label is the expression comparison itself, spelled from its operator on a refusal.
 struct _JSONKeyCarrierFilter <: _JSONKeyPosition
   label::String
   operator::String
+  comparison::Bool
 end
+_JSONKeyCarrierFilter(label::String, operator::String) = _JSONKeyCarrierFilter(label, operator, false)
 # #1499 — an operator the key lookup has no comparison for (a membership list, a range, a pattern), on
 # the key itself and on everything that holds its value.
 struct _JSONKeyOperator <: _JSONKeyPosition
@@ -191,7 +204,7 @@ _json_key_position_applies(p::_JSONKeyCarrierFilter) = p.operator != "ISNULL"
 
 function _json_key_refusal(p::_JSONKeyArithmetic, side::Tuple{String,String})
   return QueryBuildError(
-    "\e[4m\e[31m$(p.what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
+    "\e[4m\e[31m$(_json_key_spelling(p.name, p.style))\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say which number it computes on (#1483). Say the number type you mean: " *
     "\e[32mCast(\"$(side[2])\", \"numeric\")\e[0m keeps the fraction on every engine, and " *
     "\e[32mCast(\"$(side[2])\", BigIntegerField())\e[0m computes on integers.")
@@ -206,9 +219,9 @@ _json_key_ordering_refusal(what::String, side::Tuple{String,String}, issue::Stri
     (projected ? " Project it and order by its name: \e[32mvalues(\"n\" => Cast(\"$(side[2])\", \"numeric\"))\e[0m, " *
                  "then \e[32morder_by(\"n\")\e[0m." : ""))
 _json_key_refusal(p::_JSONKeyExtremum, side::Tuple{String,String}) =
-  _json_key_ordering_refusal(p.what, side, "#1491", false)
+  _json_key_ordering_refusal(_json_key_spelling(p.name, p.style), side, "#1491", false)
 _json_key_refusal(p::_JSONKeyOrdering, side::Tuple{String,String}) =
-  _json_key_ordering_refusal(p.what, side, "#1497", p.projected)
+  _json_key_ordering_refusal(_json_key_spelling(p.name, p.style), side, "#1497", p.projected)
 
 function _json_key_refusal(p::_JSONKeyNullIf, side::Tuple{String,String})
   flag = side[2]
@@ -223,7 +236,7 @@ end
 
 # The explicit spelling casts the key inside the expression, where the type is decided.
 _json_key_refusal(p::_JSONKeyCarrierFilter, side::Tuple{String,String}) = FilterError(
-  "A filter on \e[31m$(p.label)\e[0m is not supported: it holds $(side[1]), and a JSON key's value has no " *
+  "A filter on \e[31m$(p.comparison ? string("the comparison (`", p.operator, "`)") : p.label)\e[0m is not supported: it holds $(side[1]), and a JSON key's value has no " *
   "declared type, so the query does not say what the comparison means (#1506). Cast the key inside the " *
   "expression, to the type you mean: \e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every " *
   "engine (for example \e[32mCoalesce(Cast(\"$(side[2])\", \"numeric\"), 0)\e[0m), " *

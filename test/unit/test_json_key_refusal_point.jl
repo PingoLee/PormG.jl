@@ -93,9 +93,9 @@ end
   # `MethodError` at query build — the loud failure this file exists to make impossible.
   side = ("the JSON key `metadata__wins`", "metadata__wins")
   build = Dict(
-    _JKR_QB._JSONKeyArithmetic => _JKR_QB._JSONKeyArithmetic("`+`"),
-    _JKR_QB._JSONKeyExtremum   => _JKR_QB._JSONKeyExtremum("Max"),
-    _JKR_QB._JSONKeyOrdering   => _JKR_QB._JSONKeyOrdering("`order_by`", true),
+    _JKR_QB._JSONKeyArithmetic => _JKR_QB._JSONKeyArithmetic("+", :quoted),
+    _JKR_QB._JSONKeyExtremum   => _JKR_QB._JSONKeyExtremum("MAX", :titled),
+    _JKR_QB._JSONKeyOrdering   => _JKR_QB._JSONKeyOrdering("order_by", :quoted, true),
     _JKR_QB._JSONKeyNullIf     => _JKR_QB._JSONKeyNullIf(1),
   )
   filter_side = Dict(_JKR_QB._JSONKeyCarrierFilter => _JKR_QB._JSONKeyCarrierFilter("wins", "="),
@@ -135,5 +135,19 @@ end
   for op in ("=", "!=", ">", ">=", "<", "<=")
     @test _JKR_QB._json_key_position_applies(_JKR_QB._JSONKeyCarrierFilter("wins", op))
   end
-  @test _JKR_QB._json_key_position_applies(_JKR_QB._JSONKeyArithmetic("`+`"))
+  @test _JKR_QB._json_key_position_applies(_JKR_QB._JSONKeyArithmetic("+", :quoted))
+end
+
+@testset "#1531 — a position spells its name only when it refuses" begin
+  # Expected: the three spellings a position can ask for (`+` → `` `+` ``, `SUM` → `Sum`, a phrase as is),
+  # and a comparison carrier labelled from its operator. Why: a position is built on every arithmetic
+  # node, aggregate and comparison render, so building the spelling up front allocated a string on each
+  # (measured with test/performance/alloc_baseline.jl); the refusal is the only reader.
+  @test _JKR_QB._json_key_spelling("+", :quoted) == "`+`"
+  @test _JKR_QB._json_key_spelling("SUM", :titled) == "Sum"
+  @test _JKR_QB._json_key_spelling("A window's `order_by`", :plain) == "A window's `order_by`"
+  side = ("the JSON key `metadata__wins`", "metadata__wins")
+  msg = _JKR_QB._json_key_refusal(_JKR_QB._JSONKeyCarrierFilter("", ">", true), side).msg
+  @test occursin("the comparison (`>`)", msg)
+  @test occursin("Sum over the JSON key", PormG._emsg(_JKR_QB._json_key_refusal(_JKR_QB._JSONKeyArithmetic("SUM", :titled), side).msg; color = false))
 end

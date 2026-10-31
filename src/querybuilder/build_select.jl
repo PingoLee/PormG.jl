@@ -686,7 +686,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #1497: an ordering over an uncast JSON key is refused on every engine, as `Max` is (#1491). A term
     # printed as a projection's name orders that projection, so the projection is what is asked.
     order_source = alias_name === nothing ? nothing : _projected_source(memo_key(:base, alias_name), instruc)
-    _refuse_uncast_json_key(_JSONKeyOrdering("`order_by`", true),
+    _refuse_uncast_json_key(_JSONKeyOrdering("order_by", :quoted, true),
                             order_source isa SQLTypeField ? order_source : v.field, instruc)
     push!(instruc.order, order_expr === nothing ?
       _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection) :

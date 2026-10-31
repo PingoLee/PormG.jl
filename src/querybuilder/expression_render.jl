@@ -1727,7 +1727,7 @@ function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{Strin
 end
 _refuse_json_key_in_arithmetic(v::FExpression, instruc::SQLInstruction) =
   v.operation in _ARITHMETIC_OPERATIONS ?
-    _refuse_uncast_json_key(_JSONKeyArithmetic("`$(v.operation)`"), (v.field_name, v.operand), instruc) : nothing
+    _refuse_uncast_json_key(_JSONKeyArithmetic(v.operation, :quoted), (v.field_name, v.operand), instruc) : nothing
 
 function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing

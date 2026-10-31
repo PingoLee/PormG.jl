@@ -849,7 +849,7 @@ function _render_json_key_expression_comparison(v::FExpression, left_side::Strin
     v.operand isa String && _is_field_path(v.operand, instruc) && throw(_json_key_refusal(_JSONKeyColumnRHS(label)))
     return string("(", _render_json_key_comparison(v.operation, v.operand, left_side, label, instruc), ")")
   end
-  _refuse_uncast_json_key(_JSONKeyCarrierFilter("the comparison (`$(v.operation)`)", v.operation), v.field_name, instruc)
+  _refuse_uncast_json_key(_JSONKeyCarrierFilter("", v.operation, true), v.field_name, instruc)
   return nothing
 end
 

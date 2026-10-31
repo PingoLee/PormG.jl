@@ -359,6 +359,17 @@ end
         @test err isa QueryBuildError && occursin("an expression containing an aggregate", sprint(showerror, err))
       end
     end
+    # The comparison's aggregate flag includes its right side, so a projection reading a column beside
+    # an aggregate on the right meets the #798 mixed-grouping guard, as its left-side mirror does. Before,
+    # `F("lap") > Max("lap") * 2` rendered `GROUP BY` over an aggregate, which the server rejects; the
+    # WHERE refusals above walk the tree and never read the flag, so only this pins it (review).
+    @testset "$backend: an aggregate on the right of a projected comparison takes #798" begin
+      for (label, expr) in (("F > Max * 2", F("lap") > Max("lap") * 2), ("F > Max", F("lap") > Max("lap")),
+                            ("mirror: Max * 2 < F", Max("lap") * 2 < F("lap")))
+        err = _f_agg_build_error(Model_, q -> q.values("raceid", "b" => expr))
+        @test (label, err isa QueryBuildError && occursin("(#798)", sprint(showerror, err))) == (label, true)
+      end
+    end
     @testset "$backend: a window function on the right is refused in WHERE" begin
       err = _f_agg_build_error(Model_, q -> (q.values("raceid");
                                              q.filter(F("lap") > Rank(over = WindowOver(order_by = ["milliseconds"])))))

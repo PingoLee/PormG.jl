@@ -328,15 +328,17 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Substr is text, and a function stays refused on the right of the == operator
+# Substr is text, and a comparison of two of them is a predicate
 # `_TEXT_OUTPUT_FUNCTIONS` types the value as text, so `When` refuses it as a condition; the type
-# walk names it `CText` on both engines. `Substr(a) == Substr(b)` raises `QueryBuildError` as
-# `Lower(a) == Lower(b)` does: the `==` operator takes no function on its right yet.
+# walk names it `CText` on both engines. `Substr(a) == Substr(b)` raised `QueryBuildError` here until
+# #1514 admitted a function on the right of the operator: it builds the comparison node now, as
+# `Lower(a) == Lower(b)` does (rendered in `test_filter_aggregate_expression.jl`'s #1514 testset).
 # Why: a text value used as a boolean reads as truthiness on SQLite and fails on PostgreSQL.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1332: Substr is typed as text" begin
   @test_throws PormG.QueryBuildError When(Substr("code", 1, 1); then = 1)
   @test PormG.QueryBuilder._result_rule(Substr("code", 1, 1)) isa PormG.CText
-  @test_throws PormG.QueryBuildError Substr("forename", 1, 1) == Substr("surname", 1, 1)
-  @test_throws PormG.QueryBuildError Lower("forename") == Lower("surname")
+  for node in (Substr("forename", 1, 1) == Substr("surname", 1, 1), Lower("forename") == Lower("surname"))
+    @test node isa PormG.QueryBuilder.FExpression && node.operation == "=" && node.operand isa PormG.QueryBuilder.FObject
+  end
 end

@@ -1,7 +1,7 @@
 ## The bulk writers take any Tables.jl table, and `allocate_primary_keys` loses `clone` (#1344)
 
 - **Version**: Unreleased
-- **PormG ref**: #1344 (phase 3, decision 3) ; `src/querybuilder/execution_bulk.jl` (`_bulk_frame`, `allocate_primary_keys`)
+- **PormG ref**: #1344 (phases 3 and 4, decisions 3 and 2) ; `src/querybuilder/execution_bulk.jl` (`_bulk_frame`, `allocate_primary_keys`, `bulk_insert`'s `returning`)
 - **Recorded**: 2026-10-31
 - **Severity**: breaking for `allocate_primary_keys(…; clone = …)`, which now raises. With a `DataFrame`, `bulk_insert`, `bulk_update` and `bulk_copy` write and return what they did before; the table lists the error types and message texts that changed, and the three ways `allocate_primary_keys`' result differs (the key column's element type on LibPQ, a refusal where PostgreSQL has no sequence, the frame's metadata).
 
@@ -33,12 +33,15 @@ in place, so the in-place mode is gone.
 | a `Vector` of `NamedTuple`s whose rows name different columns | `MethodError` | `QueryBuildError` naming the row and the columns that differ; nothing is written |
 | `bulk_insert(x)` / `bulk_update(x)` (the curried forms) where `x` is not a table | `MethodError`, or a closure for a `DataFrame` | `QueryBuildError` at once; a table still gives the closure |
 | any `bulk_*` call with a non-`DataFrame` table | `MethodError` | runs, writing exactly what the same rows as a `DataFrame` write |
+| `bulk_insert(q, rows; returning = …)` with a non-`DataFrame` table | `MethodError` | `r.rows` is a table of that kind, built by its `Tables.materializer`: a `Vector` of `NamedTuple`s for one, a `NamedTuple` of vectors for a `NamedTuple` of vectors, a `CSV.File` or any table whose package defines no materializer |
 
 Messages that used to say "the DataFrame" (an unmapped column, a missing key, the empty-input
 warning, "the DataFrame is empty" → "the table is empty") now say "the table".
 
-`bulk_insert(…; returning = …)` still returns its `rows` as a `DataFrame` for now, whatever you
-passed; the next phase of #1344 changes it to the kind of table you passed.
+`bulk_insert(…; returning = …)` follows the same rule: its `rows` is a table of the kind you passed,
+built by the same `Tables.materializer`, one row per input row and `missing` for a row the call did
+not write. A `DataFrame` still gives a `DataFrame` with the same columns, so `df.id = r.rows.id`
+keeps working; an empty input still gives an empty table carrying the requested columns, of your kind.
 
 ### Who this affects
 
@@ -63,7 +66,14 @@ allocate_primary_keys(M.Driver.objects, drivers_df; clone = false)
 drivers_df = allocate_primary_keys(M.Driver.objects, drivers_df)
 
 # ✓ also possible now: no DataFrame at all
-rows = [(forename = "Ayrton", surname = "Senna"), (forename = "Alain", surname = "Prost")]
+rows = [(driverref = "lindblad", code = "LIN", forename = "Arvid", surname = "Lindblad",
+         dob = Date(2007, 8, 8), nationality = "British", url = ""),
+        (driverref = "browning", code = "BRO", forename = "Luke", surname = "Browning",
+         dob = Date(2002, 1, 30), nationality = "British", url = "")]
 rows = allocate_primary_keys(M.Driver.objects, rows)     # a Vector of NamedTuples, driverid filled
 bulk_insert(M.Driver.objects, rows)
+
+# ✓ or, in place of that bulk_insert, ask for the written rows: they come back in the same kind
+r = bulk_insert(M.Driver.objects, rows; returning = ["driverid", "code"])
+r.rows[1].driverid                                       # a Vector of NamedTuples
 ```

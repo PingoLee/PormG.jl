@@ -555,7 +555,7 @@ bulk_insert(M.Status, df,                                                       
     on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
 ```
 
-`returning=` hands back generated keys and database defaults as a `DataFrame` aligned row for row with the input — a row the call skipped is `missing` (see [Returning Generated Values](write/bulk.md#Returning-Generated-Values)):
+`returning=` hands back generated keys and database defaults as a table of the kind you passed (a `DataFrame` for a `DataFrame`), aligned row for row with the input — a row the call skipped is `missing` (see [Returning Generated Values](write/bulk.md#Returning-Generated-Values)):
 
 ```julia
 r = bulk_insert(M.Driver, df; returning = ["driverid"])

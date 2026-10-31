@@ -30,7 +30,7 @@ When a bulk operation executes, it returns a `NamedTuple` `(count, rows)`. `coun
 | `bulk_update()` | rows matched by `match_on=`, the handler's filters and `filters=` — matched, as `update()` counts them, whether or not a value changed |
 | `bulk_copy()` | rows copied, from PostgreSQL's `COPY n` command tag |
 
-`rows` is `nothing` unless you ask `bulk_insert()` for the written values with `returning=` — then it is a `DataFrame` aligned with your input, see [Returning Generated Values](#Returning-Generated-Values). An empty `DataFrame` returns `(count = 0, rows = nothing)` — with `returning=`, `rows` is an empty `DataFrame` carrying the requested columns. The dry-run `show_query` modes are unchanged: they return the statement (or `nothing` for an empty `DataFrame`, which has none).
+`rows` is `nothing` unless you ask `bulk_insert()` for the written values with `returning=` — then it is a table of the kind you passed, aligned with your input, see [Returning Generated Values](#Returning-Generated-Values). An empty table returns `(count = 0, rows = nothing)` — with `returning=`, `rows` is an empty table of your kind carrying the requested columns. The dry-run `show_query` modes are unchanged: they return the statement (or `nothing` for an empty table, which has none).
 
 Check the count when a short one matters. It is the only way to tell that a `bulk_update()` matched only part of the frame, or nothing at all — say, `resultid` keys from another season sent to a handler [scoped](#Scoping-an-update-with-the-handler) to this one:
 
@@ -244,11 +244,17 @@ r = bulk_insert(M.Driver.objects, rookies; returning = ["driverid"])
 rookies.driverid = r.rows.driverid     # r.rows[i, :] belongs to rookies[i, :]
 ```
 
-`r.rows` is a `DataFrame` with one column per requested field (field names, not `db_column`s) and `nrow(rookies)` rows. A row the call did **not** write is `missing` — so under `on_conflict = :nothing` it tells you which rows were skipped (the key already existed, or repeated an earlier row of the frame):
+`r.rows` is a table of the kind you passed, built by its own `Tables.materializer`: a `DataFrame` for a `DataFrame`, a `Vector` of `NamedTuple`s for one, a `NamedTuple` of vectors for a `NamedTuple` of vectors or a `CSV.File`. It has one column per requested field (field names, not `db_column`s) and one row per input row. A row the call did **not** write is `missing` — so under `on_conflict = :nothing` it tells you which rows were skipped (the key already existed, or repeated an earlier row of the frame):
 
 ```julia
 r = bulk_insert(M.Status.objects, statuses_df; returning = ["statusid"], on_conflict = :nothing)
 already_present = statuses_df[ismissing.(r.rows.statusid), :]
+
+# Rows in, rows out: no DataFrame needed
+rookies = [(driverref = "lindblad", code = "LIN", forename = "Arvid", surname = "Lindblad",
+            dob = Date(2007, 8, 8), nationality = "British", url = "")]
+r = bulk_insert(M.Driver.objects, rookies; returning = ["driverid"])
+r.rows[1].driverid      # r.rows is a Vector of NamedTuples, r.rows[i] belongs to rookies[i]
 ```
 
 **How rows are matched to your input.** No engine promises that a multi-row `INSERT` reports its rows in input order, so PormG matches them **by key value, never by position**:
@@ -268,7 +274,7 @@ already_present = statuses_df[ismissing.(r.rows.statusid), :]
 - With pre-allocated ids the duplicate-key → sequence-resync retry is **skipped**, as it is under `on_conflict`: the retry would send the same ids again. A collision there means the sequence had drifted below `MAX(pk)` before the call — run [`resync_sequences()`](../schema_conventions.md#Explicit-repair:-resync_sequences) and retry. Pre-allocation on PostgreSQL also shares `allocate_primary_keys()`'s default-schema scope (see its [limitations](#Notes-and-Limitations)).
 - The dry-run `show_query` modes allocate nothing — drawing a sequence is a write — so the shown statement leaves an allocated pk column out. On PostgreSQL it carries the `RETURNING` clause.
 - `bulk_update()` and `bulk_copy()` do not take `returning=`.
-- **MySQL** reads the rows back as SQLite does, on the transaction's connection; outside `DO NOTHING` the read locks the rows the statement wrote, so it also finds a row another session committed that an upsert met unchanged. Under `DO NOTHING` the two reads are plain, so with another session writing the same keys during the call the rows can be wrong in either direction: a row it deletes in between is written by this call but reported `missing` (under any isolation level), and under READ COMMITTED a row it inserts in between is reported as written by this call, with that session's values. The `count` is exact either way. It cannot pre-allocate: `AUTO_INCREMENT` has no sequence to draw from ahead of the `INSERT`, and a multi-row `INSERT`'s ids are not promised consecutive. So `returning` for an `AUTO_INCREMENT` key the DataFrame leaves out, with no `on_conflict` target, raises `BackendCapabilityError` (`preallocated_keys`): supply the key in the DataFrame, or name a unique key it carries as the target ([#1266](https://github.com/PingoLee/PormG.jl/issues/1266)).
+- **MySQL** reads the rows back as SQLite does, on the transaction's connection; outside `DO NOTHING` the read locks the rows the statement wrote, so it also finds a row another session committed that an upsert met unchanged. Under `DO NOTHING` the two reads are plain, so with another session writing the same keys during the call the rows can be wrong in either direction: a row it deletes in between is written by this call but reported `missing` (under any isolation level), and under READ COMMITTED a row it inserts in between is reported as written by this call, with that session's values. The `count` is exact either way. It cannot pre-allocate: `AUTO_INCREMENT` has no sequence to draw from ahead of the `INSERT`, and a multi-row `INSERT`'s ids are not promised consecutive. So `returning` for an `AUTO_INCREMENT` key the table leaves out, with no `on_conflict` target, raises `BackendCapabilityError` (`preallocated_keys`): supply the key in the table, or name a unique key it carries as the target ([#1266](https://github.com/PingoLee/PormG.jl/issues/1266)).
 
 ### Auto-Generated Primary Keys
 

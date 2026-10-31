@@ -64,6 +64,34 @@ for (modname, key) in ((:BtPGModels, "bt_pg"), (:BtSLModels, "bt_sl"), (:BtMyMod
   end
 end
 
+# A row source that can be read once and has no schema, as a database cursor is (`SQLite.Query` from
+# `DBInterface.execute`): a second pass finds it exhausted.
+mutable struct BtOnceRows
+  rows::Vector{Any}
+  read::Bool
+end
+_BT_Tables_mod = PormG.QueryBuilder.Tables
+_BT_Tables_mod.istable(::Type{BtOnceRows}) = true
+_BT_Tables_mod.rowaccess(::Type{BtOnceRows}) = true
+_BT_Tables_mod.rows(x::BtOnceRows) = x
+function Base.iterate(x::BtOnceRows, i = 1)
+  i == 1 && (x.read && return nothing; x.read = true)
+  return i > length(x.rows) ? nothing : (x.rows[i], i + 1)
+end
+Base.IteratorSize(::Type{BtOnceRows}) = Base.SizeUnknown()
+
+# A PostgreSQL whose key has no sequence: `nextval(pg_get_serial_sequence(…))` is `nextval(NULL)`.
+struct BtNoSequencePg <: PormG.PormGPostgres end
+PormG.config["bt_noseq"] = PormG.Configuration.Settings(connections = BtNoSequencePg(), change_data = true,
+                                                         db_def_folder = "bt_noseq")
+PormG.ConnectionPool.fetch(::BtNoSequencePg, sql::String; kwargs...) =
+  occursin("reserved_id", sql) ? [(reserved_id = missing,), (reserved_id = missing,)] : NamedTuple[]
+module BtNoSeqModels
+import PormG, PormG.Models
+Status = Models.Model(statusid = Models.IDField(), status = Models.CharField())
+PormG.Models.set_models(@__MODULE__, "bt_noseq")
+end
+
 const _BT_ENGINES = (("PostgreSQL", BtPGModels), ("SQLite", BtSLModels), ("MySQL", BtMyModels))
 
 # The same rows, as each kind of table. The `CSV.File` is compared against `DataFrame(file)` rather
@@ -229,5 +257,29 @@ _bt_render(f, mode) = repr(f(mode))
     middle = (forename = ["Niki", "James"], driverid = [missing, missing], surname = ["Lauda", "Hunt"])
     out = _BT_QB._allocated_table(middle, _BT_QB._bulk_frame(middle, "allocate_primary_keys"), "driverid", ids)
     @test collect(keys(out)) == [:forename, :driverid, :surname]
+  end
+  @testset "a row source that can be read only once is written whole" begin
+    # Before the single-pass read, a check pass over the rows exhausted such a cursor, and the write
+    # that followed found no rows: `the table is empty`, and nothing written.
+    D = BtPGModels.Driver
+    rows = Any[(driverid = 1, surname = "Senna", number = 12), (driverid = 2, surname = "Prost", number = missing)]
+    expected = bulk_insert(D.objects, (driverid = [1, 2], surname = ["Senna", "Prost"], number = [12, missing]);
+                           show_query = :params)
+    @test isequal(bulk_insert(D.objects, BtOnceRows(rows, false); show_query = :params), expected)
+    once = BtOnceRows(rows, false)
+    collect(once)
+    @test isempty(collect(once))   # the mock really is single-pass
+    # A Vector{Any} is not a table to Tables.jl; the refusal names its element type and the fix.
+    err = try bulk_insert(D.objects, rows) catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("element type is Any", sprint(showerror, err)) && occursin("identity.(rows)", sprint(showerror, err))
+  end
+
+  @testset "a PostgreSQL key with no sequence behind it is refused by name" begin
+    # Before, the NULL ids came back as `missing` in the key column.
+    rows = [(status = "Finished",), (status = "Retired",)]
+    err = try allocate_primary_keys(BtNoSeqModels.Status.objects, rows) catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("no sequence or identity behind the primary key statusid", sprint(showerror, err))
   end
 end

@@ -69,32 +69,21 @@ end
 function _refuse_non_table(@nospecialize(src), op::AbstractString)
   src isa SQLObjectHandler && throw(QueryBuildError("Error in $(op), a query is not a table to write: " *
     "read its rows first, e.g. Tables.columntable(query), and pass those"))
-  Tables.istable(src) || throw(QueryBuildError("Error in $(op), expected a Tables.jl table (a DataFrame, " *
-    "a Vector of NamedTuples, a NamedTuple of vectors, a CSV.File, …), got a $(nameof(typeof(src)))"))
-  return true
+  Tables.istable(src) && return true
+  # A `Vector` built with `push!` into `[]` holds `NamedTuple`s but is a `Vector{Any}`, which Tables.jl
+  # does not take for a table: name the element type, since it is the one thing to change.
+  got = src isa AbstractVector ? "a Vector whose element type is $(_bulk_type_name(eltype(src))); build it " *
+    "as NamedTuple[...], or narrow it with identity.(rows)" : "a $(_bulk_type_name(typeof(src)))"
+  throw(QueryBuildError("Error in $(op), expected a Tables.jl table (a DataFrame, a Vector of NamedTuples, " *
+    "a NamedTuple of vectors, a CSV.File, …), got $(got)"))
 end
+_bulk_type_name(@nospecialize(T)) = T isa Union{DataType, UnionAll} ? string(nameof(T)) : "a union of types"
 
 # `@nospecialize`: the source type is read here, once, and nothing past the frame depends on it, so
 # one compiled pipeline (and the precompile workload's) serves every kind of table.
 function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
   _refuse_non_table(src, op)
-  # A row table without a schema (a `Vector` of `NamedTuple`s whose element type is not concrete) has
-  # its columns named by the first row: `Tables.columns` silently drops a key only a later row
-  # carries, and raises a bare `FieldError` for one a later row lacks. Every row must name the same
-  # columns; filling a missing key with NULL would be a guess about what the caller meant.
-  if Tables.schema(src) === nothing && Tables.rowaccess(src)
-    first_names = nothing
-    for (index, row) in enumerate(Tables.rows(src))
-      row_names = Tables.columnnames(row)
-      if first_names === nothing
-        first_names = row_names
-      elseif Set(row_names) != Set(first_names)
-        throw(QueryBuildError("Error in $(op), row $(index) of the table does not have the columns row 1 " *
-          "has ($(join(sort!(String.(collect(symdiff(Set(row_names), Set(first_names))))), ", ")) differ); " *
-          "every row must name the same columns"))
-      end
-    end
-  end
+  Tables.schema(src) === nothing && Tables.rowaccess(src) && return _schemaless_row_frame(src, op)
   cols = Tables.columns(src)
   names = String[]
   columns = Dict{String, AbstractVector}()
@@ -113,6 +102,38 @@ function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
   all(name -> length(columns[name]) == row_count, names) ||
     throw(QueryBuildError("Error in $(op), the table's columns have different lengths"))
   return _BulkFrame(names, columns, row_count)
+end
+
+# A row source without a schema: a `Vector` of `NamedTuple`s whose element type is not concrete (rows
+# where some value is `missing`, a `push!` into `NamedTuple[]`), or a cursor such as `SQLite.Query`.
+# Read in ONE pass, building the columns as it goes: a cursor can be iterated only once, so a check
+# pass followed by `Tables.columns` would find it exhausted and write nothing. Every row must name the
+# columns row 1 names: `Tables.columns` takes the names from the first row, silently dropping a key
+# only a later row carries; filling a missing key with NULL would be a guess about what was meant.
+function _schemaless_row_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
+  names = Symbol[]
+  values = Vector{Any}[]
+  row_count = 0
+  for row in Tables.rows(src)
+    row_names = Tables.columnnames(row)
+    row_count += 1
+    if row_count == 1
+      append!(names, Symbol.(collect(row_names)))
+      foreach(_ -> push!(values, Any[]), names)
+    elseif !(length(row_names) == length(names) && all(n -> Symbol(n) in names, row_names))
+      differ = symdiff(Set{Symbol}(Symbol.(collect(row_names))), Set{Symbol}(names))
+      throw(QueryBuildError("Error in $(op), row $(row_count) of the table does not have the columns row 1 " *
+        "has ($(join(sort!(String.(collect(differ))), ", ")) differ); every row must name the same columns"))
+    end
+    for (j, name) in enumerate(names)
+      push!(values[j], Tables.getcolumn(row, name))
+    end
+  end
+  row_count > 0 && isempty(names) &&
+    throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
+  # `identity.` narrows each column from `Any` to the values it holds, as `Tables.columns` would.
+  columns = Dict{String, AbstractVector}(String(name) => identity.(values[j]) for (j, name) in enumerate(names))
+  return _BulkFrame(String.(names), columns, row_count)
 end
 
 # #335: the name space PormG's own injected fill columns live in, kept disjoint from the caller's.
@@ -677,7 +698,7 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
   # What PormG fills into a column the DataFrame does NOT carry: a static `default`, an
   # auto_now/auto_now_add timestamp, or a UUID `auto_add` value. Returns
   # (should_fill, value_or_values, per_row). `per_row` is true only for the UUID `auto_add` case,
-  # where `value_or_values` is already a Vector sized to `DataFrames.nrow(df)` — one fresh UUID
+  # where `value_or_values` is already a Vector sized to the frame's row count — one fresh UUID
   # per row. For every other fill kind `per_row` is false and `value_or_values` is the single
   # value broadcast across the whole batch, unchanged from before #334.
   #
@@ -1657,7 +1678,7 @@ Inserts multiple rows into the database in bulk from any Tables.jl table (#1344)
     are **not** counted, so the input row count minus `count` is how many were duplicates. An
     `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated.
   - `rows` — `nothing` unless `returning` is given. Then a `DataFrame` with one column per
-    requested field and `nrow(df)` rows: row `i` belongs to input row `i`, and a row this call did
+    requested field and one row per input row: row `i` belongs to input row `i`, and a row this call did
     not write (skipped by `on_conflict = :nothing`, or a later duplicate of a key within the frame)
     is `missing` — as is a row whose key contains a NULL, which cannot be looked up. A row the
     database reports that matches no input key raises `QueryBuildError` instead of going missing.

@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1344 (phase 3, decision 3) ; `src/querybuilder/execution_bulk.jl` (`_bulk_frame`, `allocate_primary_keys`)
 - **Recorded**: 2026-10-31
-- **Severity**: breaking for `allocate_primary_keys(…; clone = …)`, which now raises. `bulk_insert`, `bulk_update` and `bulk_copy` called with a `DataFrame` write and return what they did before. `allocate_primary_keys` with a `DataFrame` returns the same rows, with the three differences in the table below: the key column's element type on LibPQ, a refusal where PostgreSQL has no sequence, and the frame's metadata.
+- **Severity**: breaking for `allocate_primary_keys(…; clone = …)`, which now raises. With a `DataFrame`, `bulk_insert`, `bulk_update` and `bulk_copy` write and return what they did before; the table lists the error types and message texts that changed, and the three ways `allocate_primary_keys`' result differs (the key column's element type on LibPQ, a refusal where PostgreSQL has no sequence, the frame's metadata).
 
 ### What changed
 
@@ -28,7 +28,7 @@ in place, so the in-place mode is gone.
 | `allocate_primary_keys` on PostgreSQL for a key with no sequence or identity behind it (an `IDField()` over a plain integer column) | the key column came back holding `missing` | `QueryBuildError`, naming the key: declare it `IDField(generated = false)` and supply it |
 | `bulk_insert(…; returning = …)` on PostgreSQL in that same case, when it pre-allocates the key | an error from inside the id copy, outside PormG's error types | the same `QueryBuildError` |
 | table- and column-level metadata (`metadata!`, `colmetadata!`) on the `DataFrame` you pass to `allocate_primary_keys` | kept on the returned copy | not carried: the result is rebuilt from the columns. Set it again on the result if you use it |
-| `bulk_insert(q, x)`, `bulk_update(q, x)`, `bulk_copy(q, x)`, `allocate_primary_keys(q, x)` where `x` is not a table | `MethodError` | `QueryBuildError` ("expected a Tables.jl table"). The connection's own refusals (writes disabled, an `IDField(generated = false)` key for `allocate_primary_keys`) are checked first, as before |
+| `bulk_insert(q, x)`, `bulk_update(q, x)`, `bulk_copy(q, x)`, `allocate_primary_keys(q, x)` where `x` is not a table | `MethodError` | `QueryBuildError` ("expected a Tables.jl table"). Checks that do not need the table still come first and raise as they do for a `DataFrame`: writes disabled, an invalid `returning=`, `match_on=` or `filters=`, a handler `bulk_update` cannot express, `bulk_copy` off PostgreSQL, an `IDField(generated = false)` key for `allocate_primary_keys`. Before, a non-`DataFrame` failed at dispatch, ahead of all of them |
 | the same calls where `x` is a PormG query (`M.Driver.objects…`), which is a Tables.jl source since #1344 phase 1 | `MethodError` | `QueryBuildError` ("a query is not a table to write"): read its rows first, e.g. `Tables.columntable(query)` |
 | a `Vector` of `NamedTuple`s whose rows name different columns | `MethodError` | `QueryBuildError` naming the row and the columns that differ; nothing is written |
 | `bulk_insert(x)` / `bulk_update(x)` (the curried forms) where `x` is not a table | `MethodError`, or a closure for a `DataFrame` | `QueryBuildError` at once; a table still gives the closure |
@@ -50,7 +50,7 @@ caller's frame in place. Code that matches the text of a bulk error message or w
 
 ```bash
 grep -rnE -A3 'allocate_primary_keys\s*\(' --include=*.jl . | grep -E 'clone\s*='   # -A3: a keyword on a later line
-grep -rnE 'the DataFrame (is empty|has no column)|not in the DataFrame' --include=*.jl .
+grep -rnE 'DataFrame' --include=*.jl . | grep -E 'test_logs|occursin|contains|r"'   # code matching a bulk message's text
 ```
 
 ### Migrate your app

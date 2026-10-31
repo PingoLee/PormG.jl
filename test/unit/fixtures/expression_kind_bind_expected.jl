@@ -993,6 +993,114 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("F comparison | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" > \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F date > Coalesce date | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`date` > COALESCE(`Tb`.`date`, ?)) > ?", params = [("2009-03-01", "Date"), ("2009-03-01", "Date"), ("true", "Bool")]),
+  ("F date > Coalesce date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"date\" > COALESCE(\"Tb\".\"date\", \$2::date)) > \$3", params = [("2009-03-01", "Date"), ("2009-03-01", "Date"), ("true", "Bool")]),
+  ("F date > Coalesce date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"date\" > COALESCE(\"Tb\".\"date\", ?)) > ?", params = [("\"2009-03-01\"", "String"), ("\"2009-03-01\"", "String"), ("true", "Bool")]),
+  ("F date > Coalesce date | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2009-03-01", "Date"), ("true", "Bool")]),
+  ("F date > Coalesce date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2009-03-01", "Date"), ("true", "Bool")]),
+  ("F date > Coalesce date | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"2009-03-01\"", "String"), ("true", "Bool")]),
+  ("F date > Coalesce date | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`date` > COALESCE(`R2`.`date`, ?)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("2009-03-01", "Date"), ("1", "Int64"), ("2009-03-01", "Date"), ("1", "Int64"), ("true", "Bool")]),
+  ("F date > Coalesce date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"date\" > COALESCE(\"R2\".\"date\", \$3::date)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2009-03-01", "Date"), ("1", "Int64"), ("2009-03-01", "Date"), ("1", "Int64"), ("true", "Bool")]),
+  ("F date > Coalesce date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F date > Coalesce date | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"date\" > COALESCE(\"R2\".\"date\", ?)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("\"2009-03-01\"", "String"), ("1", "Int64"), ("\"2009-03-01\"", "String"), ("1", "Int64"), ("true", "Bool")]),
+  ("F interval > Coalesce interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`fastestlaptime` > COALESCE(`Tb`.`fastestlaptime`, `Tb`.`fastestlaptime`)) > ?", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" > COALESCE(\"Tb\".\"fastestlaptime\", \"Tb\".\"fastestlaptime\")) > \$1", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" > (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT COALESCE(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))), ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms))) > ?", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("true", "Bool")]),
+  ("F interval > Coalesce interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`fastestlaptime` > COALESCE(`R2`.`fastestlaptime`, `R2`.`fastestlaptime`)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F interval > Coalesce interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" > COALESCE(\"R2\".\"fastestlaptime\", \"R2\".\"fastestlaptime\")) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F interval > Coalesce interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F interval > Coalesce interval | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" > (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT COALESCE(((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))), ((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms))) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F int > Abs int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | alone", :mysql, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`grid` > ABS(`Tb`.`grid`)) > ?", params = [("true", "Bool")]),
+  ("F int > Abs int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" > ABS(\"Tb\".\"grid\")) > \$1", params = [("true", "Bool")]),
+  ("F int > Abs int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" > ABS(\"Tb\".\"grid\")) > ?", params = [("true", "Bool")]),
+  ("F int > Abs int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | cte", :mysql, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("true", "Bool")]),
+  ("F int > Abs int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | cte", :postgres, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("true", "Bool")]),
+  ("F int > Abs int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | cte", :sqlite, "g__v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("true", "Bool")]),
+  ("F int > Abs int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | subquery", :mysql, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`grid` > ABS(`R2`.`grid`)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F int > Abs int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" > ABS(\"R2\".\"grid\")) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("F int > Abs int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
+  ("F int > Abs int | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" > ABS(\"R2\".\"grid\")) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
   ("F int + Value(1) | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(`Tb`.`grid` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F int + Value(1) | alone", :postgres, "v__@gt", "10") =>

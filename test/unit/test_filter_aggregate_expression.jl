@@ -3,7 +3,7 @@ using Dates
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateTimeField
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, Count, Max, Min, Sum
-using PormG.Functions: Lower, Upper, Rank, WindowOver, Case, When
+using PormG.Functions: Lower, Upper, Rank, WindowOver, Case, When, Coalesce, Substr
 using PormG: QueryBuildError
 
 include("helper_marker_alignment.jl")
@@ -235,9 +235,9 @@ end
     end
   end
 
-  # A value outside the `F` operand vocabulary is refused as it is for `F`, not answered by Base —
-  # and so is a function on the RIGHT, which that vocabulary does not hold either.
-  for bad in (:senna, Upper("surname"), nothing)
+  # A value outside the `F` operand vocabulary is refused as it is for `F`, not answered by Base. (A
+  # function on the RIGHT was refused here too, until #1514 admitted it: see its testset below.)
+  for bad in (:senna, nothing)
     err = try; Lower("surname") == bad; nothing; catch e; e; end
     @test err isa QueryBuildError
     @test occursin("is not a supported right-hand side for an F/Joined/function comparison",
@@ -292,11 +292,16 @@ end
     end
   end
 
-  # The operand vocabulary is the `F` one: a function on the right is refused, not answered by Base.
-  err = try; rank() > Upper("surname"); nothing; catch e; e; end
+  # The operand vocabulary is the `F` one: a value outside it is refused, not answered by Base. A
+  # function on the right is in it since #1514, so the node builds and `filter` refuses the window.
+  err = try; rank() > :senna; nothing; catch e; e; end
   @test err isa QueryBuildError
   @test occursin("is not a supported right-hand side for an F/Joined/function comparison",
                  sprint(showerror, err))
+  for (backend, Model_) in _F_AGG_MODELS
+    err = _f_agg_build_error(Model_, q -> (q.values("raceid"); q.filter(rank() > Upper("surname"))))
+    @test err isa QueryBuildError && occursin("an expression containing a window function", sprint(showerror, err))
+  end
 
   # `isequal` stays total, as for `FObject`: identity between two nodes, `false` against anything else.
   r = rank()
@@ -305,6 +310,61 @@ end
   @test !isequal(r, 1)
   @test !isequal(r, missing)
   @test length(Set([r, r, rank()])) == 2
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A function on the right of a comparison operator (#1514)
+# `Lower("surname") == Upper("surname")` and `F("points") > Max(…)` raised `QueryBuildError` ("FObject
+# is not a supported right-hand side") when the expression was built, while the filter pair
+# `"surname" => Upper("surname")` already took a function. Expected: the operator form renders the
+# pair's predicate in parentheses, with the same parameters in text order, for an `F` and a function
+# on the left (`WHERE (LOWER("Tb"."surname") = UPPER("Tb"."surname"))`, `("Tb"."points" > COALESCE(
+# "Tb"."lap", ?))`), and in a `Q` and a projection. An aggregate on the right is refused in `filter`
+# with the #895 advice, and a window function with the CTE advice, as each is on the left.
+# Why it matters: the two spellings of one comparison must not build in one and raise in the other.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1514: a function on the right of a comparison operator" begin
+  where_of(sql) = strip(split(sql, "WHERE ")[end])
+  rendered(Model_, setup) = (q = Model_.objects; q.values("raceid"); setup(q); inspect_query(q))
+  pairs = (
+    ("F == Upper",          q -> q.filter(F("surname") == Upper("surname")),       q -> q.filter("surname" => Upper("surname"))),
+    ("F > Coalesce",        q -> q.filter(F("points") > Coalesce("lap", 0)),        q -> q.filter("points__@gt" => Coalesce("lap", 0))),
+    ("F == Substr",         q -> q.filter(F("surname") == Substr("surname", 1, 1)), q -> q.filter("surname" => Substr("surname", 1, 1))),
+    ("Q(F <= Coalesce)",    q -> q.filter(Q(F("points") <= Coalesce("lap", 0))),    q -> q.filter(Q("points__@lte" => Coalesce("lap", 0)))),
+  )
+  for (backend, Model_) in _F_AGG_MODELS
+    @testset "$backend: $label" for (label, op_form, pair_form) in pairs
+      got = rendered(Model_, op_form)
+      ref = rendered(Model_, pair_form)
+      # The pair renders `col op FN(…)`; the operator form the same text in parentheses.
+      inner = replace(where_of(ref[:sql_text]), r"^\((.*)\)$"s => s"\1")
+      @test occursin(inner, got[:sql_text])
+      @test got[:parameters] == ref[:parameters]
+      assert_marker_count(got, backend)
+    end
+    @testset "$backend: a function on both sides, and in a projection" begin
+      got = rendered(Model_, q -> q.filter(Substr("surname", 1, 1) == Lower(Substr("surname", 2, 1))))
+      @test occursin("(SUBSTR(\"Tb\".\"surname\", ", got[:sql_text]) && occursin(") = LOWER(SUBSTR(\"Tb\".\"surname\", ", got[:sql_text])
+      backend === :sqlite && assert_bound_in_text_order(got, Any[1, 1, 2, 1])
+      @test occursin("WHERE (LOWER(\"Tb\".\"surname\") = UPPER(\"Tb\".\"surname\"))",
+                     rendered(Model_, q -> q.filter(Lower("surname") == Upper("surname")))[:sql_text])
+      q = Model_.objects
+      q.values("raceid", "same" => Lower("surname") == Upper("surname"))
+      @test occursin("(LOWER(\"Tb\".\"surname\") = UPPER(\"Tb\".\"surname\")) as \"same\"", inspect_query(q)[:sql_text])
+    end
+    @testset "$backend: an aggregate on the right is refused in WHERE" begin
+      for setup in (q -> q.filter(F("points") > Max("points")), q -> q.filter(Lower("surname") == Max("surname")),
+                    q -> q.filter(Q(F("lap") < Count("id"))))
+        err = _f_agg_build_error(Model_, q -> (q.values("raceid"); setup(q)))
+        @test err isa QueryBuildError && occursin("an expression containing an aggregate", sprint(showerror, err))
+      end
+    end
+    @testset "$backend: a window function on the right is refused in WHERE" begin
+      err = _f_agg_build_error(Model_, q -> (q.values("raceid");
+                                             q.filter(F("lap") > Rank(over = WindowOver(order_by = ["milliseconds"])))))
+      @test err isa QueryBuildError && occursin("Compute it in a CTE and filter on its column", sprint(showerror, err))
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

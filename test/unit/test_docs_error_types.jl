@@ -801,11 +801,8 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("x" => PormG.Functions.Substr("points", 1, 2)).
             list(show_query = :dict),
     ),
-    (
-        "read/functions_and_dates.md — a function on the right of the == operator raises (#1332)",
-        QueryBuildError,
-        () -> PormG.Functions.Substr("forename", 1, 1) == PormG.Functions.Substr("surname", 1, 1),
-    ),
+    # (A case pinned "a function on the right of the == operator raises (#1332)" here; #1514 admitted it,
+    # and the page now shows the operator spelling, run in test/integration/test_sql_functions.jl.)
     (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).

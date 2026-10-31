@@ -158,7 +158,14 @@ end
 # oracle row `test_f_date_operands.jl` demands per member. A column HANDLE (`_ColumnHandle`) is the
 # other kind of operand and renders as a column reference, never a bound value;
 # `test_node_admission.jl` is what fails when a NODE type is admitted without a consumer.
-const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,FExpression}
+#
+# #1514 — a function on the RIGHT (`Lower("forename") == Lower("surname")`, `F("points") > Coalesce("grid",
+# 0)`): the filter pair already took one (`"forename" => Lower("surname")`), and `FExpression.operand`
+# already stored one for arithmetic, so the consumer is the one arithmetic and the pair render through
+# (`_render_operand_typed`, `_set_update_query_operand`). A window function is admitted as it is on the
+# LEFT (#919): `filter(...)` refuses it with the CTE advice, through `_is_window_expr` over the operand,
+# and an aggregate is refused by `_guard_no_aggregate_predicate`, which walks the operand too.
+const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,FExpression,FObject,WindowFunction}
 
 function _compare(f::FExpression, operation::String, operand)
   if f.operation === nothing
@@ -173,14 +180,15 @@ function _compare(f::FExpression, operation::String, operand)
     # pre-#457 object left it, sharing by reference, which keeps the built expression byte-identical
     # to what the mutating form produced. So the guarantee this makes is narrow and exact — the
     # HANDLE comes back with no operation of its own — not that the two objects share no structure.
+    # #1514: an aggregate on the right (`F("points") > Max("grid")`) makes the predicate one, as on the left.
     return FExpression(field_name=f.field_name, operation=operation, operand=operand,
                        function_name=f.function_name, column=f.column,
-                       aggregate=f.aggregate, _as=f._as, kwargs=copy(f.kwargs))
+                       aggregate=f.aggregate || _is_agg(operand), _as=f._as, kwargs=copy(f.kwargs))
   end
   # Already carries an operation, so this comparison is over the whole expression: nest it, exactly as
   # the previous `else` branch did.
   return FExpression(field_name=f, operation=operation, operand=operand,
-                     function_name="F", column="", aggregate=f.aggregate)
+                     function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 
 Base.:(==)(f::FExpression, operand::_CompareOperand) = _compare(f, "=", operand)
@@ -288,7 +296,7 @@ _number_left(n::_ArithmeticNumber, op::String, f::Union{FExpression,SQLTypeFunct
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(j::JoinedReference, operand::_CompareOperand)
     _reject_joined_desc(j, "a comparison")
-    return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
+    return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
   end
   @eval function Base.$op(x::JoinedReference, operand)
     # #603: the `FExpression` twin of this branch, for the same reason and with the same
@@ -398,7 +406,7 @@ end
 # `_guard_no_aggregate_predicate` (build_filter.jl), as `OP(Count("id"), ">", 1)` has been since #537.
 #
 # The operand vocabulary is `_CompareOperand`, the `F` one, and a value outside it is refused by the
-# same funnel. A function on the RIGHT is outside it, as it is for `F`.
+# same funnel. A function on the RIGHT is in it since #1514, for both families (`Lower(a) == Lower(b)`).
 #
 # #919: a window function is the other `SQLTypeFunction`, and `Rank(…) > 1` raised the same raw
 # `MethodError: isless` #895 removed for `Count("id") > 1`. It takes the same methods and builds the
@@ -408,7 +416,7 @@ const _ComparedFunction = Union{FObject,WindowFunction}
 
 _compare(f::_ComparedFunction, operation::String, operand) =
   FExpression(field_name=f, operation=operation, operand=operand, function_name="F", column="",
-              aggregate=f.aggregate)
+              aggregate=f.aggregate || _is_agg(operand))
 
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval Base.$op(f::_ComparedFunction, operand::_CompareOperand) = _compare(f, $sym, operand)

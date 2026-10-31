@@ -175,6 +175,15 @@ const SLOTS = Tuple{String,Any,Function}[
   ("FExpression.operand", fieldtype(QBA.FExpression, :operand),
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id"); q.filter(F("note") == v); _adm_render(q))),
 
+  # #1514: the comparison SIGNATURE, which admits a function on the right since #1514, probed through
+  # the operator a caller writes in two of its families: an `F` and a function on the left. (The
+  # `Joined` family needs a join to render at all; `test_join_column_recorder.jl` covers its right side.)
+  ("F(…) == x — _CompareOperand", QBA._CompareOperand,
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id"); q.filter(F("note") == v); _adm_render(q))),
+
+  ("Lower(…) == x — _CompareOperand", QBA._CompareOperand,
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id"); q.filter(Lower("note") == v); _adm_render(q))),
+
   ("FExpression.column", fieldtype(QBA.FExpression, :column),
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id");
          q.filter(QBA.FExpression(field_name = "note", operation = "=", operand = "x", column = v));
@@ -390,6 +399,12 @@ end
   @test Dates.Period <: QBA._CompareOperand
   @test !(QBA.Interval <: QBA._CompareOperand)
   @test Dates.Period <: slot
+
+  # #1514: a function on the right (`Lower(a) == Lower(b)`), in the signature and already in the slot
+  # (arithmetic stored one). `Value(…)` is not a function node and stays out.
+  @test QBA.FObject <: QBA._CompareOperand && QBA.FObject <: slot
+  @test QBA.WindowFunction <: QBA._CompareOperand && QBA.WindowFunction <: slot
+  @test !(QBA.SQLText <: QBA._CompareOperand)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

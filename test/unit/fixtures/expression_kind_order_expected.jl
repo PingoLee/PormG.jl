@@ -771,6 +771,78 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F comparison | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date > Coalesce date | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date > Coalesce date | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009-03-01", "Date")]),
+  ("F date > Coalesce date | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date > Coalesce date | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String")]),
+  ("F date > Coalesce date | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2009-03-01", "Date"), ("1", "Int64")]),
+  ("F date > Coalesce date | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009-03-01", "Date"), ("1", "Int64")]),
+  ("F date > Coalesce date | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-01\"", "String"), ("1", "Int64")]),
+  ("F interval > Coalesce interval | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F interval > Coalesce interval | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F interval > Coalesce interval | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F interval > Coalesce interval | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int > Abs int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("F int > Abs int | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int > Abs int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F int > Abs int | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int > Abs int | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F int + Value(1) | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F int + Value(1) | alone", :postgres, "v") =>

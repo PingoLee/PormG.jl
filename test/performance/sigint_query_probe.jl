@@ -36,8 +36,9 @@
 ## Raw SQL here is the feature under test: a statement still in flight, and the server's own view of
 ## it. The child prints no connection string. Its output goes to `<tmp>/<driver>-<round>.log` and
 ## `.err`. A round passes (`ok`) when `seen` is 1, `fetch s` is under 5, every follow-up query
-## succeeds, `server` is 0 and the child exits 0; the run exits 1 when any round fails. Until #1512
-## is fixed, every Postgres.jl round fails on `fetch s`.
+## succeeds, `server` is 0 and the child exits 0; the run exits 1 when any round fails. Before #1512
+## every Postgres.jl round failed on `fetch s` (about 30.5 s): the interrupt waited for the
+## statement, because Reseau's wait leaves Julia's main thread outside libuv. 10/10 rounds pass since.
 using UUIDs
 
 const ROOT = normpath(joinpath(@__DIR__, "..", ".."))

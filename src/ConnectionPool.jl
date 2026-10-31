@@ -263,6 +263,38 @@ function _await_abandoned(e, depth::Int = 0)::Bool
 end
 
 """
+    _fetch_interruptible(handle) -> result
+
+A `Base.fetch` of a driver handle that a Ctrl-C can interrupt while the driver works (#1512).
+Every await on a driver handle goes through it; `test/unit/test_await_interrupt_delivery.jl` fails
+on one that does not.
+
+Julia throws a SIGINT into thread 1 at once only while thread 1 is parked in libuv's I/O wait.
+Otherwise the interrupt waits until thread 1 next runs Julia code. LibPQ waits on its socket through
+an `FDWatcher`, so it meets that condition by accident. Postgres.jl polls on Reseau's own thread,
+and the SQLite handle waits on a `Channel` for the global worker. With nothing in libuv, an idle
+thread 1 sleeps where the signal does not reach it, and the interrupt landed only when the
+statement finished. (MySQL.jl keeps a repeating timer of its own, so its waits were already in
+libuv; its interrupt is lost elsewhere, #1520.) An open `Timer` keeps libuv's loop alive for the
+length of the wait. It repeats, so a wait longer than one period stays covered, and it never runs
+a callback.
+
+Only thread 1 receives SIGINT, so a waiter on another thread (a server's request task) fetches
+without the timer and pays nothing. What the fetch throws is unchanged: the interrupt reaches the
+caller as an `InterruptException`, which [`_await_abandoned`](@ref) recognises (#315).
+"""
+function _fetch_interruptible(handle)
+  Threads.threadid() == 1 || return Base.fetch(handle)
+  keepalive = Timer(_INTERRUPT_KEEPALIVE_SECONDS; interval = _INTERRUPT_KEEPALIVE_SECONDS)
+  try
+    return Base.fetch(handle)
+  finally
+    close(keepalive)
+  end
+end
+const _INTERRUPT_KEEPALIVE_SECONDS = 3600.0
+
+"""
     _driver_cause(e) -> Any
 
 The driver's own exception behind `e`, or `e` itself when it is not one of ours. Every site that
@@ -346,7 +378,7 @@ through `fetch`, so they are the one driver path a transaction body owns that no
 """
 function _await_tx_statement(pool, task)
   err = try
-    return Base.fetch(task)
+    return _fetch_interruptible(task)
   catch e
     _as_database_error(pool, e)
   end
@@ -2386,8 +2418,9 @@ function await_result(ft::FetchTask)
   end
 
   err = try
-    # Await the async result (works for every driver handle: each defines `Base.fetch`)
-    result = Base.fetch(ft.async_result)
+    # Await the async result (works for every driver handle: each defines `Base.fetch`). Through
+    # `_fetch_interruptible`, so a Ctrl-C reaches this task while the statement runs (#1512).
+    result = _fetch_interruptible(ft.async_result)
     ft.result_cache = result
     ft.completed = true
     return result
@@ -2772,7 +2805,7 @@ function with_transaction(pool::_SQLEngine, sql::String;
     _refuse_nul(sql, params)   # #951 — inside the `try` for the same #846 reason
     # Use async execution but await immediately
     task = _execute_async(pool, conn, sql, params)
-    result = Base.fetch(task)
+    result = _fetch_interruptible(task)
     return result, conn
   catch e
     # A transaction-ending ROLLBACK that itself failed may leave the connection with an

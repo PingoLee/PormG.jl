@@ -4,7 +4,19 @@ Bulk operations are designed for high-performance data manipulation of large dat
 
 - **`bulk_insert()`**: Standard SQL-based insertion with automatic chunking.
 - **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
-- **`bulk_update()`**: Efficient multi-row updates from a DataFrame using `match_on=` keys.
+- **`bulk_update()`**: Efficient multi-row updates from a table of rows using `match_on=` keys.
+
+### Input: any Tables.jl table
+
+Every bulk writer, and `allocate_primary_keys()`, takes any [Tables.jl](https://github.com/JuliaData/Tables.jl) table ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)): a `DataFrame`, a `Vector` of `NamedTuple`s, a `NamedTuple` of vectors, a `CSV.File`, or anything else with `Tables.istable(x) == true`. The examples on this page build `DataFrame`s, and every one of them works the same with the same rows in another kind of table. Anything that is not a table raises `QueryBuildError`.
+
+```julia
+statuses = [(statusid = 1, status = "Finished"), (statusid = 2, status = "Disqualified")]
+bulk_insert(M.Status.objects, statuses)                       # no DataFrame needed
+
+more = (statusid = [3, 4], status = ["Accident", "Collision"])  # a NamedTuple of vectors
+bulk_insert(M.Status.objects, more)
+```
 
 All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#Query-Inspection) for a full description of each mode.
 
@@ -41,7 +53,7 @@ r = bulk_insert(M.Status.objects, statuses_df, on_conflict = :nothing)
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
-- **Never Mutates, Never Copies**: The pipeline works on a zero-copy wrapper of the input `DataFrame` (shared column vectors). Injected defaults and timestamps are added to that internal frame only — see [Defaults and Auto Values](#Defaults-and-Auto-Values) — so your `DataFrame` is untouched, unconditionally, and no data is duplicated. There is no `copy=` knob because there is nothing to protect against.
+- **Never Mutates, Never Copies**: The pipeline works on its own frame over your table's columns. A column table (a `DataFrame`, a `CSV.File`, a `NamedTuple` of vectors) is read in place, with no copy; a row table (a `Vector` of `NamedTuple`s) is turned into columns once. Injected defaults and timestamps are added to that internal frame only — see [Defaults and Auto Values](#Defaults-and-Auto-Values) — so your table is untouched, unconditionally. There is no `copy=` knob because there is nothing to protect against.
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
 - **No conflicting target mappings**: A model field may not be mapped from two different `DataFrame` source columns. `columns = ["c1" => "laps", "c2" => "laps"]` raises a `QueryBuildError` instead of silently letting the later entry win — which column survived used to depend on list position. An unambiguous repeat of the *same* source (`["c1" => "laps", "c1" => "laps"]`, or a bare `"laps"` alongside `"laps" => "laps"`) is still accepted, and a bare `"laps"` the frame has no column for claims no source at all, so it may still be paired with an explicit `"c2" => "laps"` mapping.
 - **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by **exact, case-sensitive** name. A column differing only in case from a model field (e.g. `RaceId` vs `raceid`) raises an error instead of being silently folded — normalize first with `rename!(df, lowercase.(names(df)))` or map it explicitly.
@@ -283,7 +295,7 @@ If the ids are only needed *after* the parent insert — insert the drivers, the
 
 On MySQL `allocate_primary_keys()` raises `BackendCapabilityError` (`preallocated_keys`): `AUTO_INCREMENT` values cannot be drawn ahead of the `INSERT`.
 
-On a model whose key is `IDField(generated = false)`, a key the caller supplies, `allocate_primary_keys()` raises `QueryBuildError` on every engine, whatever the DataFrame holds: there is no sequence, identity or rowid to allocate from, so the ids have to come with the data ([#1393](https://github.com/PingoLee/PormG.jl/issues/1393)).
+On a model whose key is `IDField(generated = false)`, a key the caller supplies, `allocate_primary_keys()` raises `QueryBuildError` on every engine, whatever the table holds: there is no sequence, identity or rowid to allocate from, so the ids have to come with the data ([#1393](https://github.com/PingoLee/PormG.jl/issues/1393)).
 
 Use `allocate_primary_keys()` when they are needed before:
 
@@ -316,14 +328,16 @@ Critically, PormG tracks this reserved high-water mark in memory within the `Tra
 
 The counter protects reserved ids from SQLite's own auto-id inserts only on an `AUTOINCREMENT` table, which is what PormG's migrations create. On a table declared `INTEGER PRIMARY KEY` without it (an imported or legacy database), SQLite ignores `sqlite_sequence` and assigns `MAX(rowid) + 1`, so a later `create()` without a primary key does not see the reservation. A database with no `AUTOINCREMENT` table at all has no `sqlite_sequence`: allocation then starts from `MAX(pk) + 1` and the reservation lives only in the open transaction. On such a table, allocate and insert inside one `run_in_transaction`.
 
-If the DataFrame already contains the primary key column with at least one non-blank value, `allocate_primary_keys()` returns it unchanged so it is safe to call unconditionally in a data-loading pipeline over models with a generated key. A model with no `IDField` key (a `UUIDField` or `CharField` key, or none) is returned unchanged too.
+`allocate_primary_keys()` returns a **new table of the kind you passed** ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)), built by that table's own `Tables.materializer`: a `DataFrame` for a `DataFrame`, a `Vector` of `NamedTuple`s for one, and a `NamedTuple` of vectors for a table with no materializer of its own (a `CSV.File`). Its columns are copies, so your table is never modified: assign the result.
+
+If the table already contains the primary key column with at least one non-blank value, `allocate_primary_keys()` returns a copy of it unchanged so it is safe to call unconditionally in a data-loading pipeline over models with a generated key. A model with no `IDField` key (a `UUIDField` or `CharField` key, or none) gets a copy back unchanged too.
 
 #### Notes and Limitations
 
 - **Handler filters are ignored.** `allocate_primary_keys()` operates on the model that backs the handler. Any filters or annotations attached to `M.Model.objects.filter(...)` have no effect — pk allocation is always table-wide.
-- **Column dtype narrows.** If you pass a DataFrame with a `Vector{Union{Missing, Int}}` pk column, the returned column is a plain `Vector{Int}`. Downstream code expecting the missing-able element type must be adjusted.
+- **Column dtype narrows.** If you pass a table with a `Vector{Union{Missing, Int}}` pk column, the returned column is a plain `Vector{Int64}`, on every engine. Downstream code expecting the missing-able element type must be adjusted.
 - **PostgreSQL schema scope.** The PG path looks up the sequence via `pg_get_serial_sequence('table', 'col')` without a schema prefix and therefore assumes the model's table lives in the default search path (typically `public`).
-- **`clone` keyword.** With the default `clone=true`, the returned `DataFrame` is a genuine copy with independent column vectors — the new pk column exists only on the returned frame, the caller's `DataFrame` is untouched, and later element writes on either frame never affect the other. (Unlike the bulk operations' internal zero-copy working frames, this frame is *returned* to you, so it must not alias your data.) `allocate_primary_keys(handler, df; clone=false)` instead writes the new pk column straight into `df`, for when you deliberately want the caller's frame updated in place.
+- **No in-place mode.** A generic table cannot be written in place, so the key column exists only on the returned table; there is no `clone` keyword ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)). Write `df = allocate_primary_keys(M.Driver.objects, df)`.
 
 ### Pre-processing and Error Handling
 
@@ -721,7 +735,7 @@ end
 
 `bulk_update()` combines **per-row match keys** (`match_on=`, driven by DataFrame values) with **constant filters** (`filters=`, the same value for every row).
 
-- **`match_on=`**: bare model field names, e.g. `["id"]`. Each key's per-row values come from the DataFrame — through the `columns=` mapping when one is declared, otherwise from the same-named DataFrame column; the keys identify which row each DataFrame row updates. A key is matched, never written: it stays out of the `SET` clause, so an `auto_now` field used as a match key is not refreshed by that call.
+- **`match_on=`**: bare model field names, e.g. `["id"]`. Each key's per-row values come from the table — through the `columns=` mapping when one is declared, otherwise from the same-named column of the table; the keys identify which row each input row updates. A key is matched, never written: it stays out of the `SET` clause, so an `auto_now` field used as a match key is not refreshed by that call.
 - **`filters=`**: `["status" => "active"]`. Always a constant predicate AND'd onto the `WHERE` clause for every row.
 
 ```julia

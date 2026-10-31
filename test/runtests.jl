@@ -204,6 +204,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Column-wise Row Read (#1073)" include("unit/test_list_raw_columnwise_1073.jl")
     @testset "Query as a Tables.jl Source (#1344)" include("unit/test_tables_source.jl")
     @testset "Internal Reads Use Rows, not a DataFrame (#1344)" include("unit/test_internal_rows_1344.jl")
+    @testset "Bulk Writers Take Any Tables.jl Table (#1344)" include("unit/test_bulk_tables_input_1344.jl")
     @testset "Migrations applied_at Canonical Form (#570)" include("unit/test_migrations_applied_at.jl")
     @testset "Migration History Writes Bind Values (#846)" include("unit/test_migration_history_binding.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")

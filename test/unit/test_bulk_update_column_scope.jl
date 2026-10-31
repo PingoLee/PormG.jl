@@ -420,7 +420,7 @@ end
             id        = [999],    # same-named column that must be IGNORED
             new_w     = [9],
         )
-        res = @test_logs (:warn, r"same-named DataFrame column is ignored") bulk_update(
+        res = @test_logs (:warn, r"same-named column of the table is ignored") bulk_update(
             Metric.objects, conflict_df,
             columns    = ["new_w" => "weight", "record_id" => "id"],
             match_on   = ["id"],
@@ -1061,7 +1061,7 @@ end
         @test occursin("filters=", msg)
         # Distinguishes this from the neighbouring generic message, which is still correct for a
         # field PormG does not fill (asserted in "match_on field without any source column raises").
-        @test !occursin("not found in the DataFrame", msg)
+        @test !occursin("not found in the table", msg)
     end
 
     # Same arm, reached through the PRIMARY-KEY fallback rather than `match_on=` (issue task 5).

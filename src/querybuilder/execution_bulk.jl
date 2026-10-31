@@ -33,15 +33,108 @@ function _normalize_bulk_columns(columns)
   return _columns
 end
 
-# #132: the bulk pipeline never mutates the caller's DataFrame — and never copies its
-# data either. The working frame is a zero-copy wrapper (`copycols=false` shares the
-# column vectors); every internal write is a WHOLE-COLUMN replacement or addition
-# (`df[!, col] = ...`), which rebinds only the wrapper's column slot and leaves the
-# caller's frame untouched. INVARIANT for future writers: never broadcast-assign
-# (`.=`), `push!`, or `deleteat!` into an existing column/row of the working frame —
-# that would write through the shared vectors into the caller's data. Only
-# whole-column replacement/addition is safe here.
-_bulk_working_frame(df_o::DataFrames.DataFrame) = DataFrames.select(df_o, :; copycols = false)
+# #1344: the bulk pipeline's working frame — the caller's columns by name, plus PormG's own fills.
+# Every bulk writer takes any Tables.jl source (a DataFrame, a `Vector` of `NamedTuple`s, a
+# `NamedTuple` of vectors, a `CSV.File`, …) and converts it here, once; nothing past this point names
+# the caller's table type.
+#
+# #132: the pipeline never mutates the caller's table — and never copies its data either. The frame
+# holds the vectors `Tables.columns` hands back, which for a column store (a DataFrame, a `CSV.File`)
+# are the caller's own; a row store (a `Vector` of `NamedTuple`s) is copied into columns once, by
+# `Tables.columns`. Every internal write is a WHOLE-COLUMN addition (`_add_bulk_column!`), which only
+# adds a slot to the frame. INVARIANT for future writers: never broadcast-assign (`.=`), `push!`, or
+# `deleteat!` into a column the frame got from the caller — that would write through the shared
+# vectors into the caller's data. Only whole-column addition is safe here.
+struct _BulkFrame
+  names::Vector{String}                       # the caller's columns in order, then PormG's
+  columns::Dict{String, AbstractVector}
+  row_count::Int
+end
+
+_bulk_column(frame::_BulkFrame, name::AbstractString) = frame.columns[name]
+_has_bulk_column(frame::_BulkFrame, name::AbstractString) = haskey(frame.columns, name)
+# Every caller names a column the frame does not have yet (`_bulk_private_column`).
+function _add_bulk_column!(frame::_BulkFrame, name::String, column::AbstractVector)
+  push!(frame.names, name)
+  frame.columns[name] = column
+  return frame
+end
+
+# The one refusal for an argument that is not a table, shared by the writers and their curried forms.
+#
+# A PormG query is a Tables.jl source (#1344 phase 1), but not a bulk input: reading it would run its
+# SELECT inside a write, even under a dry-run `show_query`, and the curried forms read the other way
+# round (`target |> bulk_insert(source_query)` is the handler-curried method, so it would insert the
+# TARGET's rows into the source's model). Asking for its rows is one explicit call.
+function _refuse_non_table(@nospecialize(src), op::AbstractString)
+  src isa SQLObjectHandler && throw(QueryBuildError("Error in $(op), a query is not a table to write: " *
+    "read its rows first, e.g. Tables.columntable(query), and pass those"))
+  Tables.istable(src) && return true
+  # A `Vector` built with `push!` into `[]` holds `NamedTuple`s but is a `Vector{Any}`, which Tables.jl
+  # does not take for a table: name the element type, since it is the one thing to change.
+  got = src isa AbstractVector ? "a Vector whose element type is $(_bulk_type_name(eltype(src))); build it " *
+    "as NamedTuple[...], or narrow it with identity.(rows)" : "a $(_bulk_type_name(typeof(src)))"
+  throw(QueryBuildError("Error in $(op), expected a Tables.jl table (a DataFrame, a Vector of NamedTuples, " *
+    "a NamedTuple of vectors, a CSV.File, …), got $(got)"))
+end
+_bulk_type_name(@nospecialize(T)) = T isa Union{DataType, UnionAll} ? string(nameof(T)) : "a union of types"
+
+# `@nospecialize`: the source type is read here, once, and nothing past the frame depends on it, so
+# one compiled pipeline (and the precompile workload's) serves every kind of table.
+function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
+  _refuse_non_table(src, op)
+  Tables.schema(src) === nothing && Tables.rowaccess(src) && return _schemaless_row_frame(src, op)
+  cols = Tables.columns(src)
+  names = String[]
+  columns = Dict{String, AbstractVector}()
+  for name in Tables.columnnames(cols)
+    column = Tables.getcolumn(cols, name)
+    push!(names, String(name))
+    columns[String(name)] = column isa AbstractVector ? column : collect(column)
+  end
+  if isempty(names)
+    # No columns: nothing to write, which is an empty table only when it also has no rows.
+    src isa AbstractVector && !isempty(src) &&
+      throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
+    return _BulkFrame(names, columns, 0)
+  end
+  row_count = length(columns[names[1]])
+  all(name -> length(columns[name]) == row_count, names) ||
+    throw(QueryBuildError("Error in $(op), the table's columns have different lengths"))
+  return _BulkFrame(names, columns, row_count)
+end
+
+# A row source without a schema: a `Vector` of `NamedTuple`s whose element type is not concrete (rows
+# where some value is `missing`, a `push!` into `NamedTuple[]`), or a cursor such as `SQLite.Query`.
+# Read in ONE pass, building the columns as it goes: a cursor can be iterated only once, so a check
+# pass followed by `Tables.columns` would find it exhausted and write nothing. Every row must name the
+# columns row 1 names: `Tables.columns` takes the names from the first row, silently dropping a key
+# only a later row carries; filling a missing key with NULL would be a guess about what was meant.
+function _schemaless_row_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
+  names = Symbol[]
+  values = Vector{Any}[]
+  row_count = 0
+  for row in Tables.rows(src)
+    row_names = Tables.columnnames(row)
+    row_count += 1
+    if row_count == 1
+      append!(names, Symbol.(collect(row_names)))
+      foreach(_ -> push!(values, Any[]), names)
+    elseif !(length(row_names) == length(names) && all(n -> Symbol(n) in names, row_names))
+      differ = symdiff(Set{Symbol}(Symbol.(collect(row_names))), Set{Symbol}(names))
+      throw(QueryBuildError("Error in $(op), row $(row_count) of the table does not have the columns row 1 " *
+        "has ($(join(sort!(String.(collect(differ))), ", ")) differ); every row must name the same columns"))
+    end
+    for (j, name) in enumerate(names)
+      push!(values[j], Tables.getcolumn(row, name))
+    end
+  end
+  row_count > 0 && isempty(names) &&
+    throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
+  # `identity.` narrows each column from `Any` to the values it holds, as `Tables.columns` would.
+  columns = Dict{String, AbstractVector}(String(name) => identity.(values[j]) for (j, name) in enumerate(names))
+  return _BulkFrame(String.(names), columns, row_count)
+end
 
 # #335: the name space PormG's own injected fill columns live in, kept disjoint from the caller's.
 # `_prepare_bulk_df!` fills a whole column for every field the frame has no column for; before
@@ -122,7 +215,7 @@ function _match_on_pair_migration_msg(pair::Pair)
   shown = "\"$(pair.first)\" => \"$(pair.second)\""
   return """
   bulk_update: `match_on=` no longer accepts `"df_col" => "model_field"` pairs (DEPRECATED API).
-  `columns=` is the single place a DataFrame column is mapped to a model field; `match_on=`
+  `columns=` is the single place a column of the table is mapped to a model field; `match_on=`
   selects the merge keys by model field name. A field listed in both is used only for
   matching — match keys are never SET.
 
@@ -209,7 +302,7 @@ end
 # to the ordinary NOT NULL sweep and raised `InvalidValueError`. It now hits the SAME mixed-value
 # guard below as an auto-increment pk always has, and raises `QueryBuildError` — intentional, not a
 # regression: the two pk kinds now agree on both the error type and the message shape.
-function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
+function _drop_blank_auto_primary_keys!(df::_BulkFrame,
   model::PormGModel,
   fields_df::Vector{String},
   mapping::Dict{String, String},
@@ -224,7 +317,7 @@ function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
     _is_pormg_minted_bulk_primary_key(f_meta) || continue
 
     col_name = mapping[field]
-    blank_mask = map(_is_blank_bulk_primary_key_value, df[!, col_name])
+    blank_mask = map(_is_blank_bulk_primary_key_value, _bulk_column(df, col_name))
 
     if all(blank_mask)
       delete!(mapping, field)
@@ -238,25 +331,32 @@ function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
 end
 
 """
-    allocate_primary_keys(objct::SQLObjectHandler, df::DataFrame; clone=true) -> DataFrame
+    allocate_primary_keys(objct::SQLObjectHandler, table) -> a table of the same kind
 
-Pre-allocate sequential primary key values for rows in `df` that are missing an
-auto-generated primary key, and return the DataFrame with the pk column populated.
+Pre-allocate sequential primary key values for rows in `table` that are missing an
+auto-generated primary key, and return a **new** table with the pk column populated.
+
+`table` is any Tables.jl table (#1344): a `DataFrame`, a `Vector` of `NamedTuple`s, a `NamedTuple`
+of vectors, a `CSV.File`, … The result is the same kind of table, built by the input's own
+`Tables.materializer`: a `DataFrame` for a `DataFrame`, a `Vector` of `NamedTuple`s for one, and a
+`NamedTuple` of vectors for a source with no materializer of its own (a `CSV.File`). Its columns are
+copies, so the caller's table is never modified and element writes on either never reach the other;
+assign the result (`df = allocate_primary_keys(q, df)`).
 
 Use this when you need the assigned ids **before** inserting—for example, to wire up
 foreign key columns in related tables that must be bulk-inserted in the same transaction.
 
 It serves a key the database generates, `IDField()`. On a model whose key is
-`IDField(generated = false)`, a key the caller supplies, it raises `QueryBuildError` whatever `df`
-holds: no engine has ids to allocate for such a key, so supply them in the DataFrame. A model with
-no `IDField` key (a `UUIDField` or `CharField` key, or none) gets `df` back unchanged.
+`IDField(generated = false)`, a key the caller supplies, it raises `QueryBuildError` whatever `table`
+holds: no engine has ids to allocate for such a key, so supply them in the table. A model with
+no `IDField` key (a `UUIDField` or `CharField` key, or none) gets a copy of `table` back unchanged.
 
-If `df` already contains the primary key column with at least one non-blank value it is
+If `table` already contains the primary key column with at least one non-blank value, a copy is
 returned unchanged and no ids are reserved. If the column is absent, or **every** value in
 it is blank (`missing`, `nothing`, or an empty string), ids are reserved from the database.
 
 If the column contains **mixed** values—some rows have explicit pk values and some are
-blank—a `@warn` is emitted and the DataFrame is still returned unchanged. The blank rows
+blank—a `@warn` is emitted and a copy is still returned unchanged. The blank rows
 are left as-is and will raise a `QueryBuildError` when `bulk_insert` is called. To resolve
 this you can: (1) provide a pk value for every row, (2) remove the pk column so all ids
 are allocated automatically, or (3) pre-fill the blank rows before calling this function.
@@ -293,15 +393,13 @@ reservation lives only in the open transaction. On such a table, allocate and in
 - `objct`: A `SQLObjectHandler` (typically `M.Model.objects`). Only the underlying model
   is consulted — any filters, ordering, or annotations attached to the handler are
   **ignored**, since pk allocation is a table-level operation independent of any query.
-- `df`: The `DataFrame` that will be bulk-inserted.
-- `clone::Bool = true`: When `true` (default) the returned DataFrame is a genuine copy
-  with independent column vectors — the new pk column exists only on the returned frame,
-  the caller's DataFrame is left untouched, and element writes on either frame never
-  reach the other. Set to `false` to write the new pk column into the caller's DataFrame
-  in place and skip the copy.
+- `table`: The Tables.jl table that will be bulk-inserted.
+
+There is no in-place mode (#1344): a generic Tables.jl source cannot be written in place, so the
+key column is always on the returned table only.
 
 # Notes
-- The returned pk column is a plain `Vector{Int}`. If the input DataFrame had a
+- The key column of the returned table holds `Int64`s (a plain `Vector{Int64}` in a column table). If the input had a
   `Vector{Union{Missing,Int}}` pk column, the missing-able element type is dropped after
   allocation.
 - The PostgreSQL backend currently assumes the model lives in the default search path
@@ -328,7 +426,7 @@ PormG.run_in_transaction("db_2") do
 end
 ```
 """
-function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; clone::Bool=true)
+function allocate_primary_keys(objct::SQLObjectHandler, @nospecialize(src))
   model = objct.object.model
   settings, connection, conn_key = get_settings(objct)
   ensure_transaction_scope(model, connection)
@@ -337,28 +435,26 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   # #1393: a key the caller supplies has nothing to allocate from — no identity, no sequence, no rowid
   # — and before this the call returned the frame with the ids missing (PostgreSQL's `nextval(NULL)`),
   # or allocated ids a NOT NULL column without a default would never have drawn. Refused whatever the
-  # frame holds, so the outcome does not depend on the data.
+  # table holds, so the outcome does not depend on the data.
   for f in model.field_names
     _is_caller_supplied_id_key(model.fields[f]) || continue
     throw(QueryBuildError("allocate_primary_keys: the primary key $(f) of model $(model.name) is " *
       "IDField(generated = false), a key the caller supplies, so $(_backend_name(connection)) has no " *
-      "ids to allocate for it. Supply the key in the DataFrame, or declare IDField() for a key the " *
+      "ids to allocate for it. Supply the key in the table, or declare IDField() for a key the " *
       "database generates."))
   end
 
-  # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
-  # frame is RETURNED to the caller, so shared vectors would be user-visible aliasing —
-  # "clone" must mean independent columns (element writes on one frame never reach the
-  # other). clone=false remains the explicit opt-in for in-place pk writing.
-  df = clone ? Base.copy(df_o) : df_o
-  n = DataFrames.nrow(df)
-  n == 0 && return df
+  # Read through the bulk frame (zero-copy); what is RETURNED is built by `_allocated_table`, which
+  # copies every column, so the result never aliases the caller's data (#132 review, #1344).
+  df = _bulk_frame(src, "allocate_primary_keys")
+  n = df.row_count
+  n == 0 && return _allocated_table(src, df)
 
   # Find the single auto-generated primary key for this model
   pk_fields = [f for f in model.field_names
                if _is_auto_generated_bulk_primary_key(model.fields[f])]
 
-  isempty(pk_fields) && return df
+  isempty(pk_fields) && return _allocated_table(src, df)
 
   if length(pk_fields) > 1
     throw(QueryBuildError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
@@ -367,19 +463,19 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   pk_field = pk_fields[1]
 
   # Already has explicit values — return unchanged
-  if pk_field in DataFrames.names(df)
-    col = df[!, pk_field]
+  if _has_bulk_column(df, pk_field)
+    col = _bulk_column(df, pk_field)
     has_any = any(!_is_blank_bulk_primary_key_value(v) for v in col)
     if has_any
       has_blank = any(_is_blank_bulk_primary_key_value(v) for v in col)
       if has_blank
         n_blank = count(_is_blank_bulk_primary_key_value, col)
         @warn "allocate_primary_keys: column '$pk_field' in model $(model.name) has mixed values — $n_blank blank row(s) alongside explicit pk values. " *
-              "The DataFrame is returned unchanged. Those blank rows will raise a QueryBuildError at bulk_insert time. " *
+              "The table is returned unchanged. Those blank rows will raise a QueryBuildError at bulk_insert time. " *
               "Options: (1) supply a pk value for every row, (2) remove the column so all ids are allocated automatically, " *
               "or (3) pre-fill the blank rows before calling allocate_primary_keys."
       end
-      return df
+      return _allocated_table(src, df)
     end
   end
 
@@ -391,12 +487,24 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
     _allocate_ids(model, connection, pk_field, n, settings)
   end
 
-  df[!, pk_field] = ids
-  return df
+  return _allocated_table(src, df, pk_field, ids)
 end
 
-allocate_primary_keys(model::PormGModel, df::DataFrames.DataFrame; kwargs...) =
-  allocate_primary_keys(model |> object, df; kwargs...)
+allocate_primary_keys(model::PormGModel, @nospecialize(src)) = allocate_primary_keys(model |> object, src)
+
+# #1344 decision 3: what `allocate_primary_keys` returns — a new table of the caller's own kind
+# (`Tables.materializer`: a DataFrame for a DataFrame, a `Vector` of `NamedTuple`s for one, a
+# `NamedTuple` of vectors otherwise), with `pk_field` set to `ids` when given: in its own place when
+# the table carries it, appended otherwise. Every column is copied first, because a materializer may
+# keep the vectors it is handed (`Tables.columntable` does) and the result must never alias the
+# caller's data.
+function _allocated_table(@nospecialize(src), frame::_BulkFrame, pk_field::Union{Nothing, String} = nothing,
+                          ids::AbstractVector = Int64[])
+  names = copy(frame.names)
+  pk_field === nothing || pk_field in names || push!(names, pk_field)
+  columns = Tuple(name == pk_field ? Vector{Int64}(ids) : copy(_bulk_column(frame, name)) for name in names)
+  return Tables.materializer(src)(NamedTuple{Tuple(Symbol.(names))}(columns))
+end
 
 """
     resync_sequences(objct::SQLObjectHandler) -> Vector{String}
@@ -484,8 +592,14 @@ function _allocate_pg_ids(model::PormGModel, connection::PormGPostgres, pk_field
   FROM generate_series(1, $(count_placeholder))
   ORDER BY 1
   """
-  result = fetch(connection, sql, parameters) |> DataFrames.DataFrame
-  return result[!, :reserved_id]
+  rows = fetch(connection, sql, parameters) |> Tables.rowtable
+  # `nextval(NULL)` is NULL: the column has no sequence or identity (a key declared `IDField()` over a
+  # plain integer column). Refused here, never as a `MethodError` from the `Int64` vector below.
+  any(row -> ismissing(row.reserved_id) || row.reserved_id === nothing, rows) &&
+    throw(QueryBuildError("allocate_primary_keys: PostgreSQL found no sequence or identity behind the " *
+      "primary key $(pk_field) of model $(model.name), so it has no ids to allocate. Supply the key in the " *
+      "table, or declare it IDField(generated = false)."))
+  return Int64[row.reserved_id for row in rows]
 end
 
 # Reads the starting point for SQLite allocation from the larger of:
@@ -521,8 +635,8 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
     $(sequence_arm)
   ) AS allocation_state
   """
-  result = fetch(settings, sql) |> DataFrames.DataFrame
-  max_id = result[1, :max_id]
+  result = fetch(settings, sql) |> Tables.rowtable
+  max_id = first(result).max_id
   # #1393: a key PormG did not create can hold a non-integer (a REAL key declared `IDField()` by hand,
   # or text). There is no next integer after it, so the call is refused here, never as `InexactError`.
   # inspectdb declares such a key `IDField(generated = false)`, which `allocate_primary_keys` refuses
@@ -531,7 +645,7 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
    (max_id isa Real && isinteger(max_id) && typemin(Int64) <= max_id <= typemax(Int64))) ||
     throw(QueryBuildError("allocate_primary_keys: the primary key $(pk_field) of model $(model.name) " *
       "holds a value that is not a 64-bit integer, so SQLite has no next id to allocate from. Supply the key " *
-      "in the DataFrame, or declare it IDField(generated = false)."))
+      "in the table, or declare it IDField(generated = false)."))
   max_id = (ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id)
   reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field, connection)
   max_id = max(max_id, something(reserved_max, Int64(0)))
@@ -574,7 +688,7 @@ function _bulk_case_mismatch_msg(operation::Symbol, looked_for::AbstractString,
   """
 end
 
-function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
+function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
                           normalized_columns::Vector, operation::Symbol,
                           settings=nothing)
   fields = model.field_names
@@ -584,7 +698,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # What PormG fills into a column the DataFrame does NOT carry: a static `default`, an
   # auto_now/auto_now_add timestamp, or a UUID `auto_add` value. Returns
   # (should_fill, value_or_values, per_row). `per_row` is true only for the UUID `auto_add` case,
-  # where `value_or_values` is already a Vector sized to `DataFrames.nrow(df)` — one fresh UUID
+  # where `value_or_values` is already a Vector sized to the frame's row count — one fresh UUID
   # per row. For every other fill kind `per_row` is false and `value_or_values` is the single
   # value broadcast across the whole batch, unchanged from before #334.
   #
@@ -642,7 +756,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
     elseif f_meta.type == "UUID" && f_meta.auto_add
       if operation in [:insert, :copy]
         # #334: one distinct UUID per row, not one for the whole batch.
-        return true, [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)], true
+        return true, [UUIDs.uuid4() for _ in 1:df.row_count], true
       end
     end
 
@@ -684,29 +798,24 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # migration error was already being told to change.
   #
   # Whole-column ADDITION only, never a write into an existing slot — the #132 zero-copy invariant
-  # (see `_bulk_working_frame`). The uniquifying loop is what keeps it an addition: a caller column
-  # already named like the prefix would otherwise be clobbered, which is #335 over again.
+  # (see `_BulkFrame`). The uniquified name (`_bulk_private_column`) is what keeps it an addition: a
+  # caller column already named like the prefix would otherwise be clobbered, which is #335 over again.
   function inject_fill_column!(field::String, f_meta, fill_value, per_row::Bool)
     # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
-    # synthesized: that would overwrite live rows merely because the DataFrame lacks the column.
+    # synthesized: that would overwrite live rows merely because the table lacks the column.
     # Temporal auto_now/auto_now_add injections are always allowed — an intentional ORM
     # side-effect. Unchanged by #331; #335 folded it in from both call sites so the two arms are
     # provably identical rather than only visually identical.
     operation == :update && !isempty(normalized_columns) && f_meta.default !== nothing &&
       return false
 
-    target = "$(_BULK_FILL_PREFIX)$(field)"
-    suffix = 1
-    while target in names(df)
-      suffix += 1
-      target = "$(_BULK_FILL_PREFIX)$(field):$(suffix)"
-    end
+    target = _bulk_private_column(df, field)
 
     # #334: `per_row` means fill_value is already a Vector, one distinct value per row (currently
-    # only the UUID auto_add case) — otherwise broadcast the one value. `nrow` replaced a `ref_col`
-    # pick that grabbed an arbitrary `mapping` key purely for its length and indexed `df[!, 1]`
+    # only the UUID auto_add case) — otherwise broadcast the one value. the row count replaced a `ref_col`
+    # pick that grabbed an arbitrary `mapping` key purely for its length and indexed the first column
     # when `mapping` was empty (a latent `BoundsError` on a column-less frame).
-    df[!, target] = per_row ? fill_value : fill(fill_value, DataFrames.nrow(df))
+    _add_bulk_column!(df, target, per_row ? fill_value : fill(fill_value, df.row_count))
     mapping[field] = target
     return true
   end
@@ -751,27 +860,27 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         # column.second the model field. The source column must exist EXACTLY — a
         # mismatch is a hard error, not a silent log (the old @error left a bad mapping
         # in place and crashed cryptically downstream).
-        if column.first in names(df)
+        if column.first in df.names
           claim_field!(column.second, column.first)
         else
           # Offer the case hint when the only near-miss differs solely in case,
           # consistent with the string/auto-detect/match_on paths above.
-          candidates = _case_fold_candidates(column.first, names(df))
+          candidates = _case_fold_candidates(column.first, df.names)
           isempty(candidates) ||
             throw(UnknownFieldError(_bulk_case_mismatch_msg(operation, column.first, candidates,
               "\"$(candidates[1])\" => \"$(column.second)\"")))
-          throw(UnknownFieldError("Error in bulk_$(operation), the column \e[4m\e[31m$(column.first)\e[0m mapped to field \e[4m\e[31m$(column.second)\e[0m is not in the DataFrame; available columns: \e[4m\e[32m$(names(df))\e[0m"))
+          throw(UnknownFieldError("Error in bulk_$(operation), the column \e[4m\e[31m$(column.first)\e[0m mapped to field \e[4m\e[31m$(column.second)\e[0m is not in the table; available columns: \e[4m\e[32m$(df.names)\e[0m"))
         end
       else
         # String column: match the DataFrame column name EXACTLY (case-sensitive).
-        if column in names(df)
+        if column in df.names
           # Identity claim: the frame column and the model field share the name. A conflict here
           # therefore always comes from an EARLIER Pair that pointed the same field elsewhere.
           claim_field!(column, column)
         else
           # No exact match. If a column differs only in case, fail loudly instead of
           # silently case-folding (see the case-sensitive matching contract above).
-          candidates = _case_fold_candidates(column, names(df))
+          candidates = _case_fold_candidates(column, df.names)
           isempty(candidates) ||
             throw(UnknownFieldError(_bulk_case_mismatch_msg(operation, column, candidates,
               "\"$(candidates[1])\" => \"$(column)\"")))
@@ -784,7 +893,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
     # Auto-detect: a DataFrame column maps to a model field only on an EXACT
     # (case-sensitive) name match. A column that differs only in case from a model
     # field is a likely-intended typo, so fail loudly rather than fold or ignore it.
-    for col_name in names(df)
+    for col_name in df.names
       if col_name in fields
         mapping[col_name] = col_name
         push!(fields_df, col_name)
@@ -915,15 +1024,16 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   return mapping, final_fields, pk_exist, pk_field
 end
 
-function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
+function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
   mapping::Dict{String, String},
   dynamic_filters::Vector{String})
 
   isempty(dynamic_filters) && return nothing
 
   seen_keys = Dict{Tuple, Int}()
-  for (index, row) in enumerate(eachrow(df))
-    key = Tuple(row[mapping[field]] for field in dynamic_filters)
+  key_columns = [_bulk_column(df, mapping[field]) for field in dynamic_filters]
+  for index in 1:df.row_count
+    key = Tuple(column[index] for column in key_columns)
     if haskey(seen_keys, key)
       filters_text = join(dynamic_filters, ", ")
       # The rows and the key fields, never the key values (#971): a match key can be an email or a token.
@@ -965,9 +1075,9 @@ function _no_match_source_msg(kind::AbstractString, field::AbstractString, f_met
   # string in `columns=` naming a field the frame has no column for DOES target the field (it is
   # the "may be auto-populated later" path), so the narrower wording reads as false to that caller.
   return """
-  bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m has no source column — the DataFrame has no column of that name, and no columns= entry supplies one for it.
+  bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m has no source column — the table has no column of that name, and no columns= entry supplies one for it.
   PormG auto-populates \e[4m\e[31m$(field)\e[0m ($(_bulk_fill_kind_label(f_meta))), but a merge key must come from your data: an auto-populated value is minted once per call, so it would match no rows.
-  Add a DataFrame column named \e[4m\e[32m$(field)\e[0m, map one in columns= (e.g. columns = [..., \"my_col\" => \"$(field)\"]), or $(escape).
+  Add a column named \e[4m\e[32m$(field)\e[0m, map one in columns= (e.g. columns = [..., \"my_col\" => \"$(field)\"]), or $(escape).
   """
 end
 
@@ -1001,7 +1111,7 @@ end
 #     the caller's own DataFrame.
 # Suppressing it would instead mean threading `match_on`/the pk fallback into `_prepare_bulk_df!`,
 # which `bulk_insert` and `bulk_copy` share — a wider blast radius for no behavior change.
-function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
+function _resolve_match_column!(df::_BulkFrame, model::PormGModel,
   mapping::Dict{String, String}, fields_df::Vector{String},
   dynamic_filters::Vector{String}, field::String;
   kind::String="match_on")
@@ -1022,11 +1132,11 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     # at all and the condition reduces to what it always meant. Deliberately NO warning on the
     # new fill-loses-to-caller-column path: that is the documented behavior (`write/bulk.md` →
     # *Mapping-first match keys*), and a warning for behaving as documented is noise.
-    if mapping[field] != field && field in names(df)
-      @warn "bulk_update: $(kind) resolved through the columns= mapping; the same-named DataFrame column is ignored" field=field mapped_source=mapping[field] ignored_column=field
+    if mapping[field] != field && field in df.names
+      @warn "bulk_update: $(kind) resolved through the columns= mapping; the same-named column of the table is ignored" field=field mapped_source=mapping[field] ignored_column=field
     end
     mapping[field]
-  elseif field in names(df)
+  elseif field in df.names
     field                                 # identity: the caller's own column, over any fill
   else
     # No declared mapping and no exact same-named column. A column differing only in case is a
@@ -1044,7 +1154,7 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     # (`field in names(df)` at the warn condition and at the identity fallback) are provably
     # exempt and deliberately left lazy — `field` comes from `model.field_names`, and #317 forbids
     # a model field name from starting with `_`, so it can never equal an injected name.
-    caller_columns = filter(!_is_injected_fill_column, names(df))
+    caller_columns = filter(!_is_injected_fill_column, df.names)
     candidates = _case_fold_candidates(field, caller_columns)
     # Case near-miss first: it is the more specific diagnosis and carries a paste-ready fix. A
     # frame with a `Updated_At` column reads as a typo whether or not the field auto-populates,
@@ -1064,7 +1174,7 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     # exists is not usable as a key, instead of reporting the column as merely "not found".
     haskey(mapping, field) &&
       throw(UnknownFieldError(_no_match_source_msg(kind, field, model.fields[field])))
-    throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: \e[4m\e[32m$(caller_columns)\e[0m) and no columns= mapping targets that field"))
+    throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the table (columns: \e[4m\e[32m$(caller_columns)\e[0m) and no columns= mapping targets that field"))
   end
 
   mapping[field] = resolved
@@ -1088,11 +1198,11 @@ end
 # After that, a bare string or dynamic pair in `filters=` falls through to the
 # generic static-only error, which is the intended end state.
 # ============================================================================
-function _is_legacy_dynamic_filter(f, df::DataFrames.DataFrame, model::PormGModel)
+function _is_legacy_dynamic_filter(f, df::_BulkFrame, model::PormGModel)
   f isa Pair || return true                       # a bare string was always a dynamic key
   return f.second isa AbstractString &&
          !occursin("__", f.first) &&              # not a lookup such as points__@in
-         f.first in names(df) &&
+         f.first in df.names &&
          f.second in model.field_names
 end
 
@@ -1106,7 +1216,7 @@ function _bulk_update_migration_msg(f)
     "match_on = [$(shown)]"
   return """
   bulk_update: `filters=` no longer accepts per-row match keys (DEPRECATED API).
-  $(shown) references a DataFrame column, so it is a match key — match keys live in
+  $(shown) references a column of the table, so it is a match key — match keys live in
   `match_on=` (bare model field names), with any `"df_col" => "field"` mapping declared
   in `columns=`. `filters=` is now for constant predicates only.
 
@@ -1130,12 +1240,12 @@ _bulk_update_static_only_msg(f) =
 #
 # - `match_on` entries are bare model-field names (#107); each resolves to a per-row
 #   merge key whose source column comes from the `columns=` mapping or, failing that,
-#   a DataFrame column with the field's own name.
+#   a column of the table with the field's own name.
 # - `filters` entries are constant `field => value` predicates.
 # - When `match_on` is omitted and no key is produced, the model primary key(s) are used.
 # - TEMPORARY: when `match_on` is absent, the old dynamic-in-`filters` usage raises a
 #   migration error (see the deprecation-shim banner above).
-function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
+function _resolve_bulk_update_keys!(df::_BulkFrame, model::PormGModel,
   mapping::Dict{String, String}, fields_df::Vector{String},
   match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
@@ -1317,7 +1427,7 @@ function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{S
     isempty(absent) ||
       throw(QueryBuildError("Error in bulk_insert, returning matches rows to the input by the on_conflict " *
         "target, but target column(s) $(join(absent, ", ")) take no part in this INSERT; include them " *
-        "in the DataFrame/columns selection"))
+        "in the table/columns selection"))
     _refuse_array_returning_key(model, target)
     return target, nothing
   end
@@ -1333,14 +1443,14 @@ function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{S
     # promised consecutive (`innodb_autoinc_lock_mode = 2`), so it has no key to match by (#1266).
     _supports(connection, :preallocated_keys) || throw(_capability_error(connection, :preallocated_keys,
       "bulk_insert(returning = …) on $(model.name)";
-      why = "Supply the primary key column in the DataFrame, or pass on_conflict = (action = …, target = [...]) " *
-            "naming a unique key the DataFrame carries."))
+      why = "Supply the primary key column in the table, or pass on_conflict = (action = …, target = [...]) " *
+            "naming a unique key the table carries."))
     return pks, pks[1]
   end
   throw(QueryBuildError("Error in bulk_insert, returning cannot tell which written row belongs to which " *
-    "input row: the DataFrame does not carry the primary key of model $(model.name), and it is not an " *
+    "input row: the table does not carry the primary key of model $(model.name), and it is not an " *
     "auto-increment integer PormG can pre-allocate. Supply the primary key column, or pass " *
-    "on_conflict = (action = …, target = [...]) naming a unique key the DataFrame carries"))
+    "on_conflict = (action = …, target = [...]) naming a unique key the table carries"))
 end
 
 # #28: `returning` matches a written row to its input row by the key's text, and an array's written
@@ -1357,10 +1467,10 @@ end
 
 # A working-frame column name for a value PormG supplies, disjoint from every caller column —
 # the `_BULK_FILL_PREFIX` rule of #335, uniquified the same way `inject_fill_column!` does.
-function _bulk_private_column(df::DataFrames.DataFrame, field::String)
+function _bulk_private_column(df::_BulkFrame, field::String)
   name = "$(_BULK_FILL_PREFIX)$(field)"
   suffix = 1
-  while name in names(df)
+  while name in df.names
     suffix += 1
     name = "$(_BULK_FILL_PREFIX)$(field):$(suffix)"
   end
@@ -1422,7 +1532,7 @@ function _bulk_returning_fill!(rows::Vector{Vector{Any}}, returning::Vector{Stri
     returned::DataFrames.DataFrame, key::Vector{String}, key_metas, key_sources, range,
     first_only::Bool, existing = Set{Any}())
   unmatched() = throw(QueryBuildError("Error in bulk_insert, returning could not match the rows the " *
-    "database reported to the input rows by $(join(key, ", ")): a key value in the DataFrame does not " *
+    "database reported to the input rows by $(join(key, ", ")): a key value in the table does not " *
     "compare equal to what the database stored for it. That happens when the column normalizes the " *
     "value on write in a way PormG does not model (a case-insensitive collation, for instance); " *
     "supply the key as the database stores it"))
@@ -1518,12 +1628,12 @@ end
 
 
 """
-Inserts multiple rows into the database in bulk from a DataFrame.
+Inserts multiple rows into the database in bulk from any Tables.jl table (#1344): a `DataFrame`, a `Vector` of `NamedTuple`s, a `NamedTuple` of vectors, a `CSV.File`, …
 
   #### Arguments
   - `objct::SQLObjectHandler`: The SQL object handler to use for the operation.
-  - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
-  - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns from the DataFrame are used.
+  - `table`: The table holding the data to be inserted; any value with `Tables.istable(table) == true`. Anything else raises `QueryBuildError`.
+  - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns of the table are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
     PostgreSQL binds one array per column, so a positive batch is used as given (a non-positive
     one falls back to the driver's bind-parameter limit ÷ columns rows: 65,535 on LibPQ, 32,767 on
@@ -1559,21 +1669,21 @@ Inserts multiple rows into the database in bulk from a DataFrame.
     `RETURNING`; MySQL, which has none, does the same. MySQL cannot pre-allocate an
     `AUTO_INCREMENT` pk, so there that case raises `BackendCapabilityError` (#1266).
 
-  The caller's DataFrame is never mutated (and never copied — the pipeline works on a
-  zero-copy wrapper), so there is no `copy=` knob to think about.
+  The caller's table is never mutated (and a column table is never copied — the pipeline reads its
+  column vectors in place; a row table is copied into columns once), so there is no `copy=` knob.
 
   #### Returns
   Executed (`show_query = :execute`), a `NamedTuple` `(count, rows)` (#670):
   - `count::Int` — rows inserted, summed across every chunk. Rows `on_conflict = :nothing` skipped
-    are **not** counted, so `nrow(df) - count` is how many were duplicates. An
+    are **not** counted, so the input row count minus `count` is how many were duplicates. An
     `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated.
   - `rows` — `nothing` unless `returning` is given. Then a `DataFrame` with one column per
-    requested field and `nrow(df)` rows: row `i` belongs to input row `i`, and a row this call did
+    requested field and one row per input row: row `i` belongs to input row `i`, and a row this call did
     not write (skipped by `on_conflict = :nothing`, or a later duplicate of a key within the frame)
     is `missing` — as is a row whose key contains a NULL, which cannot be looked up. A row the
     database reports that matches no input key raises `QueryBuildError` instead of going missing.
 
-  An empty DataFrame returns `(count = 0, rows = nothing)` — `rows` is an empty `DataFrame` with the
+  An empty table returns `(count = 0, rows = nothing)` — `rows` is an empty `DataFrame` with the
   requested columns when `returning` is given — and `nothing` under a dry-run `show_query`, since
   there is no statement. Otherwise a dry-run mode returns the statement, as described above; it
   pre-allocates nothing, so an auto pk it would allocate is absent from the shown column list.
@@ -1602,7 +1712,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   df.id = r.rows.id
   ```
 """
-function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
+function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     columns = nothing,
     chunk_size::Integer = 1000,
     show_query::Symbol = :execute,
@@ -1621,18 +1731,18 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Validated before the empty-frame return, so a typo'd field is refused on every input (#671).
   _returning = _normalize_bulk_returning(returning, model)
 
+  df = _bulk_frame(src, "bulk_insert")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+
   # If no rows then nothing to do
-  if size(df_o, 1) == 0
-    @warn("Warning in bulk_insert, the DataFrame is empty")
+  if df.row_count == 0
+    @warn("Warning in bulk_insert, the table is empty")
     # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
     show_query === :execute || return nothing
     empty_rows = _returning === nothing ? nothing : DataFrames.DataFrame([field => Any[] for field in _returning])
     return _bulk_result(0, empty_rows)
   end
 
-  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
-
-  # Prepare columns and DataFrame using centralized helpers
+  # Prepare columns and the frame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
 
@@ -1672,7 +1782,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # themselves are drawn inside the transaction, in `insert_loop` — SQLite's allocator requires one.
   if allocate_pk !== nothing
     id_column = _bulk_private_column(df, allocate_pk)
-    df[!, id_column] = Vector{Int64}(undef, size(df, 1))
+    _add_bulk_column!(df, id_column, Vector{Int64}(undef, df.row_count))
     mapping[allocate_pk] = id_column
     push!(fields_df, allocate_pk)
   end
@@ -1701,10 +1811,10 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
   # the order the INSERT column list and the row source are built in.
   metas = [_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
-  sources = [df[!, mapping[field]] for field in fields_df]
+  sources = [_bulk_column(df, mapping[field]) for field in fields_df]
 
   results = []
-  total_rows = size(df, 1)
+  total_rows = df.row_count
   # returning= (#671): one column per requested field, filled at the input row's index.
   returned_rows = _returning === nothing ? Vector{Any}[] : [Vector{Any}(missing, total_rows) for _ in _returning]
   insert_loop = () -> begin
@@ -1713,7 +1823,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     # so it is already past them.
     if allocate_pk !== nothing
       ids = _allocate_ids(model, connection, allocate_pk, total_rows, settings)
-      copyto!(df[!, mapping[allocate_pk]], ids)
+      copyto!(_bulk_column(df, mapping[allocate_pk]), ids)
     end
     # The key's cells, for matching. Only an executed call matches: a dry run allocated nothing, so
     # an allocated pk key is not in its column list.
@@ -1724,7 +1834,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     rows = String[]
     columns = new_columns()
     count::Integer = 0
-    total::Integer = size(df, 1)
+    total::Integer = df.row_count
     # Security: Create parameterized query
     parameters = get_parameter(connection)
     # For INSERT, all params go into the :select bucket (the row source)
@@ -1745,7 +1855,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
         end
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index)
+        _depuration_values_bulk_insert(fields_df, mapping, model, df, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
         throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
                                 op = "bulk_insert", model = model.name, row = index))   # the type, never `$(e)`: its text can quote the value (#971)
@@ -1835,8 +1945,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   return _bulk_result(sum(results; init = 0), rows_df)
 
 end
-bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
-bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
+bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
+bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))
 bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df; kwargs...)
 
 """
@@ -1960,24 +2070,24 @@ end
 const _BULK_COPY_NULL = "\\N"
 
 """
-    bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
+    bulk_copy(objct::SQLObjectHandler, table; kwargs...)
 
 Performs a high-speed bulk insert operation using PostgreSQL's `COPY` protocol.
 This is significantly faster than `bulk_insert` for large datasets.
 
 # Arguments
 - `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model`).
-- `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
+- `table`: Any Tables.jl table holding the data to be inserted (a `DataFrame`, a `Vector` of `NamedTuple`s, …; #1344).
 - `columns`: (Optional) Specifies which columns to insert. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these.
 - `show_query::Symbol = :execute`: A dry-run mode (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) returns the `COPY` command instead of running it (the data stream is not included; `:none` returns `nothing`).
 
-The caller's DataFrame is never mutated (and never copied — the pipeline works on a
-zero-copy wrapper).
+The caller's table is never mutated (and a column table is never copied — the pipeline reads its
+column vectors in place).
 
 # Returns
 Executed, a `NamedTuple` `(count, rows)` (#670): `count::Int` is the rows copied, summed across
 chunks and read from each `COPY n` command tag; `rows` is always `nothing` for now. An empty
-DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
+table returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
 
 The COPY protocol cannot express `ON CONFLICT` — rows that violate a unique constraint make
 the whole COPY fail. To skip or merge duplicates, use `bulk_insert(...; on_conflict = ...)` (#123).
@@ -1987,7 +2097,7 @@ the whole COPY fail. To skip or merge duplicates, use `bulk_insert(...; on_confl
 bulk_copy(M.Driver, df)
 ```
 """
-function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
+function bulk_copy(objct::SQLObjectHandler, @nospecialize(src);
     columns = nothing,
     show_query::Symbol = :execute
   )
@@ -2002,16 +2112,16 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
 
+  df = _bulk_frame(src, "bulk_copy")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+
   # If no rows then nothing to do
-  if size(df_o, 1) == 0
-    @warn("Warning in bulk_copy, the DataFrame is empty")
+  if df.row_count == 0
+    @warn("Warning in bulk_copy, the table is empty")
     # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
     return show_query === :execute ? _bulk_result(0) : nothing
   end
 
-  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
-
-  # Prepare columns and DataFrame using centralized helpers
+  # Prepare columns and the frame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy, settings)
 
@@ -2033,7 +2143,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # Process in chunks
   chunk_size = 10000
-  total_rows = size(df, 1)
+  total_rows = df.row_count
 
   copy_loop = () -> begin
     copied = 0
@@ -2045,11 +2155,11 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       # does) — missing/nothing stays missing (every formatter returns missing for it) and is
       # written as the NULL sentinel. Columns are built in fields_df order so they align
       # positionally with the COPY column list (HEADER FALSE). #86
-      formatted = DataFrames.DataFrame()
+      formatted_columns = AbstractVector[]
       for (field, f_meta) in zip(fields_df, metas)
-        src = df[i:end_idx, mapping[field]]
-        formatted[!, field] = map(eachindex(src)) do offset
-          value = src[offset]
+        chunk = _bulk_column(df, mapping[field])[i:end_idx]
+        push!(formatted_columns, map(eachindex(chunk)) do offset
+          value = chunk[offset]
           row_index = i + offset - 1
           try
             _validate_field_value(model, field, f_meta, value, "bulk_copy")
@@ -2065,8 +2175,10 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             throw(InvalidValueError("The value failed validation or formatting ($(typeof(e))).", :other;
                                     op = "bulk_copy", model = model.name, field = field, row = row_index))
           end
-        end
+        end)
       end
+      # A Tables.jl column table for `CSV.write`, named by field (#1344: no DataFrame in between).
+      formatted = NamedTuple{Tuple(Symbol.(fields_df))}(Tuple(formatted_columns))
 
       # Force-quote strings and mark missing with the NULL sentinel so an empty string ("")
       # round-trips as "" (quoted) while missing round-trips as NULL (unquoted \N). #86
@@ -2098,7 +2210,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   return _bulk_result(total_copied)
 
 end
-bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
+bulk_copy(model::PormGModel, @nospecialize(src); kwargs...) = bulk_copy(model |> object, src; kwargs...)
 
 # #869: a cell's `InvalidValueError`, re-raised with the row, model and field it came from. Before,
 # only an untyped error got the row index; a typed refusal (`format_text_sql`, `format_date_sql`,
@@ -2134,15 +2246,16 @@ function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, val
   end
 end
 
-function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer; op::AbstractString = "bulk_insert")
+function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, df::_BulkFrame, index::Integer; op::AbstractString = "bulk_insert")
   for field in fields
-    # Check if field exists in the mapping and row
+    # Check if field exists in the mapping and the frame
     col_name = get(mapping, field, field)
-    if !(col_name in names(row))
+    if !(_has_bulk_column(df, col_name))
       continue
     end
+    value = _bulk_column(df, col_name)[index]
     try
-      model.fields[field].formatter(row[col_name])
+      model.fields[field].formatter(value)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()
       # A collection gets the refusal every writer raises (#716), not the generic message below: the
@@ -2152,14 +2265,14 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       # rethrows once this pass finds nothing.
       # An SQL expression gets the refusal `create` raises (#1283), for the same reason.
       try
-        _refuse_collection(model.fields[field], field, row[col_name], op)
-        _refuse_expression_value(model, field, row[col_name], op)
+        _refuse_collection(model.fields[field], field, value, op)
+        _refuse_expression_value(model, field, value, op)
       catch refusal
         refusal isa InvalidValueError && throw(_bulk_cell_error(refusal, op, model, field, index))
         rethrow()
       end
       # #335: `col_name` is PormG's own private fill column whenever the value was auto-populated,
-      # and printing that name would point the caller at a DataFrame column they never wrote. Name
+      # and printing that name would point the caller at a column they never wrote. Name
       # the source of the value instead.
       source = _is_injected_fill_column(col_name) ?
         "a PormG-supplied default/auto value" : "column $(col_name)"
@@ -2235,7 +2348,7 @@ function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vecto
           "model $(model.name)"))
       kind === :set && !(col in insert_cols) &&
         throw(QueryBuildError("Error in bulk_insert, on_conflict set column $(col) does not participate " *
-          "in this INSERT (not in the DataFrame/columns selection), so EXCLUDED.$(col) would be " *
+          "in this INSERT (not in the table/columns selection), so EXCLUDED.$(col) would be " *
           "the column default — include it in the insert or drop it from set"))
     end
   end
@@ -2259,7 +2372,7 @@ end
 # a missed key. An untargeted `:nothing` means "skip a conflict on any unique key", which is what
 # MySQL does, so it is not checked.
 function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Symbol, fields_df::Vector{String},
-                                     mapping, df::DataFrames.DataFrame, connection)
+                                     mapping, df::_BulkFrame, connection)
   _supports(connection, :upsert_conflict_target) && return nothing
   target = on_conflict isa NamedTuple ? _on_conflict_column_list(on_conflict, :target) : String[]
   action === :nothing && isempty(target) && return nothing
@@ -2275,9 +2388,9 @@ function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Sym
 end
 
 # A frame's reading for `_can_conflict`.
-function _frame_conflict_reading(model::PormGModel, fields_df::Vector{String}, mapping, df::DataFrames.DataFrame)
+function _frame_conflict_reading(model::PormGModel, fields_df::Vector{String}, mapping, df::_BulkFrame)
   inserted = Set(fields_df)
-  holds = name -> name in inserted ? any(v -> !(v === nothing || ismissing(v)), df[!, mapping[name]]) :
+  holds = name -> name in inserted ? any(v -> !(v === nothing || ismissing(v)), _bulk_column(df, mapping[name])) :
                                      _has_db_default(model.fields[name])
   minted = name -> _is_minted_value(model.fields[name]) &&
                    (!(name in inserted) || _is_injected_fill_column(mapping[name]))
@@ -2397,7 +2510,7 @@ function _run_bulk_insert(connection::PormGPostgres, model::PormGModel, sql::Str
         # #197: keep the original driver exception (it carries the constraint detail and is a
         # real Exception type); the String throw this replaces destroyed both. The diagnostic
         # hint moves to the log.
-        @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
+        @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the table" model=model.name exception=e
         rethrow()
       end
     elseif e isa IntegrityError && e.sqlstate == "23503"
@@ -2519,13 +2632,13 @@ function _reject_unsafe_bulk_update_shape(q::SQLObject)
 end
 
 """
-Performs a bulk update operation on a database table using the provided `DataFrame` and a query object.
+Performs a bulk update operation on a database table using the provided Tables.jl table (a `DataFrame`, a `Vector` of `NamedTuple`s, …; #1344) and a query object.
 
 # Arguments
 - `objct::SQLObjectHandler`: The database handler object.
-- `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
-- `columns`: (Optional) The **participating fields and their mappings** — the single place a DataFrame column is mapped to a model field. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame. Fields selected by `match_on` are used for matching only and are **not** SET.
-- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field **when you declared one**, otherwise a DataFrame column with the field's own name. A value PormG auto-populates for a field left out of `columns=` (`auto_now`, or a static `default` when `columns=` is omitted — an explicit `columns=` already suppresses static defaults on an update) is not a declared mapping: your same-named column outranks it, and with no caller source at all the call raises `UnknownFieldError` rather than matching every row against one per-call constant. If omitted, the model primary key(s) are used and must be present in the DataFrame, under the same precedence. A match key is **matched, never written** — it stays out of the `SET` clause, so using an `auto_now` field as a key does not refresh that timestamp.
+- `table`: The table holding the data to be used for the update; any value with `Tables.istable(table) == true`.
+- `columns`: (Optional) The **participating fields and their mappings** — the single place a column of the table is mapped to a model field. Each entry is a `String` (table column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the table. Fields selected by `match_on` are used for matching only and are **not** SET.
+- `match_on`: (Optional) The **per-row match keys** that identify which row each input row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field **when you declared one**, otherwise a column of the table with the field's own name. A value PormG auto-populates for a field left out of `columns=` (`auto_now`, or a static `default` when `columns=` is omitted — an explicit `columns=` already suppresses static defaults on an update) is not a declared mapping: your same-named column outranks it, and with no caller source at all the call raises `UnknownFieldError` rather than matching every row against one per-call constant. If omitted, the model primary key(s) are used and must be present in the table, under the same precedence. A match key is **matched, never written** — it stays out of the `SET` clause, so using an `auto_now` field as a key does not refresh that timestamp.
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
@@ -2544,8 +2657,8 @@ A handler carrying state an `UPDATE` cannot express raises `UnsafeMutationError`
 ignored. A filter that traverses a
 relation (`"driverid__surname" => …`) raises `QueryBuildError`, as the columns do.
 
-The caller's DataFrame is never mutated (and never copied — the pipeline works on a
-zero-copy wrapper), so the operation is safe in asynchronous contexts without a `copy=` knob.
+The caller's table is never mutated (and a column table is never copied — the pipeline reads its
+column vectors in place), so the operation is safe in asynchronous contexts without a `copy=` knob.
 
 # Returns
 Executed, a `NamedTuple` `(count, rows)` (#670):
@@ -2555,7 +2668,7 @@ Executed, a `NamedTuple` `(count, rows)` (#670):
   frame whose keys belong to a season the handler is not scoped to.
 - `rows` — always `nothing` for now; reserved for returned values.
 
-An empty DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
+An empty table returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
 
 # Example
 ```julia
@@ -2575,7 +2688,7 @@ bulk_update(objct, df,
     filters  = ["category_id" => 172100])    # constant: only this category
 ```
 """
-function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
+function bulk_update(objct::SQLObjectHandler, @nospecialize(src);
     columns=nothing,
     match_on=nothing,
     filters=nothing,
@@ -2586,14 +2699,14 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   _match_on = _normalize_bulk_match_on(match_on)  # bare model-field names only (#107)
   _filters  = _normalize_bulk_filters(filters)
 
-  _bulk_update(objct, df, _columns, _match_on, _filters, show_query, chunk_size)
+  _bulk_update(objct, src, _columns, _match_on, _filters, show_query, chunk_size)
 
 end
-bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
-bulk_update(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_update(objct, df; kwargs...)
+bulk_update(model::PormGModel, @nospecialize(src); kwargs...) = bulk_update(model |> object, src; kwargs...)
+bulk_update(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_update"); objct -> bulk_update(objct, src; kwargs...))
 bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df; kwargs...)
 
-function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
+function _bulk_update(objct::SQLObjectHandler, @nospecialize(src),
   columns::Vector{Union{String, Pair{String, String}}},
   match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
@@ -2617,16 +2730,16 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   work = deepcopy(objct)
   _reject_unsafe_bulk_update_shape(work.object)
 
+  df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+
   # If no rows then nothing to do
-  if size(df_o, 1) == 0
-    @warn("Warning in bulk_update, the DataFrame is empty")
+  if df.row_count == 0
+    @warn("Warning in bulk_update, the table is empty")
     # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
     return show_query === :execute ? _bulk_result(0) : nothing
   end
 
-  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
-
-  # Prepare columns and DataFrame using centralized helpers
+  # Prepare columns and the frame using centralized helpers
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
 
   # Resolve row-matching keys (match_on) and static predicates (filters).
@@ -2705,16 +2818,16 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
   set_fields = [field for field in fields_df if !(field in deny_fields)]
   set_metas = [_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
-  set_sources = [df[!, mapping[field]] for field in set_fields]
+  set_sources = [_bulk_column(df, mapping[field]) for field in set_fields]
   joined_metas = [model.fields[field] for field in joined_columns]
-  joined_sources = [df[!, mapping[field]] for field in joined_columns]
+  joined_sources = [_bulk_column(df, mapping[field]) for field in joined_columns]
 
   results = []
   # A chunk's rows bind into the :select context (the row source)
   new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
   update_loop = () -> begin
     count::Integer = 0
-    total::Integer = size(df, 1)
+    total::Integer = df.row_count
     rows = String[]
     columns = new_columns()
     chunk_parameters = new_chunk_parameters()
@@ -2733,7 +2846,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
           push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
         end
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index; op = "bulk_update")
+        _depuration_values_bulk_insert(fields_df, mapping, model, df, index; op = "bulk_update")
         e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
         throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
                                 op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)

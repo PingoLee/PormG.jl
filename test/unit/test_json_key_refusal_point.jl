@@ -11,10 +11,11 @@ types (`_JSONKeyPosition`), one refusal per position (`_json_key_refusal`), and 
 
 Pinned here:
 
-  1. **No probe outside the file.** `_json_number_side(` is called only there, except by the three
-     record writers that store its answer for the outer query (a CTE column's, a `Subquery`'s), which
-     are listed by count. A `CJSONValue` type test is written only there and in the walk
-     (`expression_kind.jl`).
+  1. **No carrier probe outside the file.** `_json_number_side(` is called only there, except by the
+     three record writers that store its answer for the outer query (a CTE column's, a `Subquery`'s),
+     which are listed by count. A `CJSONValue` type test is written only there and in the walk
+     (`expression_kind.jl`), so "is this a key's value" has one answer, `_json_key_lookup_operand`,
+     which the comparison renders call to route a key to the key lookup's comparison.
   2. **No refusal outside the file.** The refusal texts ("a JSON key's value has no …", "a JSON path
      lookup compares …") occur only there, so a position cannot raise its own copy.
   3. **Every position has its refusal**, and every refusal raises the error type its position
@@ -77,7 +78,10 @@ end
 @testset "#1531 — the uncast-JSON-key refusal texts are written only at the refusal point" begin
   # Expected: none of the refusal phrases appears in code outside `json_key_refusal.jl`. Why: a position
   # that writes its own message is a position with its own rule — the pre-#1531 shape.
-  phrases = ("a JSON key's value has no", "JSON path lookup compares the extracted value")
+  # One phrase per message: #1483/#1491/#1497/#1510/#1506/#1528 share the first, #811 has the second,
+  # and #1499's text splits "a JSON key's value" across a concatenation, so its operator list is its own.
+  phrases = ("a JSON key's value has no", "JSON path lookup compares the extracted value",
+             "compares only with =, @ne, @gt")
   stray = [(rel, i) for (rel, i, line) in _jkr_code_lines() if any(p -> occursin(p, line), phrases)]
   @test isempty(stray)
 end

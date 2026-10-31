@@ -319,8 +319,9 @@ Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_ope
 # for the same reasons: the node is an `FExpression` (a `FilterType`, the `F`-on-the-left render path),
 # every comparison constructs (the handle is immutable), the operand union is the shared
 # `_CompareOperand`, and an ordering direction is refused because it means nothing in a predicate.
-# `isequal(::CTEReference, …)` (`types.jl`) stays total for hashed containers. No arithmetic: a CTE
-# column in arithmetic is still `F("<cte>__col")`'s or a function's (`Sum(CTE(…))` is refused).
+# `isequal(::CTEReference, …)` (`types.jl`) stays total for hashed containers. No arithmetic here:
+# `CTE(…) + 1` is still a `MethodError`, and `F("<cte>__col")` cannot name a declared CTE (#492), so a
+# CTE column enters arithmetic only inside a function (`Coalesce(CTE(…), 0) + 1`).
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(c::CTEReference, operand::_CompareOperand)
     _reject_cte_desc(c, "a comparison")

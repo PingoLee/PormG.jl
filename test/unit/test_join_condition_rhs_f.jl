@@ -21,7 +21,7 @@
 using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, OP, Lower, Case, When, Subquery, OuterRef
-using PormG.Functions: Max, Coalesce
+using PormG.Functions: Max, Coalesce, Cast
 
 struct JoinRhsFMockPostgres <: PormG.PormGPostgres end
 struct JoinRhsFMockSQLite <: PormG.PormGSQLite end
@@ -273,7 +273,8 @@ end
 # The refusal is for relations OFF the path. These stay legal: the base row, the joined row itself
 # through its path, a table earlier on a deep hop, a ForeignKey column of the base row, a JSON key path
 # on the base row (a column, not a relation), and a plain string value, which is a bound literal even
-# when it contains `__`.
+# when it contains `__`. The JSON key is cast: since #1528 an uncast key on the right of a comparison is
+# refused on every engine (asserted after the table), so the cast is what states the text compare.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#962: right sides on the hop's own path still render" begin
   cases = (
@@ -285,7 +286,7 @@ end
      q -> q.values("resultid", "driverid__results__grid"), "\"Tb_2\".\"grid\" = \"Tb_1\".\"number\""),
     ("a ForeignKey column of the base row", q -> q.on("driverid", "driverid" => F("driverid")),
      q -> q.values("resultid", "driverid__code"), "\"Tb_1\".\"driverid\" = \"Tb\".\"driverid\""),
-    ("a JSON key path on the base row", q -> q.on("driverid", "code" => F("payload__code")),
+    ("a JSON key path on the base row", q -> q.on("driverid", "code" => Cast("payload__code", "text")),
      q -> q.values("resultid", "driverid__code"), "\"Tb_1\".\"code\" = "),
     # Spelled like an off-path column on purpose: read as a column it would be refused.
     ("a literal containing __", q -> q.on("driverid", "code" => "constructorid__name"),
@@ -305,6 +306,16 @@ end
       project(q)
       @test _rhs_f_build_error(q) === nothing
       @test occursin(fragment, _rhs_f_sql(q))
+    end
+
+    # #1528: the same key uncast says nothing about its type, so it is refused, not resolved.
+    @testset "$backend: an uncast JSON key on the right is refused (#1528)" begin
+      q = mod.Result.objects
+      q.on("driverid", "code" => F("payload__code"))
+      q.values("resultid", "driverid__code")
+      err = _rhs_f_build_error(q)
+      @test err isa FilterError
+      @test err isa FilterError && occursin("(#1528)", err.msg)
     end
 
     # A subquery whose `OuterRef` names the base row: the correlation the right side is for.

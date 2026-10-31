@@ -20,9 +20,12 @@ Since #1483, arithmetic over an uncast JSON key (`F("meta__round") * 2`, a `Case
 holding one) is refused on every engine as explicit intent, before this rule is asked, so the
 arithmetic shapes here assert that refusal. Since #1506 so is a filter on an alias over a value that
 carries a key (`Case(key | date)`). Since #1511 a comparison over a key compares as the key lookup
-does, on every engine and before this rule is asked: a column on either side of the key (a date, an
-interval) raises #811's `FilterError`, and a `Date` value the key lookup's own `InvalidValueError`, so
-those orderings assert that refusal too.
+does, on every engine and before this rule is asked: a column on the right of the key (a date, an
+interval) raises #811's `FilterError`, and a `Date` value the key lookup's own `InvalidValueError`.
+Since #1528 a key on the RIGHT of a comparison is refused on every engine too (`FilterError`), so the
+orderings here assert those refusals. That leaves this file's fixtures no end-to-end comparison that
+reaches #1310's refusal (their one value the walk cannot name is a JSON key), so its comparison
+message is pinned through its constructor (`_unnamed_temporal_refusal`).
 
 Which engine refuses is the engine fact `_types_temporal_operands`. MySQL renders the conditionals
 (`Case`, `Coalesce`) since #1130 phase 2c-1, so those shapes are checked live on MySQL below; JSON key
@@ -114,8 +117,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A JSON key lookup beside a date or an interval.
-# A key on the RIGHT of a temporal column: refused on SQLite, unchanged on PostgreSQL (as the filter pair
-# `"date__@gt" => F("meta__round")` is, below). On SQLite each built the generic `(l op r)` before #1310:
+# A key on the RIGHT of a temporal column, as the filter pair `"date__@gt" => F("meta__round")` is,
+# below. On SQLite each built the generic `(l op r)` before #1310:
 # a JSON value against a date's text, or an interval's `HH:MM:SS` text, where every number sorts before
 # every text, and #1310 refused it there. Since #1528 a key on the RIGHT of any comparison is refused on
 # every engine first (`FilterError`, naming the key and the cast); PostgreSQL had built `date > text`.

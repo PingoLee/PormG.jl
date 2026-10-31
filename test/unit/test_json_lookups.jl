@@ -1294,7 +1294,8 @@ end
 # server error) and `json_extract(…)`'s native value on SQLite. A carrier on the right did the same:
 # `F("id") > Coalesce("payload__n", 0)` rendered `COALESCE(#>> …, $1::bigint)`. Expected: `FilterError`
 # on every engine when the query is built, in both spellings and in a projection, naming `(#1528)`, the
-# key and the cast spelling; a text key against a text column is refused too (it is still untyped).
+# key and the cast spelling; a text key against a text column is refused too (it is still untyped), as
+# are a `Subquery` projecting the key, a CTE column over it, an `OuterRef` to it and a join condition.
 # Controls: a cast key on the right builds, a bound text value that is not a field path is not a column,
 # and the key on the left keeps #1511's comparison.
 # Why it matters: the same comparison was a server error on PostgreSQL and a silent native-value
@@ -1305,6 +1306,17 @@ end
   pair(p) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(p); q)
   expr(f) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(f); q)
   proj(f) = (q = JL.Json_scratch.objects; q.values("id", "b" => f); q)
+  QB = PormG.QueryBuilder
+  sub_key() = (s = JL.Json_scratch.objects; s.filter("id" => 1); s.values("payload__n"); s)
+  function cte(cond)
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id")
+    q.filter(cond)
+    return q
+  end
   quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
   refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
   plain(e) = PormG._emsg(sprint(showerror, e); color = false)
@@ -1318,6 +1330,14 @@ end
     ("pair = carrier", () -> pair("id" => FN.Coalesce("payload__n", 0)), "`COALESCE(…)` over the JSON key `payload__n`"),
     ("F > carrier", () -> expr(F("id") > FN.Coalesce("payload__n", 0)), "`COALESCE(…)` over the JSON key `payload__n`"),
     ("projection", () -> proj(F("id") == F("payload__n")), "the JSON key `payload__n`"),
+    # Review of #1528: every value that holds the key, wherever it comes from, on the right.
+    ("pair = Subquery(key)", () -> pair("id" => QB.Subquery(sub_key())), "a Subquery projecting the JSON key `payload__n`"),
+    ("F == Subquery(key)", () -> expr(F("id") == QB.Subquery(sub_key())), "a Subquery projecting the JSON key `payload__n`"),
+    ("pair = CTE column over a key", () -> cte("id" => QB.CTE("g", "k")), "(the JSON key `payload__n`)"),
+    ("OuterRef(key) on the right", () -> proj(QB.Subquery((s = JL.Json_scratch.objects;
+        s.filter("id" => QB.OuterRef("payload__n")); s.values("id"); s))), "the JSON key `payload__n`"),
+    ("a join condition", () -> (q = JJ.Json_entry.objects; q.on("team", "id" => F("team__payload__n"));
+        q.values("id", "team__id"); q), "the JSON key `team__payload__n`"),
   )
   for conn in (_JL_PG, _JL_SL, _JL_MY), (label, build, held) in shapes
     e = refusal(build(), conn)
@@ -1326,7 +1346,7 @@ end
     msg = plain(e)
     @test (label, occursin("(#1528)", msg)) == (label, true)
     @test (label, occursin(held, msg)) == (label, true)
-    @test (label, occursin("Cast(\"payload__", msg)) == (label, true)
+    @test (label, occursin(r"Cast\(\"(team__)?payload__[ns]\", \"numeric\"\)", msg)) == (label, true)
   end
   # Controls, every engine: the cast spelling builds, a text value is a value, the left keeps #1511's.
   for conn in (_JL_PG, _JL_SL, _JL_MY)

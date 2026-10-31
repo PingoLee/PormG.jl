@@ -6,8 +6,10 @@
 # enforced one position at a time — six helpers called from thirteen sites across six files — and each
 # new position meant one more bug (#1471 … #1511, then #1528 and #1529). This file states it once:
 #
-# - TWO PROBES, here and nowhere else. `_json_key_lookup_operand` asks the walk whether a value IS a
-#   key's value (its kind is `CJSONValue`); `_json_number_side` asks whether a value CARRIES one —
+# - TWO PROBES, defined here and nowhere else. `_json_key_lookup_operand` asks the walk whether a value
+#   IS a key's value (its kind is `CJSONValue`) — the one question a consumer asks to send a key down
+#   the key lookup's comparison, so it is called from the comparison renders; `_json_number_side` asks
+#   whether a value CARRIES one, and only this file asks it to refuse —
 #   arithmetic over it, a function whose value is its operand's, a `Case` branch, a CTE column or a
 #   `Subquery` over it, an `OuterRef` to it — which no kind can say: `Coalesce(key, 0)` has no
 #   `CJSONValue` kind and still holds the key's value on the rows where it is set.
@@ -18,9 +20,9 @@
 #   position's refusal. The consumers (`expression_render.jl`, `select_nodes.jl`, `build_select.jl`,
 #   `filter_nodes.jl`, `filter_operators.jl`, `projection_types.jl`) call it and decide nothing.
 #
-# `test/unit/test_json_key_refusal_point.jl` fails on a probe call, a `CJSONValue` test or a refusal
-# message written outside this file (the walk itself, `expression_kind.jl`, excepted), and on a
-# position with no refusal.
+# `test/unit/test_json_key_refusal_point.jl` fails on a `_json_number_side` call outside this file (the
+# record writers excepted), a `CJSONValue` test outside it and the walk (`expression_kind.jl`), a
+# refusal text written elsewhere, and a position with no refusal.
 
 # ---------------------------------------------------------------------------------------------------
 # The probes

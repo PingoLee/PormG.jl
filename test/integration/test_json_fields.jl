@@ -346,6 +346,23 @@ end
             @test length(expr(Cast("payload__points", "numeric") > 9).list()) == 1
         end
 
+        # #1528: a key on the RIGHT of a comparison compared untyped — `bigint = text` on PostgreSQL (a
+        # server error) and `json_extract`'s native value on SQLite (`"id" => F("payload__points")` matched
+        # the rows whose id happened to equal 15). Expected: `FilterError` before any query runs, in both
+        # spellings and for a carrier; the cast spelling runs and matches on every engine.
+        @testset "a JSON key on the right of a comparison is refused; the cast compares (#1528)" begin
+            expr(f) = (q = base(); q.filter(f); q)
+            @test_throws PormG.FilterError expr(F("id") == F("payload__points")).list()
+            @test_throws PormG.FilterError expr("id" => F("payload__points")).list()
+            @test_throws PormG.FilterError expr(F("slug") == F("payload__driver")).list()
+            @test_throws PormG.FilterError expr(F("id") > Coalesce("payload__points", 0)).list()
+            # The cast states the type: the seeded row's id is not 15, and it is greater than 0.
+            @test length(expr(F("id") == Cast("payload__points", PormG.Models.BigIntegerField())).list()) ==
+                  length(expr("id" => 15).list())
+            @test length(expr(F("slug") == Cast("payload__driver", "text")).list()) == 0
+            @test length(expr("slug" => Cast("payload__driver", "text")).list()) == 0
+        end
+
         # ── JSON containment and key operators (`:jsonb_operators`) ──────────
         if requires(:jsonb_operators)
             @testset "containment and key operators" begin

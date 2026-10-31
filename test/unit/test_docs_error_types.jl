@@ -1176,6 +1176,24 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter(PormG.Functions.Coalesce("payload__wins", 0) > 100).list(show_query = :dict),
     ),
+    # #1528 — the same section says a key on the RIGHT of a comparison, in either spelling, and a value
+    # carrying one there, raise `FilterError` on every backend. Each built the generic column comparison
+    # (`bigint = text` on PostgreSQL, a server error).
+    (
+        "read/filters_and_aggregates.md — a JSON key on the right of a comparison (#1528)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(F("points") == F("payload__wins")).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a JSON key on the right of a filter pair (#1528)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => F("payload__wins")).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a value carrying a JSON key on the right (#1528)",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter(F("points") > PormG.Functions.Coalesce("payload__wins", 0)).list(show_query = :dict),
+    ),
     # #1510 — *Arithmetic over a key* and `NullIf`'s docstring say `NullIf` over an uncast key raises
     # `QueryBuildError` on every engine. PostgreSQL built `NULLIF(#>> …, $1::bigint)`, a server error.
     (

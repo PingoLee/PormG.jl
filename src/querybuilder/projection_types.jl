@@ -853,8 +853,8 @@ function _render_json_key_expression_comparison(v::FExpression, left_side::Strin
   return nothing
 end
 
-# A key on the RIGHT (`F("id") == F("payload__n")`) is left as the filter pair `"id" => F("payload__n")`
-# renders it, so the two spellings of one comparison answer alike.
+# A key on the RIGHT (`F("id") == F("payload__n")`, and the pair `"id" => F("payload__n")`) is refused in
+# both spellings (#1528, `_JSONKeyRightOperand`), once the comparison has rendered.
 
 _json_key_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "the expression" : l)
 
@@ -1971,7 +1971,7 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
     sql, _ = _render_interval_source_ms(source, instruc)
     rhs, _, interval = _on_join_right(() -> _render_interval_operand(v.values, instruc), instruc)
     interval || _refuse_interval_against_number(v.operator, instruc)
-    return _render_column_rhs(sql, v.operator, rhs, instruc)
+    return _render_column_rhs(sql, v, rhs, instruc)
   end
   ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
   # #1130: and a compared VALUE that is no duration has no text comparison to fall back to: the

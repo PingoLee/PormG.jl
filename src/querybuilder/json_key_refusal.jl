@@ -171,6 +171,14 @@ struct _JSONKeyColumnRHS <: _JSONKeyPosition
   label::String
 end
 
+# #1528 — a key, or a value carrying one, on the RIGHT of a comparison: `F("constructorid") ==
+# F("metadata__wins")`, `"constructorid" => F("metadata__wins")`, `F("grid") > Coalesce(key, 0)`. The key
+# compares as its lookup does only on the left, against a value (#1511); on the right it was compared
+# untyped — `bigint = text` on PostgreSQL, a server error, and `json_extract`'s native value on SQLite.
+# EXPLICIT INTENT, refused on every engine in both spellings, as a column on the right of the key is
+# (#811).
+struct _JSONKeyRightOperand <: _JSONKeyPosition end
+
 # Whether the position refuses at all for this use (a position may exempt an operator it renders).
 _json_key_position_applies(::_JSONKeyPosition) = true
 _json_key_position_applies(p::_JSONKeyCarrierFilter) = p.operator != "ISNULL"
@@ -219,6 +227,13 @@ _json_key_refusal(p::_JSONKeyCarrierFilter, side::Tuple{String,String}) = Filter
   "engine (for example \e[32mCoalesce(Cast(\"$(side[2])\", \"numeric\"), 0)\e[0m), " *
   "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
 
+_json_key_refusal(::_JSONKeyRightOperand, side::Tuple{String,String}) = FilterError(
+  "A comparison with \e[31m$(side[1])\e[0m on its right is not supported: a JSON key's value has no " *
+  "declared type, so the query does not say what the comparison means (#1528). A key compares as its " *
+  "lookup does only on the left, against a value. Cast the key to the type you mean: " *
+  "\e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every engine, " *
+  "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
+
 # The lookup a caller wrote for an internal operator (`"BETWEEN"` → `"@range"`), for a refusal.
 function _operator_spelling(op::AbstractString)::String
   for (suffix, internal) in PormGsuffix
@@ -254,6 +269,12 @@ function _refuse_uncast_json_key(position::_JSONKeyPosition, operand, instruc::S
   side = _json_number_side(operand, instruc)
   side === nothing || throw(_json_key_refusal(position, side))
   return nothing
+end
+# #1528: the right operand of a comparison, once it has rendered. A String is a column only when it is a
+# field path (`_set_update_query_operand`'s rule); any other String is a bound text value.
+function _refuse_json_key_right_operand(operand, instruc::SQLInstruction)
+  operand isa AbstractString && !_is_field_path(String(operand), instruc) && return nothing
+  return _refuse_uncast_json_key(_JSONKeyRightOperand(), operand, instruc)
 end
 function _refuse_uncast_json_key(position::_JSONKeyPosition, operands::Tuple, instruc::SQLInstruction)
   _json_key_position_applies(position) || return nothing

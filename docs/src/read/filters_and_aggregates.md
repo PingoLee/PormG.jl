@@ -474,6 +474,13 @@ A column on the right of the key (`F("metadata__wins") > F("constructorid")`) ra
 filter on its alias does. Cast the key to say what it compares:
 `Cast("metadata__wins", BigIntegerField()) > F("constructorid")`.
 
+A key compares as its lookup does only on the **left**. On the right of a comparison
+(`F("constructorid") == F("metadata__wins")`, or the pair `"constructorid" => F("metadata__wins")`), a
+key raises a `FilterError` on every backend, as does a value that carries one
+(`F("grid") > Coalesce("metadata__wins", 0)`) (#1528). This applies even when both sides hold text,
+because the key's value still has no declared type. Cast it on that side too:
+`F("constructorid") == Cast("metadata__wins", BigIntegerField())`.
+
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
     array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that

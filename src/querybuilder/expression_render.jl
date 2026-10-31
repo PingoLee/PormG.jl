@@ -1720,6 +1720,9 @@ _time_arithmetic_refusal(::PormGMySQL, op, label) =
 function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   rendered = _render_expr_node_sql(v, instruc)
   _refuse_json_key_in_arithmetic(v, instruc)
+  # #1528: and a key on the right of a comparison, on every exit of the comparison arm, ahead of the
+  # #1310 check `_render_expr_typed` runs after this returns.
+  v.operation in _COMPARISON_OPERATIONS && _refuse_json_key_right_operand(v.operand, instruc)
   return rendered
 end
 _refuse_json_key_in_arithmetic(v::FExpression, instruc::SQLInstruction) =

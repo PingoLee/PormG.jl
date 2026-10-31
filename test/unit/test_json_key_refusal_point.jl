@@ -94,7 +94,8 @@ end
     _JKR_QB._JSONKeyOrdering   => _JKR_QB._JSONKeyOrdering("`order_by`", true),
     _JKR_QB._JSONKeyNullIf     => _JKR_QB._JSONKeyNullIf(1),
   )
-  filter_side = Dict(_JKR_QB._JSONKeyCarrierFilter => _JKR_QB._JSONKeyCarrierFilter("wins", "="))
+  filter_side = Dict(_JKR_QB._JSONKeyCarrierFilter => _JKR_QB._JSONKeyCarrierFilter("wins", "="),
+                     _JKR_QB._JSONKeyRightOperand  => _JKR_QB._JSONKeyRightOperand())
   filter_key = Dict(
     _JKR_QB._JSONKeyOperator  => _JKR_QB._JSONKeyOperator("IN", "metadata__wins"),
     _JKR_QB._JSONKeyColumnRHS => _JKR_QB._JSONKeyColumnRHS("metadata__wins"),

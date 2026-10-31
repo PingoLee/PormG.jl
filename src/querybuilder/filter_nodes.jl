@@ -765,8 +765,12 @@ end
 # operator name into the SQL. That is the fail-safe for an operator node built past the parse
 # ladder (`OP` is internal, #202). No public spelling reaches it, so no test pins it: a test would
 # have to build the node by hand, past the API, which is the #596 fallback arm's rule too.
-function _render_column_rhs(column::AbstractString, operator::AbstractString, rhs,
-                            instruc::SQLInstruction)::String
+#
+# #1528: every column-RHS filter ends here, once its right has rendered, so a JSON key (or a value
+# carrying one) on the right is refused here, once, as in the expression spelling.
+function _render_column_rhs(column::AbstractString, v::SQLTypeOper, rhs, instruc::SQLInstruction)::String
+  _refuse_json_key_right_operand(v.values, instruc)
+  operator = v.operator
   operator in VERBATIM_PATTERN_OPERATORS &&
     return _render_predicate(column, operator, rhs, instruc)
   operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
@@ -865,7 +869,7 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
     lhs_ms && (lhs = _interval_ms_as_text(lhs, instruc.connection))
     rhs_ms && (rhs = _interval_ms_as_text(rhs, instruc.connection))
   end
-  return _render_column_rhs(lhs, v.operator, rhs, instruc)
+  return _render_column_rhs(lhs, v, rhs, instruc)
 end
 
 # The field a filter's left-hand side names, and the path to report it by — a key of the model's own
@@ -1212,19 +1216,19 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
        _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
       _refuse_duration_mismatch(v, instruc)
-      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
+      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
-    return _render_column_rhs(column, v.operator, placeholders, instruc)
+    return _render_column_rhs(column, v, placeholders, instruc)
   elseif isa(v.values, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
-    return _render_column_rhs(column, v.operator, placeholders, instruc)
+    return _render_column_rhs(column, v, placeholders, instruc)
   elseif isa(v.values, SubqueryObject)
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
     # ahead of the subquery's — the text order (#586). The filter-position render: no #194 recording.
@@ -1233,11 +1237,11 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
       _refuse_duration_mismatch(v, instruc)
-      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
+      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v, rhs, instruc)
     end
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
-    return _render_column_rhs(column, v.operator, placeholders, instruc)
+    return _render_column_rhs(column, v, placeholders, instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite

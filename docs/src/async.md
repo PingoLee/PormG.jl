@@ -112,6 +112,14 @@ Because the placeholder style is backend-native, a manual-params string is **not
 
 Interrupting a running query in the REPL is safe: PormG asks the database to abandon the statement, waits for the driver to let go of the connection, and only then decides what to do with the pool slot. A connection that comes back clean is reused; one that does not is renewed or dropped, and a fresh connection takes its place. Either way the *next* query gets a healthy connection — the pool cannot be left in a state where every later query fails.
 
+On PostgreSQL under either driver and on SQLite, the interrupt reaches a query while its statement runs, so a statement interrupted outside a transaction block is cancelled rather than left to finish, and an interrupted autocommit write normally does not commit (a cancel that arrives after the server committed is too late). Inside a transaction block, the warning below applies instead. The limits come from how Julia delivers `Ctrl+C`:
+
+- It interrupts only in the REPL, or in a script that calls `Base.exit_on_sigint(false)`. A plain `julia script.jl` exits on `Ctrl+C`, so nothing is sent to the database.
+- It goes to Julia's main thread, so it interrupts a query the REPL awaits, not one awaited in a task spawned on another thread.
+- On SQLite the statement runs on a worker thread, and the cancel needs another free thread. With two or more worker threads (`julia -t auto` on a multi-core machine) both are there. With one thread (`julia -t 1`) the interrupt arrives only when the statement finishes. With plain `julia` (one worker thread plus the REPL's) it arrives at once, but the statement runs on to its end and the next query waits for it ([#1521](https://github.com/PingoLee/PormG.jl/issues/1521)). Start Julia with `-t auto`.
+- `bulk_copy` and `fetch_copy` send the COPY from your own task and are not covered.
+- On MySQL, a real `Ctrl+C` is currently lost ([#1520](https://github.com/PingoLee/PormG.jl/issues/1520)).
+
 !!! note "Recovery runs in the background"
     Control returns to the REPL immediately; the cancel-and-clean happens on its own task, and the pool slot stays checked out while it does — so a query issued in the meantime may be served by a different connection. If the database never releases the connection, the slot is dropped from the pool anyway after a few seconds and the next query opens a fresh one. Under `julia -t 1` the driver's cancel and reconnect calls block the single worker thread while they run, so a heavily-loaded single-threaded session may pause briefly — start Julia with `-t auto` if that matters.
 

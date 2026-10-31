@@ -16,7 +16,7 @@ import PormG.ConnectionPool: NUL_REFUSAL_REASON
 # Same reason, one defect class further on (#322): this module awaits driver handles directly, so a
 # Ctrl-C leaves it holding a connection the driver has not let go of — and unlike a plain query, a
 # session-level advisory lock is still held on it. Renewal is what releases that lock.
-import PormG.ConnectionPool: _await_abandoned, _recover_abandoned_connection!
+import PormG.ConnectionPool: _await_abandoned, _recover_abandoned_connection!, _fetch_interruptible
 import PormG: PormGError, DatabaseError, OperationalError, BackendCapabilityError, InvalidValueError
 import PormG: _capability_error  # #1129: the backend capability table (Kernel)
 
@@ -94,14 +94,14 @@ _LockAwaitState() = _LockAwaitState(false, nothing)
 
 # Await one lock-lifecycle driver handle, recording it (and any abandonment) on `state` first.
 #
-# `Base.fetch` qualified deliberately: this module imports no `fetch`, so a bare call would resolve
-# to Base only by absence — qualifying keeps it immune to import shadowing.
+# `_fetch_interruptible`, not a bare `Base.fetch`: a Ctrl-C during a lock wait must reach this task
+# while the statement runs (#1512).
 function _await_lock_handle(pool::Union{PormGPostgres, PormGMySQL}, state::_LockAwaitState, handle)
   # Recorded BEFORE the await: the settle probe needs the handle precisely in the case where the
   # await never returns normally.
   state.handle = handle
   err = try
-    return Base.fetch(handle)
+    return _fetch_interruptible(handle)
   catch e
     _await_abandoned(e) && (state.abandoned = true)
     _as_database_error(pool, e)

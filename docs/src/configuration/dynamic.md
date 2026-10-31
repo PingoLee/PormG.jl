@@ -55,7 +55,7 @@ A MySQL connection cannot be registered this way: `adapter = "MySQL"` raises `In
     any pool is built or an existing one under the key is closed. A deployment that exports
     `PORMG_ENV` needs no `env =` on each call.
 
-A PostgreSQL connection can pick its driver with `postgres_driver = "Postgres"` (experimental; the
+A PostgreSQL connection can pick its driver with `postgres_driver = "Postgres"` (the
 default is `"LibPQ"`), as the `postgres_driver:` key does in `connection.yml` — see
 [Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver). A resolver returning a `Dict` may
 carry a `"postgres_driver"` entry for the same purpose.

@@ -103,8 +103,8 @@ explicitly every time:
 PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.jl
 ```
 
-**Two PostgreSQL drivers.** `db_2` runs through LibPQ (the default) or Postgres.jl (experimental),
-and both are in use, so the release gate runs the `db_2` suite once per driver (#1433). A
+**Two PostgreSQL drivers.** `db_2` runs through LibPQ (the default) or Postgres.jl, and both are
+in use, so the release gate runs the `db_2` suite once per driver (#1433). A
 regression in one driver's extension, or in a path the two handle differently (`Decimal` and
 timestamp decoding, `bulk_insert`, cancellation, a statement's bind-parameter limit), is invisible
 to a run on the other. `PORMG_POSTGRES_DRIVER=Postgres` switches every pool built from the

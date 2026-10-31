@@ -38,11 +38,10 @@ const _IR_NAMES = Set([:DataFrame, :DataFrames, :DataFrameRow, :AbstractDataFram
 # The reviewed list. Each later phase of #1344 shrinks it, and phase 6 (DataFrames and CSV leave
 # `[deps]`) deletes it with this testset.
 const _IR_ALLOWED = Dict{String, Set{Symbol}}(
-  # Since phase 3 the bulk writes take any Tables.jl table. What is left: `bulk_insert(…; returning=)`
-  # still returns its rows as a `DataFrame` and reads them back through one (phase 4), and `bulk_copy`
-  # writes through CSV (phase 5).
-  "src/querybuilder/execution_bulk.jl" => Set([:DataFrames, :DataFrame, :nrow, :CSV]),
-  # The module imports the bulk writes reach DataFrames and CSV through (phase 6).
+  # Since phase 3 the bulk writes take any Tables.jl table, and since phase 4 `returning=` answers in
+  # the caller's kind. What is left: `bulk_copy` writes through CSV (phase 5).
+  "src/querybuilder/execution_bulk.jl" => Set([:CSV]),
+  # The module imports DataFrames and CSV are reached through (phase 6).
   "src/PormG.jl"                       => Set([:DataFrames]),
   "src/QueryBuilder.jl"                => Set([:DataFrames, :CSV]),
 )

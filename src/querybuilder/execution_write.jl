@@ -6,7 +6,7 @@
 
 # #800 — the read parser a model FIELD's values need on this connection, or `nothing`. The per-field
 # twin of `_projection_parsers`: a row a write hands back carries no projection record, but its
-# columns are the model's own, so the field says what each one is. `_pg_bulk_returned!` shares it.
+# columns are the model's own, so the field says what each one is. `_pg_bulk_returned` shares it.
 function _field_value_parser(f::PormGField, connection, name)::Union{Function,Nothing}
   kind = _field_read_kind(f)   # #965: a boolean reads as a `Bool` on SQLite too
   return kind === nothing ? nothing : value_parser(kind, connection, name)   # #1110: a raise names the field

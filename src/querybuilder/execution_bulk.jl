@@ -494,8 +494,8 @@ allocate_primary_keys(model::PormGModel, @nospecialize(src)) = allocate_primary_
 
 # #1344 decision 3: what `allocate_primary_keys` returns — a new table of the caller's own kind
 # (`Tables.materializer`: a DataFrame for a DataFrame, a `Vector` of `NamedTuple`s for one, a
-# `NamedTuple` of vectors otherwise), with `pk_field` set to `ids` when given: in its own place when
-# the table carries it, appended otherwise. Every column is copied first, because a materializer may
+# `NamedTuple` of vectors when its package defines none), with `pk_field` set to `ids` when given:
+# in its own place when the table carries it, appended otherwise. Every column is copied first, because a materializer may
 # keep the vectors it is handed (`Tables.columntable` does) and the result must never alias the
 # caller's data.
 function _allocated_table(@nospecialize(src), frame::_BulkFrame, pk_field::Union{Nothing, String} = nothing,
@@ -1371,7 +1371,7 @@ _bulk_result(count::Integer, rows = nothing) = (count = Int(count), rows = rows)
 # ─────────────────────────────────────────────────────────────────────────────
 # bulk_insert(…; returning=) (#671)
 #
-# The rows come back CORRELATED to the input: `rows[i, :]` belongs to input row `i`, and a row the
+# The rows come back CORRELATED to the input: row `i` of `rows` belongs to input row `i`, and a row the
 # database did not write (skipped by `ON CONFLICT DO NOTHING`) is `missing`. Neither engine promises
 # that a multi-row INSERT reports its rows in input order, so the correlation is by KEY VALUE,
 # never by position:
@@ -1529,7 +1529,7 @@ end
 # belong to some input row of the chunk (it can only have come from one), and outside DO NOTHING
 # every input row with a non-NULL key must have come back (nothing was skipped).
 function _bulk_returning_fill!(rows::Vector{Vector{Any}}, returning::Vector{String},
-    returned::DataFrames.DataFrame, key::Vector{String}, key_metas, key_sources, range,
+    returned::_BulkFrame, key::Vector{String}, key_metas, key_sources, range,
     first_only::Bool, existing = Set{Any}())
   unmatched() = throw(QueryBuildError("Error in bulk_insert, returning could not match the rows the " *
     "database reported to the input rows by $(join(key, ", ")): a key value in the table does not " *
@@ -1542,12 +1542,14 @@ function _bulk_returning_fill!(rows::Vector{Vector{Any}}, returning::Vector{Stri
     k === nothing || push!(inputs, k)
   end
   lookup = Dict{Any, Int}()
-  for r in 1:DataFrames.nrow(returned)
-    k = _bulk_returning_key_value(key_metas, key, (returned[r, field] for field in key))
+  returned_keys = _returned_columns(returned, key)
+  for r in 1:returned.row_count
+    k = _bulk_returning_key_value(key_metas, key, (column[r] for column in returned_keys))
     k === nothing && continue
     k in inputs || unmatched()
     lookup[k] = r
   end
+  returned_values = _returned_columns(returned, returning)
   seen = Set{Any}()
   for i in range
     k = _bulk_returning_key_value(key_metas, key, (source[i] for source in key_sources))
@@ -1559,11 +1561,55 @@ function _bulk_returning_fill!(rows::Vector{Vector{Any}}, returning::Vector{Stri
       first_only || unmatched()
       continue
     end
-    for (c, field) in enumerate(returning)
-      rows[c][i] = returned[r, field]
+    for (c, column) in enumerate(returned_values)
+      rows[c][i] = column[r]
     end
   end
   return nothing
+end
+
+# The columns `fields` of a returned frame, looked up once rather than per cell. A frame with no rows
+# may name no columns (a driver's zero-row result), and nothing reads them then.
+_returned_columns(frame::_BulkFrame, fields::Vector{String}) =
+  frame.row_count == 0 ? AbstractVector[] : AbstractVector[_bulk_column(frame, field) for field in fields]
+
+# #1344 phase 4: a result PormG reads itself — a driver's RETURNING rows, or a read-back query — as a
+# `_BulkFrame` keyed by its column names. A column that is not a `Vector` is `collect`ed, which
+# materializes a driver's lazy column (`LibPQ.Column`) as `DataFrame(result)` did; a `Vector` (SQLite's
+# materialized rows, a row result's built columns) is read as it is, since nothing here writes to it.
+# Nothing is refused: this is PormG's own read, not the caller's table, so it skips `_bulk_frame`.
+function _returned_frame(@nospecialize(table))::_BulkFrame
+  cols = Tables.columns(table)
+  names = String[String(name) for name in Tables.columnnames(cols)]
+  columns = Dict{String, AbstractVector}()
+  for name in names
+    column = Tables.getcolumn(cols, Symbol(name))
+    columns[name] = column isa Vector ? column : collect(column)
+  end
+  return _BulkFrame(names, columns, isempty(names) ? 0 : length(columns[names[1]]))
+end
+
+# The read-back batches as one frame (#1344 phase 4). A batch that read nothing adds nothing, whatever
+# columns it reports; that is what `vcat(…; cols = :union)` absorbed before. The columns keep their
+# element types (`vcat` promotes them), so no value is boxed.
+function _vcat_frames(frames::Vector{_BulkFrame}, fields::Vector{String})::_BulkFrame
+  filled = [frame for frame in frames if frame.row_count > 0]
+  columns = Dict{String, AbstractVector}()
+  for field in fields
+    parts = AbstractVector[_bulk_column(frame, field) for frame in filled]
+    columns[field] = isempty(parts) ? Any[] : length(parts) == 1 ? parts[1] : reduce(vcat, parts)
+  end
+  return _BulkFrame(copy(fields), columns, sum(frame.row_count for frame in filled; init = 0))
+end
+
+# #1344 phase 4 (decision 2): `returning`'s rows as a table of the caller's kind, by its
+# `Tables.materializer` — a DataFrame for a DataFrame, a `Vector` of `NamedTuple`s for one, a
+# `NamedTuple` of vectors when its package defines none — the rule `allocate_primary_keys` follows
+# (`_allocated_table`).
+# `identity.` narrows each column from `Any` to the values it holds, `Union{Missing,T}` when a row was
+# skipped. `materializer` dispatches on the type, so a source that iterates once is not read again.
+function _returning_table(@nospecialize(src), fields::Vector{String}, columns::Vector{Vector{Any}})
+  return Tables.materializer(src)(NamedTuple{Tuple(Symbol.(fields))}(Tuple(identity.(column) for column in columns)))
 end
 
 # Keys per read-back statement when the key has more than one column. A multi-column key renders as
@@ -1586,15 +1632,15 @@ const _LOCKED_READ_BACK_BATCH = 1000
 # #1267): under REPEATABLE READ a plain read sees the transaction's snapshot, which misses a row another
 # session committed after it that an upsert met unchanged; the statement already holds those rows' locks.
 function _bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector{String},
-    keys::Vector, fields::Vector{String}; lock::Bool = false)
-  isempty(keys) && return DataFrames.DataFrame([field => Any[] for field in fields])
+    keys::Vector, fields::Vector{String}; lock::Bool = false)::_BulkFrame
+  isempty(keys) && return _BulkFrame(copy(fields), Dict{String, AbstractVector}(field => Any[] for field in fields), 0)
   # A locking read is batched for a one-column key too: a long `IN (…)` can lose MySQL's range access
   # (`range_optimizer_max_mem_size`), and a scan under `FOR UPDATE` would lock every row it reads.
   per = length(key) > 1 ? _SQLITE_READ_BACK_BATCH : lock ? _LOCKED_READ_BACK_BATCH : typemax(Int)
   if length(keys) > per
     batches = Iterators.partition(keys, per)
-    return reduce(vcat, [_bulk_read_back(objct, model, key, collect(batch), fields; lock = lock) for batch in batches];
-      cols = :union)
+    return _vcat_frames(_BulkFrame[_bulk_read_back(objct, model, key, collect(batch), fields; lock = lock)
+                                   for batch in batches], fields)
   end
   q = object(model)
   q.object.connect_key = objct.object.connect_key
@@ -1605,25 +1651,26 @@ function _bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector
   end
   lock && q.select_for_update()
   q.values(fields...)
-  return DataFrames.DataFrame(q)
+  return _returned_frame(q)   # the query's own Tables.jl columns, parsed as `list()` parses them (#1344)
 end
 
-# PostgreSQL: RETURNING names its columns by `db_column`; rename them to fields and apply the read
-# parsers `DataFrame(query)` applies (#564/#581 — on PostgreSQL only an INTERVAL has one), so a value
-# comes back as the same type from either engine. A column the driver did not report (possible for a
-# zero-row result) is left alone: with no rows there is nothing in it to rename or parse.
+# PostgreSQL: RETURNING names its columns by `db_column`; key them by field instead and apply the read
+# parsers a query read applies (#564/#581 — on PostgreSQL only an INTERVAL has one), so a value comes
+# back as the same type from either engine. A column the driver did not report (possible for a zero-row
+# result) is left out: with no rows there is nothing in it to read.
 #
-# ONE `rename!` over every pair, never one per field: a `db_column` may be spelled like another
-# field's name (`a` stored as "x", `b` stored as "a"), and renaming "x" => "a" first would collide
-# with the "a" column still waiting to be renamed to `b`.
-function _pg_bulk_returned!(returned::DataFrames.DataFrame, model::PormGModel, fields::Vector{String}, connection)
-  present = [field for field in fields if hasproperty(returned, Models.model_column(model, field))]
-  DataFrames.rename!(returned, [Models.model_column(model, field) => field for field in present])
+# The frame by field is a NEW frame, read from the driver's by `db_column`, so names cannot collide: a
+# `db_column` may be spelled like another field's name (`a` stored as "x", `b` stored as "a"), which a
+# rename in place, one field at a time, would clash on.
+function _pg_bulk_returned(returned::_BulkFrame, model::PormGModel, fields::Vector{String}, connection)::_BulkFrame
+  present = String[field for field in fields if _has_bulk_column(returned, Models.model_column(model, field))]
+  columns = Dict{String, AbstractVector}()
   for field in present
+    column = _bulk_column(returned, Models.model_column(model, field))
     parser = _field_value_parser(model.fields[field], connection, field)   # #800: one rule with create()
-    parser === nothing || (returned[!, field] = map(parser, returned[!, field]))
+    columns[field] = parser === nothing ? column : map(parser, column)
   end
-  return returned
+  return _BulkFrame(present, columns, returned.row_count)
 end
 
 
@@ -1677,14 +1724,16 @@ Inserts multiple rows into the database in bulk from any Tables.jl table (#1344)
   - `count::Int` — rows inserted, summed across every chunk. Rows `on_conflict = :nothing` skipped
     are **not** counted, so the input row count minus `count` is how many were duplicates. An
     `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated.
-  - `rows` — `nothing` unless `returning` is given. Then a `DataFrame` with one column per
+  - `rows` — `nothing` unless `returning` is given. Then a table of the kind `table` is, built by
+    its `Tables.materializer` (#1344): a `DataFrame` for a `DataFrame`, a `Vector` of `NamedTuple`s
+    for one, a `NamedTuple` of vectors when its package defines no materializer. It has one column per
     requested field and one row per input row: row `i` belongs to input row `i`, and a row this call did
     not write (skipped by `on_conflict = :nothing`, or a later duplicate of a key within the frame)
     is `missing` — as is a row whose key contains a NULL, which cannot be looked up. A row the
     database reports that matches no input key raises `QueryBuildError` instead of going missing.
 
-  An empty table returns `(count = 0, rows = nothing)` — `rows` is an empty `DataFrame` with the
-  requested columns when `returning` is given — and `nothing` under a dry-run `show_query`, since
+  An empty table returns `(count = 0, rows = nothing)` — `rows` is an empty table of the same kind,
+  with the requested columns, when `returning` is given — and `nothing` under a dry-run `show_query`, since
   there is no statement. Otherwise a dry-run mode returns the statement, as described above; it
   pre-allocates nothing, so an auto pk it would allocate is absent from the shown column list.
 
@@ -1738,7 +1787,7 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     @warn("Warning in bulk_insert, the table is empty")
     # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
     show_query === :execute || return nothing
-    empty_rows = _returning === nothing ? nothing : DataFrames.DataFrame([field => Any[] for field in _returning])
+    empty_rows = _returning === nothing ? nothing : _returning_table(src, _returning, [Any[] for _ in _returning])
     return _bulk_result(0, empty_rows)
   end
 
@@ -1873,10 +1922,10 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
           run_chunk()
         elseif _insert_returns_rows(connection)
           # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
-          returned = _pg_bulk_returned!(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
+          returned = _pg_bulk_returned(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
           _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
             chunk_range, do_nothing)
-          DataFrames.nrow(returned)
+          returned.row_count
         else
           # No RETURNING (SQLite, MySQL; see the #671 block above `_normalize_bulk_returning`). Under DO
           # NOTHING, first note which keys the table already held, so a read-back row with one of
@@ -1892,8 +1941,9 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
           existing = Set{Any}()
           if do_nothing
             before = _bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
-            for r in 1:DataFrames.nrow(before)
-              k = _bulk_returning_key_value(key_metas, returning_key, (before[r, field] for field in returning_key))
+            before_keys = _returned_columns(before, returning_key)
+            for r in 1:before.row_count
+              k = _bulk_returning_key_value(key_metas, returning_key, (column[r] for column in before_keys))
               k === nothing || push!(existing, k)
             end
           end
@@ -1939,10 +1989,8 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
 
   # Executed, each chunk contributed its inserted-row count (#670).
   _returning === nothing && return _bulk_result(sum(results; init = 0))
-  # `identity.` narrows each column from `Any` to the values it holds, `Union{Missing,T}` when a row
-  # was skipped.
-  rows_df = DataFrames.DataFrame([field => identity.(column) for (field, column) in zip(_returning, returned_rows)])
-  return _bulk_result(sum(results; init = 0), rows_df)
+  # A table of the caller's kind (#1344 phase 4), one row per input row.
+  return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
 
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
@@ -2521,7 +2569,7 @@ function _run_bulk_insert(connection::PormGPostgres, model::PormGModel, sql::Str
     end
   end
   # With RETURNING (#671) the written rows themselves; the caller counts them.
-  returning && return DataFrames.DataFrame(result)
+  returning && return _returned_frame(result)
   # Rows `ON CONFLICT DO NOTHING` skipped are not counted; a `DO UPDATE` upsert counts each row it
   # inserted or updated.
   return _affected_row_count(connection, result, transaction_connection_for(settings))
@@ -2532,7 +2580,7 @@ function _run_bulk_insert(connection::PormGSQLite, model::PormGModel, sql::Strin
   # Use fetch() to properly acquire/release a connection from the pool
   # and pass the parameterized query with correct bucket ordering
   result = fetch(settings, sql, parameters)
-  returning && return DataFrames.DataFrame(result)
+  returning && return _returned_frame(result)
   # Counted here, per chunk, because the count is `changes()`, which any later statement overwrites
   # (#670) — the caller's once-per-call sequence sync (#704) among them. Rows DO NOTHING skipped are
   # not counted.

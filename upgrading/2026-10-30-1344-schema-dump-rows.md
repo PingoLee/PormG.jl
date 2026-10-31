@@ -18,7 +18,7 @@ dump is one of those reads, and it is also what `get_database_schema` returns.
 | `schema[1, :table_name]` | the first table's name | `ArgumentError: invalid index`: write `schema[1].table_name` |
 | `schema.table_name` | the column of names | `FieldError`: write `[r.table_name for r in schema]` |
 | `for r in eachrow(schema)` … `r.table_name` | each table's row | `FieldError` (`eachrow` of a `Vector` yields views, not rows): write `for r in schema` |
-| `nrow(schema)` (after `using DataFrames`) | the table count | the same count; `length(schema)` needs no DataFrames |
+| `nrow(schema)` (after `using DataFrames`) | the table count | depends on your Tables.jl version: recent ones count the rows, older ones raise `MethodError`. Write `length(schema)` |
 | `DataFrame(schema)` (after `using DataFrames`) | a copy of the frame | the same frame as before |
 | `convertSQLToModel(row)` | took only a `DataFrameRow` | takes any Tables.jl row: one of these `NamedTuple`s, or a `DataFrameRow` as before |
 

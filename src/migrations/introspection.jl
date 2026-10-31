@@ -4794,13 +4794,20 @@ end
 # an ordinary consequence of an odd-but-legal schema, so the reader degraded and warned; under JSON
 # there is no legal schema that produces an unparseable aggregate, so one means PormG built bad SQL.
 # A parse failure propagates out of `makemigrations` and `check()` as the read's own error (#1018).
-# Read through the Tables.jl row interface, which a `NamedTuple` (what the dump is since #1344) and a
-# caller's `DataFrameRow` both implement.
-function _pg_json(row, key::Symbol)
-  key in Tables.columnnames(row) || return nothing
-  value = Tables.getcolumn(row, key)
+function _pg_json(row::NamedTuple, key::Symbol)
+  haskey(row, key) || return nothing
+  value = row[key]
   ismissing(value) && return nothing
   return JSON.parse(String(value))
+end
+
+# The edge where a row of any Tables.jl type enters the PostgreSQL reader: a `NamedTuple` (what the
+# dump holds since #1344) passes through, and anything else (a caller's `DataFrameRow`) is copied into
+# one, once. Past this, the reader works on one shape (#1346).
+_pg_row(row::NamedTuple) = row
+function _pg_row(row)
+  names = Tuple(Tables.columnnames(row))
+  return NamedTuple{names}(Tuple(Tables.getcolumn(row, n) for n in names))
 end
 
 # `_pg_single_quoted_literal`, `_PG_TRAILING_CAST`, `_pg_strip_trailing_casts` and `_pg_clean_default`
@@ -4823,9 +4830,10 @@ The two readers must describe one schema the same way (#409): the key arms and t
 `_key_arm`'s on both, `unique` and `null` follow the same per-arm rules, and the same coercion
 lands each default on the value a declaration stores.
 """
-function _pg_live_table(row)::LiveTable
+_pg_live_table(row)::LiveTable = _pg_live_table(_pg_row(row))
+function _pg_live_table(row::NamedTuple)::LiveTable
   engine = _PostgresEngine()
-  table_name = String(Tables.getcolumn(row, :table_name))
+  table_name = String(row.table_name)
   # `primary_keys` is missing for keyless tables. No de-quoting anywhere since #455: JSON carries a
   # name as a string, not as a SQL identifier, so every name here is already the physical one.
   pk_set = Set{String}(String.(something(_pg_json(row, :primary_keys), Any[])))

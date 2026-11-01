@@ -174,6 +174,11 @@ _version_at_hand(T::Type{<:PormGSQLite}, v::Integer)::String =
   "the SQLite library PormG loads is $(_version_text(T, v))"
 _version_at_hand(::Type{<:PormGMySQL}, v::Integer)::String =
   "this server is $(v ÷ 10_000).$((v ÷ 100) % 100).$(v % 100)"
+# The same clause asked of the connection, which is what a refusal holds (#1467). By default the type
+# says it all. A connection whose version comes from somewhere other than its server or library adds
+# a method: a `register_offline` SQLite key renders for the version it stated, and its method beside
+# #1452's `_server_version` in `ConnectionPool.jl` says so, since Kernel cannot name that pool.
+_version_at_hand(conn::PormGBackend, v::Integer)::String = _version_at_hand(typeof(conn), v)
 
 """
     _feature_at(T, feature, server_version) -> Bool
@@ -244,7 +249,7 @@ function _capability_error(conn, feature::Symbol, what::AbstractString;
     v = since === nothing ? nothing : (server_version === nothing ? _server_version(conn) : server_version)
     if v !== nothing && v < since
       msg = "$(what) needs $(backend) $(_version_text(T, since)) or newer, for $(_feature_description(feature)); " *
-            "$(_version_at_hand(T, v))."
+            "$(_version_at_hand(conn, v))."
       why === nothing || (msg *= " " * why)
       return BackendCapabilityError(msg)
     end

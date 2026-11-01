@@ -9,7 +9,7 @@ which SQLite does not support (supported on PostgreSQL).
 
 The table below is the list PormG checks. A unit test fails when this page and the code disagree.
 
-Some features exist from a server version on. Their cell says which, as `from 13` (PostgreSQL's `server_version_num` major version) or `from 3.25.0` (the SQLite library PormG loads). PormG asks the server its version where it needs the answer. Where a feature is refused, an older server gets `BackendCapabilityError` naming both versions:
+Some features exist from a server version on. Their cell says which, as `from 13` (PostgreSQL's `server_version_num` major version) or `from 3.25.0` (the SQLite library PormG loads). PormG asks the server its version where it needs the answer; an offline SQLite key is checked against the `server_version` it states, and a refusal names that key instead of a library ([Testing](testing.md)). Where a feature is refused, an older server gets `BackendCapabilityError` naming both versions:
 
 ```text
 A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the SQLite

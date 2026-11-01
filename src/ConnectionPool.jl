@@ -456,6 +456,16 @@ function PormG.Kernel._server_version(pool::SQLiteConnectionPool)::Int
   return PormG.backend_sqlite_version(pool)
 end
 
+# #1467: the version clause of a capability refusal on that pool. An offline entry's version is the
+# one `register_offline` was given, not a library this process loads, so the refusal names the key
+# and the argument to change rather than sending the reader to look for an old SQLite.
+function PormG.Kernel._version_at_hand(pool::SQLiteConnectionPool, v::Integer)::String
+  key = connection_key_for_pool(pool)
+  _is_offline_key(key) || return PormG.Kernel._version_at_hand(SQLiteConnectionPool, v)
+  return "the offline connection \"$(key)\" renders for SQLite $(PormG.Kernel._version_text(SQLiteConnectionPool, v)), " *
+         "the version `register_offline` was given (`server_version = $(v)`)"
+end
+
 # #1130: a MySQL pool. Its slots behave like PostgreSQL's — all alike, no read/write
 # split — so it shares PostgreSQL's acquire/release/renew methods (typed on both markers below).
 # `connection_string` is a libpq-style conninfo (`host='…' port='…' user='…' password='…'

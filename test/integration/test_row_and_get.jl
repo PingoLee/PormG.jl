@@ -347,3 +347,100 @@ end
         M.Django_contract_scratch.objects.filter("label" => label).delete()
     end
 end
+# ─────────────────────────────────────────────────────────────────────────────
+# The typed read on a live engine: list(T) / first(T) / get(T, …) (#1352)
+# Expected SQL: a SELECT of exactly the struct's fields (no values()), or the values() aliases —
+# joined and aggregate columns included. Expected rows: the same values `list(:dict)` reads for the
+# same projection, each converted to the declared field type.
+# Matters: the unit file is SQLite only; this is where the DRIVER types meet the conversion rules.
+# `IntegerField` reads as Int32 on PostgreSQL and MySQL and Int64 on SQLite, so one struct declaring
+# `Int64` must read on every engine; a Date, a Time, a TIMESTAMPTZ, an interval and a Decimal arrive
+# through each engine's own read parser.
+# ─────────────────────────────────────────────────────────────────────────────
+struct TypedDriverRow1352
+    driverid::Int64
+    surname::String
+    number::Union{Nothing,Int64}      # IntegerField: Int32 on PostgreSQL/MySQL, Int64 on SQLite
+    dob::Date
+end
+struct TypedResultRow1352
+    surname::String
+    race::String
+    points::Float64
+    fastestlaptime::Union{Missing,Dates.CompoundPeriod}
+end
+struct TypedRaceRow1352
+    raceid::Int64
+    date::Date
+    time::Union{Nothing,Time}
+    start_at::Union{Nothing,ZonedDateTime}
+end
+struct TypedPointsRow1352
+    constructorresultsid::Int64
+    points::PormG.QueryBuilder.Decimals.Decimal
+end
+struct TypedTotalsRow1352
+    surname::String
+    races::Int64
+    avg_points::Float64
+end
+
+# Every field of every typed row equals the `list(:dict)` value for the same projection, NULL read as
+# the field's declared absent value.
+function _typed_matches_dict1352(typed, dicts)
+    length(typed) == length(dicts) || return false
+    for (t, d) in zip(typed, dicts), name in fieldnames(typeof(t))
+        raw = d[name]
+        got = getfield(t, name)
+        if raw === missing
+            got === nothing || got === missing || return false
+        else
+            got == raw || return false
+        end
+    end
+    return true
+end
+
+@testset "the typed read builds rows into a declared type on this engine (#1352)" begin
+    # No values(): the projection is fieldnames(T).
+    drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname", "driverid")
+    rows = drivers.list(TypedDriverRow1352)
+    @test rows isa Vector{TypedDriverRow1352}
+    @test !isempty(rows)
+    @test _typed_matches_dict1352(rows, drivers.values("driverid", "surname", "number", "dob").list(:dict))
+    @test any(r -> r.number === nothing, rows) && any(r -> r.number isa Int64, rows)
+
+    # Joined aliases and an interval.
+    results = M.Result.objects.
+        values("surname" => "driverid__surname", "race" => "raceid__name", "points", "fastestlaptime").
+        filter("raceid__year" => 2008, "driverid__driverref" => "hamilton").order_by("raceid__round")
+    typed = results.list(TypedResultRow1352)
+    @test length(typed) == 18
+    @test _typed_matches_dict1352(typed, results.list(:dict))
+
+    # Date, Time and the seeded TIMESTAMPTZ.
+    races = M.Race.objects.values("raceid", "date", "time", "start_at").
+        filter("year" => 2008).order_by("round")
+    typed_races = races.list(TypedRaceRow1352)
+    @test _typed_matches_dict1352(typed_races, races.list(:dict))
+    @test any(r -> r.start_at isa ZonedDateTime, typed_races)
+
+    # A DecimalField: a Decimal on every engine.
+    points = M.Constructor_results.objects.values("constructorresultsid", "points").
+        filter("points__@gte" => 1).order_by("constructorresultsid").limit(5)
+    @test _typed_matches_dict1352(points.list(TypedPointsRow1352), points.list(:dict))
+
+    # Aggregates through their aliases.
+    totals = M.Result.objects.
+        values("surname" => "driverid__surname", "races" => Count("resultid"), "avg_points" => Avg("points")).
+        filter("driverid__driverref__@in" => ["hamilton", "alonso"]).order_by("surname")
+    typed_totals = totals.list(TypedTotalsRow1352)
+    @test [t.surname for t in typed_totals] == ["Alonso", "Hamilton"]
+    @test _typed_matches_dict1352(typed_totals, totals.list(:dict))
+
+    # The single-row terminals.
+    hamilton = M.Driver.objects.get(TypedDriverRow1352, "driverref" => "hamilton")
+    @test hamilton.surname == "Hamilton" && hamilton.dob == Date(1985, 1, 7)
+    @test drivers.first(TypedDriverRow1352) == rows[1]
+    @test M.Driver.objects.filter("driverref" => "nobody-1352").first(TypedDriverRow1352) === nothing
+end

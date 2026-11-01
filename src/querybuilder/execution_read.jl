@@ -1330,11 +1330,15 @@ driver = q.first()                      # q is unchanged — no limit leaks in
 q.update("nationality" => "English")    # still valid on the same handler
 ```
 """
-function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
+first(objct::SQLObjectHandler; show_query::Symbol = :execute) = _first(objct, Val(:row); show_query=show_query)
+
+# #1352: `format` is `Val(:row)` or a typed-read `T` — the one body both `first()` and `first(T)` run,
+# so the slice rule (#1053) and the copy rule (#199) cannot drift between them.
+Base.@constprop :aggressive function _first(objct::SQLObjectHandler, format; show_query::Symbol)
   # #199: copy-first like count/exists/list — limit(1) must not leak into the caller's handler
   q = deepcopy(objct)
   q.limit(_probe_limit(q.object.limit, 1))   # #1053: within the caller's slice, not instead of it
-  res = list(q, show_query=show_query)
+  res = list(q, format; show_query=show_query)
   if show_query !== :execute
     return res
   end
@@ -1373,7 +1377,9 @@ the inverted ordering and `limit(1)` never leak into the caller's handler.
 On a query with `limit()` or `offset()` set, `last` raises `QueryBuildError`, as Django's does:
 reversing the ordering changes which rows the slice holds (#1053).
 """
-function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
+last(objct::SQLObjectHandler; show_query::Symbol = :execute) = _last(objct, Val(:row); show_query=show_query)
+
+Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show_query::Symbol)
   _refuse_sliced(objct.object, "last()", "it reverses the ordering, which changes which rows the slice holds")
   # #199: copy-first like first/count/list — the ordering flip and limit(1) apply to the copy only.
   q = deepcopy(objct)
@@ -1398,7 +1404,7 @@ function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
     map!(_invert_order, q.object.order, q.object.order)
   end
   q.limit(1)
-  res = list(q, show_query=show_query)
+  res = list(q, format; show_query=show_query)
   if show_query !== :execute
     return res
   end
@@ -1407,15 +1413,16 @@ end
 
 # Shared body for earliest()/latest(): apply the (already-oriented) ordering fields, take one row,
 # and raise DoesNotExist on an empty queryset (Django parity — these behave like get(), not first()).
-function _extreme(objct::SQLObjectHandler, order_fields, opname::String; show_query::Symbol)
+# `format` is `Val(:row)` or a typed-read `T` (#1352).
+Base.@constprop :aggressive function _extreme(objct::SQLObjectHandler, order_fields, opname::String; show_query::Symbol, format = Val(:row))
   _refuse_sliced(objct.object, "$(opname)()", "it replaces the ordering, which changes which rows the slice holds")
   q = deepcopy(objct)
   q.order_by(order_fields...)
   q.limit(1)
   if show_query !== :execute
-    return list(q, show_query=show_query)
+    return list(q, format; show_query=show_query)
   end
-  rows = list(q)
+  rows = list(q, format)
   if isempty(rows)
     model_name = q.object.model.name
     filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
@@ -1495,7 +1502,11 @@ A slice the caller set is honored: `get` looks for its one row inside the slice,
 `q.limit(0).get()` raises `DoesNotExist` (#1053). Inline filters join the `WHERE`
 clause before the slice applies, the same as a `filter()` call after `limit()`.
 """
-function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
+get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute) = _get(objct, Val(:row), filters; show_query=show_query)
+
+# #1352: `format` is `Val(:row)` or a typed-read `T`; one body, so `get(T, …)` raises the same
+# `DoesNotExist` / `MultipleObjectsReturned` from the same probe.
+Base.@constprop :aggressive function _get(objct::SQLObjectHandler, format, filters; show_query::Symbol)
   # #199: copy-first — inline filters and the limit(2) probe apply to the copy only,
   # so they never leak into the caller's handler.
   q = deepcopy(objct)
@@ -1503,10 +1514,10 @@ function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
   q = q.limit(_probe_limit(q.object.limit, 2))   # #1053: within the caller's slice, not instead of it
 
   if show_query !== :execute
-    return query_list(q, show_query=show_query)
+    return list(q, format; show_query=show_query)
   end
 
-  rows = list(q)
+  rows = list(q, format)
   model_name = q.object.model.name
   filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
 

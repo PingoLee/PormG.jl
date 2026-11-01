@@ -2082,6 +2082,8 @@ already an inspection call and takes `operation =` / `connection =` instead, and
 `analyze =` / `buffers =` / `verbose =`.
 
 - `.list()` → `Vector{PormGRow}`; `.list(:dict)` → `Vector{Dict}`; `.list(:json)` → JSON `String`
+- `.list(T)` → `Vector{T}` for a struct or `NamedTuple` type `T` (the typed read, #1352); `.first(T)`,
+  `.last(T)`, `.get(T, pairs...)`, `.earliest(T, f...)`, `.latest(T, f...)` likewise
 - `query |> DataFrame` — preferred for analytical queries
 - `.get(pairs...)` — exactly one row, or `DoesNotExist` / `MultipleObjectsReturned`
 - `.first()` / `.last()` — one row or `nothing`, using the ordering already on the query

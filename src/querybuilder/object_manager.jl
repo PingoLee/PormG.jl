@@ -813,11 +813,14 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :exists
     return (; show_query=:execute) -> _exists(q; show_query=show_query)
   elseif sym === :first
-    return (; kwargs...) -> first(q; kwargs...)
+    # first() -> PormGRow or nothing; first(T) -> T or nothing, the typed read (#1352). `T::Type...`
+    # so a count (`first(5)`) stays a MethodError on this closure rather than reaching `Base.first(itr, n)`.
+    return (T::Type...; kwargs...) -> first(q, T...; kwargs...)
   elseif sym === :last
     # Mirror of first() with inverted ordering (#208); with no order_by set, falls back to
     # primary-key DESC so last() is always well-defined. Returns a PormGRow or nothing.
-    return (; kwargs...) -> last(q; kwargs...)
+    # last(T): the typed read (#1352), as for first.
+    return (T::Type...; kwargs...) -> last(q, T...; kwargs...)
   elseif sym === :earliest
     # earliest(fields...) — order by the given field(s) ASC, return the first; raises
     # DoesNotExist on an empty queryset (Django parity, unlike first/last).
@@ -829,7 +832,8 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :get
     return (args...; show_query=:execute) -> get(q, args...; show_query=show_query)
   elseif sym === :list
-    return (format::Symbol=:row; show_query::Symbol=:execute) -> list(q, Val(format); show_query=show_query)
+    # list() / list(:dict) / list(:json), or list(T) — the typed read into a declared type (#1352).
+    return (format::Union{Symbol,Type}=:row; show_query::Symbol=:execute) -> list(q, format; show_query=show_query)
   elseif sym === :inspect
     return (; kwargs...) -> inspect_query(q; kwargs...)
   elseif sym === :explain

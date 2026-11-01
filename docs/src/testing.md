@@ -48,6 +48,16 @@ Without `server_version`, a query that needs the version raises `InvalidConfigur
 it, `using SQLite` or not. A bulk write always needs it, whatever its row count, since it is chunked by
 the bind limit. Every other query renders. State the version your production SQLite runs.
 
+A feature the stated version is too old for raises `BackendCapabilityError`, as it would on that
+SQLite, and the message names the key and the version you gave it rather than a library on your
+machine (#1467):
+
+```julia
+PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3_024_000)
+# a window function on a model bound to "db":
+# BackendCapabilityError: A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the offline connection "db" renders for SQLite 3.24.0, the version `register_offline` was given (`server_version = 3024000`).
+```
+
 ### Load the model files after it
 
 ```julia

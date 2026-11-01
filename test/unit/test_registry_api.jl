@@ -253,7 +253,9 @@ end
 #   clauses for that version, whatever library this process links (asserted newer than 3.30.0 first):
 #     3.29.0  order_by("-points") → ORDER BY ("Tb"."points" IS NULL) DESC, "Tb"."points" DESC
 #     3.30.0  order_by("-points") → ORDER BY "Tb"."points" DESC NULLS FIRST
-#     3.24.0  ROW_NUMBER() OVER (…) → BackendCapabilityError naming 3.25.0 and 3.24.0
+#     3.24.0  ROW_NUMBER() OVER (…) → BackendCapabilityError naming 3.25.0 and 3.24.0, as the version
+#             the offline key was given (`server_version = 3024000`), never "the SQLite library PormG
+#             loads" (#1467: PormG loaded no 3.24.0; the reader's fix is the argument they passed)
 #   and `bulk_insert(show_query = :dict)` of 1000 one-parameter rows is two statements at 3.24.0 (the
 #   999 bind limit below 3.32.0) and one at 3.45.0. With no `server_version`, a gated clause, and a
 #   one-row bulk insert, raise `InvalidConfigurationError` naming `server_version`; an ungated query
@@ -288,6 +290,11 @@ end
     err = refused(() -> PormG.inspect_query(windowed(old)))
     @test err isa PormG.BackendCapabilityError
     @test err !== nothing && occursin("3.25.0", sprint(showerror, err)) && occursin("3.24.0", sprint(showerror, err))
+    # #1467: the version at hand is the one the key stated, named as such, not a loaded library.
+    @test err !== nothing && occursin("the offline connection \"reg1452_v3024000\" renders for SQLite 3.24.0, " *
+                                      "the version `register_offline` was given (`server_version = 3024000`)",
+                                      sprint(showerror, err))
+    @test err !== nothing && !occursin("library PormG loads", sprint(showerror, err))
     @test PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections) == 999
     # The public path: 1000 one-parameter rows are two statements under 3.32.0's 999 limit, one from it.
     rows = DataFrame(points = Float64.(1:1000))

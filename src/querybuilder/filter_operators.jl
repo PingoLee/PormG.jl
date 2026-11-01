@@ -42,7 +42,7 @@ _json_finite(value::AbstractFloat) = isfinite(value) ? value :
 #   - MySQL reads text, as PostgreSQL does, and compares that text with a bound number as a double,
 #     so `<`/`>` need no cast there (`_json_numeric_operand`).
 # It renders `ISNULL`, `=`, `!=`/`<>` and the four orderings, and refuses every other operator
-# (`_json_key_operator_refusal`) — for the key and for everything that holds its value (#1499).
+# (`_JSONKeyOperator`, `json_key_refusal.jl`) — for the key and for everything that holds its value (#1499).
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at
   # parse made it reachable here — and this is the one arm where it was SILENT: the PostgreSQL branch
@@ -63,7 +63,7 @@ function _render_json_key_comparison(op::AbstractString, value, column::String, 
   # an unbindable value. Comparing extracted JSON against a column needs a per-engine cast nobody has
   # designed, so it is refused on both engines. It has to be here, not at parse: whether a path is a
   # JSON path is only known once its column resolves. `@isnull` never gets this far (#808's parse check).
-  value isa SQLType && throw(_json_key_column_rhs_refusal(label))
+  value isa SQLType && throw(_json_key_refusal(_JSONKeyColumnRHS(label)))
   as_text = _json_path_extracts_text(instruc.connection)
   if op == "ISNULL"
     # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
@@ -89,44 +89,11 @@ function _render_json_key_comparison(op::AbstractString, value, column::String, 
     ph = add_parameter!(instruc, rhs)
     return string(lhs, " ", op, " ", ph)
   else
-    throw(_json_key_operator_refusal(op, label))
+    throw(_json_key_refusal(_JSONKeyOperator(op, label)))
   end
 end
 
-_json_key_column_rhs_refusal(label::AbstractString) = FilterError(
-  "Error in filter '$(label)': a JSON path lookup compares the extracted value against a value, not a " *
-  "column expression")
-
-# The lookup a caller wrote for an internal operator (`"BETWEEN"` → `"@range"`), for a refusal.
-function _operator_spelling(op::AbstractString)::String
-  for (suffix, internal) in PormGsuffix
-    internal == op && return "@" * suffix
-  end
-  return String(op)
-end
-
-# #1499: the one refusal for an operator a JSON key lookup has no comparison for — a membership list,
-# a range, a pattern — on the key itself and on everything that holds its value (a projection alias, a
-# CTE column, a `Subquery`), so the two cannot answer differently. A key's value has no declared type,
-# and a range or a pattern over it compared text on PostgreSQL, where `'15'` is not between `'9'` and
-# `'100'`. EXPLICIT INTENT, refused on every engine: a cast in a projection names the type.
-_json_key_operator_refusal(op::AbstractString, label::AbstractString) = FilterError(
-  "The \e[31m$(_operator_spelling(op))\e[0m lookup is not supported on \e[31m$(label)\e[0m, a JSON " *
-  "key's value: it has no declared type, so it compares only with =, @ne, @gt, @gte, @lt, @lte and " *
-  "@isnull (#1499). Project the key with the type you mean and filter that name: " *
-  "\e[32mvalues(\"n\" => Cast(<the key path>, \"numeric\"))\e[0m for numbers or " *
-  "\e[32mCast(<the key path>, \"text\")\e[0m for text, then " *
-  "\e[32mfilter(\"n__$(_operator_spelling(op))\" => …)\e[0m.")
-
-# #1506: the refusal of a filter on a value that carries an uncast JSON key without being it
-# (`_refuse_json_key_carrier_filter`). `side` is `_json_number_side`'s `(what, key path)`; the explicit
-# spelling casts the key inside the expression, where the type is decided.
-_json_key_carrier_refusal(label::AbstractString, side::Tuple{String,String}) = FilterError(
-  "A filter on \e[31m$(label)\e[0m is not supported: it holds $(side[1]), and a JSON key's value has no " *
-  "declared type, so the query does not say what the comparison means (#1506). Cast the key inside the " *
-  "expression, to the type you mean: \e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every " *
-  "engine (for example \e[32mCoalesce(Cast(\"$(side[2])\", \"numeric\"), 0)\e[0m), " *
-  "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
+# The refusals above (#811, #1499) are positions of `json_key_refusal.jl` (#1531).
 
 # #27: render a JSONB containment/overlap operator (@>, ?, ?|, ?&). The LHS must be a JSON COLUMN
 # (terminal), not a nested key path. Binds the RHS per operator (jsonb document / text key /

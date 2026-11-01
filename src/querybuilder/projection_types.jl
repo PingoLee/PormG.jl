@@ -824,167 +824,14 @@ function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, i
 end
 _json_document_operand(::Any, ::SQLInstruction) = false
 
-# #1382: the other half — an operand that is a KEY LOOKUP into a JSONField (`F("payload__driver")`), the
-# key's value rather than the document. Its field is the JSONField all the same (`_render_json_lookup`
-# memoizes it so), so the field alone cannot tell the two apart; the walk can (`CJSONValue`, #1458),
-# from the record of rendered key lookups, and for a CTE column from the kind its body recorded. Decided
-# by that evidence, never as "not known to be the document": a handle `_json_document_operand` lets
-# through is not thereby a key.
-_json_key_lookup_operand(p::SQLField, instruc::SQLInstruction) = _json_key_lookup_operand(p.field, instruc)
-_json_key_lookup_operand(p::FExpression, instruc::SQLInstruction) =
-  p.operation === nothing && _json_key_lookup_operand(p.field_name, instruc)
-# #1492: a `Subquery` is its one projected column (#888), so one that projects a key lookup holds the
-# key's value, as the walk names it from the inner build's record. An alias over it compared through the
-# document's JSON formatter, which bound `100` as the text `"100"`.
-_json_key_lookup_operand(p::Union{String,CTEReference,JoinedReference,SubqueryObject}, instruc::SQLInstruction) =
-  _expression_kind(p, instruc) isa CJSONValue
-_json_key_lookup_operand(::Any, ::SQLInstruction) = false
-
-# #1471, #1483 — an operand whose value is a JSON key's value, uncast: the key itself, or a value that
-# carries it — arithmetic over it, a function whose value is its operand's (`Floor`, `Ceil`, `Abs`,
-# `Max`, `Min`, `Coalesce`, `Greatest`, `Least`, `Lag` and its `default`), a `Case` branch, `NullIf`'s
-# first operand. A key's value has no declared type: the document decides, row by row, whether it is
-# an integer, a float or text, so arithmetic on it (`_refuse_json_key_arithmetic`) and a `Sum`/`Avg` of
-# it do not say which number they compute on. EXPLICIT INTENT, refused on every engine: SQLite divides
-# the integer `json_extract` hands over as an integer (`7 / 2` is `3`), and PostgreSQL's `#>>` is text,
-# which `+`, `/` and `sum` reject at the server. A declared type (`Cast`, an `output_field`) and a
-# `numeric` function (`Round`, `Avg`) name the number and carry no key. `(what, flag)`: the operand as
-# a refusal names it, and the key's path for the explicit spelling; or `nothing`.
-_json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
-function _json_number_side(p::FExpression, instruc::SQLInstruction)
-  p.operation === nothing && return _json_number_side(p.field_name, instruc)
-  p.operation in ("+", "-", "*") || return nothing
-  side = _json_number_side(p.field_name, instruc)
-  side === nothing && (side = _json_number_side(p.operand, instruc))
-  return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
-end
-_json_number_side(p::Union{String,JoinedReference}, instruc::SQLInstruction) =
-  _json_key_lookup_operand(p, instruc) ? ("the JSON key `$(_concat_operand_label(p))`", _concat_flag(p)) : nothing
-# #1482: a CTE column is the key when it projects one (its kind is `CJSONValue`), and carries it when
-# its body's expression does (`Coalesce(key, 0)`, a `Case` branch), which its kind cannot say: the body
-# records that (`CTEDivision.json_key`).
-function _json_number_side(p::CTEReference, instruc::SQLInstruction)
-  # The body's record first: it names the key path a cast in the body takes (`Max(key)` and a bare
-  # `"payload__n"` column both record `payload__n`). The kind answers for a column with no record.
-  side = _cte_division(p, instruc, :json_key)
-  side === nothing || return ("the CTE column `$(_concat_operand_label(p))` ($(side[1]))", side[2])
-  _json_key_lookup_operand(p, instruc) || return nothing
-  return ("the CTE column `$(_concat_operand_label(p))`, a JSON key's value", _concat_flag(p))
-end
-# An `OuterRef` is the outer query's column, typed on the outer instruction (as `_side_walk_kind` reads
-# it), so `Coalesce(OuterRef("payload__n"), 0) / 2` inside a `Subquery` carries the outer key.
-_json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
-  instruc.outer === nothing ? nothing :
-  (side = _json_number_side(p.field_name, instruc.outer); side === nothing ? nothing :
-   ("$(side[1]) of the outer query (an `OuterRef`)", side[2]))
-# #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
-function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
-  instruc.subquery_json_key === nothing && return nothing
-  side = get(instruc.subquery_json_key, p, nothing)
-  return side === nothing ? nothing : ("a Subquery projecting $(side[1])", side[2])
-end
-function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
-  name = p.function_name
-  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-  declared isa AbstractString && !isempty(declared) && return nothing
-  if _undeclared_case(p)
-    values = _case_values(p)
-  else
-    rule = _result_rule(p)
-    rule in _OPERAND_TYPED_RULES || return nothing   # `SUM` is `:promoting`
-    values = rule === :first_operand ? (_first_operand(p),) : p.column isa AbstractVector ? p.column : (p.column,)
-  end
-  for value in values
-    side = _json_number_side(value, instruc)
-    side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
-  end
-  # A `Lag`/`Lead` `default` is the value on the rows it applies to, as `_textless_number` reads it.
-  if p isa WindowFunction
-    default = get(p.kwargs, "default", nothing)
-    literal = default isa SQLText ? default.field : default
-    if !(literal === nothing || literal isa AbstractString || _is_null_literal(literal))
-      side = _json_number_side(default, instruc)
-      side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
-    end
-  end
-  return nothing
-end
-_json_number_side(::Any, ::SQLInstruction) = nothing
-
-# #1483 — the one refusal for arithmetic, a `Sum` or an `Avg` over an uncast JSON key, on every engine.
-# Read after the operands render, so a joined path's column is resolved (#568's order). `what` opens the
-# message with the operation as the caller wrote it. #1491: a `Max` or a `Min` (`ordering = true`)
-# computes nothing, but orders the value, and the query does not say whether as numbers or as text.
-# #1497: so does an ordering term or a `Greatest`/`Least`, which name their own `issue`; an `order_by`
-# term takes a path or a projected name, not an expression, so it adds the `projected` spelling.
-function _refuse_json_key_operand(what::AbstractString, side::Tuple{String,String}; ordering::Bool = false,
-                                  issue::AbstractString = "#1491", projected::Bool = false,
-                                  comparing::Int = 0)
-  flag = side[2]
-  # #1510: `NullIf` compares the value, and the query does not say whether as a number or as text.
-  # `comparing` is the operand's position, so the spelling casts the key where it sits: a cast in the
-  # first position would change which value `NullIf` returns.
-  if comparing > 0
-    spell(type, other) = comparing == 1 ? "NullIf(Cast(\"$(flag)\", \"$(type)\"), $(other))" :
-                                          "NullIf(…, Cast(\"$(flag)\", \"$(type)\"))"
-    throw(QueryBuildError(
-      "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
-      "so the query does not say whether it compares numbers or text (#1510). Cast the key where it sits: " *
-      "\e[32m$(spell("numeric", "0"))\e[0m compares numbers on every engine, and " *
-      "\e[32m$(spell("text", "Value(\"\")"))\e[0m compares text."))
-  end
-  ordering && throw(QueryBuildError(
-    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
-    "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *
-    "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m orders numbers on every engine, and " *
-    "\e[32mCast(\"$(flag)\", \"text\")\e[0m orders text." *
-    (projected ? " Project it and order by its name: \e[32mvalues(\"n\" => Cast(\"$(flag)\", \"numeric\"))\e[0m, " *
-                 "then \e[32morder_by(\"n\")\e[0m." : "")))
-  throw(QueryBuildError(
-    "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
-    "so the query does not say which number it computes on (#1483). Say the number type you mean: " *
-    "\e[32mCast(\"$(flag)\", \"numeric\")\e[0m keeps the fraction on every engine, and " *
-    "\e[32mCast(\"$(flag)\", BigIntegerField())\e[0m computes on integers."))
-end
-# #1497 — an ordering over an uncast JSON key, or over a value that carries one (`Coalesce(key, 0)`, a
-# `Case` branch, a CTE column or a `Subquery` over the key), orders a value the query does not type:
-# PostgreSQL's `#>>` and MySQL's `JSON_UNQUOTE` are text, so `9` sorts after `10` descending, while
-# SQLite's `json_extract` orders the numbers. EXPLICIT INTENT, refused on every engine, as `Max` is
-# (#1491). `node` is the term as it orders: for a term printed as a projection's name, the projection.
-# Read after the term renders, as the #1491 check is.
-function _refuse_json_key_ordering(node, instruc::SQLInstruction, what::AbstractString; projected::Bool = false)
-  side = _json_number_side(node, instruc)
-  side === nothing || _refuse_json_key_operand(what, side; ordering = true, issue = "#1497", projected = projected)
-  return nothing
-end
-
-function _refuse_json_key_arithmetic(v::FExpression, instruc::SQLInstruction)
-  v.operation in _ARITHMETIC_OPERATIONS || return nothing
-  side = _json_number_side(v.field_name, instruc)
-  side === nothing && (side = _json_number_side(v.operand, instruc))
-  side === nothing || _refuse_json_key_operand("`$(v.operation)`", side)
-  return nothing
-end
+# #1382: the other half, an operand that IS a key lookup (`_json_key_lookup_operand`), and the value
+# that carries one (`_json_number_side`), are the two probes of `json_key_refusal.jl` (#1531).
 
 # #1382: whether a projection alias holds a JSON key's value — what `filter("payload__driver" => …)`
 # compares, through `_render_json_lookup_comparison`, for the operators that renders.
 function _alias_projects_json_key(having_key::MemoKey, instruc::SQLInstruction)::Bool
   source = _projected_source(having_key, instruc)
   return source isa SQLTypeField && _json_key_lookup_operand(source.field, instruc)
-end
-
-# #1506 — a filter on a handle that carries an uncast JSON key's value without being the key: an alias
-# over `Coalesce(key, 0)`, a `Case` branch or `NullIf(key, …)`, or a `Subquery` projecting one. The value
-# bound through the handle's formatter (`"9"`, text), which SQLite's `json_extract` integer is never
-# equal to nor greater than, so the filter matched no row; and PostgreSQL's `COALESCE(text, bigint)` is
-# a server error. EXPLICIT INTENT, refused on every engine and whatever the right side is, as arithmetic
-# (#1483) and an ordering (#1497) over the same value are. The caller asks for the key first: a handle
-# that IS the key compares as the key lookup (#1382). `@isnull` binds nothing and keeps its own arm.
-function _refuse_json_key_carrier_filter(v::SQLTypeOper, source, label::AbstractString, instruc::SQLInstruction)
-  v.operator == "ISNULL" && return nothing
-  side = _json_number_side(source, instruc)
-  side === nothing || throw(_json_key_carrier_refusal(label, side))
-  return nothing
 end
 
 # #1511 — an expression comparison whose LEFT is a JSON key lookup (`F("payload__n") == 5`, or the same
@@ -999,16 +846,15 @@ function _render_json_key_expression_comparison(v::FExpression, left_side::Strin
   if _json_key_lookup_operand(v.field_name, instruc)
     label = _json_key_operand_label(v.field_name)
     # A field path on the right is a column (`_set_update_query_operand`'s String rule), as `F` is.
-    v.operand isa String && _is_field_path(v.operand, instruc) && throw(_json_key_column_rhs_refusal(label))
+    v.operand isa String && _is_field_path(v.operand, instruc) && throw(_json_key_refusal(_JSONKeyColumnRHS(label)))
     return string("(", _render_json_key_comparison(v.operation, v.operand, left_side, label, instruc), ")")
   end
-  side = _json_number_side(v.field_name, instruc)
-  side === nothing || throw(_json_key_carrier_refusal("the comparison (`$(v.operation)`)", side))
+  _refuse_uncast_json_key(_JSONKeyCarrierFilter("", v.operation, true), v.field_name, instruc)
   return nothing
 end
 
-# A key on the RIGHT (`F("id") == F("payload__n")`) is left as the filter pair `"id" => F("payload__n")`
-# renders it, so the two spellings of one comparison answer alike.
+# A key on the RIGHT (`F("id") == F("payload__n")`, and the pair `"id" => F("payload__n")`) is refused in
+# both spellings (#1528, `_JSONKeyRightOperand`), once the comparison has rendered.
 
 _json_key_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "the expression" : l)
 
@@ -2022,7 +1868,7 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   if _alias_projects_json_key(having_key, instruc)
     return _render_json_lookup_comparison(v, string(_alias_lhs(having_key, having_cached, instruc)), instruc)
   else
-    _refuse_json_key_carrier_filter(v, _projected_source(having_key, instruc), having_key[2], instruc)
+    _refuse_uncast_json_key(_JSONKeyCarrierFilter(having_key[2], v.operator), _projected_source(having_key, instruc), instruc)
   end
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
@@ -2125,7 +1971,7 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
     sql, _ = _render_interval_source_ms(source, instruc)
     rhs, _, interval = _on_join_right(() -> _render_interval_operand(v.values, instruc), instruc)
     interval || _refuse_interval_against_number(v.operator, instruc)
-    return _render_column_rhs(sql, v.operator, rhs, instruc)
+    return _render_column_rhs(sql, v, rhs, instruc)
   end
   ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
   # #1130: and a compared VALUE that is no duration has no text comparison to fall back to: the

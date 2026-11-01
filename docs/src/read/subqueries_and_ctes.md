@@ -633,7 +633,10 @@ WHERE "R1"."raceid" = "R1_1"."raceid" AND "R1"."positionorder" = ?
 
 A `CTE(...)` on the **right** of a filter pair means "this column", exactly as `F(...)` does for a
 model column — so no `F()` wrapper is needed. The two compose where you want an operator:
-`filter(F("date") >= CTE("r91", "start"))`.
+`filter(F("date") >= CTE("r91", "start"))`. The handle sits on the **left** of an operator too, as
+`F(...)` does (#1529): `filter(CTE("r91", "start") <= F("date"))`. `F("r91__start")` is not that
+spelling, because a `__` path cannot reach a CTE from inside `F(...)` (#492), so the handle is the way
+to write a CTE column with an operator.
 
 Notes:
 - **`CROSS JOIN + WHERE` is inner by nature** — only rows the correlation matches are returned.

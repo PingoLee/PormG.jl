@@ -1221,8 +1221,8 @@ end
 # binding `5`; PostgreSQL `#>> '{"n"}' = $1` binding `"5"`, and `(#>> …)::numeric > $1` binding `5`),
 # through `F`, `Q`, a `When` and a projection. A column or a field path on the right of the key, and a
 # carrier on the left (`Coalesce(key, 0)`), raise `FilterError`, as the key lookup (#811) and its alias
-# (#1506) do. A key on the right of a column renders as the pair `"id" => F("payload__n")` does, and a
-# cast key keeps the generic path.
+# (#1506) do. A key on the right of a column is refused since #1528 (its testset, below), and a cast key
+# keeps the generic path.
 # Why it matters: on SQLite the integer `json_extract` hands over never equals text, so the filter
 # matched no row with no error, and on PostgreSQL `9` sorted above `10`.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1278,16 +1278,83 @@ end
     @test got[:parameters] == ref[:parameters] == Any[5]
     @test occursin(on_pred[conn], replace(got[:sql_text], r"\s+" => " "))
   end
-  # Control: a key on the RIGHT of a column is the filter pair `"id" => F("payload__n")`'s business, and
-  # the operator form renders as that pair does, so the two spellings cannot disagree.
-  for conn in (_JL_PG, _JL_SL, _JL_MY)
-    ref = where_of(_sql(pair("id" => F("payload__n")); conn = conn)[:sql_text])
-    @test occursin(ref, _sql(expr(F("id") == F("payload__n")); conn = conn)[:sql_text])
-  end
+  # A key on the RIGHT of a column is #1528's testset below: refused in both spellings, which #1511 left
+  # rendering as the pair did.
   # Control: a cast key states its type, so it keeps the generic path (`::decimal`, no key binding).
   @test occursin("::decimal > \$1::bigint", _sql(expr(FN.Cast("payload__n", "numeric") > 5); conn = _JL_PG)[:sql_text])
   # Control: a whole document is not a key, and keeps its JSON bind (#1360).
   @test occursin("CAST(? AS JSON)", _sql(expr(F("payload") == "{\"a\": 1}"); conn = _JL_MY)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1528: a JSON key, or a value carrying one, on the right of a comparison is refused on every engine
+# #1511 made a key on the LEFT compare as its lookup does and left the RIGHT alone, so both spellings of
+# `F("id") == F("payload__n")` — the operator and the pair `"id" => F("payload__n")` — rendered the
+# generic column comparison: `"Tb"."id" = "Tb"."payload" #>> '{"n"}'` on PostgreSQL (`bigint = text`, a
+# server error) and `json_extract(…)`'s native value on SQLite. A carrier on the right did the same:
+# `F("id") > Coalesce("payload__n", 0)` rendered `COALESCE(#>> …, $1::bigint)`. Expected: `FilterError`
+# on every engine when the query is built, in both spellings and in a projection, naming `(#1528)`, the
+# key and the cast spelling; a text key against a text column is refused too (it is still untyped), as
+# are a `Subquery` projecting the key, a CTE column over it, an `OuterRef` to it and a join condition.
+# Controls: a cast key on the right builds, a bound text value that is not a field path is not a column,
+# and the key on the left keeps #1511's comparison.
+# Why it matters: the same comparison was a server error on PostgreSQL and a silent native-value
+# comparison on SQLite, and only the left side said what the comparison meant.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1528: a JSON key or a carrier on the right of a comparison is refused on every engine" begin
+  FN = PormG.Functions
+  pair(p) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(p); q)
+  expr(f) = (q = JL.Json_scratch.objects; q.values("id"); q.filter(f); q)
+  proj(f) = (q = JL.Json_scratch.objects; q.values("id", "b" => f); q)
+  QB = PormG.QueryBuilder
+  sub_key() = (s = JL.Json_scratch.objects; s.filter("id" => 1); s.values("payload__n"); s)
+  function cte(cond)
+    body = JL.Json_scratch.objects
+    body.values("id", "k" => "payload__n")
+    q = JL.Json_scratch.objects
+    q.with("g" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id")
+    q.filter(cond)
+    return q
+  end
+  quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+  refusal(q, conn) = quiet(() -> try _sql(q; conn = conn); nothing catch e; e end)
+  plain(e) = PormG._emsg(sprint(showerror, e); color = false)
+  shapes = (
+    ("F == key", () -> expr(F("id") == F("payload__n")), "the JSON key `payload__n`"),
+    ("F > key", () -> expr(F("id") > F("payload__n")), "the JSON key `payload__n`"),
+    ("pair = key", () -> pair("id" => F("payload__n")), "the JSON key `payload__n`"),
+    ("pair @gt key", () -> pair("id__@gt" => F("payload__n")), "the JSON key `payload__n`"),
+    ("text column == text key", () -> expr(F("name") == F("payload__s")), "the JSON key `payload__s`"),
+    ("a key path string", () -> expr(F("name") == "payload__s"), "the JSON key `payload__s`"),
+    ("pair = carrier", () -> pair("id" => FN.Coalesce("payload__n", 0)), "`COALESCE(…)` over the JSON key `payload__n`"),
+    ("F > carrier", () -> expr(F("id") > FN.Coalesce("payload__n", 0)), "`COALESCE(…)` over the JSON key `payload__n`"),
+    ("projection", () -> proj(F("id") == F("payload__n")), "the JSON key `payload__n`"),
+    # Review of #1528: every value that holds the key, wherever it comes from, on the right.
+    ("pair = Subquery(key)", () -> pair("id" => QB.Subquery(sub_key())), "a Subquery projecting the JSON key `payload__n`"),
+    ("F == Subquery(key)", () -> expr(F("id") == QB.Subquery(sub_key())), "a Subquery projecting the JSON key `payload__n`"),
+    ("pair = CTE column over a key", () -> cte("id" => QB.CTE("g", "k")), "(the JSON key `payload__n`)"),
+    ("OuterRef(key) on the right", () -> proj(QB.Subquery((s = JL.Json_scratch.objects;
+        s.filter("id" => QB.OuterRef("payload__n")); s.values("id"); s))), "the JSON key `payload__n`"),
+    ("a join condition", () -> (q = JJ.Json_entry.objects; q.on("team", "id" => F("team__payload__n"));
+        q.values("id", "team__id"); q), "the JSON key `team__payload__n`"),
+  )
+  for conn in (_JL_PG, _JL_SL, _JL_MY), (label, build, held) in shapes
+    e = refusal(build(), conn)
+    @test (label, e isa PormG.FilterError) == (label, true)
+    e isa PormG.FilterError || continue
+    msg = plain(e)
+    @test (label, occursin("(#1528)", msg)) == (label, true)
+    @test (label, occursin(held, msg)) == (label, true)
+    @test (label, occursin(r"Cast\(\"(team__)?payload__[ns]\", \"numeric\"\)", msg)) == (label, true)
+  end
+  # Controls, every engine: the cast spelling builds, a text value is a value, the left keeps #1511's.
+  for conn in (_JL_PG, _JL_SL, _JL_MY)
+    @test _sql(expr(F("id") == FN.Cast("payload__n", "numeric")); conn = conn)[:sql_text] isa String
+    @test _sql(pair("id" => FN.Coalesce(FN.Cast("payload__n", "numeric"), 0)); conn = conn)[:sql_text] isa String
+    @test _sql(expr(F("name") == "Senna"); conn = conn)[:parameters] == Any["Senna"]
+    @test _sql(expr(F("payload__n") == 5); conn = conn)[:parameters] == _sql(pair("payload__n" => 5); conn = conn)[:parameters]
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

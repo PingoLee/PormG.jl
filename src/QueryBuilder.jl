@@ -128,6 +128,7 @@ include("querybuilder/build_select.jl")
 # #1034: the one expression-kind walk; `projection_types.jl`'s read readers are its read policy.
 include("querybuilder/expression_kind.jl")
 include("querybuilder/projection_types.jl")
+include("querybuilder/json_key_refusal.jl")   # #1531: the one refusal point for an uncast JSON key
 include("querybuilder/build_filter.jl")
 include("querybuilder/build_query.jl")
 

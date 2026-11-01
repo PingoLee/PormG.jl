@@ -1304,7 +1304,11 @@ const _SubqueryOperand = SubqueryObject
   # #533: `FExpression`, not the abstract `SQLTypeF` — see the operand-vocabulary note above. The
   # abstract spelling also admitted `OuterRefObject`, which no renderer arm handles.
   # #1476: a number on the LEFT of `-` or `/` (`10 - F("grid")`) is the node's left side.
-  field_name::Union{String,Integer,Float64,FExpression,SQLTypeFunction,SQLTypeJoined}
+  # #1529: `SQLTypeCTE` so a CTE column handle can be the LEFT side of a comparison
+  # (`CTE("g", "v") == 5`), rendered through the same `_set_update_query(::CTEReference)` seam an
+  # UPDATE value takes. Only the comparison methods in `operators.jl` build one: a `CTEReference`
+  # takes no arithmetic.
+  field_name::Union{String,Integer,Float64,FExpression,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
   # drift apart: widening one widens both, by construction rather than by a test that checks.
@@ -1511,6 +1515,9 @@ column: `filter("surname" => CTE("d91", "surname"))` correlates, while
 `filter("surname" => "d91__surname")` compares `surname` against that literal text — quietly
 matching nothing on a text column, and raising `FilterError` on a numeric one.
 
+A handle sits on either side of a comparison operator (`==`, `!=`, `<`, `<=`, `>`, `>=`), as `F(...)`
+does: `filter(CTE("driverid", "n") > 5)` and `filter(F("points") == CTE("d91", "points"))` (#1529).
+
 The second argument is a **path**, not a bare column, and carries the same `__` vocabulary the rest
 of PormG uses — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an operator
 suffix:
@@ -1553,6 +1560,14 @@ function CTE(name::AbstractString, path::AbstractString; desc::Bool=false)
   # message on the call that is not the one at fault.
   return CTEReference(name=normalized_name, path=normalized_path, desc=desc)
 end
+
+# #1529 — `Base.:(==)` on this type builds a PREDICATE (the comparison methods in `operators.jl`), so
+# the generic `isequal` fallback, which calls `==` and expects a `Bool`, would throw a `TypeError` in a
+# `Dict`, a `Set` or `unique`. The struct is immutable and compared by value in `hash`, so identity is
+# the answer, as `JoinedReference` has had since #481 (see its block below for the `::Missing` arm).
+Base.isequal(a::CTEReference, b::CTEReference) = a === b
+Base.isequal(::CTEReference, ::Any) = false
+Base.isequal(::CTEReference, ::Missing) = false
 
 # The output/cache spelling of a CTE reference — `name__path`. It is byte-identical to what the
 # pre-#444 string form produced, which is what lets every `_as`-keyed consumer downstream

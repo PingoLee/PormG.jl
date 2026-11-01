@@ -80,7 +80,7 @@ function _resolve_window_order(v::String, instruc::SQLInstruction)::Tuple{String
   field = startswith(v, "-") ? v[2:end] : v
   isempty(field) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
   expr = string(_resolve_window_expression(field, instruc))
-  _refuse_json_key_ordering(field, instruc, "A window's `order_by`")   # #1497
+  _refuse_uncast_json_key(_JSONKeyOrdering("A window's `order_by`", :plain, false), field, instruc)   # #1497
   return (expr, string(expr, " ", orientation))
 end
 
@@ -255,7 +255,7 @@ end
 
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))
-  _refuse_json_key_ordering(v.field, instruc, "A window's `order_by`")   # #1497
+  _refuse_uncast_json_key(_JSONKeyOrdering("A window's `order_by`", :plain, false), v.field, instruc)   # #1497
   orientation = _normalize_window_orientation(v.orientation)
   v.nulls === nothing && return (expr, string(expr, " ", orientation))
   return (expr, _order_term_sql(expr, orientation, _nulls_placement(orientation, v.nulls), instruc.connection))
@@ -268,7 +268,7 @@ function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::Tuple{
   orientation = v.desc ? "DESC" : "ASC"
   handle = CTEReference(name=v.name, path=v.path)
   expr = string(_get_select_query(handle, instruc))
-  _refuse_json_key_ordering(handle, instruc, "A window's `order_by`")   # #1497
+  _refuse_uncast_json_key(_JSONKeyOrdering("A window's `order_by`", :plain, false), handle, instruc)   # #1497
   return (expr, string(expr, " ", orientation))
 end
 # #481 — the joined-copy twin: consume `desc` here, then render through the same resolver.
@@ -276,7 +276,7 @@ function _resolve_window_order(v::JoinedReference, instruc::SQLInstruction)::Tup
   orientation = v.desc ? "DESC" : "ASC"
   handle = JoinedReference(v.alias, v.path, false)
   expr = string(_get_select_query(handle, instruc))
-  _refuse_json_key_ordering(handle, instruc, "A window's `order_by`")   # #1497
+  _refuse_uncast_json_key(_JSONKeyOrdering("A window's `order_by`", :plain, false), handle, instruc)   # #1497
   return (expr, string(expr, " ", orientation))
 end
 
@@ -981,20 +981,20 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     resolved_kwargs["boolean"] = true
   end
   # #1483: a sum or a mean of an uncast JSON key computes on a number the query does not name, as
-  # arithmetic over one does (`_refuse_json_key_arithmetic`): explicit intent, refused on every engine.
+  # arithmetic over one does (`_JSONKeyArithmetic`): explicit intent, refused on every engine.
   # #1491: so is an extremum. It orders the value, and the document decides the type: PostgreSQL's `#>>`
   # is text, so `Max` over 9 and 10 was `"9"`, while SQLite's `json_extract` hands over the number, `10`.
   if v.function_name in ("SUM", "AVG", "MAX", "MIN") && !(v.column isa AbstractVector)
-    side = _json_number_side(v.column, instruc)
-    side === nothing || _refuse_json_key_operand(titlecase(v.function_name), side;
-                                                 ordering = v.function_name in ("MAX", "MIN"))
+    _refuse_uncast_json_key(v.function_name in ("MAX", "MIN") ? _JSONKeyExtremum(v.function_name, :titled) :
+                                                                _JSONKeyArithmetic(v.function_name, :titled),
+                            v.column, instruc)
   end
   # #1497: `Greatest`/`Least` order their operands as `Max`/`Min` order rows; PostgreSQL's `GREATEST`
   # over a key compared its text with the other operands. An `output_field` casts the RESULT, after the
   # operands are compared, so it does not state the order: each operand states its own (`Cast`).
   if v.function_name in ("GREATEST", "LEAST")
     for operand in (v.column isa AbstractVector ? v.column : (v.column,))
-      _refuse_json_key_ordering(operand, instruc, "`$(_ONE_OF_NAMES[v.function_name])`")
+      _refuse_uncast_json_key(_JSONKeyOrdering(_ONE_OF_NAMES[v.function_name], :quoted, false), operand, instruc)
     end
   end
   # #1510: `NullIf` compares its operands for equality, and the query does not say whether a key's value
@@ -1003,8 +1003,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # `output_field` casts the result, after the comparison.
   if v.function_name == "NULLIF"
     for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
-      side = _json_number_side(operand, instruc)
-      side === nothing || _refuse_json_key_operand("`NullIf`", side; comparing = i)
+      _refuse_uncast_json_key(_JSONKeyNullIf(i), operand, instruc)
     end
   end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would

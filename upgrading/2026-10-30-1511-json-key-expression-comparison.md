@@ -23,8 +23,8 @@ ON clause. A column on the right of the key is refused, as the filter pair refus
 `F("metadata__wins") > F("constructorid")`, and `F("metadata__wins") == "name"` where `"name"` is a
 field. A value that carries the key without being it (`Coalesce("metadata__wins", 0) > 5`, a `Case`
 branch) is refused, as a filter on its alias is (#1506). A key on the right of a column
-(`F("constructorid") == F("metadata__wins")`) is unchanged: it renders as the filter pair
-`"constructorid" => F("metadata__wins")` does.
+(`F("constructorid") == F("metadata__wins")`) is refused too, in both spellings, by #1528 in the same
+release (its own entry).
 
 | expression | before | now |
 |---|---|---|

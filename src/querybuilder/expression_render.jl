@@ -1713,15 +1713,21 @@ _time_arithmetic_refusal(::PormGMySQL, op, label) =
                   "has no spelling for arithmetic on a time of day on MySQL: compare a time with a time (a Time " *
                   "literal), or compute it in Julia.")
 
-# #1483 — arithmetic over an uncast JSON key is refused on every engine (`_refuse_json_key_arithmetic`).
-# Asked once the node has rendered, as every type question here is (#568): rendering resolves a joined
-# path's column, which the kind walk reads. `/` asks before `_division_sql` too (below), so MySQL's
-# untyped-side refusal does not answer first.
+# #1483 — arithmetic over an uncast JSON key is refused on every engine (`_JSONKeyArithmetic`, the
+# position in `json_key_refusal.jl`). Asked once the node has rendered, as every type question here is
+# (#568): rendering resolves a joined path's column, which the kind walk reads. `/` asks before
+# `_division_sql` too (below), so MySQL's untyped-side refusal does not answer first.
 function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   rendered = _render_expr_node_sql(v, instruc)
-  _refuse_json_key_arithmetic(v, instruc)
+  _refuse_json_key_in_arithmetic(v, instruc)
+  # #1528: and a key on the right of a comparison, on every exit of the comparison arm, ahead of the
+  # #1310 check `_render_expr_typed` runs after this returns.
+  v.operation in _COMPARISON_OPERATIONS && _refuse_json_key_right_operand(v.operand, instruc)
   return rendered
 end
+_refuse_json_key_in_arithmetic(v::FExpression, instruc::SQLInstruction) =
+  v.operation in _ARITHMETIC_OPERATIONS ?
+    _refuse_uncast_json_key(_JSONKeyArithmetic(v.operation, :quoted), (v.field_name, v.operand), instruc) : nothing
 
 function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing
@@ -1913,7 +1919,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
         v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
           _refuse_untyped_date_operand(v.operation, instruc)
         if v.operation == "/"
-          _refuse_json_key_arithmetic(v, instruc)
+          _refuse_json_key_in_arithmetic(v, instruc)
           return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
         end
         # #1406: `time - time` is an interval on PostgreSQL; the one copy of the rule says so.
@@ -1930,7 +1936,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
       _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
 
     if v.operation == "/"
-      _refuse_json_key_arithmetic(v, instruc)
+      _refuse_json_key_in_arithmetic(v, instruc)
       return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
     end
     # `&`, `|`, `<<`, `>>`: a signed 64-bit integer on every engine (`_bitwise_sql`).

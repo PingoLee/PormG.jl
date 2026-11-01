@@ -199,6 +199,25 @@ end
         @test nrow(df) == expected
     end
 
+    @testset "a CTE handle on the left of an operator correlates as on the right (#1529)" begin
+        # #1529: `CTE("r91", "raceid") == F("raceid")` fell through to `Base.==` and handed `filter` a
+        # bare `false`; `CTE(...) > 5` was a `MethodError`. Expected: the same rows as the pair
+        # spelling `"raceid" => CTE("r91", "raceid")` (the 1991 race winners), and the handle against a
+        # value narrows the CTE's rows as its filter pair does.
+        races_91 = M.Race.objects.filter("year" => 1991).values("raceid", "round")
+        winners(cond) = (q = M.Result.objects; q.with("r91" => races_91); q.filter(cond, "positionorder" => 1);
+                         q.values("resultid"); Set((q |> DataFrame).resultid))
+        by_pair = winners("raceid" => CTE("r91", "raceid"))
+        @test !isempty(by_pair)
+        @test winners(CTE("r91", "raceid") == F("raceid")) == by_pair
+        # The first five rounds of 1991, through the handle on the left and through its filter pair.
+        early(cond) = (q = M.Result.objects; q.with("r91" => races_91);
+                       q.filter("raceid" => CTE("r91", "raceid"), "positionorder" => 1, cond);
+                       q.values("resultid"); Set((q |> DataFrame).resultid))
+        @test early(CTE("r91", "round") <= 5) == early("r91__round__@lte" => 5)
+        @test length(early(CTE("r91", "round") <= 5)) == 5
+    end
+
     @testset "self-reference: CTE on same table (LEFT and INNER)" begin
         # CTE pre-filters Driver rows born before 1980, then joined back to Driver.
         # LEFT: Hamilton (1985) appears with missing CTE column.

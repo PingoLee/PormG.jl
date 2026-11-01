@@ -88,6 +88,14 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("10 - F int",              :Result,              m -> 10 - _EKM_Q.F("grid")),
   ("10 / F int",              :Result,              m -> 10 / _EKM_Q.F("grid")),
   ("10.5 - F float",          :Result,              m -> 10.5 - _EKM_Q.F("points")),
+  # #1539: arithmetic on a CTE handle, a `MethodError` before (and a refusal on the right of `F`); a CTE
+  # date or duration column is typed as its column, so it takes the date and interval arms
+  ("CTE int col + 1",         :Result,              m -> PormG.CTE("c", "n") + 1),
+  ("10 - CTE int col",        :Result,              m -> 10 - PormG.CTE("c", "n")),
+  ("F int * CTE int col",     :Result,              m -> _EKM_Q.F("grid") * PormG.CTE("c", "n")),
+  ("CTE date col - CTE date col", :Result,          m -> PormG.CTE("c", "d") - PormG.CTE("c", "d")),
+  ("CTE date col + Day(1)",   :Result,              m -> PormG.CTE("c", "d") + Day(1)),
+  ("CTE interval col * 2",    :Result,              m -> PormG.CTE("c", "u") * 2),
   # #1034 step 5a: each arm of the render's F temporal arithmetic, so the walk's answer for it is a cell
   ("F date + Hour(1)",        :Race,                m -> _EKM_Q.F("date") + Hour(1)),
   ("F datetime - Hour(1)",    :Race,                m -> _EKM_Q.F("start_at") - Hour(1)),
@@ -597,7 +605,14 @@ _ekm_cte_interval!(q, mod) = q.with("c" => mod.Result.objects.values("resultid",
 _ekm_cte_json_lag!(q, mod) = q.with("c" => mod.Field_validation_scratch.objects.values("id",
                                       "w" => _EKM_Q.Lag("id"; default = _EKM_Q.F("payload__n"), over = _EKM_Q.WindowOver(order_by = ["id"]))),
                                     join_field = "id" => "id")
+# #1539: a CTE `c` with an integer (`n`), a date (`d`) and a duration (`u`) column, for arithmetic on it.
+_ekm_cte_arith!(q, mod) = q.with("c" => mod.Result.objects.values("resultid", "n" => "grid", "d" => "raceid__date",
+                                                                   "u" => "fastestlaptime"),
+                                 join_field = "resultid" => "resultid")
 const EKM_PREP = Dict{String,Function}(
+  "CTE int col + 1" => _ekm_cte_arith!, "10 - CTE int col" => _ekm_cte_arith!, "F int * CTE int col" => _ekm_cte_arith!,
+  "CTE date col - CTE date col" => _ekm_cte_arith!, "CTE date col + Day(1)" => _ekm_cte_arith!,
+  "CTE interval col * 2" => _ekm_cte_arith!,
   "Coalesce CTE json lag col / 2" => _ekm_cte_json_lag!,
   "DATE CTE interval col" => _ekm_cte_interval!,
   "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!,

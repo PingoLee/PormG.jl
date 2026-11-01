@@ -1227,6 +1227,150 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (? - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("10.5 - F float | subquery", :sqlite, "w__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (? - \"R2\".\"points\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("CTE int col + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`R1_1`.`n` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"n\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"n\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (`R4_1`.`n` + ?) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"n\" + \$3::bigint) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE int col + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"n\" + ?) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - `R1_1`.`n`) > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\$2::bigint - \"R1_1\".\"n\") > \$3", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(? - \"R1_1\".\"n\") > ?", params = [("10", "Int64"), ("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("10", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (? - `R4_1`.`n`) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\$3::bigint - \"R4_1\".\"n\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("10 - CTE int col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (? - \"R4_1\".\"n\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("10", "Int64"), ("1", "Int64"), ("10", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int * CTE int col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`R1`.`grid` * `R1_1`.`n`) > ?", params = [("10", "Int64")]),
+  ("F int * CTE int col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"R1\".\"grid\" * \"R1_1\".\"n\") > \$1", params = [("10", "Int64")]),
+  ("F int * CTE int col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"R1\".\"grid\" * \"R1_1\".\"n\") > ?", params = [("10", "Int64")]),
+  ("F int * CTE int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("10", "Int64")]),
+  ("F int * CTE int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("F int * CTE int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("F int * CTE int col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (`R4`.`grid` * `R4_1`.`n`) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int * CTE int col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4\".\"grid\" * \"R4_1\".\"n\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F int * CTE int col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4\".\"grid\" * \"R4_1\".\"n\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE date col - CTE date col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "DATEDIFF(`R1_1`.`d`, `R1_1`.`d`) > ?", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"d\" - \"R1_1\".\"d\") > \$1", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(julianday(\"R1_1\".\"d\") - julianday(\"R1_1\".\"d\") AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("CTE date col - CTE date col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    DATEDIFF(`R4_1`.`d`, `R4_1`.`d`) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE date col - CTE date col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"d\" - \"R4_1\".\"d\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE date col - CTE date col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    CAST(julianday(\"R4_1\".\"d\") - julianday(\"R4_1\".\"d\") AS INTEGER) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("CTE date col + Day(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | alone", :mysql, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(`R1_1`.`d` + INTERVAL ? DAY) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "((\"R1_1\".\"d\" + make_interval(days => \$2::integer)))::date > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "date(\"R1_1\".\"d\", '+' || ? || ' days') > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("CTE date col + Day(1) | cte", :mysql, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("CTE date col + Day(1) | cte", :postgres, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (DATE): The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM"),
+  ("CTE date col + Day(1) | cte", :sqlite, "g__v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > ?", params = [("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | subquery", :mysql, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (`R4_1`.`d` + INTERVAL ? DAY) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    ((\"R4_1\".\"d\" + make_interval(days => \$3::integer)))::date as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE date col + Day(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("CTE date col + Day(1) | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    date(\"R4_1\".\"d\", '+' || ? || ' days') as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
+  ("CTE interval col * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(ROUND((`R1_1`.`u`) * (?)) AS SIGNED) > ?", params = [("2", "Int64"), ("2", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"u\" * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(round((((CASE WHEN substr(\"R1_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) > ?", params = [("2", "Int64"), ("2", "Int64"), ("60000", "Int64")]),
+  ("CTE interval col * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col * 2 | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("2", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col * 2 | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col * 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col * 2 | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("2", "Int64"), ("60000", "Int64")]),
+  ("CTE interval col * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    CAST(ROUND((`R4_1`.`u`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"u\" * \$3::bigint) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col * 2 | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R4_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R4_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
   ("F date + Hour(1) | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F date + Hour(1) | alone", :mysql, "v__@gt", "datetime 2009-03-29T06:00") =>

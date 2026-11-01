@@ -437,28 +437,34 @@ const _NCG_EXISTS_WITH = r"EXISTS \(WITH [\"`]gv[\"`] AS"
 end
 
 @testset "one Exists subquery declaring a CTE, reused under two outer queries and rebuilt (#1523)" begin
-  # Expected: each outer query binds its own WHERE value around the same nested run, the subquery
-  # handler keeps only the CTE keys the caller declared, and a second build is byte-identical. Why:
-  # `build_cte_clause` writes the CTE's model into the dict it is given; `_build_exists_query` hands it
-  # its own copy, and a regression that built on the caller's handler would leak that state into the
-  # next query built from it.
+  # Expected: each outer query binds its own WHERE value around the same nested run, a second build is
+  # byte-identical, and the caller's subquery keeps its projection and only the CTE keys it declared.
+  # Why: `build_cte_clause` writes the CTE's model into the dict it is given, and the probe clears the
+  # projection; `_build_exists_query` does both on its own copy. A regression that built on the
+  # caller's handler would leak that state into the next query built from it.
+  # Built through `query()` on the outer handler itself, NOT `inspect_query`: that deep-copies the
+  # outer handler first (#43), Exists and subquery included, so it would shield `inner` whatever the
+  # renderer did — measured, a renderer building on the caller's handler passed every assertion here
+  # through `inspect_query`, and fails the last three through `query()`.
   inner = _ncg_exists_inner()
   keys_before = sort(collect(keys(inner.object.ctes["gv"])))
-  outer(v) = begin
+  build(v) = Logging.with_logger(Logging.NullLogger()) do
     q = NCG.Ncg_child.objects
     q.values("note")
     q.filter("note" => v)
     q.filter(Exists(inner))
-    q
+    sql = PormG.QueryBuilder.query(q; connection = _NCG_SL, show_query = :sql)
+    (sql, PormG.QueryBuilder.get_final_parameters(q.object.parameters))
   end
-  first_a = _ncg_sql(() -> outer("A"), _NCG_SL)
-  b = _ncg_sql(() -> outer("B"), _NCG_SL)
-  again_a = _ncg_sql(() -> outer("A"), _NCG_SL)
-  @test first_a[:parameters] == ["A", "CTEVAL", "INNERVAL"]
-  @test b[:parameters] == ["B", "CTEVAL", "INNERVAL"]
-  @test again_a[:sql_text] == first_a[:sql_text] && again_a[:parameters] == first_a[:parameters]
+  first_a = build("A")
+  b = build("B")
+  again_a = build("A")
+  @test first_a[2] == ["A", "CTEVAL", "INNERVAL"]
+  @test b[2] == ["B", "CTEVAL", "INNERVAL"]
+  @test again_a == first_a
   @test sort(collect(keys(inner.object.ctes["gv"]))) == keys_before
   @test !haskey(inner.object.ctes["gv"], "model")
+  @test length(inner.object.values) == 1
 end
 
 @testset "the read and write terminals bind a nested CTE in text order (#1292, #1523)" begin
@@ -655,13 +661,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "subqueries without a nested CTE still render (#433 control)" begin
   for (backend, conn) in _NCG_BACKENDS
-    exists_sql = _ncg_sql(() -> begin
+    exists_insp = _ncg_sql(() -> begin
       q = NCG.Ncg_child.objects
       q.values("note")
       q.filter(Exists(_ncg_inner_plain()))
       q
-    end, conn)[:sql_text]
-    @test occursin("EXISTS (SELECT 1", exists_sql)
+    end, conn)
+    @test occursin("EXISTS (SELECT 1", exists_insp[:sql_text])
+    @test exists_insp[:parameters] == ["PLAINVAL"]
 
     sub_insp = _ncg_sql(() -> begin
       q = NCG.Ncg_child.objects

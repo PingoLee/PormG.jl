@@ -1,17 +1,13 @@
 """
-Unit coverage for a `.with(...)` declared INSIDE a subquery (#433, narrowed by #1292).
+Unit coverage for a `.with(...)` declared INSIDE a subquery (#433, #1292, #1523).
 
-The contract, per consumer:
-
-  - `Subquery(...)` and `"col__@in" => sub` / `__@nin` BUILD. The nested `WITH` renders inside the
-    subquery's parentheses, and its values bind in text order on every engine: `build_cte_clause`
-    binds under a scoped `:cte` bucket (#936, #939) and the consumer lifts the subquery's whole run,
-    `:cte` first, into the clause its text sits in (#432, `detach_nested_run!`).
-  - `Exists(...)` is REFUSED with a `QueryBuildError` naming the CTE. `_build_exists_query`
-    hand-rolls its own SELECT rather than routing through `query()`, so it renders no `WITH`: the
-    first path resolving `<cte>__col` reached an "internal error … please report it" before #433,
-    and would now reach `build_joins.jl`'s "emits no WITH clause" refusal, which is about
-    `update()`. That is a missing render step, and the refusal stays until the step exists.
+The contract: every consumer BUILDS — `Subquery(...)`, `"col__@in" => sub` / `__@nin` and
+`Exists(...)`. The nested `WITH` renders inside the subquery's parentheses, and its values bind in
+text order on every engine: `build_cte_clause` binds under a scoped `:cte` bucket (#936, #939) and
+the consumer lifts the subquery's whole run, `:cte` first, into the clause its text sits in (#432,
+`detach_nested_run!`). `Subquery` and `__@in` get the `WITH` from `query()` (#1292); `Exists`
+hand-rolls its own SELECT in `_build_exists_query`, which renders it since #1523 and refused such a
+subquery before, because it emitted no `WITH` at all.
 
 History, because the receipts below are #433's. #433 refused all three consumers on every engine,
 after measuring a SQLite misbind on this fixture:
@@ -25,15 +21,16 @@ after measuring a SQLite misbind on this fixture:
         SQLite      ["CTEVAL", "INNERVAL", "PLAINVAL"]
 
 #1292 re-measured both with the guard removed: every engine now binds the text order. Those two
-shapes are pinned here as the regression, beside every position a nested `WITH` can sit in.
+shapes are pinned here as the regression, beside every position a nested `WITH` can sit in. #1523
+added the `Exists` render step, and its shapes are pinned the same way.
 
 What is pinned here (deterministic, DB-free — rendered via `inspect_query` on mock connections):
   - Each built shape on PostgreSQL, SQLite and MySQL: the exact parameter vector in text order, the
     marker count, and the positional engines checked against PostgreSQL's `\$N` read back in text
     order (`_pg_text_order`, the cross-backend differential — a source that is neither the test nor
     the change).
-  - `Exists` is refused in the filter AND the projected position, with a message that names the
-    missing render and the spellings that do render a nested `WITH`.
+  - `Exists` builds in the filter AND the projected position, over the probe's every shape (an OFFSET,
+    a kept aggregating projection, a derived table), with the `WITH` inside `EXISTS (…)`.
   - BOUNDARY: a CTE declared inside a CTE **body** renders, with its values in text order.
   - The mutation-path audits #433 found (`update()` with a CTE reference, `delete()` of a
     CTE-scoped queryset) keep refusing — they are about the OUTER query's `.with()`, not a nested one.
@@ -103,7 +100,7 @@ PormG.Models.set_models(@__MODULE__, "ncg_mock")
 end
 
 const NCG = NcgModels
-import PormG.QueryBuilder: F, Exists, Subquery, Count, Case, When, inspect_query
+import PormG.QueryBuilder: F, Exists, Subquery, OuterRef, Count, Case, When, inspect_query
 
 include("helper_marker_alignment.jl")
 
@@ -129,7 +126,7 @@ _ncg_inner_with_cte() = begin
   s
 end
 
-# The same subquery with no CTE — the control arm for every refusal below.
+# The same subquery with no CTE — the control arm.
 _ncg_inner_plain(v = "PLAINVAL") = begin
   s = NCG.Ncg_parent.objects
   s.filter("sku" => v)
@@ -150,55 +147,6 @@ end
 
 _ncg_sql(build, conn) = Logging.with_logger(Logging.NullLogger()) do
   inspect_query(build(); connection = conn)
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Exists(...) refuses a subquery that declares its own .with(...) (#433, #1292)
-# Both positions: the projected form delegates to the filter form, so guarding `_build_exists_query`
-# covers both. Without the projected case, a guard placed in `_get_filter_query` instead would pass
-# every other assertion in this file.
-# ─────────────────────────────────────────────────────────────────────────────
-const _NCG_EXISTS_CONSUMERS = [
-  ("Exists(...) in a filter", () -> begin
-    q = NCG.Ncg_child.objects
-    q.values("note")
-    q.filter(Exists(_ncg_inner_with_cte()))
-    q
-  end),
-  ("Exists(...) projected in values()", () -> begin
-    q = NCG.Ncg_child.objects
-    q.values("note", "has_parent" => Exists(_ncg_inner_with_cte()))
-    q
-  end),
-]
-
-@testset "Exists(...) over a subquery declaring its own .with(...) is refused, naming the missing WITH (#433, #1292)" begin
-  # Expected: QueryBuildError, no SQL. Why: `_build_exists_query` renders no WITH, so the CTE would
-  # never be declared — #433's reported crash. The message names that reason (a missing render step,
-  # not a binding order, which #1292 measured correct) and the spellings that do render it.
-  for (label, build_q) in _NCG_EXISTS_CONSUMERS
-    @testset "$label" begin
-      for (backend, conn) in _NCG_BACKENDS
-        err = _ncg_err(build_q, conn)
-        # Before #433 this was an `ErrorException` ("internal error … please report it").
-        @test err isa PormG.QueryBuildError
-        msg = sprint(showerror, err)
-        @test occursin("Exists(...)", msg)
-        # Names the offending CTE by the name the caller gave it.
-        @test occursin("gv", msg)
-        @test occursin(".with(", msg)
-        # The true reason — and never #433's positional-binding one, which #1292 retired.
-        @test occursin("is rendered without a", msg)
-        @test !occursin("binds parameters by position", msg)
-        # The remedies: fold the predicate, or a consumer that renders a nested WITH.
-        @test occursin(".filter(", msg)
-        @test occursin("__@in\" => subquery", msg) && occursin("Subquery(...)", msg)
-        @test !occursin("internal", lowercase(msg))
-        @test !occursin("report", lowercase(msg))
-        @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg) && !occursin("MySQL", msg)
-      end
-    end
-  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -344,6 +292,141 @@ const _NCG_NESTED_WITH = r"\(WITH [\"`]gv[\"`] AS"
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Exists(...) builds over a subquery declaring its own .with(...) (#1523)
+# Same three checks as above, plus the `WITH` sitting at the head of the EXISTS body. `Exists` used to
+# refuse these (#433): `_build_exists_query` hand-rolls its SELECT and rendered no `WITH`, so the
+# first `<cte>__col` path would have named a relation the statement never declares. Both positions,
+# because the projected form delegates to the filter form; and every probe shape the renderer prints
+# (#1053's OFFSET, #1066's kept projection, #1359's derived table), because the `WITH` must precede
+# whichever SELECT it opens with.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The shape under test, correlated as an `Exists` usually is.
+_ncg_exists_inner() = begin
+  s = _ncg_inner_with_cte()
+  s.filter("id" => OuterRef("parent"))
+  s
+end
+
+const _NCG_EXISTS_SHAPES = [
+  ("Exists(...) in a filter, after a WHERE value", ["WHEREVAL", "CTEVAL", "INNERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.filter(Exists(_ncg_exists_inner()))
+    q
+  end),
+  ("Exists(...) in a filter, before a WHERE value", ["CTEVAL", "INNERVAL", "AFTERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter(Exists(_ncg_exists_inner()))
+    q.filter("note" => "AFTERVAL")
+    q
+  end),
+  ("Exists(...) projected in values()", ["CTEVAL", "INNERVAL", "WHEREVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => "WHEREVAL")
+    q.values("note", "has_parent" => Exists(_ncg_exists_inner()))
+    q
+  end),
+  # #1053: the subquery's OFFSET binds under `:limit`, the last role, which is where its text sits.
+  ("Exists(...) over a sliced subquery: the OFFSET binds last", ["WHEREVAL", "CTEVAL", "INNERVAL", 2], () -> begin
+    s = _ncg_exists_inner()
+    s.offset(2)
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.filter(Exists(s))
+    q
+  end),
+  # #1359: a `distinct()` past an offset is probed through a derived table; the `WITH` heads the
+  # EXISTS body, ahead of `SELECT 1 FROM (SELECT DISTINCT …)`, so the inner SELECT is in its scope.
+  ("Exists(...) over a distinct, sliced subquery (derived table)", ["WHEREVAL", "CTEVAL", "INNERVAL", 1], () -> begin
+    s = _ncg_inner_with_cte()
+    s.distinct()
+    s.offset(1)
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.filter(Exists(s))
+    q
+  end),
+  # #1066: an aggregating projection decides the subquery's rows, so it is kept — its HAVING value
+  # binds after the CTE body's and the WHERE's, which is where its text sits.
+  ("Exists(...) over a grouped subquery with a HAVING value", ["CTEVAL", "INNERVAL", 2], () -> begin
+    s = NCG.Ncg_parent.objects
+    s.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+    s.filter(CTE("gv", "code") => "INNERVAL")
+    s.values("grandparent", "n" => Count("id"))
+    s.filter("n__@gte" => 2)
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter(Exists(s))
+    q
+  end),
+  ("Exists(...) over a subquery whose own Exists declares the CTE", ["WHEREVAL", "MIDVAL", "CTEVAL", "INNERVAL"], () -> begin
+    leaf = _ncg_inner_with_cte()
+    leaf.filter("id" => OuterRef("id"))
+    mid = NCG.Ncg_parent.objects
+    mid.filter("sku" => "MIDVAL")
+    mid.filter(Exists(leaf))
+    mid.filter("id" => OuterRef("parent"))
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => "WHEREVAL")
+    q.filter(Exists(mid))
+    q
+  end),
+  # Each query has its own CTE namespace (#444), and SQL scopes a WITH name to its own SELECT.
+  ("Exists(...) with a nested CTE named like the outer query's", ["CTEVAL", "OUTERVAL", "CTEVAL", "INNERVAL"], () -> begin
+    s = _ncg_inner_with_cte()
+    s.filter("id" => OuterRef("id"))
+    q = NCG.Ncg_parent.objects
+    q.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+    q.filter("gv__code" => "OUTERVAL")
+    q.filter(Exists(s))
+    q.values("sku")
+    q
+  end),
+  ("Exists(...) with a nested CTE, inside a CTE body", ["BODYVAL", "CTEVAL", "INNERVAL", "MAINVAL"], () -> begin
+    body = NCG.Ncg_child.objects
+    body.filter("note" => "BODYVAL")
+    body.filter(Exists(_ncg_exists_inner()))
+    body.values("id", "parent")
+    q = NCG.Ncg_parent.objects
+    q.with("cb" => body, join_field = "id" => "parent")
+    q.filter("sku" => "MAINVAL")
+    q.values("sku", "cb__id")
+    q
+  end),
+]
+
+const _NCG_EXISTS_WITH = r"EXISTS \(WITH [\"`]gv[\"`] AS"
+
+@testset "Exists(...) over a subquery declaring its own .with(...) builds, values in text order (#1523)" begin
+  # Expected SQL: `… WHERE note = ? AND EXISTS (WITH "gv" AS (SELECT … WHERE code = ?) SELECT 1 FROM
+  # ncg_parent … WHERE "gv".code = ? …)`, every value bound where its marker prints. Why: before
+  # #1523 `Exists` rendered no WITH and refused this shape; a regression in the render step drops the
+  # CTE from the SQL, and one in the lift binds the body's value out of text order on SQLite and
+  # MySQL, silently.
+  for (label, expected, build_q) in _NCG_EXISTS_SHAPES
+    @testset "$label" begin
+      pg = _ncg_sql(build_q, _NCG_PG)
+      @test occursin(_NCG_EXISTS_WITH, pg[:sql_text])
+      assert_marker_count(pg, :postgres)
+      @test _pg_text_order(pg) == expected
+      for (backend, conn) in _NCG_POSITIONAL
+        insp = _ncg_sql(build_q, conn)
+        @test occursin(_NCG_EXISTS_WITH, insp[:sql_text])
+        assert_marker_count(insp, :sqlite)
+        assert_bound_in_text_order(insp, expected)
+        @test insp[:parameters] == _pg_text_order(pg)
+      end
+    end
+  end
+end
+
 @testset "the read and write terminals bind a nested CTE in text order (#1292)" begin
   # Expected: `count`/`exists` render `… WHERE note = ? AND parent IN (WITH "gv" AS …)`, and the
   # UPDATE/DELETE carry the same nested WITH in their WHERE (or in SET). Why: each terminal renders
@@ -404,7 +487,7 @@ end
 
   # On SQLite both land in :cte, which is flattened first — and that is textually correct here,
   # because the whole construct IS the leading WITH clause. This is the precise difference from
-  # the refused shapes, where the same bucket choice puts values ahead of text that precedes them.
+  # #433's misbound shapes, where the same bucket choice put values ahead of text that precedes them.
   insp_sl = _ncg_sql(_boundary, _NCG_SL)
   @test insp_sl[:parameter_buckets][:cte] == ["CTEVAL", "INNERVAL"]
   @test isempty(insp_sl[:parameter_buckets][:where])

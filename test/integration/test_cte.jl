@@ -948,15 +948,16 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A subquery declaring its own CTE, against the F1 data (#1292)
-# `Subquery(...)` and `__@in` over a query with its own `.with(...)` render the WITH inside their
-# parentheses — `"driverid" IN (WITH "fast" AS (… WHERE "milliseconds" < ?) SELECT … WHERE
-# "fastlaps" >= ?)` — and bind its values where their text sits. #433 refused both on every engine
-# after measuring SQLite binding them ahead of earlier text; #1292 measured the binding correct and
-# lifted the refusal. Each shape below puts a bound value BEFORE the nested CTE in the text, which is
-# what made #433's misbind visible: bound out of order, `nationality` would be compared against
-# 75000 and the row set would be empty or wrong. Every expected value is computed in Julia from
-# plain queries, never through the shape under test. `Exists` still refuses: it renders no WITH.
+# A subquery declaring its own CTE, against the F1 data (#1292, #1523)
+# `Subquery(...)`, `__@in` and `Exists(...)` over a query with its own `.with(...)` render the WITH
+# inside their parentheses — `"driverid" IN (WITH "fast" AS (… WHERE "milliseconds" < ?) SELECT …
+# WHERE "fastlaps" >= ?)` — and bind its values where their text sits. #433 refused all three on
+# every engine after measuring SQLite binding them ahead of earlier text; #1292 measured the binding
+# correct and lifted the refusal for `Subquery` and `__@in`, and #1523 gave `Exists` the render step
+# it lacked. Each shape below puts a bound value BEFORE the nested CTE in the text, which is what
+# made #433's misbind visible: bound out of order, `nationality` would be compared against 75000 and
+# the row set would be empty or wrong. Every expected value is computed in Julia from plain queries,
+# never through the shape under test.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a subquery declaring its own CTE binds in text order (#1292)" begin
     fast_q() = begin
@@ -1005,22 +1006,51 @@ end
         @test any(>(0), df.poles) && any(>(0), df.fast_starts)   # neither column is trivially zero
     end
 
-    @testset "Exists over the same subquery is refused" begin
+    # #1523: `Exists` renders the subquery's own WITH inside `EXISTS (…)`. It used to refuse it.
+    exists_inner() = begin
         inner = M.Result.objects
         inner.with("fast" => fast_q(), join_field = "raceid" => "raceid")
         inner.filter("driverid" => OuterRef("driverid"), "fast__fastlaps__@gte" => 1)
+        inner
+    end
+    fast_starts(driverid) = count(r -> r[:driverid] == driverid && r[:raceid] in fast_races, results)
+
+    @testset "Exists in a filter, after a WHERE value (#1523)" begin
         q = M.Driver.objects
+        q.filter("nationality" => "Brazilian")
+        q.filter(Exists(exists_inner()))
+        q.values("driverid")
+        got = Set(r[:driverid] for r in q.list())
+        oracle = Set(d for d in brazilian if fast_starts(d) > 0)
+        @test !isempty(oracle) && oracle != brazilian   # the EXISTS keeps some drivers and drops others
+        @test got == oracle
+    end
+
+    @testset "Exists over a sliced subquery: its OFFSET binds after the CTE's value (#1523)" begin
+        # `offset(1)`: a second fast start exists. The OFFSET is the last marker in the text, behind
+        # the outer "Brazilian", the CTE body's 75000 and the inner WHERE's 1; bound out of order it
+        # would be compared against the wrong column.
+        inner = exists_inner()
+        inner.offset(1)
+        q = M.Driver.objects
+        q.filter("nationality" => "Brazilian")
         q.filter(Exists(inner))
         q.values("driverid")
-        err = try
-            q.list()
-            nothing
-        catch e
-            e
+        got = Set(r[:driverid] for r in q.list())
+        oracle = Set(d for d in brazilian if fast_starts(d) > 1)
+        @test !isempty(oracle) && oracle != Set(d for d in brazilian if fast_starts(d) > 0)
+        @test got == oracle
+    end
+
+    @testset "Exists projected as a column (#1523)" begin
+        q = M.Driver.objects
+        q.filter("nationality" => "Brazilian")
+        q.values("driverid", "has_fast" => Exists(exists_inner()))
+        rows = q.list()
+        @test length(rows) == length(brazilian)
+        for r in rows
+            @test r[:has_fast] == (fast_starts(r[:driverid]) > 0)
         end
-        @test err isa PormG.QueryBuildError
-        # This guard's message, not `build_joins.jl`'s "emits no WITH clause" fallback, which is a
-        # QueryBuildError too and is what the shape reaches without it.
-        @test occursin("is rendered without a", sprint(showerror, err))
+        @test any(r -> r[:has_fast] === true, rows) && any(r -> r[:has_fast] === false, rows)
     end
 end

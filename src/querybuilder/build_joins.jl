@@ -866,17 +866,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # `update()`'s own CTE refusal (#394, `_get_join_condition_list`) cannot catch that, because it
     # inspects `row_join` entries — which this function is in the middle of producing.
     #
-    # Guarding HERE rather than at each caller is deliberate. `build()` has SIX call sites and only
-    # three render a `WITH`: `execution_read.jl` `query`/`_count`/`_exists` do; `_update`,
-    # `bulk_update` (`execution_bulk.jl`) and `_build_exists_query` (`filter_nodes.jl`, which
-    # hand-rolls its own SELECT) do not. A per-caller guard would have to be re-added for each
-    # future one. This is the single point where the missing render step becomes observable.
-    #
-    # The message deliberately does NOT name `update()` as the only culprit: `_build_exists_query`
-    # is a READ-path renderer that also emits no `WITH`, so "reads render a CTE" would be a lie on
-    # that route. It is currently unreachable only because `_refuse_exists_nested_cte` refuses an
-    # `Exists` subquery's own CTE earlier with a better message — a single-point dependency worth not
-    # encoding into text. (`Subquery` and `__@in` render through `query()`, which does emit it, #1292.)
+    # Guarding HERE rather than at each caller is deliberate. Of `build()`'s call sites, the read
+    # renderers run `build_cte_clause` first: `execution_read.jl` `query`/`_count`/`_exists`, and
+    # `_build_exists_query` (`filter_nodes.jl`, which hand-rolls its own SELECT but renders the
+    # subquery's `WITH` since #1523). The mutation renderers — `_update`, `bulk_update`
+    # (`execution_bulk.jl`) — do not. A per-caller guard would have to be re-added for each future
+    # one. This is the single point where the missing render step becomes observable.
     if !haskey(cte_dict, "model")
       throw(QueryBuildError(
         "The CTE \e[4m\e[31m$(cte_name)\e[0m is referenced here, but the statement being built " *

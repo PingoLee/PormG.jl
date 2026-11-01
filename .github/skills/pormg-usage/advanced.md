@@ -23,7 +23,7 @@ M.Result.objects.
 ```
 
 A two-column subquery raises `FilterError`. Narrow it with `values("one_field")`. A subquery may
-declare its own CTE with `.with(...)`, except one inside `Exists(...)` (`QueryBuildError`).
+declare its own CTE with `.with(...)`, an `Exists(...)` subquery included.
 
 ## Correlated subqueries: `Subquery`, `OuterRef`, `Exists`
 

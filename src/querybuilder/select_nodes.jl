@@ -1326,34 +1326,13 @@ end
 # mis-resolved either. The guard's other premise, the nested parameter order, is #432's
 # `nested_parameter_mark` / `detach_nested_run!` since.
 
-# #433, narrowed by #1292: an `Exists(...)` subquery that declares its own `.with(...)` is refused,
-# because `_build_exists_query` renders no `WITH` for it. That renderer hand-rolls its own SELECT
-# rather than going through `query()`, so it emits no `WITH` prefix and never materializes the CTE's
-# model — the first path resolving `<cte>__col` would reach the "emits no WITH clause" refusal in
-# `build_joins.jl`, which names `update()` and is about a different statement. The shape is one a
-# caller is entitled to write; what is missing is a render step, and the refusal stays until it exists.
-#
-# `Subquery(...)` and `"col__@in" => sub` are NOT refused (#1292). They render through `query()`, so
-# the nested `WITH` prints inside their parentheses, and `build_cte_clause` binds its values under a
-# scoped `:cte` bucket (#936, #939) that the consumer's `detach_nested_run!` lifts with the rest of
-# the subquery's values as one clause-ordered run (#432) — `:cte` first, which is where its text sits.
-# #433 refused all three consumers on a measured SQLite misbind, `["CTEVAL", "INNERVAL", "A"]`
-# against a text order of `A, CTEVAL, INNERVAL`; on the same shapes the run now binds in text order
-# on every engine (`test_nested_cte_guard.jl` pins them), so the refusal had no defect left behind it.
-function _refuse_exists_nested_cte(handler::SQLObjectHandler)
-  ctes = handler.object.ctes
-  isempty(ctes) && return nothing
-  names = join(collect(keys(ctes)), ", ")
-  throw(QueryBuildError(
-    "Exists(...) does not support a subquery that declares its own \e[4m\e[32m.with(...)\e[0m; " *
-    "this one declares \e[4m\e[31m$(names)\e[0m.\n  " *
-    "An EXISTS subquery is rendered without a \e[4m\e[31mWITH\e[0m clause, so a CTE it declares " *
-    "would be missing from the SQL.\n  " *
-    "Fold the CTE's predicate into the subquery's own \e[4m\e[32m.filter(...)\e[0m, or test " *
-    "membership instead: project the correlated column and filter with " *
-    "\e[4m\e[32m\"<column>__@in\" => subquery\e[0m, which renders a nested " *
-    "\e[4m\e[32mWITH\e[0m, as \e[4m\e[32mSubquery(...)\e[0m does (#433, #1292)."))
-end
+# A subquery's own `.with(...)` renders inside its parentheses in every consumer: `Subquery(...)` and
+# `"col__@in" => sub` through `query()` (#1292), `Exists(...)` in `_build_exists_query` (#1523). Each
+# binds the CTE body's values under a scoped `:cte` bucket (#936, #939), which the consumer's
+# `detach_nested_run!` lifts with the rest of the subquery's values as one clause-ordered run (#432),
+# `:cte` first, which is where its text sits. #433 had refused all three on a measured SQLite misbind
+# (`["CTEVAL", "INNERVAL", "A"]` against a text order of `A, CTEVAL, INNERVAL`); `test_nested_cte_guard.jl`
+# pins every shape in text order on PostgreSQL, SQLite and MySQL.
 
 _projection_is_aggregate(v)::Bool =
   v isa SQLTypeField && v.field isa SQLTypeFunction &&

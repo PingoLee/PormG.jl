@@ -1026,25 +1026,6 @@ const DOCERR_CASES = [
     # route, but nine shapes were built against it after the change and none reached it — so there
     # is no producer to pin here. Re-add a case the moment one exists.
     (
-        # #433, narrowed by #1292. An `Exists(...)` subquery must not declare a CTE: `Exists`
-        # renders no WITH clause, so the CTE would never be declared. `@in` and `Subquery` do render
-        # one, and #1292 measured them binding in text order on every engine, so they build.
-        "read/subqueries_and_ctes.md — an Exists(...) subquery cannot declare its own .with(...)",
-        QueryBuildError,
-        () -> begin
-            fast = DOCERR_STATUS_PG.objects
-            fast.values("statusid", "status")
-            inner = DOCERR_RESULT_PG.objects
-            inner.with("fast" => fast, join_field = "statusid" => "statusid")
-            inner.filter(CTE("fast", "status") => "Finished")
-            inner.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"))
-            q = DOCERR_DRIVER_PG.objects
-            q.values("driverid")
-            q.filter(PormG.QueryBuilder.Exists(inner))
-            q.list(show_query = :dict)
-        end,
-    ),
-    (
         # #433. Only a statement that emits a WITH clause can reference a CTE. Reads do; update()
         # does not, and used to reach an "internal error … please report it" instead of saying so.
         "read/subqueries_and_ctes.md — update() cannot reference a CTE (it emits no WITH clause)",

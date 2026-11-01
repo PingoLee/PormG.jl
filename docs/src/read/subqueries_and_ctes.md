@@ -638,6 +638,27 @@ model column — so no `F()` wrapper is needed. The two compose where you want a
 spelling, because a `__` path cannot reach a CTE from inside `F(...)` (#492), so the handle is the way
 to write a CTE column with an operator.
 
+The handle takes arithmetic as `F(...)` does (#1539): `+ - * /` with a number, a column, an `F(...)`
+expression, a function or another handle, on either side. Each driver's points behind their own best
+finish in a race:
+
+```julia
+best = M.Result.objects.values("driverid", "best" => Max("points"))
+
+df = M.Result.objects.
+    with("best" => best, join_field = "driverid" => "driverid", join_type = "INNER").
+    values("resultid", "points", "behind_best" => CTE("best", "best") - F("points")).
+    filter("raceid" => 18).
+    order_by("resultid") |> DataFrame
+```
+
+A date, timestamp or duration column of a CTE is typed as one, so its arithmetic is what it is on the
+model column, on every engine: with `start` a date, `CTE("r91", "start") + Day(7)` shifts it and
+`F("date") - CTE("r91", "start")` is the day count. A duration added to a CTE column that is no date or
+timestamp raises `InvalidValueError`, as `F("grid") + Day(1)` does.
+A CTE column over a JSON key takes no arithmetic until it is cast (`Cast(CTE("ev", "n"), "integer") + 1`),
+because a key's value has no declared type to compute on.
+
 Notes:
 - **`CROSS JOIN + WHERE` is inner by nature** — only rows the correlation matches are returned.
   To keep unmatched main-table rows (a *nullable* left join against a CTE), use an explicit

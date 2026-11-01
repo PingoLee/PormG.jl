@@ -218,6 +218,53 @@ end
         @test length(early(CTE("r91", "round") <= 5)) == 5
     end
 
+    @testset "arithmetic on a CTE handle computes what the rows say (#1539)" begin
+        # #1539: `CTE(...) + 1` was a raw `MethodError`, and `F("points") - CTE(...)` a refusal.
+        # Expected: each value equals the one Julia computes from the rows themselves — a number, and
+        # the day count and the shift of a CTE date. Why it matters: before the CTE side was typed,
+        # SQLite (which holds a date as text) took `CTE(date) - CTE(date)` as a generic `-` and
+        # subtracted the YEARS, with no error.
+        best = M.Result.objects.values("driverid", "best" => Max("points"))
+        q = M.Result.objects
+        q.with("best" => best, join_field = "driverid" => "driverid", join_type = "INNER")
+        q.filter("raceid" => 18)
+        q.values("resultid", "driverid", "points",
+                 "best_plus" => CTE("best", "best") + 1, "behind" => CTE("best", "best") - F("points"),
+                 "double" => 2 * CTE("best", "best"))
+        df = q |> DataFrame
+        best_of = Dict{Int,Float64}()
+        for r in eachrow(M.Result.objects.values("driverid", "points") |> DataFrame)
+            best_of[r.driverid] = max(get(best_of, r.driverid, -Inf), Float64(r.points))
+        end
+        @test nrow(df) > 0
+        for r in eachrow(df)
+            @test Float64(r.best_plus) ≈ best_of[r.driverid] + 1
+            @test Float64(r.behind) ≈ best_of[r.driverid] - Float64(r.points)
+            @test Float64(r.double) ≈ 2 * best_of[r.driverid]
+        end
+        @test any(r -> r.behind > 0, eachrow(df))   # not every driver's best is this race
+
+        # Dates: the first and last race of 2009, a CTE over Race grouped by year.
+        season = M.Race.objects.values("year", "first" => Min("date"), "last" => Max("date"))
+        q = M.Race.objects
+        q.with("s" => season, join_field = "year" => "year", join_type = "INNER")
+        q.filter("year" => 2009)
+        q.values("raceid", "date", "season_days" => CTE("s", "last") - CTE("s", "first"),
+                 "since_first" => F("date") - CTE("s", "first"), "week_after" => CTE("s", "first") + Day(7))
+        q.order_by("raceid")
+        df = q |> DataFrame
+        asdate(x) = x isa AbstractString ? Date(x[1:10]) : Date(x)
+        dates = asdate.(df.date)
+        first_day, last_day = minimum(dates), maximum(dates)
+        @test nrow(df) > 1
+        for (r, d) in zip(eachrow(df), dates)
+            @test r.season_days == Dates.value(last_day - first_day)
+            @test r.since_first == Dates.value(d - first_day)
+            @test asdate(r.week_after) == first_day + Day(7)
+        end
+        @test df.season_days[1] > 100   # a day count (217 in 2009), not the 0 the years' difference gives
+    end
+
     @testset "self-reference: CTE on same table (LEFT and INNER)" begin
         # CTE pre-filters Driver rows born before 1980, then joined back to Driver.
         # LEFT: Hamilton (1985) appears with missing CTE column.

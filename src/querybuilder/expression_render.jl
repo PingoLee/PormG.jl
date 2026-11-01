@@ -372,6 +372,12 @@ _side_kind(value::Any, instruc::SQLInstruction) = _projection_column_kind(value,
 _side_kind(value::String, instruc::SQLInstruction) =
   occursin("__@", value) ? _temporal_side_kind(_expression_kind(value, instruc)) : _projection_column_kind(value, instruc)
 _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _side_function_kind(value, instruc)
+# #1539 — a CTE column is the kind its body recorded for it (`_cte_column_kind`, #824), read through the
+# same temporal narrowing as a path. The column lookup above answers `nothing` for a handle, which left a
+# CTE date untyped: on SQLite `CTE("g", "d") - CTE("g", "d")` fell to the generic `-` and subtracted the
+# years of two TEXT dates, and a date literal compared with a CTE timestamp bound as a bare date (#1529).
+_side_kind(value::CTEReference, instruc::SQLInstruction) =
+  _temporal_side_kind(_cte_column_kind(value, instruc, _AllKinds()))
 
 # #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
 # arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
@@ -1327,6 +1333,15 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
   if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
      _date_field_type(v.field_name, instruc) === nothing
     throw(InvalidValueError("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
+  end
+  # #1539: a CTE column, by the kind its body recorded. Unchecked, `CTE("g", "n") + Day(1)` over an
+  # integer rendered `date("n", '+1 days')` on SQLite, reading the integer as a Julian day number with no
+  # error. A kind the record does not name stays silent, as an unresolved left does above.
+  if v.field_name isa CTEReference
+    cte_kind = _cte_column_kind(v.field_name, instruc, _AllKinds())
+    cte_kind === nothing || cte_kind isa Union{CDate,CDateTime} ||
+      throw(InvalidValueError("CTE(\"$(v.field_name.name)\", \"$(v.field_name.path)\") ± a duration requires a " *
+                              "DATE/TIMESTAMP column; that CTE column is not a date/time column"))
   end
 
   return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind

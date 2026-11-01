@@ -16,6 +16,7 @@ A `CTE(...)` handle had no comparison methods. On the left of an operator it fel
 | `CTE("r91", "raceid") == F("raceid")` | `false` | a predicate: the correlation |
 | `CTE("r91", "round") != 5` | `true` | a predicate |
 | `CTE("r91", "round") <= 5` (and `<`, `>`, `>=`) | `MethodError: no method matching isless(…)` | a predicate |
+| `CTE("s", "start_at") > Date(2009, 3, 29)`, the CTE column a timestamp | `MethodError` | a predicate binding the literal as the column's type, the midnight instant `2009-03-29T00:00:00.000+00:00`, as the pair `"s__start_at__@gt" => Date(2009, 3, 29)` binds it (#1539) |
 | `filter(CTE("r91", "round") == 5)` | reported the `false` it was handed | filters the rows |
 | `CTE("r91", "round"; desc = true) > 5` | `MethodError` | `QueryBuildError`: `desc` belongs to `order_by` |
 | `CTE("r91", "round") == 1//2` | `false` | `QueryBuildError`, as `F(...) == 1//2` |
@@ -24,7 +25,10 @@ A `CTE(...)` handle had no comparison methods. On the left of an operator it fel
 
 `F("r91__round")` is not an alternative spelling: a `__` path cannot reach a CTE from inside
 `F(...)` (#492). So the handle is the only way to put a CTE column on the left of an operator. As the
-right side (`F("raceid") == CTE("r91", "raceid")`, #444) it already worked. `isequal` on a handle stays
+right side (`F("raceid") == CTE("r91", "raceid")`, #444) it already worked. A date or timestamp literal
+is bound as the CTE column's own type (#1539), so the operator and the pair spelling of one comparison
+bind the same value; on SQLite, which compares the text, a bare date against a timestamp column would
+have matched a row at exactly midnight that the pair does not. `isequal` on a handle stays
 `true` or `false`, so a handle still keys a `Dict` or a `Set`. As with `F` and `Joined` (#541), a
 container test that calls `==` (`a in v`, `[a] == [b]`) now raises, since `==` builds a predicate;
 `isequal`-based ones (`Set`, `Dict`, `unique`, `findfirst(isequal(a), v)`) keep working.

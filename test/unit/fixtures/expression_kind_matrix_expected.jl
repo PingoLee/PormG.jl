@@ -812,6 +812,114 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("10.5 - F float | subquery", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("CTE int col + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("CTE int col + 1 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("10 - CTE int col | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int * CTE int col | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int * CTE int col | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | alone", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | alone", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | alone", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | cte", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | cte", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | cte", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | subquery", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | subquery", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col - CTE date col | subquery", :mysql) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | cte", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE date col + Day(1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("CTE interval col * 2 | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | cte", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | cte", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("CTE interval col * 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :sqlite) =>
@@ -7956,6 +8064,24 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("F date - date literal | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date literal | subquery", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("CTE date col - CTE date col | alone", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | alone", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("CTE date col - CTE date col | cte", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | cte", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | cte", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("CTE date col - CTE date col | subquery", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | subquery", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("CTE date col - CTE date col | subquery", :mysql) =>
     [(:unparsed, "read=int has no MySQL read parser")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],

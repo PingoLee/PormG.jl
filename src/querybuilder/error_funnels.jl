@@ -57,14 +57,20 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 # `Float64` or a cast of its digits; a `Rational` has no SQL literal at all. The value is never printed.
 _arith_operands(::Type{FExpression}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
-  "expression, a function or a window function, or \e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also " *
-  "take a Dates period or an Interval"
+  "expression, a function or a window function, a \e[4m\e[32mCTE(...)\e[0m column, or " *
+  "\e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an Interval"
 _arith_operands(::Type{WindowFunction}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
-  "expression, a function, or \e[4m\e[32mValue(n)\e[0m of a number"
+  "expression, a function, a \e[4m\e[32mCTE(...)\e[0m column, or \e[4m\e[32mValue(n)\e[0m of a number"
 _arith_operands(::Type{FObject}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
-  "expression, another function that is not a window function, or \e[4m\e[32mValue(n)\e[0m of a number"
+  "expression, another function that is not a window function, a \e[4m\e[32mCTE(...)\e[0m column, or " *
+  "\e[4m\e[32mValue(n)\e[0m of a number"
+# #1539: a CTE column takes the `F` family's operands.
+_arith_operands(::Type{CTEReference}) =
+  "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
+  "expression, a function or a window function, another \e[4m\e[32mCTE(...)\e[0m column, or " *
+  "\e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an Interval"
 function _unsupported_arithmetic_operand(op::AbstractString, operand, node::Type)
   T = typeof(operand)
   spelling = operand isa Decimals.Decimal ?
@@ -83,6 +89,7 @@ end
 _arith_node_label(::Type{FExpression}) = "an `F(...)` expression"
 _arith_node_label(::Type{WindowFunction}) = "a window function"
 _arith_node_label(::Type{FObject}) = "a function"
+_arith_node_label(::Type{CTEReference}) = "a CTE(...) column"
 
 function _unsupported_compare_operand(op::AbstractString, operand)
   accepted = join(string.(Base.uniontypes(_CompareLiteral)), ", ")

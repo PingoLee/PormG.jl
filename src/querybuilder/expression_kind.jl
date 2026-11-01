@@ -270,7 +270,9 @@ end
 # timestamp is one too (#1307): a `Case` over dates, which `_side_function_kind` does not type, is then
 # the date side of a shift, as a `DateField` column is. Any other function is `_side_function_kind`.
 # A column is `_side_kind`. On the right, a temporal literal is its own kind, a field-path string is
-# the column it names, and a bare CTE, `Subquery` or `Joined` handle is untyped, as it is to the render.
+# the column it names, a CTE handle is its column's kind (#1539: a CTE date beside a date, untyped, was
+# the generic `-` on SQLite's text), and a bare `Subquery` or `Joined` handle is untyped, as it is to
+# the render.
 function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
@@ -283,7 +285,7 @@ function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Uni
   right || return _side_kind(x, instruc)
   x isa String && return _is_field_path(x, instruc) ? _side_kind(x, instruc) : nothing
   x isa _TemporalLiteral && return literal_canonical_kind(x)
-  return x isa SQLTypeFunction ? _side_kind(x, instruc) : nothing
+  return x isa Union{SQLTypeFunction,CTEReference} ? _side_kind(x, instruc) : nothing
 end
 
 # ── #1310: an operand the walk cannot name, beside a date, a timestamp, a time or an interval ─────────

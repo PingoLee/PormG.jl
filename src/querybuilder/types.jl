@@ -1517,6 +1517,9 @@ matching nothing on a text column, and raising `FilterError` on a numeric one.
 
 A handle sits on either side of a comparison operator (`==`, `!=`, `<`, `<=`, `>`, `>=`), as `F(...)`
 does: `filter(CTE("driverid", "n") > 5)` and `filter(F("points") == CTE("d91", "points"))` (#1529).
+It takes `+ - * /` on either side as `F(...)` does too — `CTE("best", "best") - F("points")`,
+`2 * CTE("driverid", "n")`, `CTE("s", "first") + Day(7)` — and a date, timestamp or duration column
+is typed as one, so its arithmetic is date arithmetic on every engine (#1539).
 
 The second argument is a **path**, not a bare column, and carries the same `__` vocabulary the rest
 of PormG uses — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an operator

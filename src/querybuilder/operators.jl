@@ -14,9 +14,11 @@
 # type binds on every engine and the node's operand is the number the SQL computes with.
 const _ArithmeticNumber = Union{Integer,Float16,Float32,Float64}
 _arith_number(x::Union{Float16,Float32}) = Float64(x)
+# #1539: a CTE column as an operand. `desc = true` orders; it means nothing inside an expression.
+_arith_number(x::CTEReference) = _reject_cte_desc(x, "arithmetic")
 _arith_number(x) = x
 
-function Base.:+(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:+(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="+",
@@ -27,7 +29,7 @@ function Base.:+(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpres
   )
 end
 
-function Base.:-(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:-(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="-",
@@ -38,7 +40,7 @@ function Base.:-(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpres
   )
 end
 
-function Base.:*(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:*(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="*",
@@ -49,7 +51,7 @@ function Base.:*(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpres
   )
 end
 
-function Base.:/(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:/(f::FExpression, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="/",
@@ -267,7 +269,7 @@ Base.:*(operand::_ArithmeticNumber, f::FExpression) = f * operand
 # is `(? - "grid")`), never delegated to `f - n` — the #884 shape of getting it wrong silently.
 Base.:-(operand::_ArithmeticNumber, f::FExpression) = _number_left(operand, "-", f)
 Base.:/(operand::_ArithmeticNumber, f::FExpression) = _number_left(operand, "/", f)
-_number_left(n::_ArithmeticNumber, op::String, f::Union{FExpression,SQLTypeFunction}) =
+_number_left(n::_ArithmeticNumber, op::String, f::Union{FExpression,SQLTypeFunction,CTEReference}) =
   FExpression(field_name=_arith_number(n), operation=op, operand=f, function_name="F", column="", aggregate=_is_agg(f))
 
 # #481 — the six comparisons with a JOINED-COPY reference on the LEFT, which is the spelling a
@@ -319,9 +321,8 @@ Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_ope
 # for the same reasons: the node is an `FExpression` (a `FilterType`, the `F`-on-the-left render path),
 # every comparison constructs (the handle is immutable), the operand union is the shared
 # `_CompareOperand`, and an ordering direction is refused because it means nothing in a predicate.
-# `isequal(::CTEReference, …)` (`types.jl`) stays total for hashed containers. No arithmetic here:
-# `CTE(…) + 1` is still a `MethodError`, and `F("<cte>__col")` cannot name a declared CTE (#492), so a
-# CTE column enters arithmetic only inside a function (`Coalesce(CTE(…), 0) + 1`).
+# `isequal(::CTEReference, …)` (`types.jl`) stays total for hashed containers. Arithmetic is the block
+# below (#1539).
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(c::CTEReference, operand::_CompareOperand)
     _reject_cte_desc(c, "a comparison")
@@ -336,20 +337,54 @@ Base.:(==)(::CTEReference, operand::Missing) = throw(_unsupported_compare_operan
 Base.:(==)(::CTEReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
 Base.:<(::CTEReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
-function Base.:+(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+# #1539 — `+ - * /` with a CTE column handle on either side. `CTE("g", "n") + 1` was a raw `MethodError`
+# and `F("points") + CTE("g", "n")` a #1476 refusal, while `F("g__n")` cannot name a declared CTE (#492):
+# a CTE column entered arithmetic only inside a function (`Coalesce(CTE(…), 0) + 1`). Django's `F()`
+# takes arithmetic, and the handle is the one spelling of a CTE column, so it takes the `F` family's
+# operands: a number, a column path, an `F` expression, a function, another handle, and for `+`/`-` a
+# duration (and for `-` a date literal, #814). The node is the `FExpression` `F` arithmetic builds, and
+# the render already resolves a handle on either side as the column it names (`_set_update_query`,
+# `_set_update_query_operand`). What it did not do was TYPE one: a CTE date was an untyped side, which
+# SQLite subtracted as the years of two TEXT dates; `_side_kind(::CTEReference)` (`expression_render.jl`)
+# types it as its column, so the date arms see it. `JoinedReference` still takes no arithmetic: it is a
+# comparison handle (#481). Every method constructs (the handle is immutable) and refuses `desc = true`.
+for (op, sym) in ((:+, "+"), (:-, "-"), (:*, "*"), (:/, "/"))
+  @eval function Base.$op(c::CTEReference, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
+    _reject_cte_desc(c, "arithmetic")
+    return FExpression(field_name=c, operation=$sym, operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
+  end
+end
+for (op, sym) in ((:+, "+"), (:-, "-"))
+  @eval function Base.$op(c::CTEReference, operand::_DurationOperand)
+    _reject_cte_desc(c, "arithmetic")
+    return FExpression(field_name=c, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
+  end
+end
+function Base.:-(c::CTEReference, operand::_TemporalLiteral)
+  _reject_cte_desc(c, "arithmetic")
+  return FExpression(field_name=c, operation="-", operand=operand, function_name="F", column="", aggregate=false)
+end
+# A number or a duration on the LEFT: `+` and `*` commute; `-` and `/` keep the number left (#884, #1476).
+Base.:+(operand::_ArithmeticNumber, c::CTEReference) = c + operand
+Base.:*(operand::_ArithmeticNumber, c::CTEReference) = c * operand
+Base.:-(operand::_ArithmeticNumber, c::CTEReference) = _number_left(operand, "-", _reject_cte_desc(c, "arithmetic"))
+Base.:/(operand::_ArithmeticNumber, c::CTEReference) = _number_left(operand, "/", _reject_cte_desc(c, "arithmetic"))
+Base.:+(operand::_DurationOperand, c::CTEReference) = c + operand
+
+function Base.:+(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
-function Base.:-(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:-(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(field_name=f, operation="-", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
 # #814: `Lag("date", …) - Date(2009, 3, 1)`, the window-function twin of the `F` method above.
 function Base.:-(f::WindowFunction, operand::_TemporalLiteral)
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=false)
 end
-function Base.:*(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:*(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
-function Base.:/(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction})
+function Base.:/(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(field_name=f, operation="/", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
 end
 
@@ -365,22 +400,22 @@ Base.:/(operand::_ArithmeticNumber, f::WindowFunction) = _number_left(operand, "
 
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
 # Enable expressions like Sum("points") / Count("resultid")
-function Base.:+(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+function Base.:+(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject,CTEReference})
   # #1021: `SearchVector + SearchVector` is one document, not arithmetic.
   (_is_fts_operand(f) || _is_fts_operand(operand)) && return _combine_search_vectors(f, operand)
   return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
-function Base.:-(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+function Base.:-(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject,CTEReference})
   return FExpression(field_name=f, operation="-", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 # #814: `Max("date") - Date(2009, 3, 1)`, the function twin of the `F` method above.
 function Base.:-(f::FObject, operand::_TemporalLiteral)
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
-function Base.:*(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+function Base.:*(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject,CTEReference})
   return FExpression(field_name=f, operation="*", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
-function Base.:/(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject})
+function Base.:/(f::FObject, operand::Union{_ArithmeticNumber,String,FExpression,FObject,CTEReference})
   return FExpression(field_name=f, operation="/", operand=_arith_number(operand), function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 
@@ -403,8 +438,9 @@ Base.:/(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "/", f)
 # as a bare one is). Anything else — a `Decimal`, a `Rational`, a type no operator takes — raises a
 # `QueryBuildError` naming the spelling, not Julia's `MethodError`. A number on the left is caught as
 # `::Number`, not `::Any`, so it cannot overlap the right-hand catch-all of another family (Aqua's
-# ambiguity check). `JoinedReference` takes no arithmetic: it is a comparison handle (#481).
-for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject)
+# ambiguity check). `JoinedReference` takes no arithmetic: it is a comparison handle (#481). A
+# `CTE(...)` handle is the fourth family since #1539, with the same refusals.
+for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject, :CTEReference)
   @eval Base.$op(f::$T, v::SQLText) = $op(f, _arith_value(v, $(string(op))))
   @eval Base.$op(v::SQLText, f::$T) = $op(_arith_value(v, $(string(op))), f)
   @eval Base.$op(::$T, x::Any) = throw(_unsupported_arithmetic_operand($(string(op)), x, $T))

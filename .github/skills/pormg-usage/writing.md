@@ -77,7 +77,10 @@ Filter across the relation with `__` like any other: `filter("sponsors__name" =>
 
 ## Bulk operations
 
-Never loop `create()` over a batch. The bulk writers take a `DataFrame`:
+Never loop `create()` over a batch. The bulk writers take any Tables.jl table: a `DataFrame`, a
+`Vector` of `NamedTuple`s, a `NamedTuple` of vectors, a `CSV.File`. `returning=` rows and
+`allocate_primary_keys` come back built by the input's `Tables.materializer`: a `DataFrame` for a
+`DataFrame`, a `Vector` of `NamedTuple`s for one, a `NamedTuple` of vectors for a `CSV.File`:
 
 ```julia
 bulk_insert(M.Status.objects, df)                         # every backend

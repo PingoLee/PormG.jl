@@ -63,7 +63,7 @@ task needs.
 ## One end-to-end example
 
 ```julia
-using PormG, LibPQ, DataFrames
+using PormG, LibPQ, DataFrames   # DataFrames is the app's own dependency, not PormG's (#1344)
 using PormG.Functions: Count, Sum
 
 PormG.Configuration.load("db"; env = "dev")     # 1. configuration first, environment stated

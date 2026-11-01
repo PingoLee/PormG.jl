@@ -200,7 +200,7 @@ const _OKR_MENTIONS = Dict(
   # three times: the signature, the live fallthrough, the version text)
   "src/ConnectionPool.jl" => 17,
   "src/Kernel.jl" => 3,                  # the backend markers' docstring
-  "src/Migrations.jl" => 1,              # `import … SQLiteConnectionPool` for its scratch pool (a constructor)
+  "src/Migrations.jl" => 1,              # the import behind `introspection.jl`'s scratch-pool constructor call
   "src/querybuilder/deletion.jl" => 3,   # `_is_live_pool` (reviewed)
   "ext/PormGMySQLExt.jl" => 1,           # `_Pool` (reviewed)
   "ext/PormGPostgresExt.jl" => 1,        # `_Pool` (reviewed)

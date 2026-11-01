@@ -67,6 +67,11 @@ Pkg.add("SQLite")    # SQLite
 A bare `using PormG` loads the ORM but no backend; `Configuration.load` then raises a clear error
 telling you to `using LibPQ` (or `using SQLite`).
 
+PormG depends on neither `DataFrames` nor `CSV` ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)).
+A query is a [Tables.jl](https://github.com/JuliaData/Tables.jl) table and the bulk writers take any
+Tables.jl table, so `query |> DataFrame` and `bulk_insert(…, df)` work once your app adds the package it
+uses (`Pkg.add("DataFrames")`) and loads it, as the examples below do with `using DataFrames`.
+
 ---
 
 ## Quick Start

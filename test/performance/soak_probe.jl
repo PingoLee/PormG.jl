@@ -103,7 +103,7 @@ end
 using PormG
 if IS_CHILD
   include(joinpath(ROOT, "test", "load_drivers.jl"))
-  import PormG: DataFrames
+  import DataFrames   # the integration env lists it; PormG does not depend on it (#1344)
   const _i = findfirst(==("--child"), ARGS)
   const CONF_ROOT, DRIVER, LOGDIR = ARGS[_i + 1], ARGS[_i + 3], ARGS[_i + 4]
   const SOAK_S = parse(Float64, ARGS[_i + 2])

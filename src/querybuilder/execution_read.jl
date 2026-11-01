@@ -988,7 +988,7 @@ end
 
 # #1344 — a query is a Tables.jl source. `DataFrame(query)` is DataFrames' own `DataFrame(table)`, and
 # `CSV.write(io, query)`, `Tables.rowtable(query)` or any other sink reads a query the same way, with no
-# PormG method on any of them. That is what lets `DataFrames` leave `[deps]` (#1344 phase 6). The contract
+# PormG method on any of them, and PormG does not depend on DataFrames (#1344 phase 6). The contract
 # a user reads is on `SQLObjectHandler`'s docstring.
 #
 # Column access only: `Tables.rows` falls back to the columns, and the columns are the cheap read

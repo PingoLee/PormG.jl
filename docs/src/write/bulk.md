@@ -8,7 +8,7 @@ Bulk operations are designed for high-performance data manipulation of large dat
 
 ### Input: any Tables.jl table
 
-Every bulk writer, and `allocate_primary_keys()`, takes any [Tables.jl](https://github.com/JuliaData/Tables.jl) table ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)): a `DataFrame`, a `Vector` of `NamedTuple`s, a `NamedTuple` of vectors, a `CSV.File`, or anything else with `Tables.istable(x) == true`. The examples on this page build `DataFrame`s, and every one of them works the same with the same rows in another kind of table. Anything that is not a table raises `QueryBuildError`.
+Every bulk writer, and `allocate_primary_keys()`, takes any [Tables.jl](https://github.com/JuliaData/Tables.jl) table ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)): a `DataFrame`, a `Vector` of `NamedTuple`s, a `NamedTuple` of vectors, a `CSV.File`, or anything else with `Tables.istable(x) == true`. The examples on this page build `DataFrame`s (after `using DataFrames`: DataFrames is your app's dependency, not PormG's), and every one of them works the same with the same rows in another kind of table. Anything that is not a table raises `QueryBuildError`.
 
 ```julia
 statuses = [(statusid = 1, status = "Finished"), (statusid = 2, status = "Disqualified")]

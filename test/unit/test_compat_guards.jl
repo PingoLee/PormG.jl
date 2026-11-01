@@ -174,7 +174,9 @@ end
 # Each bound below was measured version by version on Julia 1.12, not inferred:
 #   CSV    0.10.0-0.10.12 fail their own module `__init__` (`getsource` typeassert,
 #          CSV/src/utils.jl); 0.10.13 is the lowest that loads. PormG did not precompile at
-#          all at the old `"0.10"` floor — no testset ran.
+#          all at the old `"0.10"` floor — no testset ran. Since #1344 CSV is a test-only extra
+#          (PormG itself does not depend on it), but the tests load it and `floor-resolve`
+#          floor-pins every `[extras]` entry, so the floor still decides whether the suite runs.
 #   SQLite Two separate breaks, so the bound is the higher of the two. 1.0.0-1.4.2 have no
 #          `SQLite.Stmt(db, sql; register = …)` method, which `ext/PormGSQLiteExt.jl` needs (it
 #          keeps bulk seeding from accumulating registered statements) — 1.5.0 fixes that. But

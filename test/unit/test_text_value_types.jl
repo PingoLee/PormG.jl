@@ -26,6 +26,7 @@ using PormG.Models: Model, IDField, CharField, DateField
 using Dates: Date, DateTime, Time
 using PormG.QueryBuilder: inspect_query, F, ToChar
 using PormG.Functions: Lower
+import DataFrames   # a test-only dependency: PormG does not depend on DataFrames (#1344)
 
 # Dedicated mocks and config keys, so this file shares nothing with the other unit files in Main.
 struct TextVal860MockPg <: PormG.PormGPostgres end
@@ -196,7 +197,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#868: bulk_insert refuses an over-length integer in a text field" begin
   M = last(first(TEXTVAL868_MODELS))
-  df = PormG.QueryBuilder.DataFrames.DataFrame(code = Any["SEN", 12345])
+  df = DataFrames.DataFrame(code = Any["SEN", 12345])
   err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df; show_query = :dict))
   @test err isa PormG.InvalidValueError
   @test occursin("max_length is 3", textval868_msg(err))
@@ -267,7 +268,7 @@ end
 # for the reason the #868 bulk testset above gives.
 @testset "#876: bulk_insert and bulk_update refuse a Bool in a text field" begin
   M = last(first(TEXTVAL868_MODELS))
-  df = PormG.QueryBuilder.DataFrames.DataFrame(driverid = [1, 2], code = Any["SEN", true])
+  df = DataFrames.DataFrame(driverid = [1, 2], code = Any["SEN", true])
   err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df[:, [:code]]; show_query = :dict))
   @test err isa PormG.InvalidValueError
   @test occursin("Got a Bool", textval868_msg(err))

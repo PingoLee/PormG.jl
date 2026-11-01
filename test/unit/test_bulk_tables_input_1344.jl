@@ -30,7 +30,7 @@ import Dates: Date
 
 const _BT_QB = PormG.QueryBuilder
 const _BT_Tables = _BT_QB.Tables
-const _BT_CSV = _BT_QB.CSV
+import CSV as _BT_CSV   # a test-only dependency: PormG does not depend on CSV (#1344)
 
 struct BtMockPostgres <: PormG.PormGPostgres end
 struct BtMockSQLite <: PormG.PormGSQLite end

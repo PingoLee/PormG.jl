@@ -1,20 +1,20 @@
 """
-PormG's internal reads use rows, not a `DataFrame` (#1344 phase 2).
+PormG names neither DataFrames nor CSV (#1344), and its internal reads use rows, not a `DataFrame`.
 
 `fetch` returns the driver's Tables.jl source. Migrations, introspection and a handful of query-builder
 helpers used to turn it into a `DataFrame` only to index it (`nrow`, `df[1, :n]`, `eachrow`). Since
-#1344 phase 2 they read `fetch(...) |> Tables.rowtable`, the idiom the write path already used, so
-`DataFrames` and `CSV` are left to the bulk writes and can then leave `[deps]` (phases 3 to 6).
+#1344 phase 2 they read `fetch(...) |> Tables.rowtable`; phases 3 to 5 took the bulk writes off both
+packages, and phase 6 took them out of `[deps]`.
 
 Two things are checked here:
-1. A ratchet on where `DataFrames` and `CSV` may still be named in `src/` and `ext/`. Every file is
-   parsed, so a comment or a docstring never counts, and a name that resolved implicitly through
-   `using DataFrames` is caught as a symbol. A file outside the allow-list fails. A file whose set
-   shrinks fails too, until the list is shrunk with it, so each later phase records its progress.
+1. Neither package is in `Project.toml`'s `[deps]`, and no file in `src/` or `ext/` names either.
+   Every file is parsed, so a comment or a docstring never counts, and a name that would have resolved
+   through `using DataFrames` (`nrow`, `eachrow`) is caught as a symbol. Precompilation already fails
+   on an `import DataFrames`; a bare `nrow` on a path the suite never runs would fail only there.
 2. The one exported function that took a DataFrames type: `convertSQLToModel(row)` takes a row of the
    PostgreSQL schema dump. That dump is now a row vector, so the function reads any Tables.jl row, and
    a `NamedTuple` and a `DataFrameRow` give the same model. (`check`'s walk over the same rows is
-   tested in `test_generated_columns.jl`.)
+   tested in `test_generated_columns.jl`.) DataFrames is a test-only dependency here.
 
 Hermetic: no database.
 
@@ -35,16 +35,20 @@ const _IR_ROOT = pkgdir(PormG)
 const _IR_NAMES = Set([:DataFrame, :DataFrames, :DataFrameRow, :AbstractDataFrame,
                        :nrow, :ncol, :eachrow, :eachcol, :CSV])
 
-# The reviewed list. Each later phase of #1344 shrinks it, and phase 6 (DataFrames and CSV leave
-# `[deps]`) deletes it with this testset.
-const _IR_ALLOWED = Dict{String, Set{Symbol}}(
-  # `src/querybuilder/execution_bulk.jl` left the list in phase 5: the bulk writes take any Tables.jl
-  # table (phase 3), `returning=` answers in the caller's kind (phase 4), and `bulk_copy` writes
-  # COPY's text itself (phase 5).
-  # The module imports, kept only for Aqua's `stale_deps` while both packages are in `[deps]` (phase 6).
-  "src/PormG.jl"                       => Set([:DataFrames]),
-  "src/QueryBuilder.jl"                => Set([:DataFrames, :CSV]),
-)
+# A `[deps]` entry, read section-aware without a TOML dependency (the `test` target does not carry the
+# TOML stdlib; `test_compat_guards.jl` reads `[compat]` the same way).
+function _ir_deps()
+  names = Set{String}()
+  section = ""
+  for raw in eachline(joinpath(_IR_ROOT, "Project.toml"))
+    line = strip(raw)
+    startswith(line, "[") && (section = line; continue)
+    section == "[deps]" || continue
+    m = match(r"^([A-Za-z0-9_]+)\s*=", line)
+    m === nothing || push!(names, String(m.captures[1]))
+  end
+  return names
+end
 
 _ir_collect!(found, x) = found
 _ir_collect!(found, x::Symbol) = (x in _IR_NAMES && push!(found, x); found)
@@ -65,20 +69,43 @@ function _ir_scan()
   return out
 end
 
-@testset "Internal reads use rows, not a DataFrame (#1344 phase 2)" begin
+@testset "PormG names neither DataFrames nor CSV; internal reads use rows (#1344)" begin
 
-  # Expected: exactly the allow-list. Why it matters: a new `fetch(...) |> DataFrame` anywhere else
-  # would put DataFrames back on a path that phase 6 takes it off, and nothing else would notice until
-  # `using PormG` failed without it.
-  @testset "DataFrames and CSV are named only where the bulk writes need them" begin
-    found = _ir_scan()
-    extra = sort([f => sort(collect(syms)) for (f, syms) in found if !haskey(_IR_ALLOWED, f)]; by = first)
-    @test isempty(extra)
-    isempty(extra) || @info "Read with `fetch(...) |> Tables.rowtable` instead of a DataFrame" extra
-    for (f, allowed) in _IR_ALLOWED
-      # A shrink fails too: shrink `_IR_ALLOWED` with it, so the next phase starts from the truth.
-      @test get(found, f, Set{Symbol}()) == allowed
+  # Expected: neither package in `[deps]`. Why it matters: every app that loads PormG would load both
+  # again, 43% of `using PormG`'s import time when #1344 measured it.
+  # Not on CI's `floor-resolve` job: its `julia-downgrade-compat` step rewrites `Project.toml` and
+  # promotes every `[targets].test` name, CSV and DataFrames included, into `[deps]` (the reason Aqua's
+  # `stale_deps` is off there too; see `test/runtests.jl`). The subprocess check below still runs there.
+  # `ENV` is read here, not `runtests.jl`'s constant, because this file also runs on its own.
+  @testset "DataFrames and CSV are not in [deps]" begin
+    if get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
+      @test_skip "PORMG_FLOOR_RESOLVE=1: Project.toml is the downgrade action's rewrite"
+    else
+      deps = _ir_deps()
+      @test "Tables" in deps   # the reader works: it found the section
+      @test !("DataFrames" in deps)
+      @test !("CSV" in deps)
     end
+  end
+
+  # Expected: a fresh process that runs `using PormG`, in this same environment (which has both
+  # packages installed, for the tests), has loaded neither. Why it matters: the `[deps]` check above
+  # sees direct dependencies only; a new dependency that pulls DataFrames in would bring the cost back
+  # with nothing in `src/` naming it.
+  @testset "using PormG loads neither DataFrames nor CSV" begin
+    probe = "using PormG; print(join(sort([p.name for p in keys(Base.loaded_modules) " *
+            "if p.name in (\"DataFrames\", \"CSV\")]), \",\"))"
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e $probe`
+    @test readchomp(cmd) == ""
+  end
+
+  # Expected: no file in `src/` or `ext/` names either package or a DataFrames verb. Why it matters:
+  # a `fetch(...) |> DataFrame` or an `nrow` would raise `UndefVarError` at run time, on whichever path
+  # the unit suite does not reach.
+  @testset "src/ and ext/ name neither DataFrames nor CSV" begin
+    found = sort([f => sort(collect(syms)) for (f, syms) in _ir_scan()]; by = first)
+    @test isempty(found)
+    isempty(found) || @info "Read with `fetch(...) |> Tables.rowtable` instead of a DataFrame" found
   end
 
   # One row of the PostgreSQL schema dump, as the reader receives it now (a `NamedTuple`) and as

@@ -25,9 +25,10 @@ what `test/integration/test_tables_source.jl` compares against.
 | `CSV.write(io, query)`, `Tables.rowtable(query)`, any Tables.jl sink | `ArgumentError` (not a table) | reads the query |
 | `?DataFrame` | showed PormG's docstring among DataFrames' | DataFrames' only; the contract is on `?PormG.SQLObjectHandler` |
 
-This is phase 1 of #1344, which takes `DataFrames` and `CSV` out of PormG's `[deps]`. `DataFrames`
-is still a dependency in this release, for the bulk writes. Write `using DataFrames` wherever you
-build a `DataFrame` instead of relying on PormG having loaded it.
+This is phase 1 of #1344, which takes `DataFrames` and `CSV` out of PormG's `[deps]`. In this release
+neither is a dependency of PormG any more (see the entry *`using PormG` no longer loads `DataFrames` or
+`CSV`*). Write `using DataFrames` wherever you build a `DataFrame`, with `DataFrames` in your app's
+own `Project.toml`.
 
 ### Who this affects
 

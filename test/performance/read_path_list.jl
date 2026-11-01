@@ -22,7 +22,7 @@
 ## after the timed section. Only a same-machine comparison means anything.
 using PormG
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
-import PormG: DataFrames
+import DataFrames   # the integration env lists it; PormG does not depend on it (#1344)
 const Tables = PormG.QueryBuilder.Tables
 
 const ROUNDS = isempty(ARGS) ? 50 : parse(Int, ARGS[1])

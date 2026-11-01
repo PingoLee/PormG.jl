@@ -1,12 +1,9 @@
 module QueryBuilder
 
-import DataFrames, Tables, JSON, CSV, OrderedCollections
-# No `import DataFrames: DataFrame`: since #1344 a query is a Tables.jl source and DataFrames' own
-# `DataFrame(table)` reads it, so PormG defines no `DataFrame` method and marks no `DataFrame` binding.
-# Since #1344 phase 5 nothing in the query builder calls DataFrames or CSV: the bulk writes take
-# any Tables.jl table and `bulk_copy` writes COPY's text itself. The two imports stay only while
-# both packages are in `[deps]`, which Aqua's `stale_deps` checks against what `src/` imports;
-# phase 6 removes the imports with the `[deps]` entries.
+import Tables, JSON, OrderedCollections
+# #1344: PormG depends on neither DataFrames nor CSV. A query is a Tables.jl source, which DataFrames'
+# own `DataFrame(table)` reads; the bulk writes take any Tables.jl table, and `bulk_copy` writes COPY's
+# text itself. `test/unit/test_internal_rows_1344.jl` fails if `src/` or `ext/` names either again.
 using Dates, TimeZones, Decimals, UUIDs
 import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 import Printf   # #1087: PostgreSQL's `float8` → `numeric` conversion is `%.15g`

@@ -52,7 +52,7 @@ const SELF = abspath(@__FILE__)   # `common_setup.jl` changes the directory
 using PormG
 if IS_CHILD
   include(joinpath(ROOT, "test", "load_drivers.jl"))
-  import PormG: DataFrames
+  import DataFrames   # the integration env lists it; PormG does not depend on it (#1344)
   Base.exit_on_sigint(false)
   cd(INTEGRATION)
   const KEY = PormG.Configuration.load("db_2"; env = "dev")

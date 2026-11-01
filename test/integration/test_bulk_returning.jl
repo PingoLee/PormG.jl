@@ -113,6 +113,41 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1344 phase 4: `rows` is a table of the kind the caller passed. The same DO NOTHING call as above,
+# from a `Vector` of `NamedTuple`s and from a `NamedTuple` of vectors, on every engine (keyed by the
+# UNIQUE `label`, so MySQL needs no pre-allocation). Expected: a `Vector` of `NamedTuple`s and a
+# `NamedTuple` of vectors back, each row holding what the table stores for its input row, a skipped
+# row `missing`. Why it matters: each engine's own RETURNING or read-back result now reaches PormG's
+# code without a DataFrame in between.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "returning=: rows come back as the caller's kind of table (#1344)" begin
+    labels = ["br671-kind-a", "br671-kind-b", "br671-kind-c"]
+    purge() = (q = M.Django_contract_scratch.objects; q.filter("label__@in" => labels); q.exists() && q.delete())
+    purge()
+    try
+        existing_id = M.Django_contract_scratch.objects.create("label" => "br671-kind-a", "price" => 1.0).id
+        rows = [(label = "br671-kind-a", price = 2.0), (label = "br671-kind-b", price = 3.0)]
+        r = bulk_insert(M.Django_contract_scratch.objects, rows; returning = ["id", "price"],
+            on_conflict = (action = :nothing, target = ["label"]))
+        stored = _br671_by_label(M.Django_contract_scratch.objects, labels, ["id", "price"])
+        @test r.count == 1
+        @test r.rows isa Vector{<:NamedTuple} && length(r.rows) == 2
+        @test isequal(getproperty.(r.rows, :id), [missing, stored["br671-kind-b"].id])
+        @test Float64(r.rows[2].price) == 3.0
+
+        cols = (label = ["br671-kind-c", "br671-kind-a"], price = [4.0, 9.5])
+        r = bulk_insert(M.Django_contract_scratch.objects, cols; returning = ["id", "price"],
+            on_conflict = (action = :update, target = ["label"], set = ["price"]))
+        stored = _br671_by_label(M.Django_contract_scratch.objects, labels, ["id", "price"])
+        @test r.rows isa NamedTuple && keys(r.rows) == (:id, :price)
+        @test r.rows.id == [stored["br671-kind-c"].id, existing_id]
+        @test Float64.(r.rows.price) == [4.0, 9.5]
+    finally
+        purge()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Foreign-key wiring from returned ids: the use case `allocate_primary_keys` used to be the only
 # answer to. Parents are inserted with `returning = ["id"]`, and children are built from those ids;
 # every child must then point at the parent carrying its intended label.

@@ -5,8 +5,9 @@
 # rows (#671).
 #
 # CONTRACT being tested:
-#   `returning = ["id", …]` makes the executed call return `(count, rows::DataFrame)`, where `rows`
-#   has one column per requested field and `nrow(df)` rows, and row `i` belongs to input row `i`.
+#   `returning = ["id", …]` makes the executed call return `(count, rows)`, where `rows` is a table of
+#   the kind the caller passed (#1344 phase 4: a `DataFrame` for a `DataFrame`) with one column per
+#   requested field and one row per input row, and row `i` belongs to input row `i`.
 #   A row this call did not write — skipped by `on_conflict = :nothing`, or a later duplicate of a
 #   key inside the frame — is `missing`. Rows are matched to the input by KEY VALUE (the
 #   `on_conflict` target, else the primary key), never by position: neither engine promises that a
@@ -28,6 +29,7 @@ import Decimals
 using Dates
 using PormG.QueryBuilder: bulk_insert
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+const BR671_Tables = PormG.QueryBuilder.Tables
 
 # Run `f(pool, model)` against a fresh temp SQLite database. `results` carries a UNIQUE (driver, year)
 # so a conflict can be built without the pk, and `status` has a database default the frame never
@@ -133,6 +135,8 @@ br671_ids(pool) = Dict(r.driver => r.id for r in
       @test isequal(r.rows.id, [missing, missing, ids["Berger"], ids["Alboreto"], ids["Piquet"], missing])
       # Berger's written row is the first occurrence (4 points), not the skipped duplicate (1).
       @test isequal(r.rows.points, [missing, missing, 4, 3, 2, missing])
+      # Each column is narrowed to the values it holds: a gap makes it `Union{Missing, Int64}`, not `Any`.
+      @test eltype(r.rows.id) == Union{Missing, Int64} && eltype(r.rows.points) == Union{Missing, Int64}
     end
   end
 
@@ -311,6 +315,40 @@ br671_ids(pool) = Dict(r.driver => r.id for r in
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # #1344 phase 4 (decision 2): `rows` is a table of the kind the caller passed, built by its
+  # `Tables.materializer` — a `Vector` of `NamedTuple`s for one, a `NamedTuple` of vectors for one.
+  # Expected: the same values the DataFrame testsets above check, `missing` gaps included, and an
+  # empty input gives an empty table of that kind carrying the requested names. Why it matters: a
+  # caller who never loads DataFrames must not get one back.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "rows come back as the caller's kind of table (#1344)" begin
+    br671_with_sqlite() do pool, model
+      bulk_insert(model.objects, br671_season()[1:2, :])
+      df = vcat(br671_season(), DataFrame(driver = ["Berger"], year = [1988], points = [1]))
+      r = bulk_insert(model.objects, BR671_Tables.rowtable(df); returning = ["id", "points"], chunk_size = 2,
+        on_conflict = (action = :nothing, target = ["driver", "year"]))
+      @test r.count == 3
+      @test r.rows isa Vector{<:NamedTuple} && length(r.rows) == 6
+      ids = br671_ids(pool)
+      @test isequal(getproperty.(r.rows, :id), [missing, missing, ids["Berger"], ids["Alboreto"], ids["Piquet"], missing])
+      @test isequal(getproperty.(r.rows, :points), [missing, missing, 4, 3, 2, missing])
+
+      r2 = bulk_insert(model.objects, (driver = ["Mansell"], year = [1988], points = [0]); returning = ["id", "status"])
+      @test r2.rows isa NamedTuple && keys(r2.rows) == (:id, :status)
+      @test r2.rows.id == [br671_ids(pool)["Mansell"]]
+      @test r2.rows.status == ["classified"]
+
+      e = @test_logs (:warn,) bulk_insert(model.objects,
+        NamedTuple{(:driver, :year, :points), Tuple{String, Int, Int}}[]; returning = ["id"])
+      @test e.count == 0
+      @test e.rows isa Vector{<:NamedTuple} && isempty(e.rows) && fieldnames(eltype(e.rows)) == (:id,)
+      e2 = @test_logs (:warn,) bulk_insert(model.objects, (driver = String[], year = Int[], points = Int[]);
+        returning = ["id", "points"])
+      @test e2.rows isa NamedTuple && keys(e2.rows) == (:id, :points) && all(isempty, e2.rows)
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # A dry run allocates nothing: pre-allocation draws the sequence, which is a write.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "a dry run allocates no ids" begin
@@ -339,6 +377,9 @@ const BR671_RETURNED = DataFrame[]   # what each INSERT … RETURNING reports, i
 const BR671_RESERVED = Int[]         # what the nextval() allocation reports
 const BR671_WRITES = String[]
 const BR671_DUPLICATE = Ref(false)   # make every INSERT fail as a duplicate key
+# Hand RETURNING back as rows (`Vector` of `NamedTuple`s, as Postgres.jl's result reads) instead of
+# columns (as LibPQ's does); PormG must read both the same (#1344 phase 4).
+const BR671_AS_ROWS = Ref(false)
 
 function fetch(connection::BulkReturningMockPg, sql::String;
   conn = nothing, params = nothing, ignore_tx::Bool = false)
@@ -348,7 +389,8 @@ function fetch(connection::BulkReturningMockPg, sql::String;
     # A 23505 the way the pool hands it over (#987); the resync retry reads its SQLSTATE (#1001).
     BR671_DUPLICATE[] && throw(PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23505",
       message = "duplicate key value violates unique constraint \"br671_pg_result_pkey\""))
-    return popfirst!(BR671_RETURNED)
+    returned = popfirst!(BR671_RETURNED)
+    return BR671_AS_ROWS[] ? BR671_Tables.rowtable(returned) : returned
   end
   return DataFrame()   # SAVEPOINT / RELEASE and anything else
 end
@@ -373,14 +415,16 @@ const BR671_PG_PRICE = Model("br671_pg_price",
   id = IDField(), price = DecimalField(max_digits = 10, decimal_places = 2), label = CharField())
 BR671_PG_PRICE.connect_key = "br671_pg"
 
-function br671_pg(f; returned = DataFrame[], reserved = Int[], duplicate = false)
+function br671_pg(f; returned = DataFrame[], reserved = Int[], duplicate = false, as_rows = false)
   empty!(BR671_WRITES); empty!(BR671_RETURNED); empty!(BR671_RESERVED)
   append!(BR671_RETURNED, returned); append!(BR671_RESERVED, reserved)
   BR671_DUPLICATE[] = duplicate
+  BR671_AS_ROWS[] = as_rows
   try
     PormG.Configuration.with_tx_context(f, PormG.config["br671_pg"].connections, :mock_tx_conn)
   finally
     BR671_DUPLICATE[] = false
+    BR671_AS_ROWS[] = false
   end
 end
 
@@ -549,4 +593,88 @@ end
     end
     @test r.rows.id == [7, 8]
   end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #1344 phase 4: `rows` is a table of the caller's kind, and the RETURNING result is read the same
+  # whether the driver hands back columns (LibPQ) or rows (Postgres.jl). Expected: the shuffled rows
+  # of the "matching is by key" testset land on their input rows for every input kind and both result
+  # shapes, a DO NOTHING gap is `missing` in its row, and crossing db_columns still come back by field.
+  # Why it matters: the RETURNING read no longer goes through a DataFrame, so each driver's own result
+  # type now reaches PormG's code.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "rows come back as the caller's kind, from a column or a row result (#1344)" begin
+    script() = [DataFrame(id = [102, 101], points = [6, 9]), DataFrame(id = [104, 103], points = [3, 4]),
+                DataFrame(id = [105], points = [2])]
+    inputs = [br671_season() => (t -> t isa DataFrame),
+              BR671_Tables.rowtable(br671_season()) => (t -> t isa Vector{<:NamedTuple}),
+              BR671_Tables.columntable(br671_season()) => (t -> t isa NamedTuple)]
+    for as_rows in (false, true), (input, is_kind) in inputs
+      r = br671_pg(reserved = [101, 102, 103, 104, 105], returned = script(), as_rows = as_rows) do
+        bulk_insert(BR671_PG_RESULT.objects, input; returning = ["id", "points"], chunk_size = 2)
+      end
+      @test is_kind(r.rows)
+      columns = BR671_Tables.columntable(r.rows)
+      @test columns.id == [101, 102, 103, 104, 105]
+      @test columns.points == [9, 6, 4, 3, 2]
+      @test eltype(columns.id) == Int64 && eltype(columns.points) == Int64   # narrowed, never `Any`
+    end
+
+    r = br671_pg(returned = [DataFrame(driver = ["Berger", "Senna"], year = [1988, 1988], id = [7, 5])],
+                 as_rows = true) do
+      bulk_insert(BR671_PG_RESULT.objects, BR671_Tables.rowtable(br671_season()[1:3, :]); returning = ["id"],
+        on_conflict = (action = :nothing, target = ["driver", "year"]))
+    end
+    @test r.rows isa Vector{<:NamedTuple}
+    @test isequal(getproperty.(r.rows, :id), [5, missing, 7])
+    @test fieldtype(eltype(r.rows), :id) == Union{Missing, Int64}
+
+    # A chunk DO NOTHING skipped entirely: RETURNING reports no rows, with its columns named or (as a
+    # driver may for an empty result) with none at all. Every row is `missing`, in the caller's kind.
+    two = br671_season()[1:2, :]
+    two_inputs = [two => (t -> t isa DataFrame),
+                  BR671_Tables.rowtable(two) => (t -> t isa Vector{<:NamedTuple}),
+                  BR671_Tables.columntable(two) => (t -> t isa NamedTuple)]
+    for returned in (DataFrame(), DataFrame(driver = String[], year = Int[], id = Int[])),
+        as_rows in (false, true), (input, is_kind) in two_inputs
+      r = br671_pg(returned = [returned], as_rows = as_rows) do
+        bulk_insert(BR671_PG_RESULT.objects, input;
+          returning = ["id"], on_conflict = (action = :nothing, target = ["driver", "year"]))
+      end
+      @test r.count == 0
+      @test is_kind(r.rows)
+      @test isequal(collect(BR671_Tables.getcolumn(BR671_Tables.columns(r.rows), :id)), [missing, missing])
+    end
+
+    r = br671_pg(reserved = [1, 2], returned = [DataFrame(id = [2, 1], laps = [2, 1], l = [60, 61])],
+                 as_rows = true) do
+      bulk_insert(BR671_PG_CROSS.objects, (grid = [1, 2], laps = [61, 60]); returning = ["laps", "grid"])
+    end
+    @test r.rows == (laps = [61, 60], grid = [1, 2])
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1344 phase 4: the read-back's own frames. `_returned_frame` reads a driver result or a query result
+# into PormG's `_BulkFrame` by column name, from columns or rows alike, and a zero-row result may name
+# no columns. `_vcat_frames` joins the read-back batches; a batch that read nothing contributes
+# nothing, whatever columns it reports. Expected: the rows of every non-empty batch, in batch order,
+# under every requested field. Why it matters: it replaces `reduce(vcat, …; cols = :union)`, which is
+# what absorbed an empty batch before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the read-back frames (#1344)" begin
+  QB = PormG.QueryBuilder
+  from_columns = QB._returned_frame((id = [1, 2], points = [9, 6]))
+  from_rows = QB._returned_frame([(id = 1, points = 9), (id = 2, points = 6)])
+  for f in (from_columns, from_rows)
+    @test f.names == ["id", "points"] && f.row_count == 2
+    @test QB._bulk_column(f, "id") == [1, 2] && QB._bulk_column(f, "points") == [9, 6]
+  end
+  empty = QB._returned_frame(NamedTuple[])
+  @test empty.row_count == 0
+
+  joined = QB._vcat_frames([from_columns, empty, QB._returned_frame([(id = 3, points = 4)])], ["id", "points"])
+  @test joined.names == ["id", "points"] && joined.row_count == 3
+  @test QB._bulk_column(joined, "id") == [1, 2, 3]
+  @test QB._bulk_column(joined, "points") == [9, 6, 4]
+  @test QB._vcat_frames([empty], ["id"]).row_count == 0
 end

@@ -4,6 +4,9 @@
 ##
 ##   julia --project=test/integration test/performance/sigterm_exit_repro.jl <out_dir> [n] [cells...]
 ##
+## or against any PostgreSQL, with the libpq conninfo (password included) in a file only you can
+## read: `SIGTERM_REPRO_CONNINFO_FILE=<file> julia --project=test/integration …` (see `child_pool`).
+##
 ## It is not in any suite and takes no suite lock: it holds up to `pool_size * 10` connections of
 ## `db_2` (30 with the committed `connection.yml`), so run it while no other session uses `db_2`.
 ## No table is read or written — every statement is `SELECT pg_sleep(0.05)`.
@@ -37,6 +40,13 @@
 ##                              — the issue's "separate the PormG part" check
 ##   libpq:compile              SIGTERM while the process compiles and runs its first query, with
 ##                              nothing else in flight — the issue's third shape
+##   postgres:drain1            as `postgres:off`, plus a hook of the script's own that calls
+##                              `close_pool!(pool; drain_seconds = 1.0)` (#1505, option 1)
+##   postgres:rollback          as `postgres:off`, plus a hook that takes every leased handle out of
+##                              the pool, sends `ROLLBACK` on each, closes it, then closes the pool
+##                              (#1505: is the EOF the missing rollback or the driver's close?);
+##                              both run on any driver (`libpq:drain1` too), and neither is in the
+##                              default cell list
 ##   nodb                       no database and no PormG: 16 tasks parked in `FDWatcher` waits on
 ##                              pipes a writer task feeds every 50 ms — "separate the Julia part"
 
@@ -94,13 +104,59 @@ function ready(n_hooks::Int)
   println("READY"); flush(stdout)
 end
 
+# `SIGTERM_REPRO_CONNINFO_FILE=<path>`: register the pool from the libpq conninfo in that file
+# (`register_connection`, pool_size 3 and env "dev", as `db_2`'s committed `connection.yml` sets)
+# instead of loading `db_2`, so the repro can run against a throwaway cluster without a
+# `connection.yml`. The file holds the password; it is read here and nowhere else.
+function child_pool()
+  file = get(ENV, "SIGTERM_REPRO_CONNINFO_FILE", "")
+  isempty(file) && return PormG.config[PormG.Configuration.load(DB2; env = "dev")].connections
+  PormG.Configuration.register_connection("sigterm_repro", String(strip(read(file, String))); pool_size = 3, env = "dev")
+  return PormG.config["sigterm_repro"].connections
+end
+
+# Leased slots, taken out of the pool under its lock exactly as `close_pool!`'s sweep does (#1505),
+# so no borrower can lease them again: (slot, handle) pairs.
+function take_leased!(pool)
+  Base.lock(pool.lock) do
+    taken = Tuple{Int,Any}[]
+    for i in eachindex(pool.connections)
+      conn = pool.connections[i]
+      (pool.available[i] || conn === nothing) && continue
+      push!(taken, (i, conn))
+      pool.connections[i] = nothing
+      pool.available[i] = true
+    end
+    taken
+  end
+end
+
 function child_db(mode::String)
-  key = PormG.Configuration.load(DB2; env = "dev")
-  pool = PormG.config[key].connections
-  if mode == "off"
+  pool = child_pool()
+  if mode in ("off", "drain1", "rollback")
     n = length(Base.atexit_hooks)
     filter!(f -> f !== PormG.Configuration.__cleanup__, Base.atexit_hooks)
     length(Base.atexit_hooks) == n - 1 || error("PormG's exit hook was not found in Base.atexit_hooks")
+  end
+  # drain1: PormG's hook replaced by `close_pool!` with a 1 s drain instead of 0 (#1505, option 1).
+  mode == "drain1" && atexit(() -> PormG.Configuration.close_pool!(pool; drain_seconds = 1.0))
+  # rollback: take every leased handle out of the pool, `ROLLBACK` on each, close it, then close the
+  # rest of the pool as PormG's hook does (#1505: does a rollback before the close end the EOFs?).
+  mode == "rollback" && atexit() do
+    taken = take_leased!(pool)
+    ok = 0
+    for (i, conn) in taken
+      try
+        CP = PormG.ConnectionPool
+        CP._await_tx_statement(pool, CP._execute_async(pool, conn, "ROLLBACK;", nothing))
+        ok += 1
+      catch e
+        mark("rollback_failed $i $(nameof(typeof(e)))")
+      end
+      try close(conn) catch end
+    end
+    mark("rollback leased=$(length(taken)) ok=$ok")
+    PormG.Configuration.close_pool!(pool; drain_seconds = 0)
   end
   n_hooks = mark_exit_hooks!()
   sql = "SELECT pg_sleep(0.05)"

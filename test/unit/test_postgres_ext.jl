@@ -768,15 +768,13 @@ end
 end
 
 @testset "COPY reports an exact record count (#788)" begin
-  CSV = PormG.QueryBuilder.CSV
-  rows = PormG.DataFrames.DataFrame(id = [1, 2, 3, 4], s = ["plain", "two\nlines", "a \"quoted\" word", missing])
-  io = IOBuffer()
-  # As bulk_copy writes a chunk (execution_bulk.jl): no header, strings force-quoted, NULL marker.
-  CSV.write(io, rows; header = false, quotestrings = true, missingstring = "\\N")
-  payload = String(take!(io))
-  @test count(==('\n'), payload) > size(rows, 1)   # a raw newline inside a quoted value
-  @test PGExt._csv_record_count(payload) == size(rows, 1)
-  @test PGExt._csv_record_count(chop(payload)) == size(rows, 1)   # no trailing newline
+  # Written by bulk_copy's own writer (execution_bulk.jl, #1344 phase 5): no header, strings quoted,
+  # NULL marker.
+  nrows = 4
+  payload = PormG.QueryBuilder._copy_csv_chunk(([1, 2, 3, 4], ["plain", "two\nlines", "a \"quoted\" word", missing]), nrows)
+  @test count(==('\n'), payload) > nrows   # a raw newline inside a quoted value
+  @test PGExt._csv_record_count(payload) == nrows
+  @test PGExt._csv_record_count(chop(payload)) == nrows   # no trailing newline
   @test PGExt._csv_record_count("") == 0
 
   # Chunks may be strings or bytes, as LibPQ.jl's `CopyIn` accepts (review finding): bytes must be

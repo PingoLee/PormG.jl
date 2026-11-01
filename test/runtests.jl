@@ -223,6 +223,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")
     @testset "Bulk Row Counts (#670)" include("unit/test_bulk_row_counts.jl")
     @testset "Bulk Copy Cell Errors (#869)" include("unit/test_bulk_copy_cell_errors.jl")
+    @testset "Bulk Copy Stream (#1344)" include("unit/test_bulk_copy_stream.jl")
     @testset "Bulk Write Cell Errors (#875)" include("unit/test_bulk_write_cell_errors.jl")
     @testset "A NUL in a String Value Is Refused (#951)" include("unit/test_nul_in_string_values.jl")
     @testset "Refusal Keeps an Explicit conn (#960)" include("unit/test_fetch_explicit_conn_refusal.jl")

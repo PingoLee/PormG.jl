@@ -411,3 +411,131 @@ end
   CP.release_connection(p, got)
   @test p.available[1] === true
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An acquire call that exits by an exception gives back the slot it holds (#1535)
+#
+# A caller parks as a `PoolWaiter` and blocks in `take!`. A Ctrl-C there (#1512 delivers one to a
+# parked main-thread caller) used to leave the waiter queued with `done = false`, so the next release
+# handed its slot to nobody: `available[i] = false` with no borrower, for the life of the process. A
+# handoff delivered just before the interrupt, and a branch A slot whose before_connect hook then
+# refused the connection, were lost the same way. `pool_stats().in_use` is what shows the leak: a
+# slot nobody holds still counts as in use.
+#
+# The interrupt is `schedule(t, InterruptException(); error = true)`, safe only on a task that is
+# genuinely parked (see test_await_result_interrupt.jl). `W` is a sticky `@async` task whose only
+# yield point after it enqueues its waiter is the `take!`, so once the waiter is queued and the main
+# task runs again, `W` is parked there.
+#
+# Gate: unpatched, the release after the interrupt hands the slot to the orphan, so `in_use` stays
+# at the saturated count and the waiter stays queued.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an interrupted parked waiter is dequeued, and the next release frees the slot (#1535)" begin
+  for (label, mk) in (("PG", () -> MockPGHandoff(1)), ("SQLite", () -> MockSQLiteHandoff(1)))
+    @testset "$label" begin
+      p = mk()
+      held = _saturate(p)
+      n = length(held)
+      W = @async CP.acquire_connection(p; timeout_seconds = 30)
+      @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+      w = CP._waiters_for(p)[1]
+      @test !w.done && !istaskdone(W)
+
+      schedule(W, InterruptException(); error = true)
+      @test _wait_until(() -> istaskdone(W))
+      @test W.exception isa InterruptException            # the interrupt reaches the caller unchanged
+      @test w.done && isempty(CP._waiters_for(p))          # dequeued: no producer will deliver to it
+      @test PormG.pool_stats(p).waiting == 0
+
+      CP.release_connection(p, held[1])
+      @test PormG.pool_stats(p).in_use == n - 1            # ← unpatched: n, the slot leased to nobody
+      @test p.available[1] === true
+      for c in held[2:end]; CP.release_connection(p, c); end
+      @test count(!, p.available) == 0
+    end
+  end
+end
+
+# The other order: a release hands the slot over, and the interrupt lands before the waiter took it.
+# Driven through the helpers, because interrupting a task a `put!` has already made runnable would
+# enqueue it twice. What the park's `catch` runs is exactly `_abandon_wait!` then, in
+# `acquire_connection`'s own `catch`, `_drop_owned!`.
+@testset "a handoff delivered before the interrupt is passed on, not lost (#1535)" begin
+  p = MockPGHandoff(1)
+  c = CP.acquire_connection(p)
+  w = CP.PoolWaiter(:any)
+  push!(CP._waiters_for(p), w)
+  @test CP.release_connection(p, c) === true          # handed to w: leased, handle still in the slot
+  @test w.done && isready(w.chan) && p.available[1] === false
+
+  owned = CP._OwnedSlot(nothing)
+  CP._abandon_wait!(p, w, owned)
+  @test owned[] == (1, c)                              # the delivery was taken, not left in the channel
+  @test !isready(w.chan)
+  CP._drop_owned!(p, owned)
+  @test owned[] === nothing
+  @test p.available[1] === true                        # back in the pool (no other waiter)
+
+  # With a second waiter queued, the dropped slot is handed on to it instead of freed.
+  c = CP.acquire_connection(p)
+  w1, w2 = CP.PoolWaiter(:any), CP.PoolWaiter(:any)
+  append!(CP._waiters_for(p), [w1, w2])
+  CP.release_connection(p, c)                          # → w1
+  owned = CP._OwnedSlot(nothing)
+  CP._abandon_wait!(p, w1, owned); CP._drop_owned!(p, owned)
+  @test w2.done && take!(w2.chan) == (1, c)            # w2 has it, still leased for w2
+  @test p.available[1] === false && isempty(CP._waiters_for(p))
+
+  # A sentinel the Timer already delivered is dropped; nothing is owned.
+  w3 = CP.PoolWaiter(:any)
+  push!(CP._waiters_for(p), w3)
+  CP._pool_wait_timeout!(p, w3)
+  owned = CP._OwnedSlot(nothing)
+  CP._abandon_wait!(p, w3, owned)
+  @test owned[] === nothing && !isready(w3.chan)
+
+  # A slot a sweep re-opened after the handoff is not ours to free (#584): `_drop_owned!` leaves it.
+  owned[] = (1, c)
+  p.connections[1] = nothing; p.available[1] = true    # what `_close_pool_slots!` leaves
+  x = CP.acquire_connection(p)                         # a fresh acquirer materializes into slot 1
+  CP._drop_owned!(p, owned)
+  @test p.available[1] === false && p.connections[1] === x
+  CP.release_connection(p, x)
+end
+
+# A discard hands a parked waiter an EMPTY slot (branch A). The waiter must run the before_connect
+# hook before it connects, off the lock; a hook that refuses raises `PoolConnectError` out of
+# `acquire_connection`, and before #1535 the slot it was handed stayed leased to nobody.
+mutable struct MockPGHookGate <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  nid::Int
+end
+MockPGHookGate(n::Int) = MockPGHookGate(Any[nothing for _ in 1:n], fill(true, n), "mock://pg", n, ReentrantLock(), 0)
+PormG.backend_connect(p::MockPGHookGate; kwargs...) = FakeHandoffConn(p.nid += 1)
+PormG.backend_is_alive(::MockPGHookGate, c) = c isa FakeHandoffConn && !c.closed
+const HOOK_GATE_1535 = Ref(true)
+PormG.Configuration.ensure_before_connect!(::MockPGHookGate) = HOOK_GATE_1535[]
+
+@testset "a refused before_connect hook after a discard handoff frees the slot (#1535)" begin
+  p = MockPGHookGate(1)
+  held = _saturate(p)
+  n = length(held)
+  W = @async CP.acquire_connection(p; timeout_seconds = 5)
+  @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  HOOK_GATE_1535[] = false
+  try
+    @test CP._discard_connection!(p, held[1]) === true # slot 1 emptied and handed to W
+    @test _wait_until(() -> istaskdone(W))
+    @test W.exception isa PormG.PoolConnectError
+    @test PormG.pool_stats(p).in_use == n - 1          # ← unpatched: n, slot 1 leased to nobody
+    @test p.available[1] === true
+  finally
+    HOOK_GATE_1535[] = true
+  end
+  for c in held[2:end]; CP.release_connection(p, c); end
+  @test count(!, p.available) == 0
+end

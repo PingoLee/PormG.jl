@@ -112,6 +112,8 @@ Because the placeholder style is backend-native, a manual-params string is **not
 
 Interrupting a running query in the REPL is safe: PormG asks the database to abandon the statement, waits for the driver to let go of the connection, and only then decides what to do with the pool slot. A connection that comes back clean is reused; one that does not is renewed or dropped, and a fresh connection takes its place. Either way the *next* query gets a healthy connection — the pool cannot be left in a state where every later query fails.
 
+An interrupt that lands while the query is still **waiting for a connection** (every connection is leased, or the pool is retrying a connect while the server is down) also leaves the pool whole. The waiting caller leaves the queue, and a connection handed to it at that moment goes to the next waiting caller or back to the pool ([#1535](https://github.com/PingoLee/PormG.jl/issues/1535)).
+
 On PostgreSQL under either driver and on SQLite, the interrupt reaches a query while its statement runs, so a statement interrupted outside a transaction block is cancelled rather than left to finish, and an interrupted autocommit write normally does not commit (a cancel that arrives after the server committed is too late). Inside a transaction block, the warning below applies instead. The limits come from how Julia delivers `Ctrl+C`:
 
 - It interrupts only in the REPL, or in a script that calls `Base.exit_on_sigint(false)`. A plain `julia script.jl` exits on `Ctrl+C`, so nothing is sent to the database.

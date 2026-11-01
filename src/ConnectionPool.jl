@@ -2450,6 +2450,10 @@ Runs on a DETACHED task, for three separate reasons:
   * A second Ctrl-C would abort a synchronous cleanup half-way and re-poison the slot. A detached
     task does not receive the REPL's interrupt.
 
+The one exception is SQLite's cancel, which the caller sends itself before spawning (#1534): the
+detached task needs a free default thread, and under plain `julia` the only one is running the
+statement, so a cancel sent from there arrived when the statement had already finished.
+
 The slot stays LEASED for the whole routine. That is the point: it becomes available again only
 once the connection is proven clean, and otherwise it is renewed or emptied. Never throws — an
 escaping error here would surface as an unhandled task error instead of a recovered slot.
@@ -2470,20 +2474,49 @@ This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
+# The stop signal sent from the caller's own task, before the recovery is spawned (#1534). Returns
+# whether it was sent; the recovery's step 1 then sends it only if it was not.
+#
+# The recovery runs on a `Threads.@spawn` task on the `:default` pool. Under `julia -t 1,1` (plain
+# `julia`) that pool's one thread is inside the very statement being abandoned, since SQLite runs it
+# there on the global worker. The recovery then started only when the statement ended, so its cancel
+# came too late, and the next query, queued on the same worker, waited out the whole statement: 31
+# to 38 s after a Ctrl-C one second into a statement of about 30 s, 10 of 10 runs. Sent from the
+# caller, it was 0.2 s.
+#
+# SQLite: `sqlite3_interrupt` sets a flag and returns, and is documented safe from any thread, so the
+# caller sends it inline. PostgreSQL and MySQL: no. `PQcancel` opens its own socket and MySQL's
+# `KILL QUERY` its own connection, either of which can block for seconds, and the caller has to give
+# the REPL back at once; their cancel stays on the detached task. Never throws, as step 1 never does.
+function _cancel_at_abandon!(pool::PormGSQLite, conn)::Bool
+  try
+    backend_cancel_query!(pool, conn)
+    return true
+  catch cancel_failure
+    @debug "Cancel of an abandoned SQLite query failed" exception=cancel_failure
+    return false
+  end
+end
+_cancel_at_abandon!(::Union{PormGPostgres, PormGMySQL}, conn)::Bool = false
+
 function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
+  cancel_sent = _cancel_at_abandon!(pool, conn)         # on the caller's task, at once (#1534)
   Threads.@spawn begin
     try
       # 1. Best-effort stop signal, and the ONLY driver call allowed to run while the operation may
       #    still be in flight: PQcancel uses a separate PGcancel on its own socket, and
       #    sqlite3_interrupt is documented cross-thread-safe. Never allowed to escape — a missing
-      #    driver hits Backend.jl's throwing fallback, and a closed handle can raise too.
-      try
-        backend_cancel_query!(pool, conn)
-      catch cancel_failure
-        @debug "Cancel of an abandoned query failed" exception=cancel_failure
+      #    driver hits Backend.jl's throwing fallback, and a closed handle can raise too. Skipped
+      #    when the caller already sent it (`_cancel_at_abandon!`, SQLite, #1534).
+      if !cancel_sent
+        try
+          backend_cancel_query!(pool, conn)
+        catch cancel_failure
+          @debug "Cancel of an abandoned query failed" exception=cancel_failure
+        end
       end
 
       # 2. Bounded wait for the driver to let go. LOAD-BEARING, not an optimization: LibPQ's

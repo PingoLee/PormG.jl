@@ -572,8 +572,9 @@ end
 
 @testset "paced connect retries do not spend max_retries (#1518)" begin
   # `max_retries` bounds scan passes. Counting the time-paced retries against it would end a long
-  # `pool_timeout` early. max_retries = 3 allows the `before_connect` detour (one pass) and two scan
-  # passes; counted naively, four refused connects would raise PoolConnectError after the 2nd.
+  # `pool_timeout` early. Counted naively, four refused connects would spend max_retries = 3 and raise
+  # PoolConnectError before the fifth connect. (Since #1540 the hook runs in the connect step and costs
+  # no pass of its own, and the pass that parks after a failed connect finishes the failing one.)
   pool = MockPG1518(1; fail_times = 4)
   conn = CP.acquire_connection(pool; timeout_seconds = 10, max_retries = 3)
   @test conn isa FakeConn1518

@@ -570,6 +570,22 @@ end
   @test CP.pool_stats(pool).waiting == 0
 end
 
+@testset "two callers whose connects fail stay paced: a failed connect does not wake the other (#1540)" begin
+  # Since #1540 a caller reserves its slot before it connects, so a failed connect frees that slot
+  # with `_handoff_or_free!`, and it could hand it to a waiter. Handing it to a caller that parked
+  # after its OWN failed connect made that caller connect at once, fail, and hand it back: two
+  # callers traded the slot as fast as the server refused, with neither backoff timer ever firing.
+  # Each caller is still paced, so over 1.5 s the pair makes at most ~2 × 6 attempts (the schedule in
+  # the testset above). Unpatched, the count runs into the thousands.
+  for pool in (MockPG1518(3; fail_times = typemax(Int)), MockSQLite1518(3; fail_times = typemax(Int)))
+    callers = [@async(try; CP.acquire_connection(pool; timeout_seconds = 1.5); catch e; e; end) for _ in 1:2]
+    errs = fetch.(callers)
+    @test all(e -> e isa PormG.PoolConnectError, errs)
+    @test pool.connects <= 30                              # ← unpatched: thousands
+    @test CP.pool_stats(pool).waiting == 0 && CP.pool_stats(pool).in_use == 0
+  end
+end
+
 @testset "paced connect retries do not spend max_retries (#1518)" begin
   # `max_retries` bounds scan passes. Counting the time-paced retries against it would end a long
   # `pool_timeout` early. Counted naively, four refused connects would spend max_retries = 3 and raise

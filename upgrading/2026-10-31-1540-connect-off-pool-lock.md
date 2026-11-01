@@ -26,10 +26,11 @@ back to the pool.
 |---|---|---|
 | `release_connection` while another caller connects | waits for the connect to finish | returns at once |
 | `acquire_connection(…; timeout_seconds = t)` while another caller connects, pool at its ceiling | raises `PoolTimeoutError` when the connect ends, possibly long after `t` | raises `PoolTimeoutError` at about `t` |
-| Callers connecting during an outage | one at a time, behind the lock | side by side, one attempt per caller at a time |
+| Callers connecting at once (an outage, or a burst on a cold pool) | one at a time, behind the lock | side by side, one attempt per caller at a time; a burst can open up to `pool_size × 10` connections together |
 | `Ctrl+C` during `backend_connect` | caught as a failed connect and retried; the interrupt was lost | `InterruptException`; the slot is freed |
-| `pool_stats().in_use` during a connect | counted as available (a new slot: not counted) until the connect ended | the reserved slot counts as `in_use` |
-| Leak detection (`leak_detection_threshold`) | no warning while connecting | a connect slower than the threshold is reported like a held connection |
+| `pool_stats()` during a connect | waited behind the lock until the connect ended | returns at once; the reserved slot counts as `in_use` |
+| Leak detection (`leak_detection_threshold`) during a connect | the check waited behind the lock until the connect ended | a connect slower than the threshold is reported like a held connection |
+| A failed connect into a slot that a release or discard handed the caller | the caller scanned again and connected into another free slot at once | the caller retries on the backoff of 50 ms doubling to 0.5 s, like any failed connect |
 
 ### How to find the calls to migrate
 

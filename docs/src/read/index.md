@@ -29,12 +29,14 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations. |
 | `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
+| `.list(T)` | `Vector{T}` | Builds each row into a struct or `NamedTuple` type `T` you declare, so the code after the query is type-stable. See [Typed rows](#Typed-rows:-list(T)). |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` (after `using DataFrames`) for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on every engine. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
 | `.last()` | `PormGRow` or `nothing` | Returns the last matching row (inverts `order_by`; falls back to primary-key descending when no ordering is set). |
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.latest(fields...)` | `PormGRow` | Returns the latest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
+| `.first(T)`, `.last(T)`, `.get(T, filters...)`, `.earliest(T, fields...)`, `.latest(T, fields...)` | `T` (or `nothing` for `first`/`last`) | The single-row terminals as typed reads. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. An aggregate with no grouping and no `HAVING` (`values("n" => Count("resultid"))`) is one row whatever matched, so its count would be a constant: it raises `QueryBuildError`. |
 | `.aggregate(pairs...)` | `NamedTuple` | Computes whole-queryset aggregates (no `GROUP BY`) and returns them as a single-row named tuple. |
 | `.exists()` | `Bool` | Returns `.count() > 0`: `true` if `.list()` would return at least one row. Raises `QueryBuildError` where `.count()` does. |
@@ -161,7 +163,101 @@ An integer's width follows the engine, for a column and a computed value alike: 
 keep the column's own type (an `IntegerField` reads as an `Int32`, a `BigIntegerField` or a `Count` as
 an `Int64`), and SQLite has one 64-bit integer, so every integer reads as an `Int64` there. That is the
 same value in different widths, not a different meaning, so PormG leaves it alone. Compare integers by value
-(`==`), or convert with `Int(x)` where one Julia type is needed.
+(`==`), or convert with `Int(x)` where one Julia type is needed — or declare the type once with a
+[typed read](#Typed-rows:-list(T)), which converts integer widths for you.
+
+### Typed rows: `list(T)`
+
+`.list()` and `.list(:dict)` hold their values as `Any`, so every field access in the code a query
+feeds is a run-time dispatch. A **typed read** builds each row into a type you declare — a struct or a
+`NamedTuple` type — and returns `Vector{T}`, so everything after the query is concrete and
+type-stable (and inferred: `list(T)` is `Vector{T}` to the compiler, `first(T)` is
+`Union{Nothing, T}`):
+
+```julia
+struct DriverRow
+    driverid::Int64
+    surname::String
+    number::Union{Nothing, Int64}
+    dob::Date
+end
+
+rows = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list(DriverRow)
+rows[1].surname                        # a String, known to the compiler
+
+M.Driver.objects.filter("nationality" => "Brazilian").first(DriverRow)   # DriverRow or nothing
+M.Driver.objects.get(DriverRow, "driverref" => "senna")                  # DriverRow, or DoesNotExist
+```
+
+With no `values(...)`, the query projects exactly `fieldnames(T)`, so it reads only the columns `T`
+needs. A field can name a joined column (`driverid__surname` is a valid field name). With
+`values(...)`, every projected name, aliases included, must be a field of `T`, and every field of `T`
+must be projected. That is how joined and computed columns reach a typed row:
+
+```julia
+struct ResultRow
+    surname::String
+    race::String
+    points::Float64
+end
+
+M.Result.objects.
+    values("surname" => "driverid__surname", "race" => "raceid__name", "points").
+    filter("raceid__year" => 2008, "driverid__driverref" => "hamilton").
+    order_by("raceid__round").
+    list(ResultRow)
+
+struct TotalsRow
+    surname::String
+    races::Int64
+    avg_points::Float64
+end
+
+M.Result.objects.
+    values("surname" => "driverid__surname", "races" => Count("resultid"), "avg_points" => Avg("points")).
+    filter("driverid__driverref__@in" => ["hamilton", "alonso"]).
+    order_by("surname").
+    list(TotalsRow)
+```
+
+A field with no column and a column with no field both raise `QueryBuildError` before any SQL runs:
+a typed read refuses rather than drops a column, so a misspelled alias cannot pass silently.
+`values("*")` is refused too, because `list(T)` already projects `T`'s fields.
+
+**NULL** reads as the field's declared absent value:
+
+| field type | a NULL reads as |
+|---|---|
+| `Union{Nothing, X}` | `nothing` |
+| `Union{Missing, X}` | `missing` |
+| `Union{Nothing, Missing, X}` | `missing` (the value a driver reads a NULL as) |
+| `X` (admits neither) | refused: `InvalidValueError` naming the field and the row |
+
+Every field must hold a **concrete** type once `Nothing`/`Missing` is set aside: `Int64`, `String`,
+`Union{Nothing, Date}`. An abstract field (`::Integer`, `::Real`, `::Any`) is refused before SQL
+runs, because it would take values the rules below refuse (a `Bool` into `::Integer`, a `Decimal`
+into `::Real`) and its rows would not be concretely typed.
+
+**Conversion** is decided by the two types: whether a column's type can go into a field's type never
+depends on the value, so a query cannot pass in a test and fail on one row in production by type.
+The one check that looks at a value is range — an integer that does not fit the field's integer type,
+or an integer a float cannot hold exactly. Each value is first read as every other terminal reads it (a
+`DateTimeField` as a `ZonedDateTime`, a `DecimalField` as a `Decimal`, …), then:
+
+| column reads as → field declared as | result |
+|---|---|
+| the field's own type | the value |
+| an integer → a narrower or wider integer | converted; a value out of the field's range raises `InvalidValueError` (`kind = :range`) |
+| an integer → a float or `Decimal` | converted when exact (an integer past 2^53 into a `Float64` is out of range) |
+| a float → a wider float (`Float32` → `Float64`) | converted |
+| any other pair — a float or `Decimal` into an integer, a `Decimal` into a float, a float into a narrower float, a `Bool` and an integer either way, a `ZonedDateTime` into a `DateTime` | refused: `InvalidValueError` (`kind = :type`), whatever the value |
+
+The integer rule is what lets one struct read the same on every engine: an `IntegerField` reads as an
+`Int32` on PostgreSQL and MySQL and as an `Int64` on SQLite, and an `Int64` field takes both. A
+refusal names the field, the field's type and the column's type, never the value.
+
+A typed row is a read-only projection, like jOOQ's `fetchInto` or sqlx's `query_as!`: it has no lazy
+relations, no many-to-many accessors and no `save()`. Use `.list()` for those.
 
 ### Serializing rows to JSON
 

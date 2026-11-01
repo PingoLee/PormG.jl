@@ -56,6 +56,7 @@ whole fluent-API reference; `?query.filter` cannot, because the methods are synt
 | `.first()` / `.last()` | `PormGRow` or `nothing` |
 | `.earliest("f")` / `.latest("f")` | `PormGRow`; raise `DoesNotExist` when empty |
 | `.get(pairs...)` | Exactly one `PormGRow`, or `DoesNotExist` / `MultipleObjectsReturned` |
+| `.list(T)` / `.first(T)` / `.get(T, pairs...)` | `Vector{T}` / `T` or `nothing` / `T` for a struct or `NamedTuple` type you declare — type-stable rows; no `values()` projects `fieldnames(T)`, with `values()` the aliases must equal `fieldnames(T)`; NULL needs `Union{Nothing,X}` or `Union{Missing,X}`; integer widths convert, float↔Decimal and float→Int are refused |
 | `.count()` / `.exists()` | `Int` / `Bool` |
 | `.aggregate("alias" => Agg(...), ...)` | One `NamedTuple` of scalars, no `GROUP BY` |
 

@@ -143,6 +143,7 @@ include("querybuilder/sql_format.jl")
 
 # #130: executing a statement, split by direction — reads, then single-row and queryset writes.
 include("querybuilder/execution_read.jl")
+include("querybuilder/typed_read.jl")     # #1352: list(T) / first(T) / get(T, …), rows built into a declared type
 include("querybuilder/execution_write.jl")
 
 # #48: `explain_query` / `.explain()` — the database's plan for the SELECT a handler builds.

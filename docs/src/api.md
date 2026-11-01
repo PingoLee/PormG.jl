@@ -60,6 +60,7 @@ These methods finalize the query and execute it against the database:
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
 | `.list(:json)` | `String` | Returns results as a JSON string. `JSON.json` on the rows from `.list()` produces the same string. A `DurationField` reads as `"00:01:49.088"` and a `DecimalField` as a JSON number carrying its exact digits — see [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON). |
+| `.list(T)` | `Vector{T}` | The typed read (#1352): each row built into a struct or `NamedTuple` type `T` you declare, so the code after the query is type-stable. Projects `fieldnames(T)` when there is no `values(...)`; a field with no column or a column with no field is a `QueryBuildError`, and a value whose type `T` does not take an `InvalidValueError`. See [Typed rows](read/index.md#Typed-rows:-list(T)). |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` (after `using DataFrames`) for tabular output. A query is a [Tables.jl](https://github.com/JuliaData/Tables.jl) table, so any Tables.jl sink reads it the same way (`CSV.write(io, query)`, `Tables.rowtable(query)`); each read executes the query once. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on every engine, as in `.list()`. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |
@@ -69,6 +70,7 @@ These methods finalize the query and execute it against the database:
 | `.earliest(fields...)` | `PormGRow` | Earliest row ordered by `fields` (ascending; `"-field"` flips); raises `DoesNotExist` when empty. |
 | `.latest(fields...)` | `PormGRow` | Latest row ordered by `fields` (descending; `"-field"` flips); raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
+| `.first(T)`, `.last(T)`, `.get(T, filters...)`, `.earliest(T, fields...)`, `.latest(T, fields...)` | `T` (`first`/`last`: or `nothing`) | The single-row terminals as typed reads, under `.list(T)`'s rules. |
 | `.create(key => value, ...)` | `PormGRow` | Inserts a single record and returns it as a row (dot-access + `.save()`). |
 | `.update(key => value, ...)` | — | Updates all matching records. |
 | `.get_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Fetch-or-insert, never updates a match; returns `(row, created)`. See [Get or Create](write/create.md#get-or-create). |

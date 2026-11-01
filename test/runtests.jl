@@ -204,6 +204,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "SQLite numeric(p, s) Applied On Read (#1110)" include("unit/test_sqlite_decimal_overflow_1110.jl")
     @testset "Value Representation Property (#564)" include("unit/test_value_repr_property.jl")
     @testset "Column-wise Row Read (#1073)" include("unit/test_list_raw_columnwise_1073.jl")
+    @testset "Typed read: list(T) / first(T) / get(T) (#1352)" include("unit/test_typed_read_1352.jl")
     @testset "Query as a Tables.jl Source (#1344)" include("unit/test_tables_source.jl")
     @testset "Internal Reads Use Rows, not a DataFrame (#1344)" include("unit/test_internal_rows_1344.jl")
     @testset "Bulk Writers Take Any Tables.jl Table (#1344)" include("unit/test_bulk_tables_input_1344.jl")

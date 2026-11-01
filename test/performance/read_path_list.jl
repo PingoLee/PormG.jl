@@ -115,3 +115,63 @@ end
 _count_allocs(f::F) where {F} = (f(); Base.gc_alloc_count(@timed(f()).gcstats))
 
 report(stdout, measure(ROUNDS))
+
+## ── The typed read (#1352) at 1k and 100k rows ───────────────────────────────────────────────────
+##
+## `list(T)` is step 1 of #1352: the `Dict{Symbol,Any}` rows `list(:dict)` builds, then one `T` per
+## row. Step 2 — decoding the driver's columns straight into `T` — would save the Dict per row and
+## nothing else, so the steps below split a `list(T)` call into the parts that decision needs:
+##
+##   execute        — build + fetch, as above;
+##   Dict rows      — `_rows_from_result` over that result: what step 2 would remove;
+##   T rows         — `_typed_rows` over those Dicts: the conversion `list(T)` adds to `list(:dict)`;
+##   list(:dict), list(T), list() — the terminals end to end.
+##
+## A `Lap_times` read ordered by its natural key, five integer columns, at `limit(n)`. Rounds are
+## capped at 10 for 100k rows, which still interleaves every step.
+struct LapRow1352
+  raceid::Int64
+  driverid::Int64
+  lap::Int64
+  position::Union{Nothing,Int64}
+  milliseconds::Union{Nothing,Int64}
+end
+
+function typed_report(io::IO, n::Int, rounds::Int)
+  q() = M.Lap_times.objects.values("raceid", "driverid", "lap", "position", "milliseconds").
+    order_by("raceid", "driverid", "lap").limit(n)
+  held = let (result, built, connection) = QB._execute_select(q())
+    (; result, parsers = QB._projection_parsers(built, connection))
+  end
+  dicts = QB._rows_from_result(held.result, held.parsers)
+  site = QB._TypedReadSite("list(LapRow1352)", "Lap_times")
+  steps = (
+    ("execute (build + fetch)", () -> QB._execute_select(q())),
+    ("Dict rows (_rows_from_result)", () -> QB._rows_from_result(held.result, held.parsers)),
+    ("T rows (_typed_rows over the Dicts)", () -> QB._typed_rows(LapRow1352, dicts, site)),
+    ("list(:dict)", () -> q().list(:dict)),
+    ("list(T)", () -> q().list(LapRow1352)),
+    ("list()", () -> q().list()),
+  )
+  for (_, f) in steps, _ in 1:2
+    _alloc(f); _time_ns(f)
+  end
+  allocs = Dict(s => Int[] for (s, _) in steps)
+  times = Dict(s => UInt64[] for (s, _) in steps)
+  for r in 1:rounds, i in 0:length(steps)-1
+    s, f = steps[mod1(r + i, length(steps))]
+    push!(allocs[s], _alloc(f))
+    push!(times[s], _time_ns(f))
+  end
+  println(io)
+  println(io, "**Typed read (#1352):** `Lap_times`, $(length(dicts)) rows, $(rounds) interleaved rounds; median (min–max).")
+  println(io)
+  println(io, "| step | allocations | KiB | time µs |")
+  println(io, "|---|---:|---:|---:|")
+  for (s, f) in steps
+    println(io, "| $(s) | $(_count_allocs(f)) | $(_spread(allocs[s], 1024)) | $(_spread(times[s], 1000)) |")
+  end
+end
+
+typed_report(stdout, 1_000, ROUNDS)
+typed_report(stdout, 100_000, min(ROUNDS, 10))

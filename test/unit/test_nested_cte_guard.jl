@@ -100,7 +100,7 @@ PormG.Models.set_models(@__MODULE__, "ncg_mock")
 end
 
 const NCG = NcgModels
-import PormG.QueryBuilder: F, Exists, Subquery, OuterRef, Count, Case, When, inspect_query
+import PormG.QueryBuilder: F, Q, Exists, Subquery, OuterRef, Count, Case, When, inspect_query
 
 include("helper_marker_alignment.jl")
 
@@ -378,6 +378,15 @@ const _NCG_EXISTS_SHAPES = [
     q.filter(Exists(mid))
     q
   end),
+  # The one position whose run lands in `:join`. ON prints before WHERE, so the nested run comes first
+  # in the text; PostgreSQL numbers the WHERE value `$1`, hence the text-order readback.
+  ("Exists(...) in an on() join condition", ["CTEVAL", "INNERVAL", "AFTERVAL"], () -> begin
+    q = NCG.Ncg_child.objects
+    q.on("parent", Q(Exists(_ncg_exists_inner())))
+    q.values("note", "parent__sku")
+    q.filter("note" => "AFTERVAL")
+    q
+  end),
   # Each query has its own CTE namespace (#444), and SQL scopes a WITH name to its own SELECT.
   ("Exists(...) with a nested CTE named like the outer query's", ["CTEVAL", "OUTERVAL", "CTEVAL", "INNERVAL"], () -> begin
     s = _ncg_inner_with_cte()
@@ -427,7 +436,32 @@ const _NCG_EXISTS_WITH = r"EXISTS \(WITH [\"`]gv[\"`] AS"
   end
 end
 
-@testset "the read and write terminals bind a nested CTE in text order (#1292)" begin
+@testset "one Exists subquery declaring a CTE, reused under two outer queries and rebuilt (#1523)" begin
+  # Expected: each outer query binds its own WHERE value around the same nested run, the subquery
+  # handler keeps only the CTE keys the caller declared, and a second build is byte-identical. Why:
+  # `build_cte_clause` writes the CTE's model into the dict it is given; `_build_exists_query` hands it
+  # its own copy, and a regression that built on the caller's handler would leak that state into the
+  # next query built from it.
+  inner = _ncg_exists_inner()
+  keys_before = sort(collect(keys(inner.object.ctes["gv"])))
+  outer(v) = begin
+    q = NCG.Ncg_child.objects
+    q.values("note")
+    q.filter("note" => v)
+    q.filter(Exists(inner))
+    q
+  end
+  first_a = _ncg_sql(() -> outer("A"), _NCG_SL)
+  b = _ncg_sql(() -> outer("B"), _NCG_SL)
+  again_a = _ncg_sql(() -> outer("A"), _NCG_SL)
+  @test first_a[:parameters] == ["A", "CTEVAL", "INNERVAL"]
+  @test b[:parameters] == ["B", "CTEVAL", "INNERVAL"]
+  @test again_a[:sql_text] == first_a[:sql_text] && again_a[:parameters] == first_a[:parameters]
+  @test sort(collect(keys(inner.object.ctes["gv"]))) == keys_before
+  @test !haskey(inner.object.ctes["gv"], "model")
+end
+
+@testset "the read and write terminals bind a nested CTE in text order (#1292, #1523)" begin
   # Expected: `count`/`exists` render `… WHERE note = ? AND parent IN (WITH "gv" AS …)`, and the
   # UPDATE/DELETE carry the same nested WITH in their WHERE (or in SET). Why: each terminal renders
   # its own statement around the same filter render, so a terminal-specific bucket switch would
@@ -435,6 +469,14 @@ end
   _filtered(note) = begin
     q = NCG.Ncg_child.objects
     q.filter("note" => note, "parent__@in" => _ncg_inner_with_cte())
+    q
+  end
+  # #1523: the same terminals over an `Exists` declaring the CTE. The mutations carry a nested `WITH`
+  # inside their EXISTS for the first time; before #1523 the shape was refused.
+  _filtered_exists(note) = begin
+    q = NCG.Ncg_child.objects
+    q.filter("note" => note)
+    q.filter(Exists(_ncg_exists_inner()))
     q
   end
   for (label, expected, run) in [
@@ -449,6 +491,14 @@ end
     end),
     ("delete()", ["WHEREVAL", "CTEVAL", "INNERVAL"],
      () -> _filtered("WHEREVAL").delete(show_query = :inspection, connection = _NCG_SL)),
+    ("count(), over Exists (#1523)", ["WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered_exists("WHEREVAL").count(show_query = :inspection)),
+    ("exists(), over Exists (#1523)", ["WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered_exists("WHEREVAL").exists(show_query = :inspection)),
+    ("update(), over Exists in WHERE (#1523)", ["SETVAL", "WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered_exists("WHEREVAL").update("note" => "SETVAL", show_query = :inspection)),
+    ("delete(), over Exists (#1523)", ["WHEREVAL", "CTEVAL", "INNERVAL"],
+     () -> _filtered_exists("WHEREVAL").delete(show_query = :inspection, connection = _NCG_SL)),
   ]
     @testset "$label" begin
       insp = Logging.with_logger(run, Logging.NullLogger())
@@ -598,9 +648,10 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONTROLS: the same consumers with NO nested CTE are unaffected (#433)
-# A guard that refused every subquery would pass every assertion above. These pin that only the
-# nested-`.with(...)` case moved.
+# CONTROLS: the same consumers with NO nested CTE are unaffected (#433, #1523)
+# A render that printed a `WITH` for every subquery, or bound a value it does not have, would pass
+# the shapes above. These pin that a subquery declaring no CTE renders as it always did — `EXISTS
+# (SELECT 1` with nothing before the SELECT.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "subqueries without a nested CTE still render (#433 control)" begin
   for (backend, conn) in _NCG_BACKENDS
@@ -633,10 +684,11 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #566: a subquery cannot see its ENCLOSING query's CTE, and the refusal says why
-# The docs used to call "a CTE inside a subquery" an unblocked-but-untested edge. It is refused in
-# every spelling: declared inside (#433, above) or reached for from inside (here, #444's per-query
-# namespace). The refusal was already correct; what #566 changed is the message, which read
-# "declared CTEs: none" (or "column gv not found") while the caller's `.with()` was in plain sight.
+# The docs used to call "a CTE inside a subquery" an unblocked-but-untested edge. A CTE DECLARED
+# inside builds in every consumer (#1292, #1523, above); one REACHED FOR from inside is refused in
+# every spelling (here, #444's per-query namespace). The refusal was already correct; what #566
+# changed is the message, which read "declared CTEs: none" (or "column gv not found") while the
+# caller's `.with()` was in plain sight.
 # ─────────────────────────────────────────────────────────────────────────────
 import PormG.QueryBuilder: OuterRef
 

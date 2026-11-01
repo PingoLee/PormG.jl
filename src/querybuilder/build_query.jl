@@ -60,7 +60,7 @@ end
 # renders a condition can hold already restored the bucket by hand. They now restore through
 # `with_bucket` structurally, so one scope covers the loop. A subquery in a condition may declare its
 # own CTE (#1292): its `:cte` values are lifted with the rest of its run into this bucket, where its
-# markers sit (`test_parameter_alignment_nested.jl`, Rep B). `Exists(...)` refuses one (#433).
+# markers sit (`test_parameter_alignment_nested.jl`, Rep B); an `Exists(...)` too since #1523.
 function build_row_join_sql_text(instruc::SQLInstruction)
   @pormg_debug false
   with_bucket(instruc, :join) do

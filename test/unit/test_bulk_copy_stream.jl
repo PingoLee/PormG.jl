@@ -115,6 +115,33 @@ const BCS1344_EXPECTED =
   @test only(chunks) == BCS1344_EXPECTED
 end
 
+# The writer alone, on cells no F1 column above produces but a formatter can hand it: integers of
+# every width and both extremes (`format_number_sql` returns an integer as given), `Bool`, text that
+# is not a `String` (a `SubString`; any `AbstractString` passes `format_text_sql` unchanged, such as
+# a `CSV.File` column's inline strings — `Test.GenericString` stands in for them), invalid UTF-8, and
+# a `"` at either end. The expected bytes were taken from `CSV.write(io, cols; header = false,
+# quotestrings = true, missingstring = "\N")` directly (CSV 1.2), during phase 5's review.
+const BCS1344_WRITER_COLUMNS = (
+  Any[Int8(-128), UInt8(255), typemin(Int64), typemax(Int128), big(2)^70, true, UInt64(0), Int16(-10)],
+  Any[SubString("xSennax", 2, 6), "\xff\"", "a\xc0\"b", "lone\rCR", missing, "\"\"", "ends\"", "\"starts"],
+  Any[Test.GenericString("Räikkönen \"Kimi\""), Test.GenericString(""), "", "\\N", Int32(-7), "😀,\"", missing, "x"],
+)
+const BCS1344_WRITER_EXPECTED =
+  "-128,\"Senna\",\"Räikkönen \"\"Kimi\"\"\"\n" *
+  "255,\"\xff\"\"\",\"\"\n" *
+  "-9223372036854775808,\"a\xc0\"\"b\",\"\"\n" *
+  "170141183460469231731687303715884105727,\"lone\rCR\",\"\\N\"\n" *
+  "1180591620717411303424,\\N,-7\n" *
+  "true,\"\"\"\"\"\",\"😀,\"\"\"\n" *
+  "0,\"ends\"\"\",\\N\n" *
+  "-10,\"\"\"starts\",\"x\"\n"
+
+@testset "bulk_copy's writer: integer widths, text types and invalid UTF-8, as CSV.write wrote them (#1344 phase 5)" begin
+  @test PormG.QueryBuilder._copy_csv_chunk(BCS1344_WRITER_COLUMNS, 8) == BCS1344_WRITER_EXPECTED
+  # A type no formatter returns has no method: it fails by name rather than having its text guessed.
+  @test_throws MethodError PormG.QueryBuilder._copy_csv_chunk((Any[1.5],), 1)
+end
+
 # A small table, 10,001 rows: one more than a chunk.
 const BCS1344_LAPS = Model("bcs1344_laps",
   id = IDField(), code = CharField(max_length = 3), lap = IntegerField())

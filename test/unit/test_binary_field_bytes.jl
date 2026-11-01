@@ -329,9 +329,9 @@ end
 
   # ───────────────────────────────────────────────────────────────────────────
   # bulk_copy streams CSV rather than binding parameters
-  # It formats each cell through the field's formatter and hands the result to CSV.write,
-  # so a `PormGBytes` would be serialized by `show` as the Julia literal
-  # `PormGBytes(UInt8[…])` and land in the column as that text. The COPY statement uses
+  # It formats each cell through the field's formatter and writes the result as COPY's CSV text
+  # (`_copy_csv_cell!`), so a `PormGBytes` would have been written as the Julia literal
+  # `PormGBytes(UInt8[…])` and landed in the column as that text. The COPY statement uses
   # FORMAT CSV, where backslash is not an escape character, so PostgreSQL's hex input
   # syntax survives the CSV layer and `byteain` decodes it — giving bulk_copy the same
   # bytes as bulk_insert. (bulk_copy is PostgreSQL-only, guarded in bulk_copy itself.)

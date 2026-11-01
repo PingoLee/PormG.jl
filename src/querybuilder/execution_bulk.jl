@@ -2003,7 +2003,8 @@ bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df;
 Render one already-formatted value for the COPY stream.
 
 Only binary payloads need translating: a field formatter hands back a [`PormGBytes`](@ref), which
-`CSV.write` would serialize through `show` as the Julia literal `PormGBytes(UInt8[0x01, …])` (#296).
+the COPY writer (`_copy_csv_cell!`) has no method for, and which `CSV.write` used to write as the
+text of the Julia literal `PormGBytes(UInt8[0x01, …])` (#296).
 The COPY statement uses `FORMAT CSV`, where backslash is *not* an escape character, so PostgreSQL's
 hex input syntax passes through the CSV layer untouched and `byteain` decodes it — the same wire
 form the parameterized `add_parameter!` path uses, so `bulk_copy` and `bulk_insert` store identical
@@ -2013,10 +2014,119 @@ bytes.
 that is needed here.
 """
 _bulk_copy_cell(value::PormGBytes) = "\\x" * bytes2hex(value.bytes)
-# #28: an `ArrayField` value is its array literal. `CSV.write` force-quotes it and doubles each `"`,
+# #28: an `ArrayField` value is its array literal. `_copy_csv_cell!` quotes it and doubles each `"`,
 # and COPY's CSV reader undoes exactly that before `array_in` reads the literal.
 _bulk_copy_cell(value::PormGArrayLiteral) = value.literal
 _bulk_copy_cell(value) = value
+
+# ── The COPY text (#1344 phase 5) ──
+# PormG writes the `FORMAT CSV` stream itself; it used to call `CSV.write(…; header = false,
+# quotestrings = true, missingstring = _BULK_COPY_NULL)`, and `test_bulk_copy_stream.jl` holds the
+# bytes that writer produced, which this one reproduces. Every cell has been formatted by its field
+# first, so it is `missing`, an integer (a `Bool` included) or text:
+#   - `missing` is the NULL marker, unquoted (#86); so is `nothing`, which every formatter already
+#     turns into `missing`;
+#   - text is always quoted with each `"` doubled, so `""` is an empty string and a quoted `\N` is
+#     those two characters; a comma, a line break or a backslash inside the quotes is data;
+#   - an integer is its digits, a `Bool` `true`/`false`, which nothing in CSV needs to quote.
+# There is no method for any other type: no formatter returns one, and a new formatter that did
+# should fail here by name rather than have its value's text guessed. `digits` is a scratch buffer
+# the column writer owns, used only by the machine-integer method.
+_copy_csv_cell!(io::IO, ::Union{Missing, Nothing}, ::Vector{UInt8}) = (write(io, _BULK_COPY_NULL); nothing)
+_copy_csv_cell!(io::IO, value::Bool, ::Vector{UInt8}) = (write(io, value ? "true" : "false"); nothing)
+_copy_csv_cell!(io::IO, value::Integer, ::Vector{UInt8}) = (print(io, value); nothing)   # a `BigInt`, …
+# A machine integer's digits, filled from the end of `digits` and written in one call: `print`
+# builds a `String` for each one (#1346). `-unsigned(value)` is the magnitude for `typemin` too,
+# which `abs` is not. `digits` holds 40 bytes; the widest, a `UInt128`, has 39 digits.
+function _copy_csv_cell!(io::IO, value::Base.BitInteger, digits::Vector{UInt8})
+  n = value < 0 ? -unsigned(value) : unsigned(value)
+  k = length(digits)
+  while true
+    digits[k] = UInt8('0') + (rem(n, oftype(n, 10)) % UInt8)
+    n = div(n, oftype(n, 10))
+    iszero(n) && break
+    k -= 1
+  end
+  value < 0 && write(io, UInt8('-'))
+  write(io, view(digits, k:length(digits)))
+  return nothing
+end
+function _copy_csv_cell!(io::IO, value::AbstractString, ::Vector{UInt8})
+  write(io, '"')
+  # The text between one `"` and the next, written in one call each, then the `"` doubled; with no
+  # `"` that is the whole value in one call. Nothing is allocated (`replace` copied the text).
+  start = firstindex(value)
+  while (q = findnext(==('"'), value, start)) !== nothing
+    write(io, SubString(value, start, q), '"')
+    start = nextind(value, q)
+  end
+  write(io, SubString(value, start), '"')
+  return nothing
+end
+
+# One column's first `nrows` cells, written back to back, and the byte offset each cell ends at. A
+# function barrier: it compiles once per column type, so whatever the model's width, a column whose
+# element type is concrete or a small `Union` (what `_format_copy_column`'s `map` gives for every
+# field formatter) is written without a dynamic dispatch per cell.
+function _copy_csv_column(column::AbstractVector, nrows::Int)::Tuple{Vector{UInt8}, Vector{Int}}
+  io = IOBuffer()
+  ends = Vector{Int}(undef, nrows)
+  digits = Vector{UInt8}(undef, 40)
+  for row in 1:nrows
+    _copy_csv_cell!(io, column[row], digits)
+    ends[row] = position(io)
+  end
+  return take!(io), ends
+end
+
+# One chunk's rows, cells joined by `,` and every row ended by `\n`, in `columns` order — the order
+# of the COPY column list (HEADER FALSE). Each column is written on its own (`_copy_csv_column`) and
+# the rows are then assembled from the byte ranges. Writing row by row over a tuple of the columns,
+# the shape `CSV.write` uses, compiles once per tuple of column types and costs more per cell the
+# wider the model: measured in #1344 phase 5's review, 60 columns took seconds to compile, again for
+# each new tuple (a nullable column with and without a `missing` in the chunk), and ran 1 µs a cell.
+function _copy_csv_chunk(columns::Union{Tuple, AbstractVector}, nrows::Int)::String
+  written = Tuple{Vector{UInt8}, Vector{Int}}[_copy_csv_column(column, nrows) for column in columns]
+  out = IOBuffer(; sizehint = sum(length(first(w)) for w in written; init = 0) + nrows * length(written))
+  starts = zeros(Int, length(written))   # where each column's next cell begins, 0-based
+  for row in 1:nrows
+    for (j, (bytes, ends)) in enumerate(written)
+      j > 1 && write(out, UInt8(','))
+      stop = ends[row]
+      write(out, view(bytes, (starts[j] + 1):stop))
+      starts[j] = stop
+    end
+    write(out, UInt8('\n'))
+  end
+  return String(take!(out))
+end
+
+# One column of a `bulk_copy` chunk, rows `first_row` to `first_row + nrows - 1`, each cell validated
+# and formatted so COPY stores the SAME values as bulk_insert/create() (#86). A function barrier: it
+# compiles for the column's own type, and `map` gives back a vector of the formatted cells' types.
+# `missing`/`nothing` stays missing (every formatter returns missing for it) and is written as the
+# NULL sentinel.
+function _format_copy_column(model::PormGModel, field::AbstractString, f_meta, source::AbstractVector,
+                             first_row::Int, nrows::Int)
+  return map(1:nrows) do offset
+    row_index = first_row + offset - 1
+    value = source[row_index]
+    try
+      _validate_field_value(model, field, f_meta, value, "bulk_copy")
+      # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax; every
+      # other value passes through unchanged (#296). A collection is refused first, as in every
+      # other writer (#712): the stream would otherwise carry its text as the column's.
+      _bulk_copy_cell(_format_single(f_meta, field, value, "bulk_copy"))
+    catch e
+      # A value refusal names the cell: bulk_copy logs no per-row depuration, so this message is
+      # the only place a 100k-row frame's bad cell is located (#869).
+      e isa InvalidValueError && throw(_bulk_cell_error(e, "bulk_copy", model, field, row_index))
+      e isa PormGError && rethrow()   # any other taxonomy type is not about the value, and passes as is
+      throw(InvalidValueError("The value failed validation or formatting ($(typeof(e))).", :other;
+                              op = "bulk_copy", model = model.name, field = field, row = row_index))
+    end
+  end
+end
 
 """
     _pg_bulk_cast_type(field, conn::PormGPostgres) -> String
@@ -2111,10 +2221,10 @@ function _pg_unnest_source!(params::PormGPostgresParam, columns::Vector{Vector{A
 end
 
 # bulk_copy NULL sentinel (#86) — PostgreSQL's conventional NULL marker. Safe because bulk_copy
-# force-quotes every string value (CSV.write quotestrings=true): a genuine string equal to this
-# sentinel is written *quoted* and read back as the literal string, while a `missing`/`nothing`
-# is written *unquoted* and read as NULL. So "" (quoted) ≠ NULL (unquoted \N). The COPY `NULL '…'`
-# clause and CSV.write's `missingstring` must use this same value.
+# quotes every string value (`_copy_csv_cell!`): a genuine string equal to this sentinel is
+# written *quoted* and read back as the literal string, while a `missing`/`nothing` is written
+# *unquoted* and read as NULL. So "" (quoted) ≠ NULL (unquoted \N). The COPY `NULL '…'` clause and
+# `_copy_csv_cell!(io, ::Missing)` must use this same value.
 const _BULK_COPY_NULL = "\\N"
 
 """
@@ -2198,41 +2308,16 @@ function bulk_copy(objct::SQLObjectHandler, @nospecialize(src);
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
 
-      # Build a FORMATTED chunk so COPY stores the SAME values as bulk_insert/create().
-      # Each cell is validated and then serialized through the field formatter (as bulk_insert
-      # does) — missing/nothing stays missing (every formatter returns missing for it) and is
-      # written as the NULL sentinel. Columns are built in fields_df order so they align
-      # positionally with the COPY column list (HEADER FALSE). #86
-      formatted_columns = AbstractVector[]
-      for (field, f_meta) in zip(fields_df, metas)
-        chunk = _bulk_column(df, mapping[field])[i:end_idx]
-        push!(formatted_columns, map(eachindex(chunk)) do offset
-          value = chunk[offset]
-          row_index = i + offset - 1
-          try
-            _validate_field_value(model, field, f_meta, value, "bulk_copy")
-            # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax;
-            # every other value passes through unchanged (#296). A collection is refused first, as
-            # in every other writer (#712): CSV would otherwise store its `repr` as the column text.
-            _bulk_copy_cell(_format_single(f_meta, field, value, "bulk_copy"))
-          catch e
-            # A value refusal names the cell: bulk_copy logs no per-row depuration, so this message
-            # is the only place a 100k-row frame's bad cell is located (#869).
-            e isa InvalidValueError && throw(_bulk_cell_error(e, "bulk_copy", model, field, row_index))
-            e isa PormGError && rethrow()   # any other taxonomy type is not about the value, and passes as is
-            throw(InvalidValueError("The value failed validation or formatting ($(typeof(e))).", :other;
-                                    op = "bulk_copy", model = model.name, field = field, row = row_index))
-          end
-        end)
-      end
-      # A Tables.jl column table for `CSV.write`, named by field (#1344: no DataFrame in between).
-      formatted = NamedTuple{Tuple(Symbol.(fields_df))}(Tuple(formatted_columns))
+      # Build a FORMATTED chunk so COPY stores the SAME values as bulk_insert/create() (#86), one
+      # column at a time (`_format_copy_column`), in fields_df order so the columns align
+      # positionally with the COPY column list (HEADER FALSE).
+      nrows = end_idx - i + 1
+      formatted_columns = AbstractVector[_format_copy_column(model, field, f_meta, _bulk_column(df, mapping[field]), i, nrows)
+                                         for (field, f_meta) in zip(fields_df, metas)]
 
-      # Force-quote strings and mark missing with the NULL sentinel so an empty string ("")
-      # round-trips as "" (quoted) while missing round-trips as NULL (unquoted \N). #86
-      io = IOBuffer()
-      CSV.write(io, formatted; header=false, quotestrings=true, missingstring=_BULK_COPY_NULL)
-      csv_data = String(take!(io))
+      # Strings quoted, missing as the unquoted NULL sentinel, so an empty string ("") round-trips
+      # as "" while missing round-trips as NULL (#86, #1344 phase 5: `_copy_csv_cell!`).
+      csv_data = _copy_csv_chunk(formatted_columns, nrows)
 
       # The COPY command tag carries the chunk's row count (#670).
       copied += fetch_copy(settings, sql, [csv_data])

@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1535 ; `src/ConnectionPool.jl` (`acquire_connection`, `_abandon_wait!`, `_drop_owned!`)
 - **Recorded**: 2026-10-31
-- **Severity**: behavior change (bug fix). Nothing raises differently; a pool no longer loses a slot.
+- **Severity**: behavior change (bug fix). The interrupted or refused call raises as before; a pool no longer loses a slot.
 
 ### What changed
 

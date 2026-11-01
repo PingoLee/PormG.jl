@@ -575,13 +575,15 @@ end
   # with `_handoff_or_free!`, and it could hand it to a waiter. Handing it to a caller that parked
   # after its OWN failed connect made that caller connect at once, fail, and hand it back: two
   # callers traded the slot as fast as the server refused, with neither backoff timer ever firing.
-  # Each caller is still paced, so over 1.5 s the pair makes at most ~2 × 6 attempts (the schedule in
-  # the testset above). Unpatched, the count runs into the thousands.
+  # Each caller is still paced: attempts at about 0, 0.05, 0.15, 0.35, 0.75 and 1.25 s, so 6 each and
+  # 12 for the pair over 1.5 s (the schedule in the testset above). Load only lowers the count. The
+  # bound leaves slack for scheduling, not for one extra attempt per paced one (that would be 24).
+  # Unpatched, the count runs into the thousands.
   for pool in (MockPG1518(3; fail_times = typemax(Int)), MockSQLite1518(3; fail_times = typemax(Int)))
     callers = [@async(try; CP.acquire_connection(pool; timeout_seconds = 1.5); catch e; e; end) for _ in 1:2]
     errs = fetch.(callers)
     @test all(e -> e isa PormG.PoolConnectError, errs)
-    @test pool.connects <= 30                              # ← unpatched: thousands
+    @test pool.connects <= 16                              # ← unpatched: thousands
     @test CP.pool_stats(pool).waiting == 0 && CP.pool_stats(pool).in_use == 0
   end
 end

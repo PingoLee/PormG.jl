@@ -40,8 +40,9 @@ mutable struct MockPGSlow1540 <: PormG.PormGPostgres
   delay::Float64            # seconds each connect takes (0 = instant)
   connecting::Int           # connects in flight right now
   peak::Int                 # the most connects ever in flight at once
+  fail_next::Int            # connects still to refuse, after their delay
 end
-MockPGSlow1540(n::Int) = MockPGSlow1540(Any[nothing for _ in 1:n], fill(true, n), "mock://pg", n, ReentrantLock(), 0, 0.0, 0, 0)
+MockPGSlow1540(n::Int) = MockPGSlow1540(Any[nothing for _ in 1:n], fill(true, n), "mock://pg", n, ReentrantLock(), 0, 0.0, 0, 0, 0)
 
 mutable struct MockSQLiteSlow1540 <: PormG.PormGSQLite
   connections::Vector{Any}
@@ -58,10 +59,11 @@ mutable struct MockSQLiteSlow1540 <: PormG.PormGSQLite
   connecting::Int
   peak::Int
   read_only_seen::Vector{Bool}   # the `read_only` each connect was asked for, in order
+  fail_next::Int
 end
 MockSQLiteSlow1540(n::Int; split::Bool = false) =
   MockSQLiteSlow1540(Any[nothing for _ in 1:n], fill(true, n), "mock://sqlite", n, split && n > 1, 1, 0,
-                     ReentrantLock(), ReentrantLock(), 0, 0.0, 0, 0, Bool[])
+                     ReentrantLock(), ReentrantLock(), 0, 0.0, 0, 0, Bool[], 0)
 
 const _Slow1540 = Union{MockPGSlow1540, MockSQLiteSlow1540}
 
@@ -73,6 +75,10 @@ function _slow_connect_1540(p::_Slow1540)
   finally
     p.connecting -= 1
   end
+  if p.fail_next > 0
+    p.fail_next -= 1
+    error("mock: connection refused")                 # a restart, as the client sees it
+  end
   return FakeSlowConn1540(p.nid += 1)
 end
 PormG.backend_connect(p::MockPGSlow1540; kwargs...) = _slow_connect_1540(p)
@@ -81,6 +87,7 @@ function PormG.backend_connect(p::MockSQLiteSlow1540; read_only::Bool = false)
   return _slow_connect_1540(p)
 end
 PormG.backend_is_alive(::_Slow1540, c) = c isa FakeSlowConn1540 && !c.closed
+PormG.backend_is_permanent_connect_error(::_Slow1540, e) = false   # ambiguous: retried, never fast-failed
 
 function _wait_until_1540(pred; timeout = 5.0, step = 0.005)
   t0 = time()
@@ -238,4 +245,42 @@ end
   @test p.read_only_seen == [false, true]
   @test p.connections[1] === w && p.connections[2] === r
   CP.release_connection(p, w); CP.release_connection(p, r)
+end
+
+@testset "a slot freed by a failed connect goes to a caller waiting on a full pool (#1540)" begin
+  # A connect into a reserved slot fails. The slot goes back through `_handoff_or_free!(…;
+  # skip_retry = true)`: never to a caller that parked after its own failed connect (it paces its own
+  # retries), but at once to one that parked because every slot was leased. That caller's timer runs
+  # to its deadline and no release may come, so freeing the slot as merely available would strand it
+  # there. Here the pool is at its ceiling with the last slot reserved by a failing 0.5 s connect, and
+  # B parks behind it with a 5 s deadline. Gate: with every waiter skipped, B times out at 5 s.
+  for (label, mk) in (("PG", () -> MockPGSlow1540(1)), ("SQLite", () -> MockSQLiteSlow1540(1)))
+    @testset "$label" begin
+      p = mk()
+      ceiling = p.pool_size * CP.POOL_EXPANSION_FACTOR
+      held = [CP.acquire_connection(p; timeout_seconds = 5) for _ in 1:(ceiling - 1)]
+      p.delay = 0.5
+      p.fail_next = 1
+      A = @async(try; CP.acquire_connection(p; timeout_seconds = 3); catch e; e; end)   # reserves the last slot
+      started = _wait_until_1540(() -> p.connecting == 1)
+      t0 = time()
+      B = @async CP.acquire_connection(p; timeout_seconds = 5)
+      queued = _wait_until_1540(() -> length(CP._waiters_for(p)) == 1)
+      w = queued ? CP._waiters_for(p)[1] : nothing
+      p.delay = 0.0                                      # B's own connect, once handed the slot
+      b = try; fetch(B); catch e; e; end
+      b_s = time() - t0
+
+      @test started && queued
+      @test w !== nothing && w.retry === false             # B parked for saturation, not after a failure
+      @test b isa FakeSlowConn1540                         # ← with every waiter skipped: PoolTimeoutError
+      @test b_s < 2.0                                      # ← …at 5 s
+
+      push!(held, b)
+      for c in held; CP.release_connection(p, c); end     # the last release hands A a slot
+      a = fetch(A)
+      a isa FakeSlowConn1540 && CP.release_connection(p, a)
+      @test PormG.pool_stats(p).in_use == 0 && PormG.pool_stats(p).waiting == 0
+    end
+  end
 end

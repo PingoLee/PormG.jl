@@ -1203,9 +1203,11 @@ _after_connect_install(pool::PormGSQLite, i::Int) = _warn_private_memory_slot(po
 
 Open a connection for slot `i`, which this acquire call holds as `owned[] == (i, nothing)`: leased and
 empty. Called **without** `pool.lock` (#1540). On success the handle is installed and leased to the
-caller. A failed connect gives the slot back (`_handoff_or_free!`, through `_drop_owned!`), so a
-caller parked meanwhile is handed it at once. An `InterruptException` is not a failed connect: it
-propagates, and `acquire_connection`'s own catch gives the slot back (#1535).
+caller. A failed connect gives the slot back (`_drop_owned!(…; failed_connect = true)`): to a
+caller parked because every slot was leased, at once, and never to one pacing its own retries,
+which finds it through its next scan. A cancellation (an `InterruptException`, however the driver
+wrapped it, `_await_abandoned`) is not a failed connect: it propagates as raised, and
+`acquire_connection`'s own catch gives the slot back (#1535).
 """
 function _connect_reserved!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, last_connect_error::Base.RefValue{Any})
   new_conn = try

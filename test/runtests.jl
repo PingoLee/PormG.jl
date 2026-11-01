@@ -290,6 +290,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Connect-key Resolution (#550)" include("unit/test_connect_key_resolution.jl")
     @testset "load(…; root): short keys without cd (#857)" include("unit/test_load_root.jl")
     @testset "Registry Public API (#1229)" include("unit/test_registry_api.jl")
+    @testset "What an Offline Key Can Reach (#1466)" include("unit/test_offline_key_reach.jl")
     @testset "Host-Library Primitives (#1230)" include("unit/test_host_primitives.jl")
     @testset "Bootstrap Ergonomics (#1232)" include("unit/test_bootstrap_ergonomics.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")

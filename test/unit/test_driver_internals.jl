@@ -55,6 +55,7 @@ const PINNED_NAMES = _NamePin[
   (name = "LibPQ.lock",                         status = :internal,   reader = "PormG.backend_is_alive, _drain_postgres_connection! (`Base.lock`: PINNED_METHODS)"),
   (name = "LibPQ.Errors.LibPQException",        status = :documented, reader = "PormG.backend_classify_error, backend_is_retry_safe"),
   (name = "LibPQ.Errors.JLResultError",         status = :documented, reader = "PormG.backend_copy_in!"),
+  (name = "LibPQ.Errors.JLConnectionError",     status = :documented, reader = "PormG.backend_is_connection_error"),
   (name = "LibPQ.Errors.PQConnectionError",     status = :documented, reader = "PormG.backend_classify_error, backend_is_retry_safe, backend_copy_in!, _drain_postgres_connection!"),
   (name = "LibPQ.Errors.PQResultError",         status = :documented, reader = "PormG.backend_classify_error, backend_error_fields, backend_is_connection_error, _raise_if_failed"),
   (name = "LibPQ.Errors.error_class",           status = :internal,   reader = "PormG.backend_classify_error"),
@@ -148,6 +149,9 @@ const PINNED_FIELDS = _FieldPin[
   (type = LibPQ.Errors.PQConnectionError, fields = [:msg], status = :internal, reader = "PormG.backend_is_retry_safe"),
   (type = LibPQ.Errors.PQResultError, fields = [:msg], status = :internal, reader = "PormG.backend_error_fields"),
   # SQLite.jl
+  # `:lock` (read by `_release_leaked_db_lock!`, #1521) is not pinned: SQLite.jl added it in 1.9.0, and
+  # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
+  # test_connection_pool_liveness.jl reads it whenever it exists, so a rename still fails there.
   (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
    reader = "PormG.backend_classify_error, backend_error_fields"),

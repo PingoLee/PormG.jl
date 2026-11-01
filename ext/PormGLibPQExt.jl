@@ -456,6 +456,24 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
   # (1) The server gave us a code — trust it over any text.
   e isa _PG_LOST_CONNECTION_ERRORS && return true
 
+  # (1b) LibPQ.jl's own connection exception, matched on its type (#1519). When the socket under a
+  #      statement closes, LibPQ's result loop (`asyncresults.jl`, an EBADF from the socket watcher)
+  #      raises `JLConnectionError("PostgreSQL connection socket was unexpectedly closed")`. It is a
+  #      sibling of `PQResultError`, so it carries no SQLSTATE, and before #1519 it fell through to
+  #      the phrases below, matched none, and reached the caller as `StatementError` — the type that
+  #      means the SQL itself was refused — with the dead handle left in its slot.
+  #
+  #      Every place LibPQ.jl raises this type is about the connection, never about data: the closed
+  #      socket above; in `connections.jl` a connect that timed out or could not allocate its struct,
+  #      a client encoding libpq could not read or set, a reset or a conninfo read on a closed
+  #      connection, and an unexpected `dispchar` in libpq's option table (never reached on a query
+  #      path). "Failed cancelling query" is only logged, never thrown. So the type is the signal,
+  #      and no message is read.
+  #
+  #      Renewed and swept like every lost connection, but NOT retried: the socket can close after
+  #      the server received the statement, so `backend_is_retry_safe` below leaves it out.
+  e isa LibPQ.Errors.JLConnectionError && return true
+
   # (2) A result error carrying a REAL SQLSTATE that is not one of the above is not a retryable
   #     dropped connection, and must never reach the message matching below — that is the user-data
   #     hazard above. `CUN` is LibPQ's synthetic "no code" class, so it deliberately falls through.

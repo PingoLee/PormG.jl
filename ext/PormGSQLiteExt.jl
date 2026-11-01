@@ -160,7 +160,48 @@ end
 # Synchronous execute — funnelled through the single global SQLite worker in core.
 function PormG.backend_execute(pool::PormGSQLite, conn::SQLite.DB, sql::String, params)
   resolved = params isa PormGSQLiteParam ? params.parameters : params
-  return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, resolved))
+  try
+    return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, resolved))
+  catch
+    _release_leaked_db_lock!(conn)
+    rethrow()
+  end
+end
+
+# Give back every hold this task still has on `conn`'s own lock after a statement failed (#1521).
+#
+# SQLite.jl takes the `ReentrantLock` on its `DB` (`db.lock`) around each native call, as
+# `Base.@lock db.lock C.sqlite3_step(…)`, which releases it in a `finally`. An `InterruptException`
+# can defeat that `finally`. Under `julia -t 1`, a Ctrl-C during a long statement stays pending
+# while `sqlite3_step` runs (a ccall, so no safepoint), and the first safepoint after it returns is
+# the entry of `unlock` itself, inside that `finally`. So the exception is thrown by the `unlock`
+# that was meant to release the lock, before it decrements the count, and nothing else releases it.
+# The worker task then keeps `db.lock` for good, idle on its queue. The next statement, the
+# checkout probe (`backend_is_alive`) and `close` on that handle all wait on it forever: the hang
+# #1521 reported, and the reason `exit` hung too. Captured with the exception's backtrace, which
+# ends in `Base._unlock` called from `SQLite.execute`.
+#
+# PormG never holds `db.lock` across this call (nothing in PormG takes it), so whatever hold the
+# task has left when the statement has failed can only be a leaked one, and giving it back is
+# exact. Only this task's holds are touched: `locked_by` names the owner, and a lock another task
+# holds is left alone. Every exception gets the check, not only `InterruptException`, because the
+# same leak follows from any exception thrown at that point, and the check costs one field read.
+#
+# The count guard is for an exception landing inside `unlock` after it decremented the count and
+# before it cleared the owner: that leaves count 0 with this task named, and an unguarded loop would
+# underflow the count. `locked_by` and `reentrancy_cnt` are fields of Base's `ReentrantLock`; the
+# #1521 test reads both, so a rename fails there.
+#
+# SQLite.jl took no Julia-side lock before 1.9.0 (`DB` has no `lock` field there; PormG's floor is
+# 1.6.1), so there is nothing to leak and nothing to release. `hasfield` on the type is a constant,
+# so the check costs nothing at run time.
+function _release_leaked_db_lock!(conn::SQLite.DB)
+  hasfield(SQLite.DB, :lock) || return nothing
+  l = conn.lock
+  while l.locked_by === current_task() && l.reentrancy_cnt > 0
+    unlock(l)
+  end
+  return nothing
 end
 
 # No `backend_is_retry_safe` method: on SQLite, core's default (`false`) holds for every failure, so

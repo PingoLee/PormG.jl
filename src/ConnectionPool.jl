@@ -617,11 +617,12 @@ end
 # barge (HikariCP / Go database/sql style). Fair (FIFO) and event-driven; sub-100ms handoff.
 
 # One parked acquirer. `chan` is capacity-1: exactly ONE producer — a release-handoff OR the
-# timeout Timer — ever put!s to it, decided by read-modify-writing `done` under the pool lock
+# waiter's Timer — ever put!s to it, decided by read-modify-writing `done` under the pool lock
 # (that lock IS the compare-and-set). `mode` types the waiter for SQLite split pools (:any on PG).
 # A handoff delivers `(slot, handle)` — the handle the slot held at handoff time, or `nothing`
 # for a slot emptied first — and acquire branch A re-checks that pair under the lock before it
-# trusts the slot (#584); the timeout delivers `_POOL_WAIT_TIMEOUT`.
+# trusts the slot (#584); the Timer delivers `_POOL_WAIT_TIMEOUT`, or `_POOL_WAIT_RETRY` for a
+# waiter that parked after a failed connect (#1518).
 mutable struct PoolWaiter
   mode::Symbol
   chan::Channel{Any}
@@ -631,6 +632,39 @@ PoolWaiter(mode::Symbol) = PoolWaiter(mode, Channel{Any}(1), false)
 
 # Delivered to a waiter's channel when its timeout budget elapses (vs. a slot index on handoff).
 const _POOL_WAIT_TIMEOUT = :__pormg_pool_wait_timeout__
+
+# Delivered instead when a waiter that parked after a FAILED connect is due to try again (#1518).
+const _POOL_WAIT_RETRY = :__pormg_pool_wait_retry__
+
+# Backoff between connect attempts of one caller whose connects keep failing (#1518): 50 ms,
+# doubling, capped at 0.5 s. The cap bounds how late a caller notices a server that came back, and it
+# is also what an outage costs the server: about five connect attempts in a waiting caller's first
+# second, then two a second. There is no jitter: callers that parked together retry together.
+const _CONNECT_RETRY_BACKOFF_MIN = 0.05
+const _CONNECT_RETRY_BACKOFF_MAX = 0.5
+
+_connect_retry_backoff(n::Int)::Float64 =
+  min(_CONNECT_RETRY_BACKOFF_MAX, _CONNECT_RETRY_BACKOFF_MIN * 2.0^(max(n, 1) - 1))
+
+# When a parked waiter's Timer fires, and what it delivers (#1518). A caller parks for one of two
+# reasons, and only the first is what the #124 handoff was built for:
+#
+#   * every slot is leased: a release or a discard will hand it one, so it waits to its deadline;
+#   * a connect FAILED in this pass (a restart, a refused or timed-out connect) and the pool still
+#     has free capacity. Nothing is leased, so nothing will ever be released to wake it, and before
+#     #1518 it waited out `pool_timeout` even after the server came back. It still parks, in the
+#     same locked section, so a release still hands it a slot at once; but its Timer fires after the
+#     backoff and delivers `_POOL_WAIT_RETRY`, and the caller scans and connects again.
+#
+# `retry_pass` counts the passes of this acquire call that parked after a failed connect (0 = a
+# saturated pool). A backoff that would reach the deadline delivers the timeout instead, so no
+# connect is attempted past the deadline.
+function _waiter_wake(deadline::Float64, retry_pass::Int)::Tuple{Symbol, Float64}
+  remaining = max(deadline - time(), 0.0)
+  retry_pass == 0 && return (_POOL_WAIT_TIMEOUT, remaining)
+  backoff = _connect_retry_backoff(retry_pass)
+  return backoff < remaining ? (_POOL_WAIT_RETRY, backoff) : (_POOL_WAIT_TIMEOUT, remaining)
+end
 
 # Waiter FIFO queues live OUTSIDE the pool structs so mock pools that declare their own
 # `<: PormGPostgres/PormGSQLite` struct (with no `waiters` field) are unaffected (#124). Each
@@ -678,17 +712,17 @@ function _handoff_or_free!(pool, i::Int)
   return nothing
 end
 
-# The timeout producer, symmetric with `_handoff_or_free!`: deliver the timeout sentinel iff the
-# waiter has not already been handed a slot. The `done` read-modify-write under pool.lock resolves
-# the timeout↔handoff race — exactly one producer ever put!s the waiter's channel.
-function _pool_wait_timeout!(pool, w::PoolWaiter)
+# The timer producer, symmetric with `_handoff_or_free!`: deliver `sentinel` (the timeout, or the
+# #1518 retry) iff the waiter has not already been handed a slot. The `done` read-modify-write under
+# pool.lock resolves the timer↔handoff race — exactly one producer ever put!s the waiter's channel.
+function _pool_wait_timeout!(pool, w::PoolWaiter, sentinel::Symbol = _POOL_WAIT_TIMEOUT)
   Base.lock(pool.lock) do
     if !w.done
       w.done = true
       ws = _waiters_for(pool)
       k = findfirst(x -> x === w, ws)   # `===(w)` has no curried form; use an explicit closure
       k === nothing || deleteat!(ws, k)
-      put!(w.chan, _POOL_WAIT_TIMEOUT)
+      put!(w.chan, sentinel)
     end
   end
   return nothing
@@ -1111,7 +1145,8 @@ using it: do not release it as it is — pass it to
 - `timeout_seconds`: how long to wait for a free connection. Defaults to the pool's
   `pool_timeout` from `connection.yml` (30 s if unset, #126); passing it explicitly wins.
 - `max_retries`: a safety bound on scan/materialize iterations, not a poll count — waiting is
-  event-driven (#124), so this is normally 1.
+  event-driven (#124), so this is normally 1. The paced connect retries below do not count
+  against it; the timeout bounds them.
 - `mode` (**SQLite only**): `:read`, `:write`, or `:any`. When the pool has read/write
   splitting enabled, only the writer slot may write, so **a connection you intend to write on
   must be acquired with `mode = :write`**; `:read` or `:any` can hand you a read-only handle
@@ -1120,7 +1155,10 @@ using it: do not release it as it is — pass it to
 The pool grows lazily up to `pool_size × 10`. Exhausting that budget within the timeout raises
 `PoolTimeoutError`; a permanent connect failure (bad credentials, missing database, unopenable
 SQLite file) fails fast with `PoolConnectError`, whose connection string is redacted. Both are
-catchable and exported.
+catchable and exported. Any other failed connect (a server restarting, a refused or timed-out
+connect) is retried with a backoff of 50 ms doubling to 0.5 s until the timeout, which then raises
+`PoolConnectError` carrying the last cause; a release meanwhile still hands the caller its slot at
+once.
 
 See also [`release_connection`](@ref), `pool_stats`, and the
 [Advanced Configuration](@ref) guide for pool tuning and leak detection.
@@ -1149,6 +1187,8 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
   # Most recent `backend_connect` failure this call. When set, the terminal branch raises a truthful
   # PoolConnectError (the pool couldn't be opened) instead of the saturation PoolTimeoutError (#72).
   last_connect_error = Ref{Any}(nothing)
+  # Passes of this call that parked after a failed connect: the backoff before the next try (#1518).
+  retry_pass = 0
 
   while true
     attempts += 1
@@ -1156,8 +1196,16 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
     # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
     # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
     dead_handles = Any[]
+    # `max_retries` bounds scan/materialize passes, not the paced connect retries of #1518: those are
+    # bounded by the deadline, and counting them would end a long `pool_timeout` early. Computed here,
+    # once per pass, so the closure below captures a value rather than a reassigned variable.
+    scan_budget_spent = attempts - retry_pass >= max_retries
 
     outcome = Base.lock(pool.lock) do
+      # Did a connect fail in this pass while the pool had room? Then (D) parks with a retry timer
+      # instead of waiting for a handoff that nothing may ever make (#1518).
+      connect_failed = false
+
       # (A) Materialize a handed-off slot (already leased for us; #124 direct handoff).
       if owned !== nothing
         i, expected = owned
@@ -1218,6 +1266,10 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
             push!(dead_handles, pool.connections[i])
             pool.connections[i] = nothing
           end
+          # One connect attempt per pass (#1518): after a failure the server is not answering, and a
+          # caller that now retries on a backoff would otherwise try every free slot, under the
+          # lock, on each pass. The scan goes on only to find a live handle.
+          connect_failed && continue
           before_connect_done || return (:hook, nothing)
           try
             new_conn = backend_connect(pool)
@@ -1229,6 +1281,7 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
             @debug "Failed to create $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
+            connect_failed = true
             continue
           end
         end
@@ -1236,7 +1289,8 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
 
       # (C) Expand the pool if we haven't reached the ceiling. Append-only under the lock, so the
       # `== ceiling` check is race-free even under `-t auto` — the @warn fires exactly once (#37).
-      if length(pool.connections) < ceiling
+      # Not after a failed connect in (B): one attempt per pass (#1518).
+      if !connect_failed && length(pool.connections) < ceiling
         before_connect_done || return (:hook, nothing)
         try
           new_conn = backend_connect(pool)
@@ -1253,18 +1307,21 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
         catch e
           _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
           @debug "Failed to expand $(_backend_name(pool)) pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+          connect_failed = true
         end
       end
 
-      # (D) No capacity. Time out, or park as a waiter for direct handoff. Enqueue happens in the
-      # SAME locked section as the "no capacity" check, so a concurrent release can't slip a wakeup
-      # in between (no lost wakeup).
-      if attempts >= max_retries || time() >= deadline
+      # (D) No connection to be had in this pass. Time out, or park as a waiter for direct handoff.
+      # Enqueue happens in the SAME locked section as the "no capacity" check, so a concurrent
+      # release can't slip a wakeup in between (no lost wakeup). Two reasons to be here: every slot
+      # is leased (`:wait` — a release will wake us), or a connect just failed while the pool had
+      # room (`:wait_retry` — also woken by a release, but its timer retries the connect, #1518).
+      if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
       w = PoolWaiter(:any)
       push!(_waiters_for(pool), w)
-      return (:wait, w)
+      return (connect_failed ? :wait_retry : :wait, w)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -1290,16 +1347,18 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
     elseif kind === :timeout
       err = _acquire_terminal_error(pool, _backend_name(pool), last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
       if err isa PoolTimeoutError
-        if attempts >= max_retries
+        if attempts - retry_pass >= max_retries
           @warn "Exceeded maximum retry attempts ($max_retries) to acquire $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         else
           @warn "Timeout after $(to) seconds waiting for available $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         end
       end
       throw(err)
-    else # :wait — park until a connection is handed to us or the deadline elapses.
+    else # :wait / :wait_retry — park until a slot is handed to us, the retry is due, or the deadline.
       w = outcome[2]
-      timer = Timer(_ -> _pool_wait_timeout!(pool, w), max(deadline - time(), 0.0))
+      kind === :wait_retry && (retry_pass += 1)
+      sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
+      timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
       handed = try
         take!(w.chan)
       finally
@@ -1310,6 +1369,9 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
         err isa PoolTimeoutError &&
           @warn "Timeout after $(to) seconds waiting for available $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
+      elseif handed === _POOL_WAIT_RETRY
+        owned = nothing                                  # scan and connect again (#1518)
+        continue
       end
       owned = handed::Tuple{Int, Any}                    # loop back to materialize the handed slot
       continue
@@ -1334,6 +1396,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   ceiling = _pool_ceiling(pool)
   # See the PormGPostgres twin: most recent connect failure this call → truthful PoolConnectError (#72).
   last_connect_error = Ref{Any}(nothing)
+  retry_pass = 0                                        # see the PormGPostgres twin (#1518)
 
   while true
     attempts += 1
@@ -1341,8 +1404,14 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
     # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
     dead_handles = Any[]
+    # `max_retries` bounds scan/materialize passes, not the paced connect retries of #1518: those are
+    # bounded by the deadline, and counting them would end a long `pool_timeout` early. Computed here,
+    # once per pass, so the closure below captures a value rather than a reassigned variable.
+    scan_budget_spent = attempts - retry_pass >= max_retries
 
     outcome = Base.lock(pool.lock) do
+      connect_failed = false                            # see the PormGPostgres twin (#1518)
+
       # (A) Materialize a handed-off slot (already leased for us).
       if owned !== nothing
         i, expected = owned
@@ -1392,6 +1461,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             push!(dead_handles, pool.connections[i])
             pool.connections[i] = nothing
           end
+          connect_failed && continue                    # one connect attempt per pass (#1518)
           before_connect_done || return (:hook, nothing)
           try
             is_reader_slot = pool.split_read_write && i != pool.writer_slot
@@ -1405,6 +1475,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
             @debug "Failed to create SQLite connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
+            connect_failed = true
             continue
           end
         end
@@ -1412,7 +1483,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
 
       # (C) Expand (never for split pools — fixed reader/writer layout). Append-only under the lock
       # → the `== ceiling` warn is race-free (#37).
-      can_expand = !pool.split_read_write && length(pool.connections) < ceiling
+      can_expand = !connect_failed && !pool.split_read_write && length(pool.connections) < ceiling
       if can_expand
         before_connect_done || return (:hook, nothing)
         try
@@ -1431,16 +1502,18 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
         catch e
           _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
           @debug "Failed to expand SQLite pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+          connect_failed = true
         end
       end
 
-      # (D) No capacity: time out or park (enqueue in the same locked section → no lost wakeup).
-      if attempts >= max_retries || time() >= deadline
+      # (D) No connection this pass: time out or park (enqueue in the same locked section → no lost
+      # wakeup); after a failed connect, park with a retry timer — see the PormGPostgres twin (#1518).
+      if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
       w = PoolWaiter(mode)
       push!(_waiters_for(pool), w)
-      return (:wait, w)
+      return (connect_failed ? :wait_retry : :wait, w)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -1465,13 +1538,15 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     elseif kind === :timeout
       err = _acquire_terminal_error(pool, "SQLite", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
       err isa PoolTimeoutError &&
-        @warn (attempts >= max_retries ?
+        @warn (attempts - retry_pass >= max_retries ?
           "Exceeded maximum retry attempts ($max_retries) to acquire SQLite connection" :
           "Timeout after $(to) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
       throw(err)
-    else # :wait
+    else # :wait / :wait_retry — see the PormGPostgres twin (#1518).
       w = outcome[2]
-      timer = Timer(_ -> _pool_wait_timeout!(pool, w), max(deadline - time(), 0.0))
+      kind === :wait_retry && (retry_pass += 1)
+      sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
+      timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
       handed = try
         take!(w.chan)
       finally
@@ -1482,6 +1557,9 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
         err isa PoolTimeoutError &&
           @warn "Timeout after $(to) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
+      elseif handed === _POOL_WAIT_RETRY
+        owned = nothing
+        continue
       end
       owned = handed::Tuple{Int, Any}
       continue

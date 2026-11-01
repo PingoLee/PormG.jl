@@ -559,6 +559,39 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# (13b) LibPQ.jl's own "socket closed" is a lost connection, decided by its type (#1519).
+#
+# When the socket under a running statement closes, LibPQ.jl's result loop raises
+# `JLConnectionError("PostgreSQL connection socket was unexpectedly closed")` — no SQLSTATE, and not
+# a `PQResultError`. The #1072 soak probe caught it around every `cut` and `restart` fault: the
+# classifier returned `:unknown`, so the caller got `StatementError` (the SQL was refused) instead of
+# `OperationalError`, and the dead handle was neither renewed nor swept. Expected: a lost connection,
+# classified `:operational`, and NOT retry-safe (the statement may already have reached the server).
+# The decision is the type, so any message LibPQ.jl raises it with counts, and no message is read.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "LibPQ's JLConnectionError is a lost connection, never retried (#1519)" begin
+  pg = CP.PostgresConnectionPool("host=localhost dbname=x user=y")
+  E = LibPQ.Errors
+
+  closed_socket = E.JLConnectionError("PostgreSQL connection socket was unexpectedly closed")
+  @test PormG.backend_is_connection_error(pg, closed_socket)
+  @test PormG.backend_classify_error(pg, closed_socket) === :operational
+  @test !PormG.backend_is_retry_safe(pg, closed_socket)
+
+  # Type, not text: another of LibPQ.jl's messages for the same type is a lost connection too.
+  timed_out = E.JLConnectionError("Connection process timed out")
+  @test PormG.backend_is_connection_error(pg, timed_out)
+  @test !PormG.backend_is_retry_safe(pg, timed_out)
+
+  # Its sibling about RESULTS is not a lost connection: the match is this one type, not
+  # `JLClientException`.
+  @test !PormG.backend_is_connection_error(pg, E.JLResultError("Result has no rows"))
+
+  # Inside a multi-result failure, the recursion in step (0) still finds it.
+  @test PormG.backend_is_connection_error(pg, CompositeException([closed_socket]))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (10) The retry never renews a slot it could not claim (#584).
 #
 # `await_result`'s finally releases the failed connection BEFORE `fetch`'s catch runs, so a parked
@@ -615,4 +648,78 @@ end
 
   for c in held[2:end]; CP.release_connection(pool, c); end
   @test count(!, pool.available) == 0                     # nothing leaked
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (14) A statement that fails while the worker still holds SQLite.jl's DB lock gives it back (#1521).
+#
+# Under `julia -t 1`, a Ctrl-C during a long SQLite statement stays pending through `sqlite3_step`
+# (a ccall), and the first safepoint after it is the entry of `unlock` in SQLite.jl's
+# `Base.@lock db.lock …` — so the `InterruptException` is thrown by the very `unlock` that was
+# meant to release `db.lock`, and the global worker kept it for good. The next query's checkout
+# probe (`backend_is_alive`) on that handle then waited on the lock forever (captured with a
+# SIGUSR1 dump and the exception's backtrace). The leak point cannot be hit deterministically, so
+# this test leaves the same state behind by hand: the task holds `db.lock` when the statement
+# fails. Expected: after `backend_execute` raises, the task holds no part of `db.lock`, and another
+# task can use the handle. A hold by ANOTHER task is never touched. Reverting the fix leaves the
+# lock held, and the probe from another task times out.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a failed statement leaves no hold on the DB's lock behind (#1521)" begin
+  pool = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+  db = CP.acquire_connection(pool; timeout_seconds = 5)
+  try
+    # The release must never turn the driver's own failure into another error. SQLite.jl before 1.9
+    # has no `DB.lock` (the floor, 1.6.1), and reading it there raised a `FieldError` from every
+    # failed statement, which broke the extension's precompile workload on the floor-resolve job.
+    floor_err = try
+      PormG.backend_execute(pool, db, "SELECT * FROM no_such_table_1521", nothing)
+      nothing
+    catch e; e end
+    @test floor_err isa SQLite.SQLiteException
+    if hasfield(SQLite.DB, :lock)
+      # The leaked hold, as the interrupted `unlock` leaves it: owned by this task, count 1.
+      lock(db.lock)
+      @test db.lock.locked_by === current_task() && db.lock.reentrancy_cnt == 1   # the fields the fix reads
+      err = try
+        PormG.backend_execute(pool, db, "SELECT * FROM no_such_table_1521", nothing)
+        nothing
+      catch e; e end
+      @test err isa SQLite.SQLiteException                  # the failure itself still propagates
+      @test !islocked(db.lock)                              # the leaked hold is given back
+
+      # Another task can now use the handle: the checkout probe that hung in #1521.
+      probe = Threads.@spawn PormG.backend_is_alive(pool, db)
+      @test timedwait(() -> istaskdone(probe), 5.0) === :ok
+      @test istaskdone(probe) && fetch(probe) === true      # never `fetch` a probe still blocked
+      # Should the hold have survived (the regression), drop it here so the rest of the testset
+      # reports instead of hanging behind it.
+      while db.lock.locked_by === current_task(); unlock(db.lock); end
+      wait(probe)
+
+      # A hold by another task is not this task's to release, and is left alone.
+      holding, release = Channel{Nothing}(1), Channel{Nothing}(1)
+      holder = @async begin
+        lock(db.lock)
+        put!(holding, nothing)
+        take!(release)
+        unlock(db.lock)
+      end
+      take!(holding)
+      ext = Base.get_extension(PormG, :PormGSQLiteExt)
+      ext._release_leaked_db_lock!(db)
+      @test islocked(db.lock) && db.lock.locked_by === holder
+      put!(release, nothing)
+      wait(holder)
+      @test !islocked(db.lock)
+
+      # The success path is unchanged.
+      @test PormG.backend_execute(pool, db, "SELECT 2 AS two", nothing) == [(two = 2,)]
+    else
+      # No Julia-side lock to leak on this SQLite.jl: the success path is all that is left to check.
+      @test PormG.backend_execute(pool, db, "SELECT 2 AS two", nothing) == [(two = 2,)]
+    end
+  finally
+    CP.release_connection(pool, db)
+    CP.close_pool!(pool)
+  end
 end

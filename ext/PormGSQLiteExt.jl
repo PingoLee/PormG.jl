@@ -81,9 +81,11 @@ function _create_sqlite_connection(connection_string::String; read_only::Bool = 
   # String padding for `LPad`/`RPad` (#122).
   SQLite.register(new_conn, _pormg_lpad; nargs = 3, name = "pormg_lpad", isdeterm = true)
   SQLite.register(new_conn, _pormg_rpad; nargs = 3, name = "pormg_rpad", isdeterm = true)
+  # `busy_timeout` first: switching to WAL takes a lock on the file, and since #1540 two connections
+  # of one pool can open at the same moment. Set after it, the first could see SQLITE_BUSY at once.
+  SQLite.execute(new_conn, "PRAGMA busy_timeout = 30000;")
   SQLite.execute(new_conn, "PRAGMA journal_mode = WAL;")
   SQLite.execute(new_conn, "PRAGMA synchronous = NORMAL;")
-  SQLite.execute(new_conn, "PRAGMA busy_timeout = 30000;")
   SQLite.execute(new_conn, "PRAGMA case_sensitive_like = ON;")
   # #276: SQLite defaults `foreign_keys` OFF for backwards compatibility, so PormG's own REFERENCES
   # clauses were declared and never enforced — a dangling FK inserted fine on SQLite and raised

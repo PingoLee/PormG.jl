@@ -622,13 +622,16 @@ end
 # A handoff delivers `(slot, handle)` — the handle the slot held at handoff time, or `nothing`
 # for a slot emptied first — and acquire branch A re-checks that pair under the lock before it
 # trusts the slot (#584); the Timer delivers `_POOL_WAIT_TIMEOUT`, or `_POOL_WAIT_RETRY` for a
-# waiter that parked after a failed connect (#1518).
+# waiter that parked after a failed connect (#1518). `retry` records that last case: such a waiter
+# paces its own connect attempts, so a slot freed by ANOTHER caller's failed connect is not handed to
+# it (`_handoff_or_free!(…; skip_retry = true)`, #1540).
 mutable struct PoolWaiter
   mode::Symbol
   chan::Channel{Any}
   done::Bool
+  retry::Bool
 end
-PoolWaiter(mode::Symbol) = PoolWaiter(mode, Channel{Any}(1), false)
+PoolWaiter(mode::Symbol, retry::Bool = false) = PoolWaiter(mode, Channel{Any}(1), false, retry)
 
 # Delivered to a waiter's channel when its timeout budget elapses (vs. a slot index on handoff).
 const _POOL_WAIT_TIMEOUT = :__pormg_pool_wait_timeout__
@@ -698,9 +701,16 @@ end
 # identity lets the waiter tell, under the lock, whether the slot is still the one it was handed;
 # a mismatch retries instead of sharing the newcomer's handle. Discard-origin, retire-on-release
 # and failed-materialize handoffs all empty the slot first, so they carry `nothing`.
-function _handoff_or_free!(pool, i::Int)
+#
+# `skip_retry = true` is for a slot emptied by a FAILED connect (#1540). It is handed only to a waiter
+# that parked because every slot was leased, never to one that parked after its own failed connect
+# (`w.retry`): that waiter would connect into it at once, fail, and hand it back to the first, and
+# two callers against a server that refuses fast would trade the slot at the refusal's speed instead
+# of the #1518 backoff. A saturation waiter still needs it: the failed connect's reservation may be
+# the reason it parked, and no release may ever come.
+function _handoff_or_free!(pool, i::Int; skip_retry::Bool = false)
   ws = _waiters_for(pool)
-  idx = findfirst(w -> !w.done && _slot_fits_mode(pool, i, w.mode), ws)
+  idx = findfirst(w -> !w.done && !(skip_retry && w.retry) && _slot_fits_mode(pool, i, w.mode), ws)
   if idx === nothing
     pool.available[i] = true
   else
@@ -723,6 +733,61 @@ function _pool_wait_timeout!(pool, w::PoolWaiter, sentinel::Symbol = _POOL_WAIT_
       k = findfirst(x -> x === w, ws)   # `===(w)` has no curried form; use an explicit closure
       k === nothing || deleteat!(ws, k)
       put!(w.chan, sentinel)
+    end
+  end
+  return nothing
+end
+
+# A leased slot that an `acquire_connection` call holds but has not yet given to its caller (#1535):
+# a slot a release handed it, as the `(slot, handle)` pair the handoff carried. It is set and cleared
+# under `pool.lock` at the exact points the slot changes hands, so that when the call exits by an
+# exception (a Ctrl-C, a hook that refuses the connection) `_drop_owned!` knows what to give back.
+const _OwnedSlot = Base.RefValue{Union{Nothing, Tuple{Int, Any}}}
+
+# The acquire body is compiled once, for a `Float64` deadline, whatever number the caller passed.
+_timeout_arg(t::Nothing)::Nothing = nothing
+_timeout_arg(t::Real)::Float64 = Float64(t)
+
+# The park's exception path (#1535). An interrupt during `take!` used to leave the waiter queued with
+# `done = false`, so the next release handed its slot to nobody, and a slot already delivered to the
+# channel was lost the same way. Under the lock, the `done` compare-and-set decides which happened:
+# no producer yet → dequeue the waiter, so no producer ever will; a producer already delivered → take
+# what it put, and record a handed slot in `owned` for `_drop_owned!` to pass on. A sentinel left by
+# the Timer is dropped.
+function _abandon_wait!(pool, w::PoolWaiter, owned::_OwnedSlot)
+  disable_sigint() do                                  # a second Ctrl-C must not abort it half-way
+    Base.lock(pool.lock) do
+      if !w.done
+        w.done = true
+        ws = _waiters_for(pool)
+        k = findfirst(x -> x === w, ws)
+        k === nothing || deleteat!(ws, k)
+      elseif isready(w.chan)
+        handed = take!(w.chan)
+        handed isa Tuple{Int, Any} && (owned[] = handed)
+      end
+    end
+  end
+  return nothing
+end
+
+# Give back the slot an acquire call is leaving with (#1535). The slot is passed on only while it is
+# still the one this call was handed: leased and holding the handle (or the emptiness) recorded in
+# `owned`. A sweep may have re-opened it meanwhile (#584), and then it is no longer ours to free.
+#
+# `failed_connect = true` when the slot is given back because a connect into it failed (#1540): see
+# `_handoff_or_free!`'s `skip_retry`. A second Ctrl-C must not abort the give-back half-way, so it
+# runs with SIGINT deferred; it holds `pool.lock` only briefly, since no connect runs under it.
+function _drop_owned!(pool, owned::_OwnedSlot; failed_connect::Bool = false)
+  disable_sigint() do
+    Base.lock(pool.lock) do
+      held = owned[]
+      held === nothing && return nothing
+      owned[] = nothing
+      i, expected = held
+      (i <= length(pool.available) && !pool.available[i] && pool.connections[i] === expected) || return nothing
+      _handoff_or_free!(pool, i; skip_retry = failed_connect)
+      return nothing
     end
   end
   return nothing
@@ -1021,7 +1086,9 @@ before the final sweep; what is leased at *that* instant is what gets force-clos
 parked waiters therefore never drains: every release is handed to a waiter, so the budget
 expires and those fresh leases are closed too. Waiters are not woken by close — they unwind
 through their own timeout, a pre-existing #124 limitation. A slot handed to a waiter by a
-discard (empty, leased) is left leased for that waiter; one handed by a release still holds its
+discard (empty, leased) is left leased for that waiter, and so is a slot an acquire reserved for a
+connect still in progress (#1540): that caller installs its new connection after `close_pool!`
+returns and gets it as usual, so the pool is not empty at that moment; one handed by a release still holds its
 handle and is indistinguishable from an ordinary lease, so it is swept like one — and the waiter,
 which was handed that handle's identity, notices the slot changed and retries rather than sharing
 whatever a fresh acquirer materialized there (#584).
@@ -1062,9 +1129,10 @@ function _close_pool_slots!(pool::_SQLEngine; drain_seconds::Real)
   # 2. Take every handle out under the lock; close nothing here (closes never run under
   #    `pool.lock` — a driver close can block on I/O, and on SQLite it may defer, #327). A leased
   #    slot is taken too: its borrower keeps a handle the pool no longer knows. A leased slot with
-  #    NO handle is a discard-origin #124 handoff still materializing (acquire branch A) — the
-  #    waiter that owns it will store a fresh handle and release the slot itself, so it stays
-  #    leased: flipping it available here would let a second acquirer lease that fresh handle too.
+  #    NO handle is a discard-origin #124 handoff still materializing (acquire branch A), or a slot
+  #    an acquire reserved for a connect in progress (#1540) — the caller that owns it will store a
+  #    fresh handle and lease it to its own caller, so it stays leased: flipping it available here
+  #    would let a second acquirer lease that fresh handle too. It is counted in `in_use` below.
   #    A release-origin handoff is NOT distinguishable here: it leaves the released handle in the
   #    slot with `available[i] == false`, exactly like an ordinary lease, so it is force-closed and
   #    re-opened for lease like one. That is safe because the handoff carried the handle's identity
@@ -1105,6 +1173,72 @@ end
 # `config` entry) aborts with a `FieldError` the first time it reaches a leaked test mock (#147).
 # Accepts (and ignores) the `drain_seconds` kwarg so `__cleanup__` can pass it uniformly.
 close_pool!(::_SQLEngine; kwargs...) = nothing
+
+# ── Connecting off the lock (#1540) ──────────────────────────────────────────
+# `acquire_connection` used to call `backend_connect` inside `pool.lock`, so for the whole connect
+# every other operation on the pool waited: a borrower's `release_connection`, every other acquire
+# (one that would have found a live idle handle included), `pool_stats`, the reaper, the leak
+# monitor, `close_pool!`. `timeout_seconds` did not bound that wait, because the deadline is read
+# after the lock is taken, and against a host that drops packets a connect lasts as long as the OS
+# connect timeout allows. Now the caller RESERVES the slot under the lock (leased, empty, recorded in
+# its `owned` slot), connects without the lock, and takes it again to install the handle — the
+# shape of Go's `database/sql`, and the reason #327 moved renewal off the lock.
+#
+# Outcomes of `_connect_reserved!` other than a handle. Symbols, never a driver handle.
+const _CONNECT_FAILED = :__pormg_connect_failed__        # ambiguous failure: slot given back, retry on the #1518 timer
+const _CONNECT_PERMANENT = :__pormg_connect_permanent__  # permanent failure with fast-fail on: slot given back, raise
+const _CONNECT_LOST = :__pormg_connect_lost__            # connected, but the slot is no longer ours: handle closed, rescan
+
+# The driver call for slot `i`. A SQLite reader slot of a split pool opens read-only.
+_backend_connect_slot(pool::Union{PormGPostgres, PormGMySQL}, ::Int) = backend_connect(pool)
+_backend_connect_slot(pool::PormGSQLite, i::Int) =
+  backend_connect(pool; read_only = pool.split_read_write && i != pool.writer_slot)
+
+# What runs once a fresh handle is installed in slot `i`, off the lock.
+_after_connect_install(::Union{PormGPostgres, PormGMySQL}, ::Int) = nothing
+_after_connect_install(pool::PormGSQLite, i::Int) = _warn_private_memory_slot(pool, i)   # (#545)
+
+"""
+    _connect_reserved!(pool, owned, i, last_connect_error) -> handle or a `_CONNECT_*` symbol
+
+Open a connection for slot `i`, which this acquire call holds as `owned[] == (i, nothing)`: leased and
+empty. Called **without** `pool.lock` (#1540). On success the handle is installed and leased to the
+caller. A failed connect gives the slot back (`_drop_owned!(…; failed_connect = true)`): to a
+caller parked because every slot was leased, at once, and never to one pacing its own retries,
+which finds it through its next scan. A cancellation (an `InterruptException`, however the driver
+wrapped it, `_await_abandoned`) is not a failed connect: it propagates as raised, and
+`acquire_connection`'s own catch gives the slot back (#1535).
+"""
+function _connect_reserved!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, last_connect_error::Base.RefValue{Any})
+  new_conn = try
+    _backend_connect_slot(pool, i)
+  catch e
+    # A cancellation, however the driver wrapped it, is not a failed connect (#315's recogniser).
+    _await_abandoned(e) && rethrow()
+    fast_fail = _on_connect_failure!(pool, e, last_connect_error)
+    _drop_owned!(pool, owned; failed_connect = true)    # to a saturation waiter, or free it
+    @debug "Failed to open a $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+    return fast_fail ? _CONNECT_PERMANENT : _CONNECT_FAILED
+  end
+  installed = Base.lock(pool.lock) do
+    # Still ours: no other path writes a handle into a leased empty slot or flips it available
+    # (`_close_pool_slots!` leaves it leased), so this holds unless that changes. Checked anyway, as
+    # `_swap_slot!` checks, because installing into a slot that is not ours would strand its holder.
+    ours = owned[] === (i, nothing) && !pool.available[i] && pool.connections[i] === nothing
+    owned[] = nothing
+    ours || return false
+    pool.connections[i] = new_conn
+    _monitor_note_create!(pool, i)                      # fresh connection timestamp (#125)
+    return true
+  end
+  if !installed
+    @debug "Reserved $(_backend_name(pool)) slot changed during the connect; retrying" slot=i
+    _close_driver_handle!(pool, new_conn)
+    return _CONNECT_LOST
+  end
+  _after_connect_install(pool, i)
+  return new_conn
+end
 
 """
     acquire_connection(pool::PormGPostgres; timeout_seconds=nothing, max_retries=300)
@@ -1158,12 +1292,27 @@ SQLite file) fails fast with `PoolConnectError`, whose connection string is reda
 catchable and exported. Any other failed connect (a server restarting, a refused or timed-out
 connect) is retried with a backoff of 50 ms doubling to 0.5 s until the timeout, which then raises
 `PoolConnectError` carrying the last cause; a release meanwhile still hands the caller its slot at
-once.
+once. A connect runs without holding the pool's lock (#1540): the caller reserves its slot, so
+other callers release, borrow and time out while it connects.
 
 See also [`release_connection`](@ref), `pool_stats`, and the
 [Advanced Configuration](@ref) guide for pool tuning and leak detection.
 """
 function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300)
+  # A slot handed to this call stays leased for it until the caller has it. Whatever ends the call
+  # by an exception (a Ctrl-C while parked, a hook that refuses the connection) gives it back
+  # here, or the slot would stay leased to nobody for the life of the process (#1535).
+  owned = _OwnedSlot(nothing)
+  try
+    return _acquire_connection!(pool, owned, _timeout_arg(timeout_seconds), max_retries)
+  catch
+    _drop_owned!(pool, owned)
+    rethrow()
+  end
+end
+
+function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_OwnedSlot,
+                              timeout_seconds::Union{Nothing, Float64}, max_retries::Int)
   # PostgreSQL's and MySQL's slots are all alike, so one method serves both (#1130); the messages
   # name the engine through `_backend_name`.
   start_time = time()
@@ -1179,36 +1328,44 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
   # Tracks whether the before_connect hook already ran for this acquire call, so it runs at most
   # once even across retries.
   before_connect_done = false
-  # A slot handed to us by a release/discard (leased for us) that still needs its connection
-  # validated/materialized, as the `(slot, handle)` pair the handoff delivered (#584). `nothing`
-  # when we are doing a normal scan.
-  owned::Union{Nothing, Tuple{Int, Any}} = nothing
+  # `owned[]`: the slot this call holds for itself and has not yet given its caller — one a
+  # release/discard handed it, as the `(slot, handle)` pair the handoff delivered (#584), or one it
+  # reserved to connect into, `(slot, nothing)` (#1540). `nothing` while it holds none. Set and
+  # cleared under the lock where the slot changes hands, so the caller's `_drop_owned!` gives back
+  # exactly what this call still holds (#1535).
   ceiling = _pool_ceiling(pool)
   # Most recent `backend_connect` failure this call. When set, the terminal branch raises a truthful
   # PoolConnectError (the pool couldn't be opened) instead of the saturation PoolTimeoutError (#72).
   last_connect_error = Ref{Any}(nothing)
   # Passes of this call that parked after a failed connect: the backoff before the next try (#1518).
   retry_pass = 0
+  # The connect of the previous pass failed. The pass that follows finishes that one — it scans only
+  # for a live handle, then parks with the #1518 retry timer — so it is not counted as a new pass:
+  # before #1540 both halves ran in one locked section.
+  failed_connect = false
 
   while true
-    attempts += 1
+    failed_connect || (attempts += 1)
 
     # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
     # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
     dead_handles = Any[]
     # `max_retries` bounds scan/materialize passes, not the paced connect retries of #1518: those are
     # bounded by the deadline, and counting them would end a long `pool_timeout` early. Computed here,
-    # once per pass, so the closure below captures a value rather than a reassigned variable.
+    # once per pass, so the closure below captures values rather than reassigned variables.
     scan_budget_spent = attempts - retry_pass >= max_retries
+    connect_failed_before = failed_connect
+    failed_connect = false
 
     outcome = Base.lock(pool.lock) do
-      # Did a connect fail in this pass while the pool had room? Then (D) parks with a retry timer
-      # instead of waiting for a handoff that nothing may ever make (#1518).
-      connect_failed = false
+      # Did a connect fail while the pool had room? Then (D) parks with a retry timer instead of
+      # waiting for a handoff that nothing may ever make (#1518). One connect attempt per pass: after a
+      # failure the server is not answering, so this pass only looks for a live handle.
+      connect_failed = connect_failed_before
 
       # (A) Materialize a handed-off slot (already leased for us; #124 direct handoff).
-      if owned !== nothing
-        i, expected = owned
+      if owned[] !== nothing
+        i, expected = owned[]
         conn = pool.connections[i]
         # The slot must still be the one we were handed: leased, and holding exactly the handle
         # (or the emptiness) the handoff carried. Between the handoff's `put!` and this lock a
@@ -1219,37 +1376,25 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
         # section as its no-capacity check, so no wakeup is lost.
         if pool.available[i] || conn !== expected
           @debug "Handed-off $(_backend_name(pool)) slot changed before the waiter woke; retrying" slot=i
+          owned[] = nothing                                # not ours any more (#1535)
           return (:retry, nothing)
         end
         if conn !== nothing && backend_is_alive(pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
+          owned[] = nothing                                # the caller has it now (#1535)
           return (:got, conn)                          # live handle handed over — reuse as-is
         end
         # Empty/dead slot (e.g. handed off by _discard_connection!): open a fresh connection.
         # A handle the probe just REJECTED is retired here rather than silently overwritten — the old
         # driver object would otherwise be dropped on the floor for a GC finalizer to close, and the
         # #442 probe rejects far more often than the old bare `PQstatus` read did. Nil the slot with
-        # it, so the `:hook` detour below cannot re-enter and queue the same handle twice — and hand
-        # the detour the now-empty slot, so its identity re-check expects `nothing`.
+        # it, so the slot is reserved exactly like one (B) or (C) reserves: leased and empty.
         if conn !== nothing
           push!(dead_handles, conn)
           pool.connections[i] = nothing
+          owned[] = (i, nothing)
         end
-        before_connect_done || return (:hook, (i, nothing))
-        try
-          new_conn = backend_connect(pool)
-          pool.connections[i] = new_conn
-          _monitor_note_create!(pool, i)                  # fresh connection timestamp (#125)
-          return (:got, new_conn)
-        catch e
-          # Free/hand-off the leased slot BEFORE we return either way — on a fast-fail bail too, so the
-          # slot handed to us (#124) is never leaked (#72).
-          fast_fail = _on_connect_failure!(pool, e, last_connect_error)
-          _handoff_or_free!(pool, i)                    # pass the slot on / free it
-          fast_fail && return (:connect_failed, e)
-          @debug "Failed to materialize handed-off $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-          return (:retry, nothing)
-        end
+        return (:connect, i)                             # connect OFF the lock (#1540)
       end
 
       # (B) Normal scan for an available slot.
@@ -1260,55 +1405,40 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
             _monitor_note_touch!(pool, i)                  # checkout timestamp (#125)
             return (:got, pool.connections[i])
           end
-          # Slot is empty or dead: defer creation so the before_connect hook runs off the lock.
-          # Retire a handle the probe rejected instead of overwriting it (#442) — see branch (A).
+          # Slot is empty or dead. Retire a handle the probe rejected instead of overwriting it
+          # (#442) — see branch (A).
           if pool.connections[i] !== nothing
             push!(dead_handles, pool.connections[i])
             pool.connections[i] = nothing
           end
-          # One connect attempt per pass (#1518): after a failure the server is not answering, and a
-          # caller that now retries on a backoff would otherwise try every free slot, under the
-          # lock, on each pass. The scan goes on only to find a live handle.
+          # One connect attempt per pass (#1518); the scan goes on only to find a live handle.
           connect_failed && continue
-          before_connect_done || return (:hook, nothing)
-          try
-            new_conn = backend_connect(pool)
-            pool.connections[i] = new_conn
-            pool.available[i] = false
-            _monitor_note_create!(pool, i)                 # fresh connection timestamp (#125)
-            return (:got, new_conn)
-          catch e
-            _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-            @debug "Failed to create $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-            pool.available[i] = true
-            connect_failed = true
-            continue
-          end
+          # Reserve the slot — leased and empty — and connect off the lock (#1540). A leased empty
+          # slot is already a state the pool has (a discard-origin handoff being materialized), so
+          # the sweep, the reaper and every identity-matched release/discard leave it alone.
+          pool.available[i] = false
+          owned[] = (i, nothing)                           # before anything that can block (#1535)
+          _monitor_note_touch!(pool, i)                    # leak clock starts at the reservation (#127)
+          return (:connect, i)
         end
       end
 
-      # (C) Expand the pool if we haven't reached the ceiling. Append-only under the lock, so the
-      # `== ceiling` check is race-free even under `-t auto` — the @warn fires exactly once (#37).
-      # Not after a failed connect in (B): one attempt per pass (#1518).
+      # (C) Expand the pool if we haven't reached the ceiling. The reservation is an append under the
+      # lock, so the `== ceiling` check is race-free even under `-t auto` — the @warn fires exactly
+      # once (#37) — however many callers then connect at once (#1540).
+      # Not after a failed connect: one attempt per pass (#1518).
       if !connect_failed && length(pool.connections) < ceiling
-        before_connect_done || return (:hook, nothing)
-        try
-          new_conn = backend_connect(pool)
-          push!(pool.connections, new_conn)
-          push!(pool.available, false)
-          _monitor_note_create!(pool, length(pool.connections))   # grow monitor vectors in lockstep (#125)
-          new_size = length(pool.connections)
-          if new_size == ceiling
-            @warn "$(_backend_name(pool)) pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-          else
-            @debug "$(_backend_name(pool)) pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
-          end
-          return (:got, new_conn)
-        catch e
-          _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-          @debug "Failed to expand $(_backend_name(pool)) pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-          connect_failed = true
+        push!(pool.connections, nothing)
+        push!(pool.available, false)
+        new_size = length(pool.connections)
+        owned[] = (new_size, nothing)                      # before anything that can block (#1535)
+        _monitor_note_create!(pool, new_size)              # grow monitor vectors in lockstep (#125)
+        if new_size == ceiling
+          @warn "$(_backend_name(pool)) pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        else
+          @debug "$(_backend_name(pool)) pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
         end
+        return (:connect, new_size)
       end
 
       # (D) No connection to be had in this pass. Time out, or park as a waiter for direct handoff.
@@ -1319,7 +1449,7 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(:any)
+      w = PoolWaiter(:any, connect_failed)
       push!(_waiters_for(pool), w)
       return (connect_failed ? :wait_retry : :wait, w)
     end
@@ -1332,18 +1462,27 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
     kind = outcome[1]
     if kind === :got
       return outcome[2]
-    elseif kind === :hook
-      _run_before_connect!(pool)                        # off the lock (#37)
-      before_connect_done = true
-      owned = outcome[2]                                # branch A hands back `(i, nothing)`; B/C `nothing`
-      continue
+    elseif kind === :connect
+      # The before_connect hook, then the connect, both OFF the lock (#37, #1540). A hook that refuses
+      # raises PoolConnectError, and the caller's catch gives the reserved slot back (#1535).
+      if !before_connect_done
+        _run_before_connect!(pool)
+        before_connect_done = true
+      end
+      got = _connect_reserved!(pool, owned, outcome[2]::Int, last_connect_error)
+      if got === _CONNECT_FAILED
+        failed_connect = true                            # the next pass parks with the retry timer
+        continue
+      elseif got === _CONNECT_PERMANENT
+        # Permanent connect failure (bad password / missing role|db) with fast-fail on: don't wait the
+        # full timeout — raise the truthful cause now (#72).
+        throw(PoolConnectError(_backend_name(pool), last_connect_error[], redact_secret(pool.connection_string), attempts, time() - start_time))
+      elseif got === _CONNECT_LOST
+        continue
+      end
+      return got
     elseif kind === :retry
-      owned = nothing
       continue
-    elseif kind === :connect_failed
-      # Permanent connect failure (bad password / missing role|db) with fast-fail on: don't wait the
-      # full timeout — raise the truthful cause now (#72).
-      throw(PoolConnectError(_backend_name(pool), outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
     elseif kind === :timeout
       err = _acquire_terminal_error(pool, _backend_name(pool), last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
       if err isa PoolTimeoutError
@@ -1361,6 +1500,9 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
       handed = try
         take!(w.chan)
+      catch
+        _abandon_wait!(pool, w, owned)                   # dequeue, or keep what was handed (#1535)
+        rethrow()
       finally
         close(timer)
       end
@@ -1370,10 +1512,9 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
           @warn "Timeout after $(to) seconds waiting for available $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
       elseif handed === _POOL_WAIT_RETRY
-        owned = nothing                                  # scan and connect again (#1518)
-        continue
+        continue                                         # scan and connect again (#1518)
       end
-      owned = handed::Tuple{Int, Any}                    # loop back to materialize the handed slot
+      owned[] = handed::Tuple{Int, Any}                  # loop back to materialize the handed slot
       continue
     end
   end
@@ -1381,7 +1522,17 @@ end
 
 function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300, mode::Symbol = :any)
   mode in (:any, :read, :write) || throw(InvalidValueError("Invalid SQLite acquire mode: $(mode). Expected :any, :read or :write."))
+  owned = _OwnedSlot(nothing)                           # see the PormGPostgres twin (#1535)
+  try
+    return _acquire_connection!(pool, owned, _timeout_arg(timeout_seconds), max_retries, mode)
+  catch
+    _drop_owned!(pool, owned)
+    rethrow()
+  end
+end
 
+function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
+                              timeout_seconds::Union{Nothing, Float64}, max_retries::Int, mode::Symbol)
   start_time = time()
   # Default acquire timeout comes from the pool (connection.yml `pool_timeout`, #126); an explicit
   # per-call `timeout_seconds` still wins.
@@ -1389,63 +1540,53 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   deadline = start_time + to
   _MONITOR_ANY[] && _leak_check!(pool)   # leak detection (#127): warn about connections held past the threshold
   attempts = 0
-  # See the PormGPostgres twin: hook runs off the lock at most once; `owned` is a slot handed to
-  # us (leased) awaiting materialize; direct-handoff wait replaces the busy-poll (#124).
+  # See the PormGPostgres twin: hook runs off the lock at most once; `owned[]` is the slot this call
+  # holds for itself, handed or reserved (#1535, #1540); direct-handoff wait replaces the busy-poll (#124).
   before_connect_done = false
-  owned::Union{Nothing, Tuple{Int, Any}} = nothing
   ceiling = _pool_ceiling(pool)
   # See the PormGPostgres twin: most recent connect failure this call → truthful PoolConnectError (#72).
   last_connect_error = Ref{Any}(nothing)
   retry_pass = 0                                        # see the PormGPostgres twin (#1518)
+  failed_connect = false                                # see the PormGPostgres twin (#1540)
 
   while true
-    attempts += 1
+    failed_connect || (attempts += 1)
 
     # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
     # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
     dead_handles = Any[]
     # `max_retries` bounds scan/materialize passes, not the paced connect retries of #1518: those are
     # bounded by the deadline, and counting them would end a long `pool_timeout` early. Computed here,
-    # once per pass, so the closure below captures a value rather than a reassigned variable.
+    # once per pass, so the closure below captures values rather than reassigned variables.
     scan_budget_spent = attempts - retry_pass >= max_retries
+    connect_failed_before = failed_connect
+    failed_connect = false
 
     outcome = Base.lock(pool.lock) do
-      connect_failed = false                            # see the PormGPostgres twin (#1518)
+      connect_failed = connect_failed_before              # see the PormGPostgres twin (#1518)
 
       # (A) Materialize a handed-off slot (already leased for us).
-      if owned !== nothing
-        i, expected = owned
+      if owned[] !== nothing
+        i, expected = owned[]
         conn = pool.connections[i]
         # Identity re-check before trusting the slot — see the PormGPostgres twin (#584).
         if pool.available[i] || conn !== expected
           @debug "Handed-off SQLite slot changed before the waiter woke; retrying" slot=i
+          owned[] = nothing                                # not ours any more (#1535)
           return (:retry, nothing)
         end
         if conn !== nothing && backend_is_alive(pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
+          owned[] = nothing                                # the caller has it now (#1535)
           return (:got, conn)
         end
         # Retire a handle the probe rejected instead of overwriting it — see the PormGPostgres twin.
         if conn !== nothing
           push!(dead_handles, conn)
           pool.connections[i] = nothing
+          owned[] = (i, nothing)
         end
-        before_connect_done || return (:hook, (i, nothing))
-        try
-          is_reader_slot = pool.split_read_write && i != pool.writer_slot
-          new_conn = backend_connect(pool; read_only = is_reader_slot)
-          pool.connections[i] = new_conn
-          _monitor_note_create!(pool, i)                  # fresh connection timestamp (#125)
-          _warn_private_memory_slot(pool, i)              # per-connection `:memory:` (#545)
-          return (:got, new_conn)
-        catch e
-          # Free/hand-off the leased slot BEFORE we return either way, fast-fail included (#72/#124).
-          fast_fail = _on_connect_failure!(pool, e, last_connect_error)
-          _handoff_or_free!(pool, i)
-          fast_fail && return (:connect_failed, e)
-          @debug "Failed to materialize handed-off SQLite connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-          return (:retry, nothing)
-        end
+        return (:connect, i)                             # connect OFF the lock (#1540)
       end
 
       # (B) Normal mode-aware scan.
@@ -1462,48 +1603,29 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             pool.connections[i] = nothing
           end
           connect_failed && continue                    # one connect attempt per pass (#1518)
-          before_connect_done || return (:hook, nothing)
-          try
-            is_reader_slot = pool.split_read_write && i != pool.writer_slot
-            new_conn = backend_connect(pool; read_only = is_reader_slot)
-            pool.connections[i] = new_conn
-            pool.available[i] = false
-            _monitor_note_create!(pool, i)                 # fresh connection timestamp (#125)
-            _warn_private_memory_slot(pool, i)             # per-connection `:memory:` (#545)
-            return (:got, new_conn)
-          catch e
-            _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-            @debug "Failed to create SQLite connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-            pool.available[i] = true
-            connect_failed = true
-            continue
-          end
+          # Reserve the slot and connect off the lock — see the PormGPostgres twin (#1540).
+          pool.available[i] = false
+          owned[] = (i, nothing)
+          _monitor_note_touch!(pool, i)
+          return (:connect, i)
         end
       end
 
-      # (C) Expand (never for split pools — fixed reader/writer layout). Append-only under the lock
-      # → the `== ceiling` warn is race-free (#37).
+      # (C) Expand (never for split pools — fixed reader/writer layout). The reservation is an append
+      # under the lock → the `== ceiling` warn is race-free (#37, #1540).
       can_expand = !connect_failed && !pool.split_read_write && length(pool.connections) < ceiling
       if can_expand
-        before_connect_done || return (:hook, nothing)
-        try
-          new_conn = backend_connect(pool)
-          push!(pool.connections, new_conn)
-          push!(pool.available, false)
-          _monitor_note_create!(pool, length(pool.connections))   # grow monitor vectors in lockstep (#125)
-          _warn_private_memory_slot(pool, length(pool.connections))  # per-connection `:memory:` (#545)
-          new_size = length(pool.connections)
-          if new_size == ceiling
-            @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-          else
-            @debug "SQLite pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
-          end
-          return (:got, new_conn)
-        catch e
-          _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-          @debug "Failed to expand SQLite pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
-          connect_failed = true
+        push!(pool.connections, nothing)
+        push!(pool.available, false)
+        new_size = length(pool.connections)
+        owned[] = (new_size, nothing)                      # before anything that can block (#1535)
+        _monitor_note_create!(pool, new_size)              # grow monitor vectors in lockstep (#125)
+        if new_size == ceiling
+          @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        else
+          @debug "SQLite pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
         end
+        return (:connect, new_size)
       end
 
       # (D) No connection this pass: time out or park (enqueue in the same locked section → no lost
@@ -1511,7 +1633,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(mode)
+      w = PoolWaiter(mode, connect_failed)
       push!(_waiters_for(pool), w)
       return (connect_failed ? :wait_retry : :wait, w)
     end
@@ -1524,17 +1646,25 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     kind = outcome[1]
     if kind === :got
       return outcome[2]
-    elseif kind === :hook
-      _run_before_connect!(pool)
-      before_connect_done = true
-      owned = outcome[2]                                # see the PormGPostgres twin
-      continue
+    elseif kind === :connect
+      # The hook, then the connect, both off the lock — see the PormGPostgres twin (#37, #1540).
+      if !before_connect_done
+        _run_before_connect!(pool)
+        before_connect_done = true
+      end
+      got = _connect_reserved!(pool, owned, outcome[2]::Int, last_connect_error)
+      if got === _CONNECT_FAILED
+        failed_connect = true
+        continue
+      elseif got === _CONNECT_PERMANENT
+        # Permanent connect failure (unopenable path) with fast-fail on: raise the truthful cause now (#72).
+        throw(PoolConnectError("SQLite", last_connect_error[], redact_secret(pool.connection_string), attempts, time() - start_time))
+      elseif got === _CONNECT_LOST
+        continue
+      end
+      return got
     elseif kind === :retry
-      owned = nothing
       continue
-    elseif kind === :connect_failed
-      # Permanent connect failure (unopenable path) with fast-fail on: raise the truthful cause now (#72).
-      throw(PoolConnectError("SQLite", outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
     elseif kind === :timeout
       err = _acquire_terminal_error(pool, "SQLite", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
       err isa PoolTimeoutError &&
@@ -1549,6 +1679,9 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
       handed = try
         take!(w.chan)
+      catch
+        _abandon_wait!(pool, w, owned)                   # see the PormGPostgres twin (#1535)
+        rethrow()
       finally
         close(timer)
       end
@@ -1558,10 +1691,9 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           @warn "Timeout after $(to) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
       elseif handed === _POOL_WAIT_RETRY
-        owned = nothing
         continue
       end
-      owned = handed::Tuple{Int, Any}
+      owned[] = handed::Tuple{Int, Any}
       continue
     end
   end
@@ -2322,6 +2454,31 @@ end
 _wait_settled(probe, seconds::Real)::Bool =
   timedwait(probe, max(0.0, Float64(seconds)); pollint = 0.05) === :ok
 
+# The stop signal sent from the caller's own task, before the recovery is spawned (#1534). Returns
+# whether it was sent; the recovery's step 1 then sends it only if it was not.
+#
+# The recovery runs on a `Threads.@spawn` task on the `:default` pool. Under `julia -t 1,1` (plain
+# `julia`) that pool's one thread is inside the very statement being abandoned, since SQLite runs it
+# there on the global worker. The recovery then started only when the statement ended, so its cancel
+# came too late, and the next query, queued on the same worker, waited out the whole statement: 31
+# to 38 s after a Ctrl-C one second into a statement of about 30 s, 10 of 10 runs. Sent from the
+# caller, it was 0.2 s.
+#
+# SQLite: `sqlite3_interrupt` sets a flag and returns, and is documented safe from any thread, so the
+# caller sends it inline. PostgreSQL and MySQL: no. `PQcancel` opens its own socket and MySQL's
+# `KILL QUERY` its own connection, either of which can block for seconds, and the caller has to give
+# the REPL back at once; their cancel stays on the detached task. Never throws, as step 1 never does.
+function _cancel_at_abandon!(pool::PormGSQLite, conn)::Bool
+  try
+    backend_cancel_query!(pool, conn)
+    return true
+  catch cancel_failure
+    @debug "Cancel of an abandoned SQLite query failed" exception=cancel_failure
+    return false
+  end
+end
+_cancel_at_abandon!(::Union{PormGPostgres, PormGMySQL}, conn)::Bool = false
+
 """
     _recover_abandoned_connection!(pool, conn, handle; settle_seconds, close_seconds, force_renew) -> Nothing
     _recover_abandoned_connection!(ft::FetchTask; settle_seconds, close_seconds, force_renew) -> Nothing
@@ -2345,6 +2502,10 @@ Runs on a DETACHED task, for three separate reasons:
     this in the caller would make Ctrl-C wait for the very query it just cancelled.
   * A second Ctrl-C would abort a synchronous cleanup half-way and re-poison the slot. A detached
     task does not receive the REPL's interrupt.
+
+The one exception is SQLite's cancel, which the caller sends itself before spawning (#1534): the
+detached task needs a free default thread, and under plain `julia` the only one is running the
+statement, so a cancel sent from there arrived when the statement had already finished.
 
 The slot stays LEASED for the whole routine. That is the point: it becomes available again only
 once the connection is proven clean, and otherwise it is renewed or emptied. Never throws — an
@@ -2370,16 +2531,20 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
+  cancel_sent = _cancel_at_abandon!(pool, conn)         # on the caller's task, at once (#1534)
   Threads.@spawn begin
     try
       # 1. Best-effort stop signal, and the ONLY driver call allowed to run while the operation may
       #    still be in flight: PQcancel uses a separate PGcancel on its own socket, and
       #    sqlite3_interrupt is documented cross-thread-safe. Never allowed to escape — a missing
-      #    driver hits Backend.jl's throwing fallback, and a closed handle can raise too.
-      try
-        backend_cancel_query!(pool, conn)
-      catch cancel_failure
-        @debug "Cancel of an abandoned query failed" exception=cancel_failure
+      #    driver hits Backend.jl's throwing fallback, and a closed handle can raise too. Skipped
+      #    when the caller already sent it (`_cancel_at_abandon!`, SQLite, #1534).
+      if !cancel_sent
+        try
+          backend_cancel_query!(pool, conn)
+        catch cancel_failure
+          @debug "Cancel of an abandoned query failed" exception=cancel_failure
+        end
       end
 
       # 2. Bounded wait for the driver to let go. LOAD-BEARING, not an optimization: LibPQ's

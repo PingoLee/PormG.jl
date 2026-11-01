@@ -570,10 +570,29 @@ end
   @test CP.pool_stats(pool).waiting == 0
 end
 
+@testset "two callers whose connects fail stay paced: a failed connect does not wake the other (#1540)" begin
+  # Since #1540 a caller reserves its slot before it connects, so a failed connect frees that slot
+  # with `_handoff_or_free!`, and it could hand it to a waiter. Handing it to a caller that parked
+  # after its OWN failed connect made that caller connect at once, fail, and hand it back: two
+  # callers traded the slot as fast as the server refused, with neither backoff timer ever firing.
+  # Each caller is still paced: attempts at about 0, 0.05, 0.15, 0.35, 0.75 and 1.25 s, so 6 each and
+  # 12 for the pair over 1.5 s (the schedule in the testset above). Load only lowers the count. The
+  # bound leaves slack for scheduling, not for one extra attempt per paced one (that would be 24).
+  # Unpatched, the count runs into the thousands.
+  for pool in (MockPG1518(3; fail_times = typemax(Int)), MockSQLite1518(3; fail_times = typemax(Int)))
+    callers = [@async(try; CP.acquire_connection(pool; timeout_seconds = 1.5); catch e; e; end) for _ in 1:2]
+    errs = fetch.(callers)
+    @test all(e -> e isa PormG.PoolConnectError, errs)
+    @test pool.connects <= 16                              # ← unpatched: thousands
+    @test CP.pool_stats(pool).waiting == 0 && CP.pool_stats(pool).in_use == 0
+  end
+end
+
 @testset "paced connect retries do not spend max_retries (#1518)" begin
   # `max_retries` bounds scan passes. Counting the time-paced retries against it would end a long
-  # `pool_timeout` early. max_retries = 3 allows the `before_connect` detour (one pass) and two scan
-  # passes; counted naively, four refused connects would raise PoolConnectError after the 2nd.
+  # `pool_timeout` early. Counted naively, four refused connects would spend max_retries = 3 and raise
+  # PoolConnectError before the fifth connect. (Since #1540 the hook runs in the connect step and costs
+  # no pass of its own, and the pass that parks after a failed connect finishes the failing one.)
   pool = MockPG1518(1; fail_times = 4)
   conn = CP.acquire_connection(pool; timeout_seconds = 10, max_retries = 3)
   @test conn isa FakeConn1518

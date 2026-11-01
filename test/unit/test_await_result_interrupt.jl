@@ -487,3 +487,82 @@ PormG.backend_execute_async(pool::MockPGPlain315, conn, sql::String, params) =
     @test pool.cancels[] == 0 && pool.drains[] == 0 && pool.renewals[] == 0
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Where the cancel is sent from (#1534)
+# The recovery runs on a `Threads.@spawn` task on the `:default` pool. Under plain `julia` (`-t 1,1`)
+# that pool has one thread, and SQLite runs the abandoned statement on it, so the recovery's cancel
+# arrived when the statement had already ended and the next query waited out the whole statement
+# (31-38 s in 10 of 10 child-process runs, 0.2 s with the fix). On SQLite the CALLER now sends
+# `sqlite3_interrupt` itself, before `_recover_abandoned_connection!` returns, and the recovery does
+# not send it again. PostgreSQL keeps it on the recovery task: `PQcancel` opens a socket and can block.
+#
+# Recorded as the task each cancel ran on. The SQLite assertion is read before this task yields, so
+# no other task can have run yet. No SQL. Gate: unpatched, the SQLite cancel has not run at that
+# point, and when it does it runs on the recovery task.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct FakeConn1534
+  closed::Bool
+end
+Base.close(c::FakeConn1534) = (c.closed = true; nothing)
+
+mutable struct MockSQLiteCancel1534 <: PormG.PormGSQLite
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  split_read_write::Bool
+  writer_slot::Int
+  reader_cursor::Int
+  lock::ReentrantLock
+  write_lock::ReentrantLock
+  cancel_tasks::Vector{Task}
+  cancel_lock::ReentrantLock
+end
+MockSQLiteCancel1534() = MockSQLiteCancel1534(Any[nothing], [true], "mock://sqlite", 1, false, 1, 0,
+                                              ReentrantLock(), ReentrantLock(), Task[], ReentrantLock())
+
+mutable struct MockPGCancel1534 <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  cancel_tasks::Vector{Task}
+  cancel_lock::ReentrantLock
+end
+MockPGCancel1534() = MockPGCancel1534(Any[nothing], [true], "mock://pg", 1, ReentrantLock(), Task[], ReentrantLock())
+
+const _Cancel1534 = Union{MockSQLiteCancel1534, MockPGCancel1534}
+PormG.backend_connect(::_Cancel1534; kwargs...) = FakeConn1534(false)
+PormG.backend_is_alive(::_Cancel1534, c) = c isa FakeConn1534 && !c.closed
+PormG.backend_cancel_query!(p::_Cancel1534, c) = Base.lock(() -> push!(p.cancel_tasks, current_task()), p.cancel_lock)
+PormG.backend_drain_connection!(::_Cancel1534, c) = true
+_cancels_1534(p) = Base.lock(() -> copy(p.cancel_tasks), p.cancel_lock)
+
+@testset "SQLite: the caller sends the cancel itself, once; PostgreSQL leaves it to the recovery (#1534)" begin
+  me = current_task()
+
+  sl = MockSQLiteCancel1534()
+  c = CP.acquire_connection(sl)
+  gate = Channel{Nothing}(1)
+  handle = @async take!(gate)                          # the abandoned statement, still running
+  CP._recover_abandoned_connection!(sl, c, handle; settle_seconds = 5.0, close_seconds = 5.0)
+  sent = _cancels_1534(sl)                             # read before this task yields
+  @test length(sent) == 1                              # ← unpatched: 0, the recovery has not run
+  @test !isempty(sent) && sent[1] === me
+  put!(gate, nothing)                                  # the statement ends
+  @test _wait_until_315(() -> sl.available[1] === true)   # recovered and released
+  @test length(_cancels_1534(sl)) == 1                 # not sent a second time by the recovery
+
+  pg = MockPGCancel1534()
+  c = CP.acquire_connection(pg)
+  gate = Channel{Nothing}(1)
+  handle = @async take!(gate)
+  CP._recover_abandoned_connection!(pg, c, handle; settle_seconds = 5.0, close_seconds = 5.0)
+  @test _wait_until_315(() -> length(_cancels_1534(pg)) == 1)
+  @test _cancels_1534(pg)[1] !== me                    # sent by the recovery task
+  put!(gate, nothing)
+  @test _wait_until_315(() -> pg.available[1] === true)
+  @test length(_cancels_1534(pg)) == 1
+end

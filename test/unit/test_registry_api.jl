@@ -295,6 +295,9 @@ end
                                       "the version `register_offline` was given (`server_version = 3024000`)",
                                       sprint(showerror, err))
     @test err !== nothing && !occursin("library PormG loads", sprint(showerror, err))
+    # A live SQLite pool (one `register_offline` does not hold) keeps the library's wording.
+    live = PormG.ConnectionPool.SQLiteConnectionPool(tempname() * ".sqlite"; pool_size = 1)
+    @test PormG.Kernel._version_at_hand(live, 3_024_000) == "the SQLite library PormG loads is 3.24.0"
     @test PormG.QueryBuilder._backend_parameter_limit(PormG.config[last(keys)].connections) == 999
     # The public path: 1000 one-parameter rows are two statements under 3.32.0's 999 limit, one from it.
     rows = DataFrame(points = Float64.(1:1000))

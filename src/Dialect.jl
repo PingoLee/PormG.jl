@@ -809,7 +809,8 @@ MAX(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MAX($(column)
 MIN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MIN($(column))"
 
 # SQLite has window functions from 3.25.0: a version row of the capability table (#1163), checked
-# against the library PormG loads, and refused below it with the version the table states.
+# against the library PormG loads (or the `server_version` an offline key states, #1452), and refused
+# below it with the version the table states.
 _assert_sqlite_window_support(conn::PormGSQLite)::Nothing = _require_feature(conn, :window_functions, "A window function")
 
 function _window_no_column(function_name::String, over_sql::String)

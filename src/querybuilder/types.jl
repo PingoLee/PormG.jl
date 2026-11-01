@@ -1230,6 +1230,11 @@ const _RenderKind = Union{TemporalKind, _IntervalMs}
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 
+# A date or timestamp LITERAL as a side of date arithmetic: the right of `-` since #814
+# (`F("date") - Date(2009, 3, 1)`), and the left of `-` since #1549 (`Date(2009, 3, 29) - F("date")`).
+# Here rather than in `operators.jl` because `FExpression.field_name` below admits it.
+const _TemporalLiteral = Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime}
+
 # ── The operand vocabulary, named ONCE (#533) ────────────────────────────────
 #
 # `_CompareOperand` (the comparison SIGNATURE) and `FExpression.operand` (the STORAGE slot) have to
@@ -1308,7 +1313,9 @@ const _SubqueryOperand = SubqueryObject
   # (`CTE("g", "v") == 5`), rendered through the same `_set_update_query(::CTEReference)` seam an
   # UPDATE value takes. Only the comparison methods in `operators.jl` build one: a `CTEReference`
   # takes no arithmetic.
-  field_name::Union{String,Integer,Float64,FExpression,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE}
+  # #1549: a date or timestamp literal on the LEFT of `-` (`Date(2009, 3, 29) - F("date")`), kept on
+  # the left as #1476 keeps a number: `d - f` does not commute.
+  field_name::Union{String,Integer,Float64,_TemporalLiteral,FExpression,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
   # drift apart: widening one widens both, by construction rather than by a test that checks.

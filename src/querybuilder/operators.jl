@@ -99,8 +99,8 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # spelling of what `F("date") - "2009-03-01"` attempted, which bound TEXT — PostgreSQL has no
 # `date - text`, and SQLite subtracted the years — and which is now refused on both engines.
 # The renderer types the literal (`_render_operand_typed`) and refuses it against a left that is not
-# temporal.
-const _TemporalLiteral = Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime}
+# temporal. `_TemporalLiteral` is declared in `types.jl`, beside `FExpression`, whose left slot takes
+# one too (#1549, `_temporal_left` below).
 
 function Base.:-(f::FExpression, operand::_TemporalLiteral)
   return FExpression(
@@ -440,12 +440,40 @@ Base.:/(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "/", f)
 # `::Number`, not `::Any`, so it cannot overlap the right-hand catch-all of another family (Aqua's
 # ambiguity check). `JoinedReference` takes no arithmetic: it is a comparison handle (#481). A
 # `CTE(...)` handle is the fourth family since #1539, with the same refusals.
+#
+# #1549 — the LEFT side's other operands, which missed the `::Number` arm and reached Julia's raw
+# `MethodError`: a date, a duration and `missing`. Caught as their own union, for the same Aqua reason,
+# and refused by `_unsupported_left_arithmetic_operand`, which names what the left of each family takes.
+# The two that build are more specific methods below: a date on the left of `-` (`_temporal_left`), and a
+# duration on the left of `+`, which commutes.
+# `Nothing` and `Dates.Time` too: the right side refuses both (`F("grid") + nothing`, `F("at") - Time(6)`).
+const _LeftArithmeticRefused = Union{_TemporalLiteral,_DurationOperand,Dates.Time,Missing,Nothing}
 for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject, :CTEReference)
   @eval Base.$op(f::$T, v::SQLText) = $op(f, _arith_value(v, $(string(op))))
   @eval Base.$op(v::SQLText, f::$T) = $op(_arith_value(v, $(string(op))), f)
   @eval Base.$op(::$T, x::Any) = throw(_unsupported_arithmetic_operand($(string(op)), x, $T))
   @eval Base.$op(x::Number, ::$T) = throw(_unsupported_arithmetic_operand($(string(op)), x, $T))
+  @eval Base.$op(x::_LeftArithmeticRefused, ::$T) = throw(_unsupported_left_arithmetic_operand($(string(op)), x, $T))
 end
+
+# #1549 — a date or timestamp literal on the LEFT of `-`: `Date(2009, 3, 29) - F("date")`, the mirror of
+# #814's `F("date") - Date(2009, 3, 29)`. The literal stays on the left of its own node, as #1476's
+# `_number_left` keeps a number there: `d - f` does not commute, and rewriting it as `-(f - d)` would make
+# the node say something the user did not write. The render types the literal (`_side_kind`) and the
+# #801/#814 arm decides the rest, as it does with the date on the right: a day count beside a date, an
+# interval beside a timestamp, a shift beside a day count or an interval, a refusal beside anything else.
+for T in (:FExpression, :WindowFunction, :FObject)
+  @eval Base.:-(d::_TemporalLiteral, f::$T) = _temporal_left(d, f)
+end
+Base.:-(d::_TemporalLiteral, c::CTEReference) = _temporal_left(d, _reject_cte_desc(c, "arithmetic"))
+_temporal_left(d::_TemporalLiteral, f::Union{FExpression,SQLTypeFunction,CTEReference}) =
+  FExpression(field_name=d, operation="-", operand=f, function_name="F", column="", aggregate=_is_agg(f))
+
+# #1549 — a duration on the LEFT of `+` commutes, as it has for `F` (#25) and `CTE(...)` (#1539): the
+# function families now take the same route, so `Day(1) + Max("date")` is `Max("date") + Day(1)`, which
+# the right-hand catch-all refuses with its advice (shift the column inside the function).
+Base.:+(operand::_DurationOperand, f::WindowFunction) = f + operand
+Base.:+(operand::_DurationOperand, f::FObject) = f + operand
 # Text in `Value` is refused: unwrapped, a String is a column path, so `F("grid") + Value("10")` would
 # read a column named `10`.
 function _arith_value(v::SQLText, op::String)

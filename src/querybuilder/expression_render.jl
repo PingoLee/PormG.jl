@@ -378,6 +378,10 @@ _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _side_function_kin
 # years of two TEXT dates, and a date literal compared with a CTE timestamp bound as a bare date (#1529).
 _side_kind(value::CTEReference, instruc::SQLInstruction) =
   _temporal_side_kind(_cte_column_kind(value, instruc, _AllKinds()))
+# #1549 — a date or timestamp literal on the LEFT (`Date(2009, 3, 29) - F("date")`) is its own kind, as
+# it is on the right (`_render_side_kind`'s `right` arm). Typed here, the one side rule, so the render
+# and the walk (`_temporal_arith_kind`) both send it to the #801/#814 arm the date-on-the-right takes.
+_side_kind(value::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(value)
 
 # #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
 # arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
@@ -446,6 +450,12 @@ _day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction)
 # PostgreSQL has no operator either and fails when the statement runs. The exception is a `TimeField`:
 # PostgreSQL's `date + time` is a timestamp, which SQLite does not render — an intentional divergence,
 # documented beside the integer-column rule.
+# #814 — a day count MINUS a date has no meaning, on every engine: a count column (#882) or, since #1549,
+# a number literal on the left (`10 - F("date")`). One text for both.
+_count_minus_date_error() =
+  QueryBuildError("A day count minus a date has no meaning. To move a date back, subtract from the date " *
+                  "instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or F(\"date\") - Day(30).")
+
 _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction) =
   _untyped_date_refusal(instruc.connection, operation)
 function _untyped_date_refusal(conn, operation::AbstractString)
@@ -1059,6 +1069,21 @@ function _render_operand_typed(operand::Any, field_name::Any, operation::String,
   return sql, _render_side_kind(operand, instruc; right = true)   # #1034 step 5b: the one side rule
 end
 
+# #1549 — the PostgreSQL cast of a date or timestamp literal on the LEFT, the mirror of the right-hand
+# arm above: a date casts to `date`; a timestamp to `timestamp` beside a timestamp with no time zone,
+# whose input ignores the bound UTC offset, and to `timestamptz` otherwise. The side that decides is the
+# right one when it is a date or a timestamp, and the literal's own kind beside anything else (a day
+# count, an interval). Appended to the bare placeholder `_set_update_query_left` bound, which is the text
+# `add_parameter!` would have produced with the cast (`"\$n" * "::type"`). Engines that bind no cast
+# (`_casts_bind_parameters`) keep the placeholder.
+function _cast_temporal_left(left_side::String, left_kind::TemporalKind, right_kind::_RenderKind,
+                             instruc::SQLInstruction)::String
+  _casts_bind_parameters(instruc.connection) || return left_side
+  left_kind isa CDate && return left_side * "::date"
+  other = right_kind isa Union{CDate,CDateTime} ? right_kind : left_kind
+  return left_side * (other == CDateTime(false) ? "::timestamp" : "::timestamptz")
+end
+
 # A `String` operand names a FIELD when it is a path or one of the model's own fields; otherwise it
 # is a text literal. The rule `_set_update_query_operand`'s String arm applies.
 # No path starts with `{`, `[` or `"`, so a text that does is a literal even when it holds `__`: a JSON
@@ -1557,6 +1582,12 @@ function _set_update_query_left(value::Any, operation::String, instruc::SQLInstr
   elseif value isa Float64
     # #1476: a float on the left of `-` or `/` (`10.5 - F("points")`), bound as one.
     return add_parameter!(instruc, value; sql_type=_infer_parameter_sql_type(value, instruc))
+  elseif value isa _TemporalLiteral
+    # #1549: a date or timestamp literal on the left of `-`, bound as the right-hand #814 arm binds one
+    # (`_render_operand_typed`): the formatter of its own kind. With NO cast here: on PostgreSQL the cast
+    # of a timestamp depends on the other side (`timestamp` beside a column with no time zone), and the
+    # left renders first (#568), so `_cast_temporal_left` appends it once the right has rendered.
+    return add_parameter!(instruc, value_formatter(literal_canonical_kind(value), instruc.connection)(value))
   elseif value isa FExpression
     return _set_update_query(value, instruc)
   elseif value isa SQLTypeFunction
@@ -1841,6 +1872,8 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
       end
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
+      # #1549: a literal on the left takes its PostgreSQL cast now that the right is typed.
+      v.field_name isa _TemporalLiteral && (left_side = _cast_temporal_left(left_side, left_kind, right_kind, instruc))
       # #882: an integer column on the right is a day count, typed once it has rendered.
       v.operation in ("+", "-") && (right_kind = _day_count_column_kind(v.operand, right_kind, instruc))
       if right_kind isa Union{CDate,CDateTime}
@@ -1893,10 +1926,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
         throw(_interval_error("`$(v.operation)` between a number and an interval", instruc.connection))
       end
       if right_kind isa Union{CDate,CDateTime}
-        v.operation == "-" &&
-          throw(QueryBuildError("A day count minus a date has no meaning. To move a date back, subtract " *
-                                "from the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
-                                "F(\"date\") - Day(30)."))
+        v.operation == "-" && throw(_count_minus_date_error())
         return _render_day_count_shift(right_side, right_kind, _day_count_sql(left_side, count_kind, instruc),
                                        "+", false, instruc), _arith_result_kind(v, left_kind, right_kind, instruc)
       end
@@ -1929,6 +1959,11 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
         # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
         _is_interval_kind(right_kind) &&
           return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
+        # #1549: a number LITERAL on the left of `-` (#1476's `10 - F("date")`) is a count minus a date,
+        # which has no meaning on any engine. SQLite and MySQL refused it below as an untyped side, and
+        # PostgreSQL rendered `$1::bigint - date`, which fails when the statement runs.
+        v.operation == "-" && v.field_name isa Union{Integer,Float64} && right_kind isa Union{CDate,CDateTime} &&
+          throw(_count_minus_date_error())
         # #882: a date on the right of `+`/`-` whose left PormG cannot type (a text column, `Sum(...)`,
         # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
         v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
@@ -1949,6 +1984,14 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # integer (MySQL), one holding an interval compared with this left, which is none, is refused.
     v.operation in _COMPARISON_OPERATIONS && v.operand isa Union{SubqueryObject,CTEReference} &&
       _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
+    # #1549 — a CTE date or timestamp on the right of `+`/`-` beside a left that is no date, interval or
+    # count. `_typed_right_operand` does not take a handle, so the two date-on-the-right checks above
+    # never ran for one: `10 - CTE("g", "d")` rendered `(? - "R1_1"."d")`, which SQLite computed as
+    # `10 - 2009`, silently. The handle is typed now that it has rendered, and refused as its column is.
+    if v.operation in ("+", "-") && v.operand isa CTEReference && _side_kind(v.operand, instruc) isa Union{CDate,CDateTime}
+      v.operation == "-" && v.field_name isa Union{Integer,Float64} && throw(_count_minus_date_error())
+      _refuse_untyped_date_operand(v.operation, instruc)
+    end
 
     if v.operation == "/"
       _refuse_json_key_in_arithmetic(v, instruc)

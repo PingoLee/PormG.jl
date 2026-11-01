@@ -646,6 +646,28 @@ end
     @test span_df[1, :season_days] == Dates.value(maximum(Dates.Date.(string.(df.date))) - minimum(Dates.Date.(string.(df.date))))
   end
 
+  @testset "a date literal on the left of `-` is the difference the other way round (#1549)" begin
+    # `Date(…) - F("date")` was a raw MethodError. It is the negative of `F("date") - Date(…)`, computed
+    # with the literal on the left on every engine (`$1::date - "date"`, `julianday(?) - julianday(…)`,
+    # `DATEDIFF(?, …)`). Oracles: the mirror projected from the same rows, and the days recomputed in
+    # Julia. A date literal minus a day count (`round`) is that date moved back, as `F("date") - F("round")`
+    # moves a race date back (#882).
+    opener = Dates.Date(2009, 3, 29)
+    query = M.Race.objects
+    query.filter("year" => 2009)
+    query.values("raceid", "date", "round",
+                 "before_opener" => opener - F("date"),
+                 "since_opener" => F("date") - opener,
+                 "opener_back" => opener - F("round"))
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    @test df.before_opener == -df.since_opener
+    @test df.before_opener == [Dates.value(opener - Dates.Date(string(d))) for d in df.date]
+    @test minimum(df.before_opener) < -200          # days, not years, and the sign is the literal's side
+    @test Dates.Date.(string.(df.opener_back)) == [opener - Dates.Day(r) for r in df.round]
+  end
+
   @testset "a day count combined with a date is a whole-day shift (#814)" begin
     # `date + (date - opener)` moves each race forward by its own distance from the season opener:
     # a date twice as far from the opener. SQLite added the YEAR to the count before. The oracle is

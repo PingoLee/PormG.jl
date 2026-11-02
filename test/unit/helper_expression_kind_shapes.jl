@@ -108,6 +108,20 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("F int col * interval",    :Result,              m -> _EKM_Q.F("grid") * _EKM_Q.F("fastestlaptime")),
   ("F hop date + interval",   :Result,              m -> _EKM_Q.F("raceid__date") + _EKM_Q.F("fastestlaptime")),
   ("F hop datetime + interval", :Result,            m -> _EKM_Q.F("raceid__start_at") + _EKM_Q.F("fastestlaptime")),
+  # #1553: a duration literal as an interval VALUE — scaled by a number, divided by one, beside an
+  # interval on either side. A month has no fixed length, so it is a value only where an interval keeps
+  # months apart (`calendar_intervals`); the timestamp difference `+ Month(1)` is the shape that refused
+  # it before #1553, with another type.
+  ("F int col * Hour(1)",     :Result,              m -> _EKM_Q.F("grid") * Hour(1)),
+  ("Hour(1) * F int col",     :Result,              m -> Hour(1) * _EKM_Q.F("grid")),
+  ("Hour(1) / F int col",     :Result,              m -> Hour(1) / _EKM_Q.F("grid")),
+  ("F interval - Hour(1)",    :Result,              m -> _EKM_Q.F("fastestlaptime") - Hour(1)),
+  ("Hour(1) - F interval",    :Result,              m -> Hour(1) - _EKM_Q.F("fastestlaptime")),
+  ("F int col * Month(1)",    :Result,              m -> _EKM_Q.F("grid") * Month(1)),
+  ("F datetime diff + Month(1)", :Race,             m -> (_EKM_Q.F("start_at") - _EKM_Q.F("start_at")) + Month(1)),
+  ("CTE int col * Hour(1)",   :Result,              m -> PormG.CTE("c", "n") * Hour(1)),
+  ("CTE interval col - Hour(1)", :Result,           m -> PormG.CTE("c", "u") - Hour(1)),
+  ("Hour(1) - CTE interval col", :Result,           m -> Hour(1) - PormG.CTE("c", "u")),
   ("F @year + 1",             :Race,                m -> _EKM_Q.F("start_at__@year") + 1),
   ("Max F datetime - datetime", :Race,              m -> _EKM_FN.Max(_EKM_Q.F("start_at") - _EKM_Q.F("start_at"))),
   ("Abs F date - date",       :Race,                m -> _EKM_FN.Abs(_EKM_Q.F("date") - _EKM_Q.F("date"))),
@@ -613,14 +627,20 @@ const EKM_PREP = Dict{String,Function}(
   "CTE int col + 1" => _ekm_cte_arith!, "10 - CTE int col" => _ekm_cte_arith!, "F int * CTE int col" => _ekm_cte_arith!,
   "CTE date col - CTE date col" => _ekm_cte_arith!, "CTE date col + Day(1)" => _ekm_cte_arith!,
   "CTE interval col * 2" => _ekm_cte_arith!,
+  "CTE int col * Hour(1)" => _ekm_cte_arith!, "CTE interval col - Hour(1)" => _ekm_cte_arith!,
+  "Hour(1) - CTE interval col" => _ekm_cte_arith!,
   "Coalesce CTE json lag col / 2" => _ekm_cte_json_lag!,
   "DATE CTE interval col" => _ekm_cte_interval!,
   "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!,
   "Cast CTE scale 1 col to scale 2" => _ekm_cte_scaled!, "Cast CTE scale 3 col to scale 2" => _ekm_cte_scaled!,
   "Cast CTE decimal col to scale 2" => _ekm_cte_decimal!, "Cast CTE decimal col to scale 1" => _ekm_cte_decimal!)
 
-"""`true` for a shape whose node is a column path — the shapes the `When` context applies to (#979)."""
-ekm_is_path(build, mod) = (n = build(mod); n isa AbstractString && !occursin("__@", n))
+"""`true` for a shape whose node is a column path — the shapes the `When` context applies to (#979).
+A shape whose node raises when it is built is no path: it is recorded at the `:call` stage (#1553
+added rows that raised there before the change, so the change is a diff of those cells)."""
+ekm_is_path(build, mod) =
+  (n = try build(mod) catch e; e isa PormG.PormGError || rethrow(); nothing end;
+   n isa AbstractString && !occursin("__@", n))
 
 """
     ekm_query(mod, base, build, context; prep! = nothing)

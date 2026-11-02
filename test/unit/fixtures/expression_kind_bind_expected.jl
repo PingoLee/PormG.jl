@@ -1767,6 +1767,18 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop datetime + interval | subquery", :sqlite, "w__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"R2_1\".\"start_at\") + ((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0)) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F datetime diff + Month(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F datetime diff + Month(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"start_at\" - \"Tb\".\"start_at\") + make_interval(months => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F datetime diff + Month(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F datetime diff + Month(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F datetime diff + Month(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F datetime diff + Month(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"start_at\" - \"R2\".\"start_at\") + make_interval(months => \$3::integer)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("F @year + 1 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM `Tb`.`start_at`) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | alone", :postgres, "v__@gt", "10") =>

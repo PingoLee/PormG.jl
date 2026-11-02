@@ -1229,14 +1229,14 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   # interval is no number whatever the float's width (#1259, #1260), and MySQL reads the digits of one
   # (`CAST(DATE '2009-03-29' AS FLOAT)` is `20090329`). The other rules below do not apply to a float.
   if _single_precision_cast(declared)
-    d = departs(:value, "any value", :single_precision, "<flag>")
+    d = departs(:value, "any value", :single_precision, "x")
     d === nothing || return d
   end
   # #1252: a declared length cuts whatever text the cast writes, so the node is checked once, like
   # single precision. On an engine that keeps the length the operands are still read below, as for any
   # cast to text.
   if _sized_text_length(declared) !== nothing
-    d = departs(:value, "any value", :sized_text, "<flag>")
+    d = departs(:value, "any value", :sized_text, "x")
     d === nothing || return d
   end
   size = _numeric_cast_size(declared)
@@ -1368,14 +1368,25 @@ _textless_literal(::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:inter
 _textless_literal(::Any) = nothing
 
 # The column an operand names, as the caller spelled it, or `nothing` for any other expression.
-# `_concat_flag` hands a path to the refusal's `Case(When("<path>" => true, …))` suggestion.
 _concat_operand_label(p::AbstractString) = String(p)
 _concat_operand_label(p::CTEReference) = "CTE(\"$(p.name)\", \"$(p.path)\")"
 _concat_operand_label(p::JoinedReference) = "Joined(\"$(p.alias)\", \"$(p.path)\")"
 _concat_operand_label(p::SQLField) = _concat_operand_label(p.field)
 _concat_operand_label(p::FExpression) = p.operation === nothing ? _concat_operand_label(p.field_name) : nothing
 _concat_operand_label(::Any) = nothing
-_concat_flag(p) = (l = _concat_operand_label(p); l isa String && !occursin('(', l) ? l : "<flag>")
+# #1554 — the operand as a refusal's advice spells it, as Julia a caller can paste: a path quoted
+# (`Cast("price", "text")`), a `CTE(…)`/`Joined(…)` handle as written and unquoted
+# (`Cast(CTE("tc", "v"), "text")`), and any other expression `x`, as the other refusals write a computed
+# operand (`Extract(x, "year")`, `Cast(x, IntegerField())`). Until #1554 everything but a path was
+# `"<flag>"` — a boolean's placeholder, quoted as if it were a path. The templates insert it bare.
+_concat_flag(p) = (l = _concat_operand_label(p); l === nothing ? "x" : occursin('(', l) ? l : "\"$(l)\"")
+_flag_is_path(flag::AbstractString) = startswith(flag, '"')
+# `When` takes a path or a `Q`, so a boolean that is no path keeps the placeholder there: `When(x => true)`
+# would advise a call that does not exist.
+_when_flag(flag::AbstractString) = _flag_is_path(flag) ? flag : "\"<flag>\""
+# A path is a column in arithmetic only as `F("path")`, and a `CTE(…)` handle is an expression already.
+# A `Joined(…)` handle takes no arithmetic (`operators.jl`), so it is advised as `x`, as a computed value is.
+_f_flag(flag::AbstractString) = _flag_is_path(flag) ? "F($(flag))" : startswith(flag, "Joined(") ? "x" : flag
 
 function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   field = _alias_column_field(p, instruc)

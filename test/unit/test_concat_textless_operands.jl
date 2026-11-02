@@ -195,9 +195,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Concat: the refusal names the operand and the spelling that says which text it means
 # The message is the same on every engine: the operand is not text, so say which text (#1147 step 2).
-# A number is pointed to a cast to text — naming the column when it is one, `<flag>` for a computed
-# value — and never given an engine's own spelling of it (no `1` vs `1.0`, no `3.00` vs `3`). A
-# boolean written as `F("active")` still names its column in the `Case` suggestion.
+# A number is pointed to a cast to text — naming the column when it is one, `x` for a computed value
+# (#1554: it was `"<flag>"`, a boolean's placeholder quoted as a path), as the other refusals write a
+# computed operand — and never given an engine's own spelling of it (no `1` vs `1.0`, no `3.00` vs
+# `3`). A boolean written as `F("active")` still names its column in the `Case` suggestion; a computed
+# boolean keeps the `"<flag>"` placeholder there, since `When` takes a path.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1027: the message fits the operand" begin
   F = PormG.QueryBuilder.F
@@ -206,7 +208,8 @@ end
     for (expr, named) in ((Fn.Mod("number", 3), "`MOD(…)`"), (Fn.Avg("number"), "`AVG(…)`"), (Fn.Round("points"), "`ROUND(…)`"))
       m = msg(expr)
       @test occursin("Concat joins text, and $(named) is not text: say which text you mean (#1027)", m)
-      @test occursin("Cast it to text first: Cast(\"<flag>\", \"text\")", m)
+      @test occursin("Cast it to text first: Cast(x, \"text\")", m)
+      @test !occursin("<flag>", m)
       @test !occursin("3.00", m) && !occursin("1.0", m)
       @test _cto_names_no_engine(m)
     end
@@ -222,6 +225,8 @@ end
 # Concat: a Joined(...) or CTE(...) handle to a float is refused, and named as written
 # A handle resolves to a column through its own memo namespace (`memo_key(ref)`), not the model's
 # fields, so it is a separate arm of the classifier. A text column through the same handle passes.
+# #1554: the advice names the handle as written and unquoted, `Cast(Joined("t", "rating"), "text")`,
+# where it named the `"<flag>"` placeholder (and a handle is never a quoted path).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1027: Joined and CTE handles" begin
   joined() = (q = CTO.Cto_driver.objects;
@@ -237,6 +242,8 @@ end
       err = try _cto_sql(q; conn = conn); nothing catch e; e end
       @test err isa QueryBuildError
       @test occursin(named, _cto_msg(err))
+      label = PormG.QueryBuilder._concat_operand_label(float_ref)
+      @test occursin("Cast($(label), \"text\")", _cto_msg(err)) && !occursin("<flag>", _cto_msg(err))
       q = mk(); q.values("x" => Fn.Concat(Fn.Value("-"), text_ref))
       @test !isempty(_cto_sql(q; conn = conn))
     end

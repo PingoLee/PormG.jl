@@ -934,7 +934,7 @@ end
 # message names the spelling that says it, and no engine: a cast to text builds everywhere and writes
 # each engine's own text (`docs/src/read/functions_and_dates.md`). A boolean's cast to text is a
 # question of meaning on SQLite (`_MEANING_DEPARTURES`), so it is pointed to the `Case` that writes it.
-function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::AbstractString = "<flag>")
+function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::AbstractString = "x")
   issue = kind in (:timestamp, :interval, :json) ? "#1028" : "#1027"
   return QueryBuildError(
     "\e[4m\e[31mConcat\e[0m joins text, and $(what) is not text: say which text you mean ($(issue)). " *
@@ -942,10 +942,10 @@ function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::Abst
 end
 _concat_text_fix(kind::Symbol, flag::AbstractString) =
   kind === :bool ?
-    "Write it: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
+    "Write it: \e[32mCase(When($(_when_flag(flag)) => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
   kind === :timestamp ?
-    "Name the format, \e[32mToChar(\"$(flag)\", \"YYYY-MM-DD HH:MI:SS\")\e[0m, or cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m." :
-    "Cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m, or fetch the value and format it in Julia."
+    "Name the format, \e[32mToChar($(flag), \"YYYY-MM-DD HH:MI:SS\")\e[0m, or cast it to text first: \e[32mCast($(flag), \"text\")\e[0m." :
+    "Cast it to text first: \e[32mCast($(flag), \"text\")\e[0m, or fetch the value and format it in Julia."
 
 # #1061 — `Round(x, d)` over text (`_scale_divergent_operand`'s `:text` kind: a text column or
 # function, a string literal, a JSON value). EXPLICIT INTENT (#1147 step 2): text is no number to

@@ -1694,6 +1694,49 @@ end
             _drop_multipath_set_null_scratch_schema!()
         end
     end
+
+    # What: a key set two chunks long, where the LAST chunk's root DELETE fails in the database. A
+    #       table PormG has no model for (`mp_block_scratch`) references the last root, so the planner
+    #       sees nothing to refuse and the engine raises on the foreign key: at that statement on MySQL,
+    #       at COMMIT where the keys are checked deferred (SQLite's pragma; PostgreSQL's one chunk).
+    # SQL: the key read, then per chunk `DELETE FROM "mp_mid_scratch" …` and `DELETE FROM
+    #      "mp_root_scratch" WHERE … IN (…)`; the second chunk's root DELETE (or the COMMIT) fails.
+    # Why: #1376. Every chunk runs inside the delete's one transaction, so the failure must roll back
+    #      the chunks that had already run. A partial delete here would be silent wrong data.
+    @testset "a failure in the last chunk rolls back the chunks before it (#1376)" begin
+        pool = PormG.config[PORMG_DB_FOLDER].connections
+        engine = pool   # the pool is the engine the statements render for
+        chunk = fld(PormG.QueryBuilder._backend_parameter_limit(engine), PormG.QueryBuilder.ROOT_KEY_PATH_BUDGET)
+        # One chunk on PostgreSQL (one array), two on SQLite and MySQL.
+        n = PormG.QueryBuilder._binds_list_as_array(engine) ? 300 : chunk + 5
+        root_ids = collect(939001:939000 + n)
+        _reset_multipath_set_null_scratch_schema!()
+        try
+            _scratch_sql(pool, """
+            CREATE TABLE "mp_block_scratch" (
+                "id" INTEGER PRIMARY KEY,
+                "root" INTEGER NOT NULL,
+                FOREIGN KEY ("root") REFERENCES "mp_root_scratch" ("id")
+            );
+            """)
+            bulk_insert(MultipathSetNullM.Mp_root_scratch.objects, DataFrame(id = root_ids, name = fill("chunk-root-1376", n)))
+            bulk_insert(MultipathSetNullM.Mp_mid_scratch.objects,
+                DataFrame(id = root_ids .+ 10_000, owner = root_ids, label = fill("chunk-1376", n)))
+            _scratch_sql(pool, "INSERT INTO \"mp_block_scratch\" (\"id\", \"root\") VALUES (1, $(last(root_ids)));")
+            @test length(PormG.QueryBuilder._root_key_chunks(engine, root_ids)) ==
+                  (PormG.QueryBuilder._binds_list_as_array(engine) ? 1 : 2)
+
+            q = MultipathSetNullM.Mp_root_scratch.objects
+            q.filter("mp_owned__label" => "chunk-1376")
+            @test_throws PormG.IntegrityError q.delete()
+
+            @test MultipathSetNullM.Mp_root_scratch.objects.filter("id__@in" => root_ids).count() == n
+            @test MultipathSetNullM.Mp_mid_scratch.objects.filter("owner__@in" => root_ids).count() == n
+        finally
+            _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_block_scratch\";")
+            _drop_multipath_set_null_scratch_schema!()
+        end
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

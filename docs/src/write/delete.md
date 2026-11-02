@@ -332,9 +332,30 @@ deletes keep a single statement: a root with nothing to cascade to, and an unfil
 - **SQLite and MySQL bind a list one value at a time**, so a large key set runs the cascade in
   chunks, all inside the same transaction: the engine's bind limit divided by 16, the number of
   cascade paths into one table a statement can carry (2047 keys on SQLite, 256 on MySQL).
-  PostgreSQL binds the whole list as one array.
+  PostgreSQL binds the whole list as one array. Each chunk repeats the cascade's statements and its
+  existence checks, and a failure in any chunk rolls back every chunk before it. The cost per root
+  stays flat as long as each child table's foreign key has an index, which PormG's migrations create
+  for every `ForeignKey`: on SQLite, roots with one child each took about 7 µs per root at 1, 2 and
+  10 chunks (14 ms for 2047 roots, 153 ms for 20 470), and on MySQL 8.4 about 36–41 µs (11 ms for 256
+  roots, 91 ms for 2560). On a child table with no index on that column (a table PormG did not
+  create), each chunk's `DELETE` of the roots scans the whole child table for every root, because the
+  later chunks' children are still there: 10 chunks took 6.1 s on SQLite instead of 0.15 s. Index
+  the column.
 - **Inspection reads the keys** when the pool is a live one, as the cascade's existence checks
   already do, so `show_query` shows the statements that would run. Nothing is written.
+
+!!! warning "A cascading delete needs `UPDATE` privilege on PostgreSQL"
+    PostgreSQL takes a row lock (`SELECT … FOR UPDATE`) only with `UPDATE` privilege on the table, not
+    with `SELECT` and `DELETE` alone. A role granted only `SELECT` and `DELETE` therefore cannot
+    run a filtered delete on a model that has a reverse relation (`CASCADE`, `SET_NULL`,
+    `SET_DEFAULT`), even when the dependents hold no rows, since the key read is `FOR UPDATE`; nor an
+    unfiltered one whose dependents hold rows, which locks the root as their parent. The delete raises
+    before anything is written, with SQLSTATE `42501` ("permission denied for table"). A model that
+    nothing references is deleted with one `DELETE`, which that role can run.
+    Grant `UPDATE` on the tables a cascading delete starts from.
+
+    MySQL documents a different rule: `FOR UPDATE` needs `SELECT` plus one of `DELETE`,
+    `LOCK TABLES` or `UPDATE`, so a role that can delete can take the lock. SQLite has no privileges.
 
 ### A cascade locks its parents first on PostgreSQL
 

@@ -8855,4 +8855,496 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(json_extract(\"R2\".\"payload\", '\$.n'), '')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Concat json key | subquery", :sqlite, "w__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(?, '') ||\nCOALESCE(json_extract(\"R2\".\"payload\", '\$.n'), '')) as \"t\"\nFROM \"field_validation_scratch\" as \"R2\"\nWHERE \"R2\".\"id\" = \"Tb\".\"id\"\nLIMIT ? \n) > ?", params = [("\"n=\"", "String"), ("1", "Int64"), ("\"n=\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
+  ("Cast zero-scale + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(`Tb`.`grid` AS DECIMAL(65,0)) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CAST(`Tb`.`grid` AS DECIMAL(65,0)) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::numeric(4,0) + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::numeric(4,0) + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast zero-scale + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(`R2`.`grid` AS DECIMAL(65,0)) + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(`R2`.`grid` AS DECIMAL(65,0)) + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::numeric(4,0) + \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::numeric(4,0) + \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(\"R2\".\"grid\" AS NUMERIC(4,0)) + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(\"R2\".\"grid\" AS NUMERIC(4,0)) + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast zero-scale * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(`Tb`.`grid` AS DECIMAL(65,0)) * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CAST(`Tb`.`grid` AS DECIMAL(65,0)) * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::numeric(4,0) * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "((\"Tb\".\"grid\")::numeric(4,0) * \$2::bigint) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)) * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)) * ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Decimal")]),
+  ("Cast zero-scale * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(`R2`.`grid` AS DECIMAL(65,0)) * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(`R2`.`grid` AS DECIMAL(65,0)) * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::numeric(4,0) * \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"grid\")::numeric(4,0) * \$3::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Cast zero-scale * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(\"R2\".\"grid\" AS NUMERIC(4,0)) * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CAST(\"R2\".\"grid\" AS NUMERIC(4,0)) * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("F bigint + Cast zero-scale | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`resultid` + CAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`resultid` + CAST(`Tb`.`grid` AS DECIMAL(65,0))) > ?", params = [("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"resultid\" + (\"Tb\".\"grid\")::numeric(4,0)) > \$1", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"resultid\" + (\"Tb\".\"grid\")::numeric(4,0)) > \$1", params = [("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"resultid\" + CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))) > ?", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"resultid\" + CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))) > ?", params = [("10.5", "Decimal")]),
+  ("F bigint + Cast zero-scale | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("F bigint + Cast zero-scale | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`resultid` + CAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F bigint + Cast zero-scale | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`resultid` + CAST(`R2`.`grid` AS DECIMAL(65,0))) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"resultid\" + (\"R2\".\"grid\")::numeric(4,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F bigint + Cast zero-scale | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"resultid\" + (\"R2\".\"grid\")::numeric(4,0)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F bigint + Cast zero-scale | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"resultid\" + CAST(\"R2\".\"grid\" AS NUMERIC(4,0))) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F bigint + Cast zero-scale | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"resultid\" + CAST(\"R2\".\"grid\" AS NUMERIC(4,0))) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Case zero-scale cast int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN `Tb`.`grid` = ? THEN CAST(`Tb`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN `Tb`.`grid` = ? THEN CAST(`Tb`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN (\"Tb\".\"grid\")::numeric(4,0)\nELSE \$4::bigint\nEND\n > \$5", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN (\"Tb\".\"grid\")::numeric(4,0)\nELSE \$4::bigint\nEND\n > \$5", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("0", "Int64"), ("10.5", "Decimal")]),
+  ("Case zero-scale cast int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("0", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN `R2`.`grid` = ? THEN CAST(`R2`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN `R2`.`grid` = ? THEN CAST(`R2`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$4 THEN (\"R2\".\"grid\")::numeric(4,0)\nELSE \$5::bigint\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$4 THEN (\"R2\".\"grid\")::numeric(4,0)\nELSE \$5::bigint\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN CAST(\"R2\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast int | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN CAST(\"R2\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Coalesce zero-scale cast int | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(CAST(`Tb`.`grid` AS DECIMAL(65,0)), `Tb`.`grid`) > ?", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(CAST(`Tb`.`grid` AS DECIMAL(65,0)), `Tb`.`grid`) > ?", params = [("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\")::numeric(4,0), \"Tb\".\"grid\") > \$1", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\")::numeric(4,0), \"Tb\".\"grid\") > \$1", params = [("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)), \"Tb\".\"grid\") > ?", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "COALESCE(CAST(\"Tb\".\"grid\" AS NUMERIC(4,0)), \"Tb\".\"grid\") > ?", params = [("10.5", "Decimal")]),
+  ("Coalesce zero-scale cast int | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Coalesce zero-scale cast int | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(CAST(`R2`.`grid` AS DECIMAL(65,0)), `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce zero-scale cast int | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(CAST(`R2`.`grid` AS DECIMAL(65,0)), `R2`.`grid`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\")::numeric(4,0), \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce zero-scale cast int | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\")::numeric(4,0), \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Coalesce zero-scale cast int | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(4,0)), \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce zero-scale cast int | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE(CAST(\"R2\".\"grid\" AS NUMERIC(4,0)), \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("F decimal + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`points` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`points` + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" + \$2::bigint) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"points\" + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("F decimal + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`points` + ?) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`points` + ?) as `t`\nFROM `constructor_results` as `R2`\nWHERE `R2`.`constructorresultsid` = `Tb`.`constructorresultsid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" + \$3::bigint) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" + \$3::bigint) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("F decimal + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" + ?) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("F decimal + 1 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"points\" + ?) as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Case float literal + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n + \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n + \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Case float literal + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n + \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n + \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal + 1 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Case float literal * 2 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n * ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n * ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n * \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n * \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n * ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n * ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
+  ("Case float literal * 2 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n * ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n * \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n * \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case float literal * 2 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case float literal * 2 | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n * ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("1 + Case float literal | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n + \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | alone", :postgres, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::bigint\nEND\n + \$8::bigint) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | alone", :sqlite, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("1 + Case float literal | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | cte", :mysql, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | cte", :postgres, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | cte", :sqlite, "g__v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n + \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | subquery", :postgres, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::double precision\nELSE \$8::bigint\nEND\n + \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("1 + Case float literal | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("1 + Case float literal | subquery", :sqlite, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Float64")]),
+  ("Case int literal + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$5 THEN \$6::bigint\nELSE \$7::bigint\nEND\n + \$8::bigint) > \$9", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$5", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN ?\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$6 THEN \$7::bigint\nELSE \$8::bigint\nEND\n + \$9::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$10 \n) > \$11", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case int literal + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN CAST(`Tb`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN `Tb`.`grid` = ? THEN CAST(`Tb`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN (\"Tb\".\"grid\")::numeric(4,0)\nELSE \$5::bigint\nEND\n + \$6::bigint) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN (\"Tb\".\"grid\")::numeric(4,0)\nELSE \$5::bigint\nEND\n + \$6::bigint) > \$7", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :sqlite, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = ? THEN CAST(\"Tb\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n + ?) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Case zero-scale cast + 1 | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN CAST(`R2`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN `R2`.`grid` = ? THEN CAST(`R2`.`grid` AS DECIMAL(65,0))\nELSE ?\nEND\n + ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN (\"R2\".\"grid\")::numeric(4,0)\nELSE \$6::bigint\nEND\n + \$7::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN (\"R2\".\"grid\")::numeric(4,0)\nELSE \$6::bigint\nEND\n + \$7::bigint) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Case zero-scale cast + 1 | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN CAST(\"R2\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN CAST(\"R2\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Extract milliseconds time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) / 1000) > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds time | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) / 1000) > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds time | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds time | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds time | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract milliseconds time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract microseconds time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) AS DECIMAL(65,0)) > ?", params = [("10", "Int64")]),
+  ("Extract microseconds time | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) AS DECIMAL(65,0)) > ?", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MICROSECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract microseconds time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MICROSECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract microseconds time | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract microseconds time | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) AS DECIMAL(65,0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract microseconds time | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) AS DECIMAL(65,0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract microseconds time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MICROSECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract microseconds time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MICROSECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract second time | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(SECOND FROM `Tb`.`time`) > ?", params = [("10", "Int64")]),
+  ("Extract second time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "trunc(EXTRACT(SECOND FROM \"Tb\".\"time\"))::integer > \$1", params = [("10", "Int64")]),
+  ("Extract second time | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(strftime('%S', \"Tb\".\"time\") AS INTEGER) > ?", params = [("10", "Int64")]),
+  ("Extract second time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract second time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract second time | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("10", "Int64")]),
+  ("Extract second time | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(SECOND FROM `R2`.`time`) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract second time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    trunc(EXTRACT(SECOND FROM \"R2\".\"time\"))::integer as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract second time | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%S', \"R2\".\"time\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract julian date | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"date\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract julian date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"date\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract julian date | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian date | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"date\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract julian date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"date\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract julian start_at | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract julian start_at | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian start_at | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract julian start_at | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian start_at | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract julian start_at | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`start_at`) / 1000) > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`start_at`) / 1000) > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`start_at`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds start_at | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`start_at`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds start_at | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
 )

@@ -98,6 +98,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Pattern Lookup on a Number Column (#1168)" include("unit/test_pattern_number_column.jl")
     @testset "Pattern Lookup on a Temporal, Boolean or Binary Column (#1183)" include("unit/test_pattern_temporal_column.jl")
     @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
+    @testset "Zero Scale Through Arithmetic and Case (#1550)" include("unit/test_zero_scale_through_arithmetic.jl")
     @testset "Divergent Casts And Concat Operands (#1028)" include("unit/test_cast_divergent_operands.jl")
     @testset "Expression Update Into a Scaled DecimalField (#1279)" include("unit/test_update_decimal_scale.jl")
     @testset "Expression Update Into a DecimalField Checks Its Width (#1330)" include("unit/test_update_decimal_width.jl")

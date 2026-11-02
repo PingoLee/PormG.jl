@@ -32,6 +32,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no | yes |
 | `no_key_locks` | `select_for_update(no_key = true)` (SQLite takes no row lock at all, so it renders no clause, as for every `select_for_update`) | yes | no | no |
 | `negative_round_precision` | `Round(x, d)` with a negative `d` (SQLite's `ROUND` reads it as 0) | yes | no | yes |
+| `calendar_intervals` | a `Month` or `Year` as an interval value: scaled (`F("grid") * Month(1)`), divided, or beside an interval (`F("time") - Year(1)`, a timestamp difference `+ Month(1)`). SQLite and MySQL compute an interval as milliseconds or microseconds, and a month has no fixed length. Shifting a date by one (`F("date") + Month(1)`) works on every engine | yes | no | no |
 | `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 | yes |
 | `window_groups_frame` | a window `frame` that starts with `GROUPS` | yes | no | no |
 | `window_frame_exclusion` | a window `frame` with an `EXCLUDE` clause | yes | no | no |

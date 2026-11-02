@@ -2827,8 +2827,9 @@ const DOCERR_CASES = [
     # shifts render there since #881, so #814's rows for them are gone), a duration against something
     # that is not an interval (#814), and `+`/`*`/`/` between two temporal values (#801).
     (
-        "read/field_expressions.md — a month added to a timestamp difference is refused on SQLite (#881)",
-        QueryBuildError,
+        # #1553: the `calendar_intervals` capability; a `QueryBuildError` until then.
+        "read/field_expressions.md — a month added to a timestamp difference is refused on SQLite (#881, #1553)",
+        BackendCapabilityError,
         () -> begin
             q = DOCERR_RACE801_SL.objects
             q.values("x" => (F("start_at") - F("date")) + PormG.Dates.Month(1))
@@ -2886,14 +2887,29 @@ const DOCERR_CASES = [
         () -> PormG.Dates.Date(2009, 3, 29) + F("date"),
     ),
     (
-        "read/field_expressions.md — a duration on the left of `-` is refused (#1549)",
+        # #1553: a duration on the left of `-` is an interval value, so the node builds; a duration minus
+        # a DATE has no meaning, refused when the query builds.
+        "read/field_expressions.md — a duration minus a date is refused (#1549, #1553)",
         QueryBuildError,
-        () -> PormG.Dates.Day(1) - F("date"),
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => PormG.Dates.Day(1) - F("date"))
+            q.list(show_query = :dict)
+        end,
     ),
     (
-        "read/field_expressions.md — a duration on the left of `*` is refused (#1549, #1553)",
+        "read/field_expressions.md — a value divided by a duration is refused (#1553)",
         QueryBuildError,
-        () -> PormG.Dates.Day(1) * F("grid"),
+        () -> F("raceid") / PormG.Dates.Day(1),
+    ),
+    (
+        "read/field_expressions.md — a month as an interval value is refused on SQLite (#1553)",
+        BackendCapabilityError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => PormG.Dates.Month(1) - (F("start_at") - F("date")))
+            q.list(show_query = :dict)
+        end,
     ),
     (
         "read/field_expressions.md — `missing` in arithmetic is refused, on either side (#1549)",

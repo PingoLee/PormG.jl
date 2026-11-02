@@ -1315,7 +1315,9 @@ const _SubqueryOperand = SubqueryObject
   # takes no arithmetic.
   # #1549: a date or timestamp literal on the LEFT of `-` (`Date(2009, 3, 29) - F("date")`), kept on
   # the left as #1476 keeps a number: `d - f` does not commute.
-  field_name::Union{String,Integer,Float64,_TemporalLiteral,FExpression,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE}
+  # #1553: a duration on the LEFT of `-` or `/` (`Hour(1) - F("time")`, `Minute(3) / F("lap")`), an
+  # interval value, for the same reason. `+` and `*` commute and never put one here.
+  field_name::Union{String,Integer,Float64,_TemporalLiteral,_DurationOperand,FExpression,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
   # drift apart: widening one widens both, by construction rather than by a test that checks.
@@ -1340,8 +1342,11 @@ comparison or arithmetic happens inside SQL, so no data is pulled into Julia and
 a single atomic statement.
 
 `F` expressions support `+`, `-`, `*` and `/` against constants, other `F`s and SQL functions.
-`+` and `-` additionally accept a `Dates` period or an [`Interval`](@ref), for date arithmetic
-(`*` and `/` do not).
+`+` and `-` additionally accept a `Dates` period or an [`Interval`](@ref), for date arithmetic. A
+period is also an interval value (#1553): `*` scales one by a number (`F("lap") * Second(90)`, either
+way round), `/` divides one written first (`Minute(3) / F("lap")`), and `-` takes one beside an
+interval on either side (`F("time") - Second(1)`, `Minute(4) - F("time")`), as `+` does
+(`F("time") + Second(1)`). A number divided by a period is refused.
 
 ```julia
 # Field-to-field comparison — grid position worse than finishing position

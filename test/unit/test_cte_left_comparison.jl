@@ -294,13 +294,20 @@ end
   # ± a duration on a column that is no date or timestamp: the handle refuses where the model column does.
   for conn in (_CLC_PG, _CLC_SL), (handle_node, column_node) in (
       (CTE("g", "n") + Day(1), F("points") + Day(1)), (Day(1) + CTE("g", "n"), Day(1) + F("points")),
-      (CTE("g", "x") - Hour(1), F("fl") - Hour(1)), (CTE("g", "u") + Day(1), F("du") + Day(1)),
-      (CTE("g", "m") + Hour(1), F("tm") + Hour(1)))
+      (CTE("g", "x") - Hour(1), F("fl") - Hour(1)), (CTE("g", "m") + Hour(1), F("tm") + Hour(1)))
     tag = (nameof(typeof(conn)), handle_node.operation, string(handle_node.field_name))
     @test (tag, _clc_refusal(() -> _clc_sql(_clc_arith(column_node), conn)) isa PormG.InvalidValueError) == (tag, true)
     e = _clc_refusal(() -> _clc_sql(_clc_arith(handle_node), conn))
     @test (tag, e isa PormG.InvalidValueError) == (tag, true)
     @test (tag, occursin("requires a DATE/TIMESTAMP column", PormG._emsg(sprint(showerror, e); color = false))) == (tag, true)
+  end
+  # #1553: a DURATION column ± a duration is an interval, not a date shift, so it builds; the handle renders
+  # what its model column renders. It raised the date-column `InvalidValueError` above until #1553.
+  for conn in (_CLC_PG, _CLC_SL), (handle_node, column_node) in (
+      (CTE("g", "u") + Day(1), F("du") + Day(1)), (CTE("g", "u") * 2 - Hour(1), F("du") * 2 - Hour(1)),
+      (Hour(1) - CTE("g", "u"), Hour(1) - F("du")), (CTE("g", "n") * Hour(1), F("points") * Hour(1)))
+    @test (nameof(typeof(conn)), string(handle_node.operation), _clc_same(handle_node, column_node, conn)) ==
+          (nameof(typeof(conn)), string(handle_node.operation), true)
   end
   # A duration compared with a CTE duration: the handle on the left compares what it does on the right.
   for conn in (_CLC_PG, _CLC_SL)
@@ -391,7 +398,7 @@ end
 @testset "#1539: arithmetic outside the vocabulary, desc and a JSON key's column are refused" begin
   c = CTE("g", "n")
   d = CTE("g", "n"; desc = true)
-  for bad in (() -> c + Decimal(1), () -> c - 1 // 2, () -> c * Value("10"), () -> c * Day(1),
+  for bad in (() -> c + Decimal(1), () -> c - 1 // 2, () -> c * Value("10"), () -> c / Day(1),
               () -> c / nothing, () -> 1 // 2 + c, () -> d + 1, () -> 10 - d, () -> F("grid") + d,
               () -> Max("grid") * d, () -> d - Day(1), () -> c + d)
     @test _clc_refusal(bad) isa PormG.QueryBuildError

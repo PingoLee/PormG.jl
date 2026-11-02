@@ -44,6 +44,11 @@ const _BACKEND_FEATURES = (
   # #1167: SQLite's `ROUND` has no negative precision — it reads one as 0, so `Round(125, -1)` would
   # answer `125.0` where it means `130`. Django's `Round` refuses it on SQLite the same way.
   :negative_round_precision => "rounding to a negative number of places (`Round(x, -1)`: tens, hundreds, …)",
+  # #1553: a month or a year has no fixed length, so it is an interval VALUE only where an interval keeps
+  # months apart (PostgreSQL's `interval`). SQLite and MySQL compute an interval as a number of
+  # milliseconds or microseconds, which no month count converts to. A shift (`F("date") + Month(1)`) is
+  # not this: every engine moves a date by a month.
+  :calendar_intervals => "an interval type that keeps months and years apart (a `Month` or `Year` as an interval value)",
   # #1163: the rows below depend on the server version on at least one backend.
   :window_functions       => "window functions (`OVER (…)`)",
   # #1130 phase 2c-3b: two frame forms a backend can lack while it renders ROWS and RANGE frames.

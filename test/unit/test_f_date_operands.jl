@@ -1917,8 +1917,11 @@ end
 #   count it is a whole-day shift, as `F("seen") - F("grid")` is (#882);
 # - a duration on the left of `+` commutes (`Day(1) + Max("seen")` is `Max("seen") + Day(1)`, whose
 #   #1476 refusal it raises);
-# - everything else — a date under `+ * /`, a duration under `- * /` (#1553 tracks building those),
-#   `missing` under any operator — raises `QueryBuildError` saying what the left of that family takes.
+# - since #1553, a duration on the left of `- * /` on `F` and `CTE(...)` builds too, an interval value:
+#   `*` commutes, `-` and `/` keep it on the left (`test_duration_value_1553.jl` pins the SQL);
+# - everything else — a date under `+ * /`, a duration beside a function or a window function under
+#   `- * /`, `missing` under any operator — raises `QueryBuildError` saying what the left of that family
+#   takes.
 # Why it matters: a raw `MethodError` names no way out (the #536 class), and the date difference is the
 # one users write either way round.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1938,8 +1941,9 @@ end
   ops = (("+", +), ("-", -), ("*", *), ("/", /))
 
   # The grid, from the table in the issue rather than from running the code: a date under `-` builds;
-  # a duration under `+` builds where the right side takes one (`F`, `CTE`) and raises the family's
-  # #1476 refusal where it does not; every other cell raises the #1549 refusal.
+  # a duration builds where the right side takes one (`F`, `CTE`) — under `+` since #1549, under `- * /`
+  # since #1553 — and under `+` raises the function family's #1476 refusal; every other cell raises the
+  # #1549 refusal.
   @testset "$lname $sym $fname" for (lname, left) in lefts, (sym, op) in ops, (fname, node, T) in families
     is_date = left isa Union{Date,DateTime,TimeZones.ZonedDateTime}
     is_duration = left isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
@@ -1948,12 +1952,15 @@ end
     if is_date && sym == "-"
       @test r isa PormG.QueryBuilder.FExpression
       @test r.field_name == left && r.operation == "-" && r.operand === node
-    elseif is_duration && sym == "+"
-      if T <: Union{PormG.QueryBuilder.FExpression,PormG.QueryBuilder.CTEReference}
-        @test r isa PormG.QueryBuilder.FExpression && r.operand == left
-      else
-        @test r isa PormG.QueryBuildError && occursin("(#1476)", plain(r))
+    elseif is_duration && T <: Union{PormG.QueryBuilder.FExpression,PormG.QueryBuilder.CTEReference}
+      @test r isa PormG.QueryBuilder.FExpression
+      if sym in ("+", "*")   # commutes: the duration is the operand
+        @test r.operand == left && r.operation == sym
+      else                   # `-` and `/` keep the duration on the left (#1553)
+        @test r.field_name == left && r.operation == sym && r.operand === node
       end
+    elseif is_duration && sym == "+"   # a function family: `+` commutes into its #1476 refusal
+      @test r isa PormG.QueryBuildError && occursin("(#1476)", plain(r))
     else
       @test r isa PormG.QueryBuildError
       msg = r isa Exception ? plain(r) : ""
@@ -1961,8 +1968,7 @@ end
       @test occursin("Date(2009, 3, 29) - ", msg)          # names the date the left does take
       (left === missing || left === nothing) && @test occursin("Coalesce(\"grid\", 0)", msg)
       is_date && sym == "+" && @test occursin("Cast(Value(Date(2009, 3, 29)), \"date\") + F(\"grid\")", msg)
-      is_duration && sym in ("*", "/") && @test occursin("(#1553)", msg)
-      is_duration && sym == "-" && @test occursin("F(\"date\") - Day(1)", msg)
+      is_duration && @test occursin("inside the function", msg)   # a function takes no duration (#1553)
     end
   end
 
@@ -2037,12 +2043,12 @@ end
     @test _fd_sql(proj(Fn.Cast(Fn.Value(Date(2009, 3, 29)), "date") + F("grid")); conn = conn) isa String
   end
 
-  # The right-hand refusals name the same ways out: `missing` the `Coalesce`, and a period under `*` on
-  # `F` the shift by a column (no longer "inside the function", which is the function family's advice).
+  # The right-hand refusals name the same ways out: `missing` the `Coalesce`, and a period under `/` on
+  # `F` the duration divided instead (#1553; not "inside the function", the function family's advice).
   e = try F("grid") + missing; nothing catch err; err end
   @test e isa PormG.QueryBuildError && occursin("Coalesce(\"grid\", 0)", plain(e))
-  e = try F("grid") * Day(1); nothing catch err; err end
-  @test e isa PormG.QueryBuildError && occursin("F(\"date\") + F(\"grid\")", plain(e)) &&
+  e = try F("grid") / Day(1); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("Day(1) / F(\"grid\")", plain(e)) &&
         !occursin("inside the function", plain(e))
   # `desc = true` orders; it means nothing in arithmetic, on the left as on the right (#1539).
   e = try Date(2009, 3, 29) - QB.CTE("g", "d"; desc = true); nothing catch err; err end
@@ -2272,7 +2278,6 @@ end
     ("a number / d", F("points") / _fd_diff(), "on the right of a value that is not one"),
     ("a number - d", F("points") - _fd_diff(), "between a number and an interval"),
     ("a date * d", F("seen") * _fd_diff(), "between a date and an interval"),
-    ("d + Month(1)", _fd_diff() + Dates.Month(1), "no fixed length"),
     ("Lag(lap) + d", _FN.Lag("lap", over = _FN.WindowOver(order_by = ["id"])) + _fd_diff(),
      "not a timestamp difference or a DurationField column"),
     ("d * Lag(points)", _fd_diff() * _FN.Lag("points", over = _FN.WindowOver(order_by = ["id"])), "window function"),
@@ -2289,6 +2294,15 @@ end
   err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
   @test err isa PormG.QueryBuildError
   @test occursin(msg, sprint(showerror, err))
+end
+# A month or a year has no fixed length: the `calendar_intervals` capability since #1553 (a
+# `QueryBuildError` before), on SQLite and MySQL alike.
+@testset "#881/#1553: a month beside a timestamp difference is a capability" for conn in (_FD_SL, _FD_MY)
+  q = FD.Fd_result.objects
+  q.values("x" => _fd_diff() + Dates.Month(1))
+  err = try _fd_sql(q; conn = conn); nothing catch e; e end
+  @test err isa PormG.BackendCapabilityError
+  @test occursin("months or years", sprint(showerror, err))
 end
 
 # The kind that carries milliseconds is the renderer's own. Every door out of it — the projection's

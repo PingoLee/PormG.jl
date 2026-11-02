@@ -1098,7 +1098,19 @@ end
 # handled by the migration runner (gated on change_db, deliberate operator step),
 # never on app boot. Here we only probe pg_extension and warn on misconfiguration
 # so a missing extension is visible before the first query fails.
-function _check_configured_extensions!(settings::PormGSettings)::Nothing
+#
+# Never while generating output (#1570). The probe is the one query `load` runs (pools otherwise
+# connect lazily), so a package whose module body loads its configuration connected to the database
+# from inside the precompile worker: the build needed the database and its credentials, and with the
+# database down it waited out the pool's connect timeout before warning. Nothing is lost for a
+# package image: it saves none of PormG's state, so the run-time `load` in `__init__` comes back
+# here. A sysimage or `juliac` build keeps the loaded key, so its run-time `load` returns early
+# (#1225) and the probe never runs; a missing extension then surfaces at the first `iunaccent_*`
+# query. `extensions:` is still validated at precompile time, by `_configured_extensions` in `load`.
+# `generating` is a keyword so the unit test can take the precompile branch.
+function _check_configured_extensions!(settings::PormGSettings;
+                                       generating::Bool = ccall(:jl_generating_output, Cint, ()) == 1)::Nothing
+  generating && return nothing
   extensions = _configured_extensions(settings)
   isempty(extensions) && return nothing
 

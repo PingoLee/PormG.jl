@@ -50,6 +50,36 @@ end
     @test_throws PormG.InvalidConfigurationError PormG.Configuration._configured_extensions(settings)
 end
 
+@testset "#1570: the extension check runs no query while generating output" begin
+    # What: `_check_configured_extensions!` — the probe `load` ends with when `extensions:` is set
+    #   (`SELECT 1 FROM pg_extension WHERE extname = 'unaccent'`) — returns before touching the pool
+    #   when `generating = true`, the branch a precompile worker takes; with `generating = false` the
+    #   same settings reach the probe.
+    # Expected SQL: none on the precompile branch. On the run-time branch the probe is attempted and,
+    #   with no pool behind these settings, fails into the "Could not verify" warning — the control
+    #   that proves the silent result above is the skip, not an input that never reached the fetch.
+    # Why: the probe is the one query `load` runs, so a package that loads its configuration in its
+    #   module body connected to the database from inside the precompile worker; with the database
+    #   down that build waited out the pool's 30 s connect timeout. The run-time `load` in `__init__`
+    #   repeats the check, so skipping it while precompiling loses nothing for a package image.
+    pg = PormG.Configuration.Settings()
+    pg.db_config_settings = Dict{String, Any}("adapter" => "PostgreSQL", "extensions" => ["unaccent"])
+    @test pg.connections === nothing
+    @test (@test_logs PormG.Configuration._check_configured_extensions!(pg; generating = true)) === nothing
+    @test_logs (:warn, r"Could not verify PostgreSQL extension state") match_mode = :any (
+        PormG.Configuration._check_configured_extensions!(pg; generating = false))
+    # The default reads this process, which generates no output, so it probes: a default that always
+    # skipped would silently drop the run-time warning in production.
+    @test_logs (:warn, r"Could not verify PostgreSQL extension state") match_mode = :any (
+        PormG.Configuration._check_configured_extensions!(pg))
+
+    # The adapter refusal is the same detection, so it is skipped too and still warns at run time.
+    sl = PormG.Configuration.Settings()
+    sl.db_config_settings = Dict{String, Any}("adapter" => "SQLite", "extensions" => ["unaccent"])
+    @test (@test_logs PormG.Configuration._check_configured_extensions!(sl; generating = true)) === nothing
+    @test_logs (:warn, r"only supported for PostgreSQL") PormG.Configuration._check_configured_extensions!(sl; generating = false)
+end
+
 @testset "Explicit env reload keeps Settings synchronized" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")

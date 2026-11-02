@@ -47,6 +47,16 @@ A numeric operand is an `Integer`, a `Float64`, a `Float32` or a `Float16` (the 
 keeps its place. A `Decimal` or a `Rational` raises a `QueryBuildError` naming the spelling to use:
 `Float64(x)`, or a cast that keeps a decimal's digits, `Cast(Value("2.5"), "numeric")` (#1476).
 
+On the **left** of an `F(...)` expression, a function, a window function or a `CTE(...)` column, two
+more operands are taken, each where it means something: a date or timestamp literal on the left of `-`
+(`Date(2009, 3, 29) - F("date")`, see [Subtracting two dates](#Subtracting-two-dates)), and a duration on
+the left of `+`, which is the duration on the right (`Day(1) + F("date")` is `F("date") + Day(1)`, and a
+function refuses it on either side). A date on the left of
+`+`, `*` or `/`, a duration on the left of `-`, `*` or `/`, and `missing` (or `nothing`) on either side
+raise a `QueryBuildError` that names what the left takes (#1549). `missing` is SQL `NULL`, and arithmetic with
+`NULL` is always `NULL`: to count a missing value as a number, coalesce the column,
+`Coalesce("grid", 0) + 1`.
+
 ```julia
 q = M.Result.objects
 q.values("resultid", "behind" => 20 - F("positionorder"))   # (? - "Tb"."positionorder")
@@ -325,7 +335,9 @@ WHERE (`Tb_1`.`date` > `Tb_2`.`dob`)
 
 #### Explicit duration types
 
-For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). Only `+` and `-` apply to a duration operand:
+For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). Only `+` and `-` apply to a duration operand. A duration goes on the right,
+or on the left of `+` (`Day(30) + F("date")` is `F("date") + Day(30)`); a duration on the left of `-`
+has no meaning, and a duration is not multiplied or divided by a column (#1553):
 
 ```julia
 using Dates
@@ -674,6 +686,18 @@ arithmetic is text, not a date (`F("date") - "2009-03-29"`), and raises `QueryBu
 engine; a string that names a field (`F("date") - "dob"`) is that field. Subtracting a date literal
 from something that is not a date or timestamp PormG can type — a number, `Sum(...)`, `__@year` —
 raises `QueryBuildError` too.
+
+A date literal goes on the **left** of `-` as well, and the difference is then the other way round:
+`Date(2009, 3, 29) - F("date")` is how many days each race was held *before* the opener, the negative
+of `F("date") - Date(2009, 3, 29)`, on every engine (#1549). The literal stays on the left in the SQL
+(`($1::date - "Tb"."date")` on PostgreSQL), and the rules above apply with the sides swapped: a timestamp
+literal minus a timestamp is an interval, and a date literal minus a day count is a date shifted back.
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "before_opener" => Date(2009, 3, 29) - F("date"))
+```
 
 A day count combined with a date is a whole-day **shift**, as it is on PostgreSQL: `F("date") ± count`
 and `count + F("date")` are dates (timestamps stay timestamps), on every engine. Each 2009 race moved

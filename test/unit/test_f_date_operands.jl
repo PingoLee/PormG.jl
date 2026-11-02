@@ -1904,6 +1904,152 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1549 — a date, a duration or `missing` on the LEFT of `+ - * /` builds or is refused by name
+# #1476 gave a number on the left a method on all four families, and #25/#1539 a duration on the left of
+# `+` on `F` and `CTE(...)`. Every other left operand missed the `::Number` catch-all and raised Julia's
+# `MethodError` before any query existed: `Date(2009, 3, 29) - F("date")`, `Day(1) * F("grid")`,
+# `missing + F("grid")`, and the same on a `CTE(...)` handle, a window function and a function. Expected:
+# - a date or timestamp literal on the left of `-` BUILDS, kept on the left (`d - f` does not commute):
+#   `($1::date - "Tb"."seen")` on PostgreSQL, `CAST(julianday(?) - julianday("Tb"."seen") AS INTEGER)` on
+#   SQLite, `DATEDIFF(?, `Tb`.`seen`)` on MySQL, binding `"2009-03-29"` — the sides of #814's
+#   `F("seen") - Date(…)` swapped. A timestamp literal casts to `timestamp` beside a zone-less timestamp
+#   and to `timestamptz` otherwise, decided by the right side as #814 decides it by the left. Beside a day
+#   count it is a whole-day shift, as `F("seen") - F("grid")` is (#882);
+# - a duration on the left of `+` commutes (`Day(1) + Max("seen")` is `Max("seen") + Day(1)`, whose
+#   #1476 refusal it raises);
+# - everything else — a date under `+ * /`, a duration under `- * /` (#1553 tracks building those),
+#   `missing` under any operator — raises `QueryBuildError` saying what the left of that family takes.
+# Why it matters: a raw `MethodError` names no way out (the #536 class), and the date difference is the
+# one users write either way round.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1549: a date, a duration or missing on the left builds or is refused by name" begin
+  Fn = PormG.Functions
+  proj(expr) = (q = FD.Fd_result.objects; q.values("x" => expr); q)
+  plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  w = QB.WindowOver(order_by = ["id"])
+  families = (("F", F("seen"), PormG.QueryBuilder.FExpression),
+              ("CTE", QB.CTE("g", "d"), PormG.QueryBuilder.CTEReference),
+              ("window", QB.Lag("seen"; over = w), PormG.QueryBuilder.WindowFunction),
+              ("function", Fn.Max("seen"), PormG.QueryBuilder.FObject))
+  lefts = (("Date", Date(2009, 3, 29)), ("DateTime", DateTime(2009, 3, 29, 6)),
+           ("ZonedDateTime", TimeZones.ZonedDateTime(DateTime(2009, 3, 29, 6), TimeZones.tz"UTC")),
+           ("Day", Day(1)), ("CompoundPeriod", Month(1) + Day(1)), ("Interval", Interval("01:30:00")),
+           ("missing", missing), ("nothing", nothing), ("Time", Time(6)))
+  ops = (("+", +), ("-", -), ("*", *), ("/", /))
+
+  # The grid, from the table in the issue rather than from running the code: a date under `-` builds;
+  # a duration under `+` builds where the right side takes one (`F`, `CTE`) and raises the family's
+  # #1476 refusal where it does not; every other cell raises the #1549 refusal.
+  @testset "$lname $sym $fname" for (lname, left) in lefts, (sym, op) in ops, (fname, node, T) in families
+    is_date = left isa Union{Date,DateTime,TimeZones.ZonedDateTime}
+    is_duration = left isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
+    r = try op(left, node) catch err; err end
+    @test !(r isa MethodError)
+    if is_date && sym == "-"
+      @test r isa PormG.QueryBuilder.FExpression
+      @test r.field_name == left && r.operation == "-" && r.operand === node
+    elseif is_duration && sym == "+"
+      if T <: Union{PormG.QueryBuilder.FExpression,PormG.QueryBuilder.CTEReference}
+        @test r isa PormG.QueryBuilder.FExpression && r.operand == left
+      else
+        @test r isa PormG.QueryBuildError && occursin("(#1476)", plain(r))
+      end
+    else
+      @test r isa PormG.QueryBuildError
+      msg = r isa Exception ? plain(r) : ""
+      @test occursin("on the left of $sym is not an operand here (#1549)", msg)
+      @test occursin("Date(2009, 3, 29) - ", msg)          # names the date the left does take
+      (left === missing || left === nothing) && @test occursin("Coalesce(\"grid\", 0)", msg)
+      is_date && sym == "+" && @test occursin("Cast(Value(Date(2009, 3, 29)), \"date\") + F(\"grid\")", msg)
+      is_duration && sym in ("*", "/") && @test occursin("(#1553)", msg)
+      is_duration && sym == "-" && @test occursin("F(\"date\") - Day(1)", msg)
+    end
+  end
+
+  # (label, expression, SQLite, PostgreSQL, MySQL, parameters). Each row is #814's or #882's with the
+  # literal moved to the left, and the needle is that row's SQL with its sides swapped.
+  day = "2009-03-29"
+  ts  = "2009-03-29T06:00:00.000+00:00"
+  for (label, expr, sl, pg, my, params) in (
+      ("Date - F", () -> Date(2009, 3, 29) - F("seen"),
+       "CAST(julianday(?) - julianday(\"Tb\".\"seen\") AS INTEGER)", "(\$1::date - \"Tb\".\"seen\")",
+       "DATEDIFF(?, `Tb`.`seen`)", Any[day]),
+      ("Value(Date) - F", () -> Fn.Value(Date(2009, 3, 29)) - F("seen"),
+       "CAST(julianday(?) - julianday(\"Tb\".\"seen\") AS INTEGER)", "(\$1::date - \"Tb\".\"seen\")",
+       "DATEDIFF(?, `Tb`.`seen`)", Any[day]),
+      ("Date - Max", () -> Date(2009, 3, 29) - Fn.Max("seen"),
+       "CAST(julianday(?) - julianday(MAX(\"Tb\".\"seen\")) AS INTEGER)", "(\$1::date - MAX(\"Tb\".\"seen\"))",
+       "DATEDIFF(?, MAX(`Tb`.`seen`))", Any[day]),
+      ("Date - joined date", () -> Date(2009, 3, 29) - F("race__date"),
+       "CAST(julianday(?) - julianday(\"Tb_1\".\"date\") AS INTEGER)", "(\$1::date - \"Tb_1\".\"date\")",
+       "DATEDIFF(?, `Tb_1`.`date`)", Any[day]),
+      ("DateTime - F", () -> DateTime(2009, 3, 29, 6) - F("logged_at"),
+       "CAST(round((julianday(?) - julianday(\"Tb\".\"logged_at\")) * 86400000) AS INTEGER)",
+       "(\$1::timestamptz - \"Tb\".\"logged_at\")",
+       "(-TIMESTAMPDIFF(MICROSECOND, ?, `Tb`.`logged_at`))", Any[ts]),
+      ("Date - day count", () -> Date(2009, 3, 29) - F("grid"),
+       "date(julianday(?) - (\"Tb\".\"grid\"))", "(\$1::date - \"Tb\".\"grid\")",
+       "(? - INTERVAL (`Tb`.`grid`) DAY)", Any[day]),
+      ("(Date - F) * 2", () -> (Date(2009, 3, 29) - F("seen")) * 2,
+       "(CAST(julianday(?) - julianday(\"Tb\".\"seen\") AS INTEGER) * ?)",
+       "((\$1::date - \"Tb\".\"seen\") * \$2::bigint)", "(DATEDIFF(?, `Tb`.`seen`) * ?)", Any[day, 2]))
+    @testset "$label" begin
+      for (conn, want) in ((_FD_SL, sl), (_FD_PG, pg), (_FD_MY, my))
+        @test occursin(want, _fd_sql(proj(expr()); conn = conn))
+        @test _fd_params(proj(expr()); conn = conn) == params
+      end
+    end
+  end
+
+  # The mirror decides the PostgreSQL cast by the RIGHT side, as #814 decides it by the left: a
+  # zone-less timestamp (a sub-day shift of a DATE) takes `timestamp`, which keeps the UTC wall time.
+  @test occursin("(\$1::timestamp - (\"Tb\".\"seen\" + make_interval(hours => \$2::integer)))",
+                 _fd_sql(proj(DateTime(2009, 3, 29, 6) - (F("seen") + Hour(6))); conn = _FD_PG))
+  @test occursin("(\$1::timestamptz - \"Tb\".\"logged_at\")",
+                 _fd_sql(proj(TimeZones.ZonedDateTime(DateTime(2009, 3, 29, 6), TimeZones.tz"UTC") - F("logged_at")); conn = _FD_PG))
+
+  # In a filter, the difference is the predicate's left (`(… - …) > ?`), and the date binds first.
+  q = FD.Fd_result.objects
+  q.filter((Date(2009, 3, 29) - F("seen")) > 5)
+  @test occursin("WHERE (CAST(julianday(?) - julianday(\"Tb\".\"seen\") AS INTEGER) > ?)", _fd_sql(q; conn = _FD_SL))
+  @test _fd_params(q; conn = _FD_SL) == Any[day, 5]
+
+  # What the date-on-the-right refuses, the mirror refuses: a window side of a TIMESTAMP difference on
+  # SQLite (its subquery sees one row), and a side PormG cannot type on SQLite and MySQL.
+  e = try _fd_sql(proj(DateTime(2009, 3, 29, 6) - QB.Lag("logged_at"; over = w)); conn = _FD_SL); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("window function", plain(e))
+  @test occursin("CAST(julianday(?) - julianday(LAG(", _fd_sql(proj(Date(2009, 3, 29) - QB.Lag("seen"; over = w)); conn = _FD_SL))
+  for conn in (_FD_SL, _FD_MY)
+    e = try _fd_sql(proj(Date(2009, 3, 29) - F("code")); conn = conn); nothing catch err; err end
+    @test e isa PormG.QueryBuildError
+  end
+
+  # A number literal on the left of `-` beside a date is a count minus a date: no meaning, refused on
+  # every engine as the count column is (#814). PostgreSQL rendered `($1::bigint - "Tb"."seen")` before,
+  # which failed only when the statement ran.
+  for conn in (_FD_PG, _FD_SL, _FD_MY), n in (10, 10.5)
+    e = try _fd_sql(proj(n - F("seen")); conn = conn); nothing catch err; err end
+    @test e isa PormG.QueryBuildError && occursin("A day count minus a date has no meaning", plain(e))
+  end
+  @test occursin("(\$1::bigint - \"Tb\".\"points\")", _fd_sql(proj(10 - F("points")); conn = _FD_PG))
+  # The spelling the date-under-`+` refusal names builds, on every engine.
+  for conn in (_FD_PG, _FD_SL, _FD_MY)
+    @test _fd_sql(proj(Fn.Cast(Fn.Value(Date(2009, 3, 29)), "date") + F("grid")); conn = conn) isa String
+  end
+
+  # The right-hand refusals name the same ways out: `missing` the `Coalesce`, and a period under `*` on
+  # `F` the shift by a column (no longer "inside the function", which is the function family's advice).
+  e = try F("grid") + missing; nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("Coalesce(\"grid\", 0)", plain(e))
+  e = try F("grid") * Day(1); nothing catch err; err end
+  @test e isa PormG.QueryBuildError && occursin("F(\"date\") + F(\"grid\")", plain(e)) &&
+        !occursin("inside the function", plain(e))
+  # `desc = true` orders; it means nothing in arithmetic, on the left as on the right (#1539).
+  e = try Date(2009, 3, 29) - QB.CTE("g", "d"; desc = true); nothing catch err; err end
+  @test e isa PormG.QueryBuildError
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #882 — an integer COLUMN beside a date is a whole number of days, as an integer literal (#568) and a
 # `DATE - DATE` count (#814) already were. Before, `F("seen") - F("points")` shifted by days on
 # PostgreSQL and subtracted `points` from the YEAR on SQLite. Typed for date arithmetic only, so an

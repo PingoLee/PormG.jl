@@ -2900,6 +2900,31 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        "read/field_expressions.md — a date on the left of `+` is refused (#1549)",
+        QueryBuildError,
+        () -> PormG.Dates.Date(2009, 3, 29) + F("date"),
+    ),
+    (
+        "read/field_expressions.md — a duration on the left of `-` is refused (#1549)",
+        QueryBuildError,
+        () -> PormG.Dates.Day(1) - F("date"),
+    ),
+    (
+        "read/field_expressions.md — a duration on the left of `*` is refused (#1549, #1553)",
+        QueryBuildError,
+        () -> PormG.Dates.Day(1) * F("grid"),
+    ),
+    (
+        "read/field_expressions.md — `missing` in arithmetic is refused, on either side (#1549)",
+        QueryBuildError,
+        () -> missing + F("grid"),
+    ),
+    (
+        "read/field_expressions.md — `missing` in arithmetic is refused, on the right (#1549)",
+        QueryBuildError,
+        () -> F("grid") + missing,
+    ),
+    (
         "read/field_expressions.md — a day count minus a date is refused (#814)",
         QueryBuildError,
         () -> begin

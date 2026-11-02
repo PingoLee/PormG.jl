@@ -314,6 +314,50 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1549: a date or timestamp literal on the LEFT of `-` over a CTE handle
+# Expected: `Date(2009, 3, 29) - CTE("g", "d")` renders and binds what `Date(2009, 3, 29) - F("dt")` does
+# on the model column, once `"R1_1"."d"` reads `"R1"."dt"`, on PostgreSQL and SQLite: a day count
+# (`($1::date - "R1_1"."d")`, `CAST(julianday(?) - julianday("R1_1"."d") AS INTEGER)`); a timestamp
+# literal against a CTE timestamp is an interval, cast on PostgreSQL by the column's zone as #814 casts the
+# date on the right. An integer CTE column is not read as a day count beside it, as it is not beside a
+# date column (the #1539 testset above): SQLite refuses it.
+# Why it matters: it was a raw `MethodError` (`-(::Date, ::CTEReference)`), while the date on the right
+# built since #1539.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1549: a date literal on the left of a CTE handle builds what it builds on the column" begin
+  for conn in (_CLC_PG, _CLC_SL)
+    tag = nameof(typeof(conn))
+    cases = (
+      :date_left      => (Date(2009, 3, 29) - CTE("g", "d"),         Date(2009, 3, 29) - F("dt")),
+      :datetime_left  => (DateTime(2009, 3, 29, 6) - CTE("g", "t"),  DateTime(2009, 3, 29, 6) - F("ts")),
+      :date_left_ts   => (Date(2009, 3, 29) - CTE("g", "t"),         Date(2009, 3, 29) - F("ts")),
+    )
+    for (case, (handle_node, column_node)) in cases
+      @test (tag, case, _clc_same(handle_node, column_node, conn)) == (tag, case, true)
+    end
+  end
+  @test _clc_proj(_clc_sql(_clc_arith(Date(2009, 3, 29) - CTE("g", "d")), _CLC_PG)[:sql_text]) ==
+        "(\$1::date - \"R1_1\".\"d\")"
+  @test _clc_proj(_clc_sql(_clc_arith(Date(2009, 3, 29) - CTE("g", "d")), _CLC_SL)[:sql_text]) ==
+        "CAST(julianday(?) - julianday(\"R1_1\".\"d\") AS INTEGER)"
+  @test _clc_refusal(() -> _clc_sql(_clc_arith(Date(2009, 3, 29) - CTE("g", "n")), _CLC_SL)) isa PormG.QueryBuildError
+  # A number literal minus a CTE date is a count minus a date, refused on every engine as it is beside
+  # `F("dt")`. It rendered `(? - "R1_1"."d")` before, which SQLite computed as `10 - 2009` silently.
+  for conn in (_CLC_PG, _CLC_SL), n in (10, 10.5), col in ("d", "t")
+    e = _clc_refusal(() -> _clc_sql(_clc_arith(n - CTE("g", col)), conn))
+    @test (nameof(typeof(conn)), n, col, e isa PormG.QueryBuildError &&
+           occursin("A day count minus a date", PormG._emsg(sprint(showerror, e); color = false))) ==
+          (nameof(typeof(conn)), n, col, true)
+  end
+  # An untyped left beside a CTE date is refused on SQLite, as `(F("points") * 2) - F("dt")` is (#882).
+  for node in ((F("points") * 2) - CTE("g", "d"), (F("points") * 2) + CTE("g", "d"))
+    @test _clc_refusal(() -> _clc_sql(_clc_arith(node), _CLC_SL)) isa PormG.QueryBuildError
+    twin = node.operation == "+" ? node.field_name + F("dt") : node.field_name - F("dt")
+    @test _clc_refusal(() -> _clc_sql(_clc_arith(twin), _CLC_SL)) isa PormG.QueryBuildError
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1539: a date literal against a CTE date or timestamp column binds what the filter pair binds
 # Expected: `CTE("g", "t") > Date(2009, 3, 1)` binds the canonical midnight instant
 # `"2009-03-01T00:00:00.000+00:00"`, as `"g__t__@gt" => Date(2009, 3, 1)` does, and every comparison

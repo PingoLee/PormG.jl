@@ -6755,4 +6755,324 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String"), ("1", "Int64")]),
   ("Concat json key | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"n=\"", "String"), ("1", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Cast zero-scale + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast zero-scale * 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("F bigint + Cast zero-scale | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F bigint + Cast zero-scale | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F bigint + Cast zero-scale | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F bigint + Cast zero-scale | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Case zero-scale cast int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64")]),
+  ("Case zero-scale cast int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast int | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast int | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Coalesce zero-scale cast int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce zero-scale cast int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Coalesce zero-scale cast int | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Coalesce zero-scale cast int | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
+  ("F decimal + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F decimal + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F decimal + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F decimal + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case float literal + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case float literal * 2 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64")]),
+  ("Case float literal * 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64")]),
+  ("Case float literal * 2 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64")]),
+  ("Case float literal * 2 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("2", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("1 + Case float literal | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case int literal + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Case zero-scale cast + 1 | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+  ("Extract milliseconds time | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Extract milliseconds time | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract milliseconds time | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Extract milliseconds time | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract microseconds time | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Extract microseconds time | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract microseconds time | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Extract microseconds time | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract second time | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Extract second time | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract second time | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Extract second time | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract second time | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract julian date | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract julian date | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract julian start_at | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract julian start_at | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Extract milliseconds start_at | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
+  ("Extract milliseconds start_at | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Extract milliseconds start_at | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
+  ("Extract milliseconds start_at | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
 )

@@ -39,7 +39,7 @@ F("points") / 2.0                # Division
 Sum("points") / Count("resultid") # Aggregate ratios
 ```
 
-**Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic).
+**Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic). A duration is also an interval value: `*` scales one by a number, and `/` divides one placed first — see [A duration as an interval value](#A-duration-as-an-interval-value).
 
 A numeric operand is an `Integer`, a `Float64`, a `Float32` or a `Float16` (the last two bind as the
 `Float64` they hold), or `Value(n)` of one, which is the same literal: `F("grid") + Value(1)` is
@@ -49,11 +49,13 @@ keeps its place. A `Decimal` or a `Rational` raises a `QueryBuildError` naming t
 
 On the **left** of an `F(...)` expression, a function, a window function or a `CTE(...)` column, two
 more operands are taken, each where it means something: a date or timestamp literal on the left of `-`
-(`Date(2009, 3, 29) - F("date")`, see [Subtracting two dates](#Subtracting-two-dates)), and a duration on
-the left of `+`, which is the duration on the right (`Day(1) + F("date")` is `F("date") + Day(1)`, and a
-function refuses it on either side). A date on the left of
-`+`, `*` or `/`, a duration on the left of `-`, `*` or `/`, and `missing` (or `nothing`) on either side
-raise a `QueryBuildError` that names what the left takes (#1549). `missing` is SQL `NULL`, and arithmetic with
+(`Date(2009, 3, 29) - F("date")`, see [Subtracting two dates](#Subtracting-two-dates)), and a duration.
+A duration on the left of `+` or `*` is the duration on the right (`Day(1) + F("date")` is
+`F("date") + Day(1)`), and on the left of `-` or `/` it is an interval value
+(`Minute(2) - F("time")`, see [A duration as an interval value](#A-duration-as-an-interval-value)). A
+function or a window function refuses a duration on either side. A date on the left of `+`, `*` or `/`,
+and `missing` (or `nothing`) on either side, raise a `QueryBuildError` that names what the left takes
+(#1549). `missing` is SQL `NULL`, and arithmetic with
 `NULL` is always `NULL`: to count a missing value as a number, coalesce the column,
 `Coalesce("grid", 0) + 1`.
 
@@ -335,9 +337,9 @@ WHERE (`Tb_1`.`date` > `Tb_2`.`dob`)
 
 #### Explicit duration types
 
-For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). Only `+` and `-` apply to a duration operand. A duration goes on the right,
-or on the left of `+` (`Day(30) + F("date")` is `F("date") + Day(30)`); a duration on the left of `-`
-has no meaning, and a duration is not multiplied or divided by a column (#1553):
+For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). A date takes a duration under `+` and `-`, on the right
+or on the left of `+` (`Day(30) + F("date")` is `F("date") + Day(30)`). A duration minus a date has no
+meaning. A duration is also an interval value of its own; see [A duration as an interval value](#A-duration-as-an-interval-value) below:
 
 ```julia
 using Dates
@@ -526,8 +528,10 @@ from it, and both are intentional divergences:
 
 - **Precision** is the millisecond on SQLite, the precision a stored timestamp has; PostgreSQL and
   MySQL keep microseconds. Dividing by zero gives `NULL` on SQLite and MySQL and an error on PostgreSQL.
-- **What has no millisecond form is refused on SQLite** with `QueryBuildError`: a month or a year
-  (`d + Month(1)`, which has no fixed length), and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
+- **What has no millisecond form is refused on SQLite.** A month or a year (`d + Month(1)`) has no
+  fixed length, and raises `BackendCapabilityError` (the `calendar_intervals` row in
+  [Backends](../backends.md)). A window function inside the interval
+  (`F("start_at") - Lag("start_at", over = …)`) raises `QueryBuildError`. The window
   sees a single row in the subquery that formats the text; project its value in a CTE first and use
   the column. `Max`/`Min` over a timestamp are fine. A `Case` whose value is a duration, or a
   function over one (`Sum`, `Max`, `Coalesce`, …), is refused in arithmetic too
@@ -542,6 +546,66 @@ from it, and both are intentional divergences:
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
 `d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
 times an interval. SQLite and MySQL refuse them at build time with `QueryBuildError`.
+
+#### A duration as an interval value
+
+A `Dates` duration (or an `Interval`) is an interval value, as a `DurationField` is. So it takes the same
+arithmetic, with the duration on either side:
+
+| Expression | Means |
+|---|---|
+| `F("lap") * Second(1)`, `Second(1) * F("lap")` | a duration scaled by a number |
+| `Minute(3) / F("lap")` | a duration divided by a number |
+| `F("time") - Second(1)`, `F("time") + Second(1)` | an interval plus or minus a duration |
+| `Minute(2) - F("time")` | a duration minus an interval |
+
+Here `lap` is an `IntegerField` and `time` a `DurationField`. Each lap's time against a pace of 1:30 per
+lap, negative when faster:
+
+```julia
+query = M.Lap_times.objects
+query.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+query.values("driverid__surname", "lap", "time",
+             "vs_pace" => F("time") - Second(90),
+             "pace_total" => F("lap") * Second(90))
+```
+
+Generated SQL (PostgreSQL), where the duration is a `make_interval`:
+```sql
+("Tb"."time" - make_interval(secs => $1::double precision)) as "vs_pace",
+("Tb"."lap" * make_interval(secs => $2::double precision)) as "pace_total"
+-- parameters: [90.0, 90.0, 2009, 1, 3]
+```
+
+On SQLite the duration binds as its milliseconds (`90000`), and on MySQL as its microseconds
+(`90000000`). A product or a quotient is rounded back to a whole unit, as it is for a `DurationField`
+column. The result reads back as a `Dates.CompoundPeriod` on every engine.
+
+A duration on the left of `+` and `*` commutes. On the left of `-` and `/` it stays where it was written.
+The rest has no meaning and raises `QueryBuildError` on every engine, PostgreSQL included:
+
+- a number or an interval divided by a duration (`F("grid") / Hour(1)`); write the duration first,
+  `Hour(1) / F("grid")`;
+- a duration minus a number or a date, or divided by an interval (but see the note on untyped sides
+  below);
+- a date, a text column or an interval multiplied by a duration.
+
+The refusal is decided by the side's type. A side PormG cannot type is taken as a number, as it is for a
+`DurationField` column (`d * x`). On PostgreSQL, a side that is an interval PormG cannot name, such as
+`F("time") / F("time")` or `F("time") + 5`, still fails when the statement runs. It fails the same way on
+its own, without the duration (#1572).
+
+A month or a year has no fixed length, so it is an interval value only on PostgreSQL, where an
+`interval` keeps months apart: `F("grid") * Month(1)` is `make_interval(months => …)` there. SQLite and
+MySQL raise `BackendCapabilityError` (`calendar_intervals` in [Backends](../backends.md)). A date
+shifted by a month (`F("date") + Month(1)`) is not a value, and builds on every engine. A month
+multiplied by a whole number stays months: `F("grid") * Month(1)` is seven months for a grid of 7. A
+month divided, or multiplied by a fraction, is what PostgreSQL makes of it. A month is 30 days there, so
+`Year(1) / F("grid")` over a grid of 7 is one month, 21 days and about 10 hours and 17 minutes. For
+calendar-exact arithmetic, scale by whole numbers.
+
+Only `F(...)` expressions and `CTE(...)` columns take a duration this way. A function or a window
+function takes none: shift or scale the column inside the function (`Max(F("time") - Second(1))`).
 
 **A number function over a duration** (`Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`,
 `Abs`) raises `QueryBuildError` on every engine when the query is built (#1324): a duration is not a

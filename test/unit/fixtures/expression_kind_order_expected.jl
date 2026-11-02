@@ -1371,6 +1371,214 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F hop datetime + interval | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("F int col * Hour(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Hour(1) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "CAST(round((\"Tb\".\"grid\") * (?)) AS INTEGER) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("F int col * Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("F int col * Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("F int col * Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("F int col * Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("F int col * Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("F int col * Hour(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F int col * Hour(1) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R2\".\"grid\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) * F int col | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("Hour(1) * F int col | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) * F int col | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "CAST(round((\"Tb\".\"grid\") * (?)) AS INTEGER) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("Hour(1) * F int col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) * F int col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) * F int col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) * F int col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) * F int col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) * F int col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) * F int col | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((`R3`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((`R2`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) * F int col | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Hour(1) * F int col | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R2\".\"grid\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) / F int col | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(CAST(ROUND((?) * 1.0 / (`Tb`.`grid`)) AS SIGNED) IS NULL) ASC, CAST(ROUND((?) * 1.0 / (`Tb`.`grid`)) AS SIGNED) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("Hour(1) / F int col | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) / F int col | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "CAST(round((?) * 1.0 / (\"Tb\".\"grid\")) AS INTEGER) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("Hour(1) / F int col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) / F int col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) / F int col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) / F int col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) / F int col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) / F int col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) / F int col | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((SELECT\n    CAST(ROUND((?) * 1.0 / (`R3`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((?) * 1.0 / (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) / F int col | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Hour(1) / F int col | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((?) * 1.0 / (\"R2\".\"grid\")) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("F interval - Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "((`Tb`.`fastestlaptime` - ?) IS NULL) ASC, (`Tb`.`fastestlaptime` - ?) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("F interval - Hour(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F interval - Hour(1) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("F interval - Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("F interval - Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("F interval - Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F interval - Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F interval - Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("F interval - Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("F interval - Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((SELECT\n    (`R3`.`fastestlaptime` - ?) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    (`R2`.`fastestlaptime` - ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("F interval - Hour(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F interval - Hour(1) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - F interval | alone", :mysql, "v") =>
+    (stage = :ok, sql = "((? - `Tb`.`fastestlaptime`) IS NULL) ASC, (? - `Tb`.`fastestlaptime`) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("Hour(1) - F interval | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - F interval | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "(? - ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("Hour(1) - F interval | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) - F interval | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) - F interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - F interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - F interval | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) - F interval | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) - F interval | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((SELECT\n    (? - `R3`.`fastestlaptime`) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    (? - `R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - F interval | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - F interval | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (? - ((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("F int col * Month(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Month(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Month(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F int col * Month(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F datetime diff + Month(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime diff + Month(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime diff + Month(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime diff + Month(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("CTE int col * Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(CAST(ROUND((`R1_1`.`n`) * (?)) AS SIGNED) IS NULL) ASC, CAST(ROUND((`R1_1`.`n`) * (?)) AS SIGNED) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("CTE int col * Hour(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE int col * Hour(1) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "CAST(round((\"R1_1\".\"n\") * (?)) AS INTEGER) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("CTE int col * Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((WITH `c` AS (\n  SELECT\n    `R5`.`resultid` as `resultid`, \n  `R5`.`grid` as `n`, \n  `R5_1`.`date` as `d`, \n  `R5`.`fastestlaptime` as `u`\nFROM `result` as `R5`\n INNER JOIN `race` AS `R5_1` ON `R5`.`raceid` = `R5_1`.`raceid` \n\n)\nSELECT\n    CAST(ROUND((`R6_1`.`n`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R6`\n LEFT JOIN `c` AS `R6_1` ON `R6`.`resultid` = `R6_1`.`resultid` \nWHERE `R6`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    CAST(ROUND((`R4_1`.`n`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("CTE int col * Hour(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("CTE int col * Hour(1) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R4_1\".\"n\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("CTE interval col - Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "((`R1_1`.`u` - ?) IS NULL) ASC, (`R1_1`.`u` - ?) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("CTE interval col - Hour(1) | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE interval col - Hour(1) | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "(((CASE WHEN substr(\"R1_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("CTE interval col - Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((WITH `c` AS (\n  SELECT\n    `R5`.`resultid` as `resultid`, \n  `R5`.`grid` as `n`, \n  `R5_1`.`date` as `d`, \n  `R5`.`fastestlaptime` as `u`\nFROM `result` as `R5`\n INNER JOIN `race` AS `R5_1` ON `R5`.`raceid` = `R5_1`.`raceid` \n\n)\nSELECT\n    (`R6_1`.`u` - ?) as `t`\nFROM `result` as `R6`\n LEFT JOIN `c` AS `R6_1` ON `R6`.`resultid` = `R6_1`.`resultid` \nWHERE `R6`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (`R4_1`.`u` - ?) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("CTE interval col - Hour(1) | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("CTE interval col - Hour(1) | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(\"R4_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R4_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - CTE interval col | alone", :mysql, "v") =>
+    (stage = :ok, sql = "((? - `R1_1`.`u`) IS NULL) ASC, (? - `R1_1`.`u`) ASC", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("3600000000", "Int64")]),
+  ("Hour(1) - CTE interval col | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - CTE interval col | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "(? - ((CASE WHEN substr(\"R1_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC NULLS LAST", params = [("3600000", "Int64"), ("3600000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`R2_1`.`v` IS NULL) ASC, `R2_1`.`v` ASC", params = [("3600000000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R2_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = [("3600000", "Int64")]),
+  ("Hour(1) - CTE interval col | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "((WITH `c` AS (\n  SELECT\n    `R5`.`resultid` as `resultid`, \n  `R5`.`grid` as `n`, \n  `R5_1`.`date` as `d`, \n  `R5`.`fastestlaptime` as `u`\nFROM `result` as `R5`\n INNER JOIN `race` AS `R5_1` ON `R5`.`raceid` = `R5_1`.`raceid` \n\n)\nSELECT\n    (? - `R6_1`.`u`) as `t`\nFROM `result` as `R6`\n LEFT JOIN `c` AS `R6_1` ON `R6`.`resultid` = `R6_1`.`resultid` \nWHERE `R6`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (? - `R4_1`.`u`) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - CTE interval col | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Hour(1) - CTE interval col | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (? - ((CASE WHEN substr(\"R4_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R4_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64")]),
   ("F @year + 1 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F @year + 1 | alone", :postgres, "v") =>

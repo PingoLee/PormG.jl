@@ -211,6 +211,13 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
     period = p.operand isa Interval ? p.operand.period : p.operand
     return _shift_result_kind(left, _decompose_period(period))
   end
+  # #1553: a number side times a duration is an interval value (`_render_duration_product`); anything
+  # else times one is refused there, so it has no kind. A duration on the LEFT (`Hour(1) - F("time")`,
+  # `Minute(3) / F("lap")`) needs no arm: `_side_kind` names it an interval, so `_interval_left_kind`
+  # types it below as it types a `DurationField` column.
+  if op == "*" && p.operand isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
+    return _is_number_side(p.field_name, left, instruc) ? CInterval() : nothing
+  end
   # #568: a bare integer beside a date is whole days.
   if left isa Union{CDate,CDateTime} && op in ("+", "-") && p.operand isa Integer && !(p.operand isa Bool)
     return _shift_result_kind(left, _decompose_period(Dates.Day(p.operand)))

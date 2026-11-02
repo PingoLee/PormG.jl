@@ -337,6 +337,7 @@ function _render_left_typed(value::Any, operation::String, instruc::SQLInstructi
   end
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)
+  value isa _DurationOperand && return _render_duration_value(value, instruc)   # #1553
   sql = _set_update_query_left(value, operation, instruc)
   return sql, _render_side_kind(value, instruc)   # #1034 step 5b: the one side rule
 end
@@ -382,6 +383,10 @@ _side_kind(value::CTEReference, instruc::SQLInstruction) =
 # it is on the right (`_render_side_kind`'s `right` arm). Typed here, the one side rule, so the render
 # and the walk (`_temporal_arith_kind`) both send it to the #801/#814 arm the date-on-the-right takes.
 _side_kind(value::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(value)
+# #1553 — a duration on the LEFT (`Hour(1) - F("time")`, `Minute(3) / F("lap")`) is an interval value, so
+# the render and the walk both send it to the interval-on-the-left arm (`_render_interval_left`,
+# `_interval_left_kind`), as a `DurationField` column goes there.
+_side_kind(::_DurationOperand, ::SQLInstruction) = CInterval()
 
 # #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
 # arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
@@ -491,8 +496,11 @@ _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, operation:
                        instruc::SQLInstruction)::String =
   _temporal_shift_sql(instruc.connection, left_side, kind, operation, comps, instruc)
 
-function _temporal_shift_sql(::PormGPostgres, left_side::AbstractString, kind::TemporalKind, operation::String,
-                             comps, instruc::SQLInstruction)::String
+# PostgreSQL's spelling of a duration: one bound, typed `make_interval` argument per component. Shared by
+# the shift below and the duration VALUE (`_duration_value_sql`, #1553), so the two cannot spell one
+# duration two ways. The unit keywords come from `_PG_INTERVAL_KW`, a fixed whitelist; every magnitude
+# is a parameter. `nothing` for a zero-length duration, which binds nothing.
+function _pg_interval_args(comps, instruc::SQLInstruction)::Union{String,Nothing}
     parts = String[]
     for (unit, value) in comps
       if unit === :second
@@ -503,13 +511,19 @@ function _temporal_shift_sql(::PormGPostgres, left_side::AbstractString, kind::T
         push!(parts, "$(_PG_INTERVAL_KW[unit]) => $ph")
       end
     end
-    isempty(parts) && return left_side  # zero-length interval → identity
+    return isempty(parts) ? nothing : join(parts, ", ")
+end
+
+function _temporal_shift_sql(::PormGPostgres, left_side::AbstractString, kind::TemporalKind, operation::String,
+                             comps, instruc::SQLInstruction)::String
+    args = _pg_interval_args(comps, instruc)
+    args === nothing && return left_side  # zero-length interval → identity
     # #572 — rendered into the representation the RESULT kind is stored in, exactly as the SQLite
     # branch below is. For a whole-day shift on a DATE that is a `::date` cast (PostgreSQL's own
     # `date + interval` is a timestamp); for everything else the table's PostgreSQL arm is the
     # identity. `kind` is the result kind, so a sub-day shift on a DATE is never cast. An untyped
     # left (`nothing`) renders as it always did — no cast chosen on a guess.
-    shifted = "($(left_side) $(operation) make_interval($(join(parts, ", "))))"
+    shifted = "($(left_side) $(operation) make_interval($(args)))"
     kind === nothing && return shifted
     return sql_canonicalize(kind, instruc.connection, shifted)
 end
@@ -587,6 +601,28 @@ function _temporal_shift_sql(::PormGMySQL, left_side::AbstractString, kind::Temp
   end
   return sql
 end
+
+# #1553 — A DURATION LITERAL AS AN INTERVAL VALUE, rendered and typed: what `F("grid") * Hour(1)`,
+# `Minute(3) / F("lap")` and `Minute(2) - F("time")` compute on. PostgreSQL: `make_interval(…)`, an
+# `interval` (`make_interval()` for a zero-length duration, which is the zero interval). SQLite and
+# MySQL: the duration in the unit they compute an interval in (`_duration_units` — milliseconds,
+# microseconds), bound as an integer and typed `_IntervalMs`, so the #881 arithmetic takes it as it
+# takes a timestamp difference. A month or a year has no such count and is refused there as the
+# `calendar_intervals` capability. One method per engine and no fallback, as `_temporal_shift_sql`.
+_render_duration_value(d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+  _duration_value_sql(instruc.connection, d, instruc)
+function _duration_value_sql(::PormGPostgres, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  args = _pg_interval_args(_decompose_period(d isa Interval ? d.period : d), instruc)
+  return "make_interval($(something(args, "")))", CInterval()
+end
+_duration_value_sql(conn::PormGSQLite, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+  (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
+_duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+  (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
+# A zero-length duration is zero whatever its unit (`Month(0)` too), as the shift's identity treats it,
+# so only a duration with a calendar component reaches the `calendar_intervals` refusal.
+_duration_operand_units(d::_DurationOperand, conn)::Int64 =
+  isempty(_decompose_period(d isa Interval ? d.period : d)) ? Int64(0) : _duration_units(d, conn)
 
 # #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being the rule's answer (`_arith_result_kind`).
 #
@@ -700,19 +736,23 @@ _interval_shift_sql(::PormGMySQL, date_side::AbstractString, ::Union{CDate,CDate
 # #881 — a duration literal as the integer it binds against an `_IntervalMs` side: the engine's unit
 # (`_interval_unit_ns` — milliseconds on SQLite, microseconds on MySQL), rounded half away from zero as
 # the difference is. A month or a year has no fixed length, so it has no such count (PostgreSQL's
-# `interval` keeps months apart for the same reason).
+# `interval` keeps months apart for the same reason): the `calendar_intervals` capability (#1553), the
+# one refusal for a month beside an interval, a timestamp difference's and a duration value's alike. It
+# was a `QueryBuildError` that printed the period until #1553; it names no value now (#971).
 function _duration_units(p, conn)::Int64
   period = p isa Interval ? p.period : p
   ns = try
     Models._duration_to_nanoseconds(period)
   catch e
     e isa InvalidValueError || rethrow()
-    throw(QueryBuildError("A duration of months or years ($(period)) has no fixed length, so it cannot be " *
-                          "combined with a timestamp difference on $(_backend_name(conn)). Use weeks, days " *
-                          "or a time: Day(30), Hour(1)."))
+    throw(_capability_error(conn, :calendar_intervals, "A duration of months or years in interval arithmetic";
+                            why = "An interval is a number of $(_interval_unit_name(conn)) there, and a month " *
+                                  "has no fixed length. Use weeks, days or a time: Day(30), Hour(1)."))
   end
   return _ns_to_units(ns, _interval_unit_ns(conn))
 end
+# The unit `_interval_unit_ns` names, as the refusal above says it.
+_interval_unit_name(conn)::String = _interval_unit_ns(conn) == 1_000_000 ? "milliseconds" : "microseconds"
 function _ns_to_units(ns::Int64, unit::Int64)::Int64
   q, r = divrem(ns, unit)
   return 2 * abs(r) >= unit ? q + sign(ns) : q
@@ -1229,7 +1269,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     end
     if sqlite && left_kind isa _IntervalMs
       if v.operand isa Union{Dates.Period,Dates.CompoundPeriod}
-        return "($(left_side) $(op) $(add_parameter!(instruc, _duration_units(v.operand, instruc.connection))))", nothing
+        return "($(left_side) $(op) $(add_parameter!(instruc, _duration_operand_units(v.operand, instruc.connection))))", nothing
       end
       # #1130: where the interval IS its integer (MySQL) there is no text to compare: a duration string
       # binds its count, and anything else is refused as no interval, rather than a text bound against
@@ -1266,6 +1306,15 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
 
   if op in _ARITHMETIC_OPERATIONS
     right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+    # #1553: a duration literal on the left takes an interval under `-` and a number under `/` (`+` and
+    # `*` commute and never put one here). Everything else is refused on EVERY engine: PostgreSQL would
+    # render `interval - integer` or `interval / interval`, which fail when the statement runs. A date
+    # under `-` reaches the refusal below, which says why.
+    if v.field_name isa _DurationOperand
+      takes = op == "-" ? (_is_interval_kind(right_kind) || right_kind isa Union{CDate,CDateTime}) :
+              op == "/" && _is_number_side(v.operand, right_kind, instruc)
+      takes || throw(_duration_left_error(op))
+    end
     if op in ("+", "-")
       if right_kind isa Union{CDate,CDateTime}
         op == "-" &&
@@ -1305,6 +1354,28 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
   left_side = _as_interval_text(left_side, left_kind, instruc.connection)
   return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
 end
+
+# #1553 — `x * d`, a duration literal scaled by a number side, an interval value. The left renders first
+# (the order rule), then the duration as its value (`_render_duration_value`), and the product is #881's
+# number-times-interval (`_render_interval_right`): `x * make_interval(…)` on PostgreSQL, the rounded
+# product of the integer form on SQLite and MySQL. A date, a text column or an interval times a duration
+# has no meaning and is refused on every engine before any SQL is written (PostgreSQL has no
+# `date * interval` or `interval * interval`).
+function _render_duration_product(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+  _is_number_side(v.field_name, left_kind, instruc) || throw(_duration_scale_error())
+  right_side, right_kind = _render_duration_value(v.operand, instruc)
+  return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
+end
+_duration_scale_error() =
+  QueryBuildError("A duration is scaled by a number only (\e[4m\e[32mF(\"grid\") * Hour(1)\e[0m). A date, a " *
+                  "text column or an interval times a duration has no meaning. To shift a date by a " *
+                  "duration, add it: \e[4m\e[32mF(\"date\") + Hour(1)\e[0m.")
+_duration_left_error(op::AbstractString) =
+  QueryBuildError("A duration on the left of `$(op)` takes an interval under `-` " *
+                  "(\e[4m\e[32mMinute(2) - F(\"time\")\e[0m) and a number under `/` " *
+                  "(\e[4m\e[32mHour(1) / F(\"grid\")\e[0m); the right side here is neither. To move a " *
+                  "date back, subtract the duration from it: \e[4m\e[32mF(\"date\") - Day(1)\e[0m.")
 
 # #881 — an interval on the RIGHT of a left that is neither a date nor an interval. Only a number
 # times an interval is one (`F("points") * d`, and `2 * d`, which is `d * 2`). On SQLite, ordering a
@@ -1352,6 +1423,24 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     return "($(left_side) $(v.operation) $(add_parameter!(instruc, _duration_units(period, instruc.connection))))", left_kind
   end
   kind = _arith_result_kind(v, left_kind, nothing, instruc)   # #1034 step 5b: the one copy of the rule
+
+  # #1553: an interval VALUE on the left — a `DurationField` column, a CTE column holding a duration, a
+  # `Case` over durations — plus or minus a duration is an interval, not a date shift, so the date-column
+  # checks below do not apply. PostgreSQL's `interval ± make_interval(…)` is the shift's own text. SQLite
+  # and MySQL compute on the interval's integer form, as `d ± Hour(1)` does above, and refuse an interval
+  # with none (a `Case` over durations is text on SQLite): its date modifiers would read the `HH:MM:SS`
+  # text as a date, and MySQL's `+ INTERVAL … HOUR` would add an hour to a count of microseconds.
+  if left_kind isa CInterval
+    if _interval_as_ms(instruc.connection)
+      lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
+      lms === nothing &&
+        throw(_interval_error("`$(v.operation)` a duration on an interval that is not a timestamp difference or a " *
+                              "DurationField column", instruc.connection))
+      isempty(comps) && return left_side, left_kind
+      return "($(lms) $(v.operation) $(add_parameter!(instruc, _duration_units(period, instruc.connection))))", _IntervalMs()
+    end
+    return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
+  end
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
   # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
@@ -1807,6 +1896,10 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # infix branch: a Period operand must NOT reach `_set_update_query_operand`, which would try to
     # bind it as a raw SQL parameter.
     return _render_date_period_arithmetic(v, instruc)
+  elseif v.operation == "*" && v.operand isa _DurationOperand
+    # #1553: a duration scaled by a number, an interval value. Ahead of the generic branch for the
+    # reason the shift is: a period must not reach `_set_update_query_operand`.
+    return _render_duration_product(v, instruc)
   else
     # Field with operation - handle nesting and date arithmetic properly.
     #

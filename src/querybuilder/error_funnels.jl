@@ -58,7 +58,7 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 _arith_operands(::Type{FExpression}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
   "expression, a function or a window function, a \e[4m\e[32mCTE(...)\e[0m column, or " *
-  "\e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an Interval"
+  "\e[4m\e[32mValue(n)\e[0m of a number; `+`, `-` and `*` also take a Dates period or an Interval"
 _arith_operands(::Type{WindowFunction}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
   "expression, a function, a \e[4m\e[32mCTE(...)\e[0m column, or \e[4m\e[32mValue(n)\e[0m of a number"
@@ -70,7 +70,7 @@ _arith_operands(::Type{FObject}) =
 _arith_operands(::Type{CTEReference}) =
   "a number (an Integer, Float64, Float32 or Float16), a column path (a String), an \e[4m\e[32mF(...)\e[0m " *
   "expression, a function or a window function, another \e[4m\e[32mCTE(...)\e[0m column, or " *
-  "\e[4m\e[32mValue(n)\e[0m of a number; `+` and `-` also take a Dates period or an Interval"
+  "\e[4m\e[32mValue(n)\e[0m of a number; `+`, `-` and `*` also take a Dates period or an Interval"
 function _unsupported_arithmetic_operand(op::AbstractString, operand, node::Type)
   T = typeof(operand)
   spelling = operand isa Decimals.Decimal ?
@@ -94,14 +94,15 @@ _arith_node_label(::Type{FObject}) = "a function"
 _arith_node_label(::Type{CTEReference}) = "a CTE(...) column"
 
 # #1549 — the LEFT side of `+ - * /` on the four families. A number goes on either side (#1476); a date
-# goes on the left of `-` only, the mirror of #814's `F("date") - Date(…)`; a duration on the left of
-# `+` commutes where the right takes one (`F`, `CTE(...)`). Everything else that reaches the left
-# catch-all — a date under `+ * /`, a duration under `- * /`, `missing` — is refused here, naming what
-# the left of that family takes. The value is never printed, only its type.
+# goes on the left of `-` only, the mirror of #814's `F("date") - Date(…)`; a duration goes on the left
+# of every operator where the right takes one (`F`, `CTE(...)`): `+` and `*` commute, and since #1553 it
+# is an interval value under `-` and `/`. Everything else that reaches the left catch-all — a date under
+# `+ * /`, a duration beside a function, `missing` — is refused here, naming what the left of that family
+# takes. The value is never printed, only its type.
 _arith_left_operands(::Type{T}) where {T<:Union{FExpression,CTEReference}} =
-  "a number (\e[4m\e[32m10 - F(\"grid\")\e[0m), a Dates period or an Interval under `+` " *
-  "(\e[4m\e[32mDay(1) + F(\"date\")\e[0m), and a Date, DateTime or ZonedDateTime under `-` " *
-  "(\e[4m\e[32mDate(2009, 3, 29) - F(\"date\")\e[0m)"
+  "a number (\e[4m\e[32m10 - F(\"grid\")\e[0m), a Dates period or an Interval " *
+  "(\e[4m\e[32mDay(1) + F(\"date\")\e[0m, \e[4m\e[32mMinute(2) - F(\"time\")\e[0m), and a Date, DateTime " *
+  "or ZonedDateTime under `-` (\e[4m\e[32mDate(2009, 3, 29) - F(\"date\")\e[0m)"
 _arith_left_operands(::Type{T}) where {T<:Union{FObject,WindowFunction}} =
   "a number (\e[4m\e[32m10 - Max(\"grid\")\e[0m), and a Date, DateTime or ZonedDateTime under `-` " *
   "(\e[4m\e[32mDate(2009, 3, 29) - Max(\"date\")\e[0m)"
@@ -115,21 +116,21 @@ function _unsupported_left_arithmetic_operand(op::AbstractString, operand, node:
         "literal to a date: \e[4m\e[32mCast(Value(Date(2009, 3, 29)), \"date\") + F(\"grid\")\e[0m." :
         "A date is not multiplied or divided. Only `-` takes one on the left: the days or the interval " *
         "to the right side, or the date moved back by a day count or an interval.") :
-    op == "-" ?
-      "A duration on the left of `-` is not taken: a duration minus a date or a number has no meaning, " *
-      "and minus an interval is not supported yet (#1553). To move a date back, subtract the duration " *
-      "from it: \e[4m\e[32mF(\"date\") - Day(1)\e[0m." :
-      _duration_multiplicand_hint()
+    # A duration: only a function or a window function reaches here (the `F` and `CTE(...)` families
+    # take one on the left of every operator, #1553).
+    "A function takes no duration. Shift or scale the column inside the function instead: " *
+      "\e[4m\e[32mMax(F(\"date\") + Day(1))\e[0m."
   return QueryBuildError(
     "\e[4m\e[31m$(T)\e[0m on the left of \e[4m\e[31m$(op)\e[0m is not an operand here (#1549). On the " *
     "left, arithmetic on $(_arith_node_label(node)) takes " * _arith_left_operands(node) * ". " * spelling)
 end
 
-# A Dates period is a shift, not a number to scale or divide by: only `+` and `-` take one. The shift by
-# a column's number of days is the column itself (#882). Shared by both sides' refusals.
+# #1553 — on the right of `F` or `CTE(...)`, a duration is a shift (`+`, `-`) or an interval value scaled
+# by the left (`*`). Only `/` reaches the right-hand catch-all with one: a number or an interval divided by
+# a duration has no meaning (PostgreSQL has no `interval / interval`), and the duration divided goes first.
 _duration_multiplicand_hint() =
-  "A duration is not scaled by a column or divided here (#1553); only `+` and `-` take one. To shift a " *
-  "date by a column's number of days, add the column: \e[4m\e[32mF(\"date\") + F(\"grid\")\e[0m."
+  "A number or an interval divided by a duration has no meaning. To divide a duration by a number, put " *
+  "the duration first: \e[4m\e[32mDay(1) / F(\"grid\")\e[0m."
 # SQL NULL in arithmetic is always NULL, so `missing` (or `nothing`) as an operand says nothing the query
 # could mean. Django has no `None + F(...)` either.
 _null_arithmetic_hint() =

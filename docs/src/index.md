@@ -69,6 +69,14 @@ Load the driver alongside PormG (`using PormG, LibPQ`, `using PormG, SQLite` or 
 PormG: the PostgreSQL backend requires LibPQ. Run `using LibPQ` (or `using PormG, LibPQ`) so the PostgreSQL extension loads.
 ```
 
+### DataFrames is your app's dependency
+
+PormG depends on neither `DataFrames` nor `CSV` ([#1344](https://github.com/PingoLee/PormG.jl/issues/1344)).
+A query is a [Tables.jl](https://github.com/JuliaData/Tables.jl) table ([A query is a Tables.jl table](read/index.md#A-query-is-a-Tables.jl-table)),
+and the bulk writers take any Tables.jl table ([Bulk Operations](write/bulk.md)). To build or read a
+`DataFrame`, add the package to your app (`Pkg.add("DataFrames")`) and load it, as the examples in
+these docs do with `using DataFrames`.
+
 ---
 
 ## Quick Start

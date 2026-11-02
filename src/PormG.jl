@@ -28,7 +28,7 @@ macro pormg_debug(ex)
 end
 export @pormg_debug
 
-import DataFrames, OrderedCollections, Dates, Logging, YAML, JSON
+import OrderedCollections, Dates, Logging, YAML, JSON
 
 # NOTE: LibPQ and SQLite are weak dependencies (Project.toml `[weakdeps]`). Core never
 # names a concrete driver type; all driver work goes through the backend generics in

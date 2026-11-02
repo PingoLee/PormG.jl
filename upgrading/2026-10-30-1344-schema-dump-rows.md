@@ -9,7 +9,7 @@
 
 PormG's migration and introspection code used to turn every catalog read into a `DataFrame`, only to
 index it. Since #1344 phase 2 it reads `fetch(...) |> Tables.rowtable`, one `NamedTuple` per row,
-which is what lets `DataFrames` leave PormG's dependencies in a later phase. The PostgreSQL schema
+which is part of what let `DataFrames` leave PormG's dependencies in this release. The PostgreSQL schema
 dump is one of those reads, and it is also what `get_database_schema` returns.
 
 | Call | before | now |

@@ -5,8 +5,6 @@ authors = ["PingoLee <eurafael@msn.com>"]
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
-CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Decimals = "abce61dc-4473-55a0-ba07-351d65e31d42"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
@@ -74,6 +72,8 @@ julia = "1.13"
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 FlameGraphs = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
 Infiltrator = "5903a43b-9cc3-4c30-8d17-598619ec4e9b"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
@@ -88,4 +88,4 @@ SnoopCompileCore = "e2b509da-e806-4183-be48-004708413034"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "BenchmarkTools", "Infiltrator", "InteractiveUtils", "LibPQ", "MySQL", "Postgres", "SQLite", "SafeTestsets", "Test"]
+test = ["Aqua", "BenchmarkTools", "CSV", "DataFrames", "Infiltrator", "InteractiveUtils", "LibPQ", "MySQL", "Postgres", "SQLite", "SafeTestsets", "Test"]

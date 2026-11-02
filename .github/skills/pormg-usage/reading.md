@@ -52,7 +52,7 @@ whole fluent-API reference; `?query.filter` cannot, because the methods are synt
 | :--- | :--- |
 | `.list()` | `Vector{PormGRow}` — `row.field`, `row[:field]`, `row.pk`, `row.save()`, `row.delete()` |
 | `.list(:dict)` / `.list(:json)` | `Vector{Dict{Symbol,Any}}` / a JSON `String` |
-| `q \|> DataFrame` | `DataFrame` (typed temporal columns) — prefer it for analytics |
+| `q \|> DataFrame` | `DataFrame` (typed temporal columns), after `using DataFrames` — prefer it for analytics. A query is a Tables.jl table, so any sink reads it (`Tables.rowtable(q)`, `CSV.write(io, q)`) |
 | `.first()` / `.last()` | `PormGRow` or `nothing` |
 | `.earliest("f")` / `.latest("f")` | `PormGRow`; raise `DoesNotExist` when empty |
 | `.get(pairs...)` | Exactly one `PormGRow`, or `DoesNotExist` / `MultipleObjectsReturned` |

@@ -37,13 +37,14 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
             # ...with ONE environment excepted (#574). CI's `floor-resolve` job runs against a
             # `Project.toml` that `julia-downgrade-compat` has REWRITTEN: to let `Pkg.test` run
             # from a locked manifest it promotes the `[targets].test` names into `[deps]` and
-            # deletes them from `[weakdeps]` — LibPQ, Postgres, SQLite, Aqua, BenchmarkTools, Infiltrator
-            # and SafeTestsets. `[extensions]` still names LibPQ, Postgres and SQLite as extension triggers,
+            # deletes them from `[weakdeps]` — the drivers (LibPQ, MySQL, Postgres, SQLite), Aqua,
+            # BenchmarkTools, CSV, DataFrames (test-only since #1344), Infiltrator and SafeTestsets.
+            # `[extensions]` still names the drivers as extension triggers,
             # so the file that job tests against is a shape that exists nowhere else.
             #
             # Exactly TWO of Aqua's eight checks read that file, and both therefore judge the
             # rewrite rather than PormG. They are the two disabled here, for the one shared reason:
-            #   * stale_deps       — seven `[deps]` entries `src/` never imports, and the drivers
+            #   * stale_deps       — the promoted `[deps]` entries `src/` never imports, and the drivers
             #                        are no longer in `[weakdeps]` for Aqua to subtract.
             #   * persistent_tasks — it builds a wrapper package that must resolve from
             #                        `Project.toml` ALONE (its own docstring says this cannot work
@@ -206,7 +207,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Column-wise Row Read (#1073)" include("unit/test_list_raw_columnwise_1073.jl")
     @testset "Typed read: list(T) / first(T) / get(T) (#1352)" include("unit/test_typed_read_1352.jl")
     @testset "Query as a Tables.jl Source (#1344)" include("unit/test_tables_source.jl")
-    @testset "Internal Reads Use Rows, not a DataFrame (#1344)" include("unit/test_internal_rows_1344.jl")
+    @testset "No DataFrames or CSV in PormG; Internal Reads Use Rows (#1344)" include("unit/test_internal_rows_1344.jl")
     @testset "Bulk Writers Take Any Tables.jl Table (#1344)" include("unit/test_bulk_tables_input_1344.jl")
     @testset "Migrations applied_at Canonical Form (#570)" include("unit/test_migrations_applied_at.jl")
     @testset "Migration History Writes Bind Values (#846)" include("unit/test_migration_history_binding.jl")

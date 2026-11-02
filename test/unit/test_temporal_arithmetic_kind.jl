@@ -87,18 +87,26 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # What the render leaves untyped, the walk leaves untyped.
-# Expected, on PostgreSQL (SQLite refuses each at build): an interval plus a number, and a date times
-# a number, are `nothing` to both, so no reader is handed a type the SQL does not have; a date part
-# plus a number is the walk's integer, as it was before step 5a.
+# Expected, on PostgreSQL (SQLite refuses it at build): a date times a number is `nothing` to both, so
+# no reader is handed a type the SQL does not have; a date part plus a number is the walk's integer, as
+# it was before step 5a. An interval plus a number is `nothing` to the walk, and since #1572 the render
+# refuses it on PostgreSQL too (it rendered `interval + bigint`, which fails when the statement runs).
 # Why it matters: the walk must never name a temporal kind the render does not compute.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034 step 5a: what the render leaves untyped stays untyped to the walk" begin
   pg = _TAK_MODELS[1][2]
-  for expr in (F("laptime") + 2, F("date") * 2)
-    rendered, walked = _tak_kinds(pg, expr)
-    @test rendered === nothing
-    @test walked === nothing
-  end
+  rendered, walked = _tak_kinds(pg, F("date") * 2)
+  @test rendered === nothing
+  @test walked === nothing
+  QB = PormG.QueryBuilder
+  q = pg.objects
+  q.values("v" => F("laptime"))
+  @test QB._expression_kind(F("laptime") + 2, QB.build(q.object)) === nothing
+  q = pg.objects
+  q.values("v" => F("laptime") + 2)
+  err = try QB.build(q.object); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  @test occursin("`+` between an interval and a number is not supported on PostgreSQL", sprint(showerror, err))
   _, walked = _tak_kinds(pg, F("start_at__@year") + 1)
   @test walked isa Union{PormG.CInt32,PormG.CInt64}
 end
@@ -549,8 +557,10 @@ end
 # neither a date nor an integer column (a float, a text) a window over a date or a duration is a typed
 # side too. Expected: SQLite and MySQL raise `QueryBuildError` — the #882 "a date and a value PormG
 # cannot type" and #881 "an interval on the right of a value that is not one" refusals a plain column
-# there gets — and PostgreSQL renders the same `"points" + LAG(…)` as before. Why it matters: both
-# engines built these and computed on the date's text or number (`points + '2009-03-29'`), silently.
+# there gets — and PostgreSQL renders the same `"points" + LAG(…)` as before for a date window. A
+# duration window is refused on PostgreSQL too since #1572: it rendered `double precision + interval`,
+# which fails when the statement runs. Why it matters: both engines built these and computed on the
+# date's text or number (`points + '2009-03-29'`), silently.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1465: a date or duration window on the right of `+`/`-` beside a float or text" begin
   QB = PormG.QueryBuilder
@@ -577,7 +587,14 @@ end
       end
       q = model("tak_pg").objects
       q.values("v" => expr())
-      @test occursin(r"\"Tb\"\.\"(points|label)\" [+-] LAG\(", QB.query(q; show_query = :sql))
+      if occursin("laptime", label)   # #1572
+        err = try QB.query(q; show_query = :sql); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        @test occursin("with an interval on the right of a value that is not one is not supported on PostgreSQL",
+                       sprint(showerror, err))
+      else
+        @test occursin(r"\"Tb\"\.\"(points|label)\" [+-] LAG\(", QB.query(q; show_query = :sql))
+      end
     end
   end
 end

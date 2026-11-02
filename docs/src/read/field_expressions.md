@@ -543,9 +543,12 @@ from it, and both are intentional divergences:
   refuses the month or the year, which has no fixed count of microseconds, and builds the window
   function: it holds an interval as its microseconds, with no text to format.
 
-Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
-`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
-times an interval. SQLite and MySQL refuse them at build time with `QueryBuildError`.
+Some shapes have no meaning on any engine: `d * d`, `d / d`, `F("points") / d`, a number plus or minus
+an interval (`d + 5`, `count + d`), and a date times or divided by an interval. They raise
+`QueryBuildError` when the query is built, on PostgreSQL as on SQLite and MySQL. Comparing a number
+with an interval is not arithmetic, and is not refused here. A CTE interval column on the right of a
+float or text column is not refused yet
+([#1581](https://github.com/PingoLee/PormG.jl/issues/1581)).
 
 #### A duration as an interval value
 
@@ -591,9 +594,8 @@ The rest has no meaning and raises `QueryBuildError` on every engine, PostgreSQL
 - a date, a text column or an interval multiplied by a duration.
 
 The refusal is decided by the side's type. A side PormG cannot type is taken as a number, as it is for a
-`DurationField` column (`d * x`). On PostgreSQL, a side that is an interval PormG cannot name, such as
-`F("time") / F("time")` or `F("time") + 5`, still fails when the statement runs. It fails the same way on
-its own, without the duration (#1572).
+`DurationField` column (`d * x`). A side that is meaningless interval arithmetic itself, such as
+`F("time") / F("time")` or `F("time") + 5`, raises `QueryBuildError` where it is built, on every engine.
 
 A month or a year has no fixed length, so it is an interval value only on PostgreSQL, where an
 `interval` keeps months apart: `F("grid") * Month(1)` is `make_interval(months => …)` there. SQLite and

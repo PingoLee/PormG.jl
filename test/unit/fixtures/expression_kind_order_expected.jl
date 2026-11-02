@@ -2347,22 +2347,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "((SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R3_1`.`start_at`, `R3_1`.`start_at`)), ?) OVER (ORDER BY `R3`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) IS NULL) ASC, (SELECT\n    CAST(ROUND((LAG((-TIMESTAMPDIFF(MICROSECOND, `R2_1`.`start_at`, `R2_1`.`start_at`)), ?) OVER (ORDER BY `R2`.`resultid` ASC)) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\n INNER JOIN `race` AS `R2_1` ON `R2`.`raceid` = `R2_1`.`raceid` \nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) ASC", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Lag F ts - ts * 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("F interval * Cast time | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval * Cast time | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast time * F interval | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast time * F interval | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("F interval * Case time col | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("F interval * Case time col | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("F interval / Cast time | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval / Cast time | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Case untyped date col + 1 | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped date col + 1 | alone", :postgres, "v") =>

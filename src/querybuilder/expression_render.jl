@@ -1333,8 +1333,9 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         _refuse_window_in_interval(v.field_name, v.operand, instruc)
         return "($(lms) $(op) $(rms))", _IntervalMs()
       end
-      sqlite && throw(_interval_error("`$(op)` between an interval and a number", instruc.connection))
-      return "($(left_side) $(op) $(right_side))", nothing
+      # #1572: no meaning on any engine. PostgreSQL rendered `interval + bigint`, which fails when the
+      # statement runs; it is refused at build there too, with the same text.
+      throw(_interval_error("`$(op)` between an interval and a number", instruc.connection))
     end
     # `*` and `/`, by a number only.
     if _is_number_side(v.operand, right_kind, instruc)
@@ -1346,8 +1347,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       product = op == "*" ? "($(lms)) * ($(right_side))" : "($(lms)) * 1.0 / ($(right_side))"
       return _interval_round_sql(product, instruc.connection), _IntervalMs()
     end
-    sqlite && throw(_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "a value that is not a number (text, a boolean, a UUID)" : "a date or an interval")", instruc.connection))
-    return "($(left_side) $(op) $(right_side))", nothing
+    # #1572: on every engine, as above (`interval * interval`, `interval / varchar` fail on PostgreSQL).
+    # A temporal side is "a date or an interval", as the text always said (a time of day included); any
+    # other typed side (a boolean extremum) is no number, which the message said only for an untyped one.
+    temporal = _is_interval_kind(right_kind) || right_kind isa Union{CDate,CDateTime,CTime}
+    throw(_interval_error("`$(op)` between an interval and $(temporal ? "a date or an interval" : "a value that is not a number (text, a boolean, a UUID)")", instruc.connection))
   end
 
   # Any other operator (bitwise, …) has no interval meaning; the interval is its text, as before #881.
@@ -1401,6 +1405,10 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
       return "($(left_side) $(op) $(right_side))", nothing
     throw(_interval_error("`$(op)` with an interval on the right of a value that is not one", instruc.connection))
   end
+  # #1572: arithmetic has no meaning here on any engine (`double precision / interval` fails when the
+  # statement runs on PostgreSQL). A comparison keeps the SQL it had.
+  op in _ARITHMETIC_OPERATIONS &&
+    throw(_interval_error("`$(op)` with an interval on the right of a value that is not one", instruc.connection))
   return "($(left_side) $(op) $(right_side))", nothing
 end
 
@@ -1994,7 +2002,8 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
       end
       # `*` and `/`: a date times an interval has no meaning on either engine; on SQLite the
       # interval would be milliseconds, so it is refused there rather than multiplied.
-      right_kind isa _IntervalMs && throw(_interval_error("`$(v.operation)` between a date and an interval", instruc.connection))
+      # #1572: any interval, a stored `DurationField` column too (SQLite multiplied its text by the date's).
+      _is_interval_kind(right_kind) && throw(_interval_error("`$(v.operation)` between a date and an interval", instruc.connection))
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end
 
@@ -2014,10 +2023,10 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     if count_kind isa Union{CInt32,CInt64} && v.operation in ("+", "-")
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
-      # #881: PostgreSQL has no `integer ± interval` and fails when the statement runs.
-      if _is_interval_kind(right_kind) && _interval_as_ms(instruc.connection)
+      # #881: no meaning on any engine. #1572: PostgreSQL too, which has no `integer ± interval` and
+      # failed when the statement ran.
+      _is_interval_kind(right_kind) &&
         throw(_interval_error("`$(v.operation)` between a number and an interval", instruc.connection))
-      end
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" && throw(_count_minus_date_error())
         return _render_day_count_shift(right_side, right_kind, _day_count_sql(left_side, count_kind, instruc),

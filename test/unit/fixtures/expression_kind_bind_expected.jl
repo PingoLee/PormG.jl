@@ -3167,22 +3167,6 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Lag F ts - ts * 2 | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (LAG((\"R2_1\".\"start_at\" - \"R2_1\".\"start_at\"), \$4::integer) OVER (ORDER BY \"R2\".\"resultid\" ASC) * \$5::bigint) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
-  ("F interval * Cast time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" * (\"Tb_1\".\"start_at\")::time) > \$1", params = [("10", "Int64")]),
-  ("F interval * Cast time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" * (\"R2_1\".\"start_at\")::time) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("Cast time * F interval | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "((\"Tb_1\".\"start_at\")::time * \"Tb\".\"fastestlaptime\") > \$1", params = [("10", "Int64")]),
-  ("Cast time * F interval | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2_1\".\"start_at\")::time * \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F interval * Case time col | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" * CASE\nWHEN \"Tb\".\"grid\" = \$2 THEN \"Tb_1\".\"time\"\nELSE NULL\nEND\n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F interval * Case time col | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" * CASE\nWHEN \"R2\".\"grid\" = \$3 THEN \"R2_1\".\"time\"\nELSE NULL\nEND\n) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
-  ("F interval / Cast time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" / (\"Tb_1\".\"start_at\")::time) > \$1", params = [("10", "Int64")]),
-  ("F interval / Cast time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" / (\"R2_1\".\"start_at\")::time) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped date col + 1 | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Case untyped date col + 1 | alone", :mysql, "v__@gt", "date 2009-03-29") =>

@@ -543,9 +543,12 @@ from it, and both are intentional divergences:
   refuses the month or the year, which has no fixed count of microseconds, and builds the window
   function: it holds an interval as its microseconds, with no text to format.
 
-Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
-`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
-times an interval. SQLite and MySQL refuse them at build time with `QueryBuildError`.
+Some shapes have no meaning on any engine: `d * d`, `d / d`, `F("points") / d`, a number plus or minus
+an interval (`d + 5`, `count + d`), and a date times or divided by an interval. They raise
+`QueryBuildError` when the query is built, on PostgreSQL as on SQLite and MySQL. Comparing a number
+with an interval is not arithmetic, and is not refused here. A CTE interval column on the right of a
+float or text column is not refused yet
+([#1581](https://github.com/PingoLee/PormG.jl/issues/1581)).
 
 #### A duration as an interval value
 
@@ -591,18 +594,36 @@ The rest has no meaning and raises `QueryBuildError` on every engine, PostgreSQL
 - a date, a text column or an interval multiplied by a duration.
 
 The refusal is decided by the side's type. A side PormG cannot type is taken as a number, as it is for a
-`DurationField` column (`d * x`). On PostgreSQL, a side that is an interval PormG cannot name, such as
-`F("time") / F("time")` or `F("time") + 5`, still fails when the statement runs. It fails the same way on
-its own, without the duration (#1572).
+`DurationField` column (`d * x`). A side that is meaningless interval arithmetic itself, such as
+`F("time") / F("time")` or `F("time") + 5`, raises `QueryBuildError` where it is built, on every engine.
 
 A month or a year has no fixed length, so it is an interval value only on PostgreSQL, where an
 `interval` keeps months apart: `F("grid") * Month(1)` is `make_interval(months => …)` there. SQLite and
 MySQL raise `BackendCapabilityError` (`calendar_intervals` in [Backends](../backends.md)). A date
-shifted by a month (`F("date") + Month(1)`) is not a value, and builds on every engine. A month
-multiplied by a whole number stays months: `F("grid") * Month(1)` is seven months for a grid of 7. A
-month divided, or multiplied by a fraction, is what PostgreSQL makes of it. A month is 30 days there, so
-`Year(1) / F("grid")` over a grid of 7 is one month, 21 days and about 10 hours and 17 minutes. For
-calendar-exact arithmetic, scale by whole numbers.
+shifted by a month (`F("date") + Month(1)`) is not a value, and builds on every engine.
+
+A month value is multiplied by a whole number only, and never divided. `F("grid") * Month(1)` is seven
+months for a grid of 7. A month has 28 to 31 days, so 1.5 months, or a year over 7, has no single
+answer. On every engine, `QueryBuildError` is raised for:
+
+- a month multiplied by a float column, a `DecimalField` with decimal places, or arithmetic that is not
+  whole (`(F("grid") * 1.5) * Month(1)`);
+- a month divided by anything (`Year(1) / F("grid")`).
+
+(PostgreSQL would turn the fraction into days at 30 days a month.) The side's type decides, not its
+value. Whole means an integer column, integer arithmetic, or a `DecimalField` with `decimal_places = 0`.
+Integer division is whole too: `(F("grid") / 2) * Month(1)` takes the integer quotient.
+
+The rule follows the month through `F` arithmetic: `(F("grid") * Month(1)) * 1.5` and
+`(F("time") + Month(1)) / 2` are refused too. It does not follow a month through a function.
+`Max(F("grid") * Month(1)) * 1.5`, a `Coalesce`, a `Case` or a `Cast` over one, or a window function
+over one, still builds ([#1583](https://github.com/PingoLee/PormG.jl/issues/1583)). A stored or
+computed interval (a `DurationField` column, a CTE column, a `Subquery`) can hold months on
+PostgreSQL, but its type does not say so, so PormG does not refuse scaling it.
+
+A float column cannot be cast to an integer inline here: a function takes no duration. To scale by one,
+cast it to an integer in a CTE column and multiply that column. Or use a duration of fixed length,
+which any number scales: `Day(45) * F("points")`.
 
 Only `F(...)` expressions and `CTE(...)` columns take a duration this way. A function or a window
 function takes none: shift or scale the column inside the function (`Max(F("time") - Second(1))`).

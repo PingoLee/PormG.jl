@@ -1661,17 +1661,17 @@ end
   end
 
   # #881 overwrote the `F("lap") + 1` row on purpose. It pinned `"lap" + ?` on SQLite, which adds 1 to
-  # the stored text's leading HOURS. PostgreSQL has no `interval + integer` and fails when it runs, so
-  # SQLite refuses it at build time; PostgreSQL's SQL is unchanged.
-  @testset "a duration plus a number is refused on SQLite" begin
-    q = FD.Fd_result.objects
-    q.values("x" => F("lap") + 1)
-    err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-    @test err isa PormG.QueryBuildError
-    @test occursin("between an interval and a number is not supported on SQLite", sprint(showerror, err))
-    q_pg = FD.Fd_result.objects
-    q_pg.values("x" => F("lap") + 1)
-    @test occursin("(\"Tb\".\"lap\" + \$1::bigint)", _fd_sql(q_pg; conn = _FD_PG))
+  # the stored text's leading HOURS. PostgreSQL has no `interval + integer` and failed when it ran, so
+  # SQLite refused it at build time. #1572: PostgreSQL refuses it at build too, with the same text
+  # naming itself, where it rendered `"lap" + $1::bigint` before.
+  @testset "a duration plus a number is refused on every engine (#881, #1572)" begin
+    for (conn, name) in ((_FD_SL, "SQLite"), (_FD_PG, "PostgreSQL"))
+      q = FD.Fd_result.objects
+      q.values("x" => F("lap") + 1)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("between an interval and a number is not supported on $(name)", sprint(showerror, err))
+    end
   end
 end
 

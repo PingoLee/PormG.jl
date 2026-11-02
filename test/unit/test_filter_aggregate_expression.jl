@@ -973,17 +973,17 @@ end
         PormG.QueryBuilder.query(q; show_query = :sql)
         @test q.object.projection_kinds[:x] == PormG.CInterval()
       end
-      # The #953 extremum keeps its kind beside an interval, as before #965: refused on SQLite, where
-      # it would multiply milliseconds by 0/1, and untyped on PostgreSQL (review of #965).
-      for value in (() -> Max("dur") * Max("finished"), () -> Max("finished") * Max("dur"))
+      # The #953 extremum keeps its kind beside an interval, as before #965: a boolean, which is no
+      # number. Refused on SQLite, where it would multiply milliseconds by 0/1 (review of #965), and since
+      # #1572 on PostgreSQL too, which has no `interval * boolean` and failed when the statement ran.
+      # The message names a non-number, not "a date or an interval".
+      for (value, says) in ((() -> Max("dur") * Max("finished"), "between an interval and a value that is not a number"),
+                            (() -> Max("finished") * Max("dur"), "with an interval on the right of a value that is not one"))
         q = Dur_.objects
         q.values("lap", "x" => value())
-        if pg
-          PormG.QueryBuilder.query(q; show_query = :sql)
-          @test get(q.object.projection_kinds, :x, nothing) === nothing
-        else
-          @test_throws QueryBuildError PormG.QueryBuilder.query(q; show_query = :sql)
-        end
+        err = try PormG.QueryBuilder.query(q; show_query = :sql); nothing catch e; e end
+        @test err isa QueryBuildError
+        @test occursin(says, sprint(showerror, err))
       end
     end
 

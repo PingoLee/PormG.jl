@@ -2037,73 +2037,73 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag F ts - ts * 2 | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * Cast time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = "rooted: CInterval()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Cast time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval * Cast time | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval * Cast time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Cast time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval * Cast time | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval * Cast time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Cast time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval * Cast time | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("Cast time * F interval | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on PostgreSQL. An interval there is a time"),
   ("Cast time * F interval | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast time * F interval | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on MySQL. An interval there is a timestamp"),
   ("Cast time * F interval | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on PostgreSQL. An interval there is a time"),
   ("Cast time * F interval | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast time * F interval | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on MySQL. An interval there is a timestamp"),
   ("Cast time * F interval | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on PostgreSQL. An interval there is a time"),
   ("Cast time * F interval | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("Cast time * F interval | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` with an interval on the right of a value that is not one is not supported on MySQL. An interval there is a timestamp"),
   ("F interval * Case time col | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = "rooted: CInterval()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Case time col | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on SQLite. An interval there is a timestamp differenc"),
   ("F interval * Case time col | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval * Case time col | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Case time col | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on SQLite. An interval there is a timestamp differenc"),
   ("F interval * Case time col | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval * Case time col | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval * Case time col | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on SQLite. An interval there is a timestamp differenc"),
   ("F interval * Case time col | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`*` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval / Cast time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = "rooted: CInterval()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval / Cast time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval / Cast time | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`/` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval / Cast time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "QueryBuildError", message = "`/` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval / Cast time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval / Cast time | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`/` between an interval and a date or an interval is not supported on MySQL. An interval there is a timestamp difference"),
   ("F interval / Cast time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "`/` between an interval and a date or an interval is not supported on PostgreSQL. An interval there is a timestamp diffe"),
   ("F interval / Cast time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
   ("F interval / Cast time | subquery", :mysql) =>

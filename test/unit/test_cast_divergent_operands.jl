@@ -1744,8 +1744,10 @@ end
   _ccd_expect_untyped_quotient(nothing; named = "the CTE column",
               run = conn -> _ccd_sql(withcte(Fn.Cast(Fn.Case(Fn.When("rating" => 1.0, then = _CF("rating")),
                                                              default = PormG.CTE("c", "half")), "text")); conn = conn))
-  # `+` with an interval on the right of a number is SQLite's own refusal; PostgreSQL refuses the half.
-  @test occursin("(#1111)", _ccd_msg(_ccd_refusal(Fn.Cast(q() + Fn.Max("laptime"), "text"); conn = _CCD_PG)))
+  # `+` with an interval on the right of a number has no meaning on any engine: since #1572 PostgreSQL
+  # refuses the `+` itself (it has no `numeric + interval`) before the half is reached, as SQLite does.
+  @test occursin("`+` with an interval on the right of a value that is not one is not supported on PostgreSQL",
+                 _ccd_msg(_ccd_refusal(Fn.Cast(q() + Fn.Max("laptime"), "text"); conn = _CCD_PG)))
   # Beside an interval, a float or a decimal, on whichever side the quotient is: PostgreSQL refuses the
   # half (#1111). SQLite refuses the value as that interval (#1259, and in `Concat` #1028) or that
   # fraction (#1028, #1040, #1027).

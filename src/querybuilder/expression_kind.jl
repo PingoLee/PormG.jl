@@ -221,7 +221,9 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
   # else times one is refused there, so it has no kind. A duration on the LEFT (`Hour(1) - F("time")`,
   # `Minute(3) / F("lap")`) needs no arm: `_side_kind` names it an interval, so `_interval_left_kind`
   # types it below as it types a `DurationField` column.
+  # #1576: a month or a year scaled by a factor that is not whole is refused there too.
   if op == "*" && p.operand isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
+    _calendar_scale_refused(p.operand, op, p.field_name, instruc) && return nothing
     return _is_number_side(p.field_name, left, instruc) ? CInterval() : nothing
   end
   # #568: a bare integer beside a date is whole days.
@@ -249,7 +251,8 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
   end
   # #881: an interval on the right of a value that is neither a date nor an interval.
   if _typed_right_operand(p.operand, instruc)
-    right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) && return CInterval()
+    right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) &&
+      !_calendar_scale_refused(p.operand, op, p.field_name, instruc) && return CInterval()   # #1576
   end
   return nothing
 end
@@ -269,6 +272,8 @@ function _interval_left_kind(p::FExpression, right, instruc::SQLInstruction)
     right isa Union{CDate,CDateTime} && return p.operation == "+" ? (right isa CDate ? CDateTime(false) : right) : nothing
     return right isa CInterval ? CInterval() : nothing
   end
+  # #1576: a month the left carries, divided or scaled by a factor that is not whole.
+  _calendar_scale_refused(p.field_name, p.operation, p.operand, instruc) && return nothing
   return _is_number_side(p.operand, right, instruc) ? CInterval() : nothing
 end
 

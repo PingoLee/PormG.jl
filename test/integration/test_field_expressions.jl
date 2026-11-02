@@ -829,13 +829,12 @@ end
 
   # #1553 — a duration literal as an interval VALUE. Each lap of the 2009 Australian GP, lap 1 to 3:
   # `lap` (an integer) times 90 seconds, either way round; three minutes split across the lap number; the
-  # lap time less a second; four minutes less the lap time; and the race start shifted by the scaled
+  # lap time less a second; two minutes less the lap time; and the race start shifted by the scaled
   # duration. The oracle is the stored `milliseconds` and the lap number, computed in Julia: every value
   # reads back as a `Dates.CompoundPeriod` (a timestamp for the shift), on every engine. A month is a value
   # only on PostgreSQL (`calendar_intervals`): it reads back as the months it is, and SQLite and MySQL
-  # refuse it with `BackendCapabilityError`. Four minutes, not two, keeps every value positive: LibPQ reads
-  # a NEGATIVE interval with a fraction back with the fraction's sign lost (`-00:00:37.754` as -36.246 s),
-  # a driver defect older than #1553 and reproducible with `F("time") - F("time") * 2` (#1568).
+  # refuse it with `BackendCapabilityError`. A lap slower than two minutes makes `from_two` a negative
+  # interval with a fraction, which LibPQ read with the fraction's sign lost until #1568.
   @testset "a duration is an interval value: scaled, divided, beside an interval (#1553)" begin
     q = M.Lap_times.objects
     q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
@@ -844,7 +843,7 @@ end
              "flipped" => Dates.Second(90) * F("lap"),
              "split" => Dates.Minute(3) / F("lap"),
              "less" => F("time") - Dates.Second(1),
-             "from_four" => Dates.Minute(4) - F("time"),
+             "from_two" => Dates.Minute(2) - F("time"),
              "paced_at" => F("raceid__start_at") + F("lap") * Dates.Second(90))
     q.order_by("driverid", "lap")
     df = q |> DataFrame
@@ -854,8 +853,8 @@ end
     @test [Dates.toms(x) for x in df.flipped] == 90_000 .* df.lap
     @test [Dates.toms(x) for x in df.split] == [round(Int, 180_000 / l) for l in df.lap]
     @test [Dates.toms(x) for x in df.less] == df.milliseconds .- 1_000
-    @test all(>(0), 240_000 .- df.milliseconds)   # the premise of the comment above
-    @test [Dates.toms(x) for x in df.from_four] == 240_000 .- df.milliseconds
+    @test any(<(0), 120_000 .- df.milliseconds)   # the premise of the comment above
+    @test [Dates.toms(x) for x in df.from_two] == 120_000 .- df.milliseconds
     @test [Dates.DateTime(x) for x in df.paced_at] ==
           [Dates.DateTime(s) + Dates.Millisecond(90_000 * l) for (s, l) in zip(df.raceid__start_at, df.lap)]
 
@@ -905,6 +904,23 @@ end
     err = try q |> DataFrame; nothing catch e; e end
     @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
                    PormG.QueryBuildError : PormG.BackendCapabilityError)
+  end
+
+  # #1568 — a negative interval with a fraction of a second reads back exact. The 2009 Australian GP's
+  # laps 1 to 3 slower than 157 s: each lap time less twice itself is minus the lap time, a negative
+  # interval with milliseconds (`-00:02:37.754`). LibPQ.jl reads PostgreSQL's ISO 8601 text and lost the
+  # fraction's sign (`PT-2M-37.754S` as -156.246 s, with no error); Postgres.jl and the other engines read
+  # it right. The oracle is the stored `milliseconds`, negated in Julia. Run on both PostgreSQL drivers.
+  @testset "a negative interval with a fraction reads back exact, on every driver (#1568)" begin
+    q = M.Lap_times.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3, "milliseconds__@gte" => 157000)
+    q.values("driverid", "lap", "milliseconds", "neg" => F("time") - F("time") * 2)
+    q.order_by("driverid", "lap")
+    df = q |> DataFrame
+    @test size(df, 1) == 3   # 157754, 158132 and 184966 ms, each a lap 1
+    @test all(x -> x isa Dates.CompoundPeriod, df.neg)
+    @test any(!iszero, df.milliseconds .% 1000)   # the premise: a fraction to lose the sign of
+    @test [Dates.toms(x) for x in df.neg] == .-df.milliseconds
   end
 
   # #1301 — a `Case` whose value is a duration, in arithmetic. SQLite holds the value as its `HH:MM:SS`

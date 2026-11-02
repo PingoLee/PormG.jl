@@ -1544,8 +1544,8 @@ end
 # answers an integer, since the list types the value, not a comparison between engines (#1147). #1337:
 # an `EXTRACT` `QUARTER` is one, `EXTRACT(QUARTER FROM x)::integer` on PostgreSQL and MySQL's
 # `QUARTER(x)` an INT, as the `@quarter` transform already was.
-# The sub-second parts are fractional on PostgreSQL besides; `EPOCH` is a decimal, stated below
-# (`_epoch_extract`, #1457). Stated here because
+# `EPOCH`, the sub-second parts and `JULIAN` are decimals, stated below (`_decimal_extract_kind`,
+# #1457, #1552). Stated here because
 # `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
 # this list belongs once it does.
 const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
@@ -1558,16 +1558,31 @@ function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
 end
 
-# #1457 — `Extract(x, "EPOCH")` is a width-less decimal, the seconds with their fraction: PostgreSQL
-# renders `EXTRACT(EPOCH FROM x)::numeric` (`Dialect.EXTRACT`; `extract` is a `numeric` from 14 and a
-# `double precision` below, so the cast holds the type on every server), and MySQL's spelling is a
-# DECIMAL (`TIMESTAMPDIFF(MICROSECOND, …) / 1000000`, or a duration's microseconds over 10^6). SQLite
-# has no `EPOCH` part (`BackendCapabilityError`). Stated beside the integer parts for their reason:
-# `_result_rule(EXTRACT)` is `:unknown`, because the type is the part's.
-function _epoch_extract(p::Union{FObject,WindowFunction})::Bool
-  p.function_name == "EXTRACT" || return false
+# #1457, #1552 — the parts that are a decimal on every engine that has them, and SQLite has none of
+# them (`BackendCapabilityError`). PostgreSQL renders each `EXTRACT(… FROM x)::numeric`
+# (`Dialect.EXTRACT`; `extract` is a `numeric` from 14 and a `double precision` below, so the cast holds
+# the type on every server). Measured for #1552 on PostgreSQL 18.6, through LibPQ and Postgres.jl, and
+# on MySQL 8.4, each reading back as a `Decimal`:
+# - `EPOCH`, the seconds with their fraction; MySQL's spelling is a DECIMAL quotient
+#   (`TIMESTAMPDIFF(MICROSECOND, …) / 1000000`). A width-less decimal;
+# - `MILLISECONDS`, the seconds with their fraction, times 1000: PostgreSQL's `numeric` has 3 places
+#   (`1500.000`), MySQL's quotient over 1000 four. A width-less decimal: below a millisecond it has a
+#   fraction;
+# - `MICROSECONDS`, the seconds times 10^6: whole on both (PostgreSQL's scale 0, MySQL's
+#   `DECIMAL(65,0)`), so a zero-scale decimal (#1550), whose text is the integer's;
+# - `JULIAN` (PostgreSQL only; MySQL refuses it): the Julian day, whole over a date (`2454920`), with
+#   the fraction of the day over a timestamp (`2454920.25…`).
+# Stated beside the integer parts for their reason: `_result_rule(EXTRACT)` is `:unknown`, because the
+# type is the part's.
+function _decimal_extract_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind)::Union{CDecimal,Nothing}
+  p.function_name == "EXTRACT" || return nothing
   part = get(p.kwargs, "part", nothing)
-  return part isa AbstractString && Dialect.extract_part(part) == "EPOCH"
+  part isa AbstractString || return nothing
+  up = Dialect.extract_part(part)
+  up in ("EPOCH", "MILLISECONDS") && return CDecimal(nothing, nothing)
+  up == "MICROSECONDS" && return CDecimal(nothing, 0)
+  up == "JULIAN" && return CDecimal(nothing, _infer_kind(p.column, instruc, policy) isa CDate ? 0 : nothing)
+  return nothing
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name

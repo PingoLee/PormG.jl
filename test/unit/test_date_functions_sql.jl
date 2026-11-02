@@ -94,10 +94,10 @@ end
     # #571: PG-only parts that are fractional by definition are not cast to an integer — that would be
     # lossy and there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …)
     # casts. #1457: `EPOCH` is cast to `numeric`, the decimal PormG states for it on every server
-    # (`extract` is a `double precision` below PostgreSQL 14).
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "EPOCH"), _PG) == "EXTRACT(EPOCH FROM $(_COL))::numeric"
-    for part in ("JULIAN", "MILLISECONDS", "MICROSECONDS")
-      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))"
+    # (`extract` is a `double precision` below PostgreSQL 14). #1552: so are `JULIAN`, `MILLISECONDS` and
+    # `MICROSECONDS`, the other parts PormG states a decimal (`_decimal_extract_kind`).
+    for part in ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
+      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))::numeric"
     end
     @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
     # Lower-case is what the docs spell (`Extract("date", "year")`); the cast rule is case-blind,

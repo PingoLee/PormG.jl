@@ -1142,6 +1142,11 @@ A filter on the result is held to the part's range: `HOUR` 0–23, `MINUTE` and 
 `MONTH` 1–12, `DAY` 1–31, `QUARTER` 1–4, `WEEK` 1–53, `ISODOW` 1–7, `DOW` 0–6, `DOY` 1–366. A
 value outside it raises `InvalidValueError` rather than matching nothing.
 
+`EPOCH`, `MILLISECONDS`, `MICROSECONDS` and `JULIAN` are decimals on every engine that has them,
+read back as a `Decimal`; PostgreSQL renders them `EXTRACT(… FROM x)::numeric` (#1457, #1552).
+`MICROSECONDS`, and `JULIAN` of a date, are whole; the others carry a fraction, so `Concat` over one
+asks for a cast to text (#1027).
+
 To change the result type, wrap it in [`Cast`](@ref) — e.g. on PostgreSQL,
 `Cast(Extract("date", "epoch"), "bigint")`.
 """

@@ -490,7 +490,7 @@ refusal covers:
 - a `true`, `1.5`, `Decimal`, `DateTime` or `Period` literal;
 - an expression of one of those types: a comparison or `Q(...)` condition, arithmetic, an extremum
   or window value, a `Cast` to a float or a decimal, `Extract(x, "epoch")` (the seconds as a decimal,
-  #1457), `Sum` of a duration, and the functions
+  #1457), `Extract(x, "milliseconds")` and `JULIAN` over a timestamp (#1552), `Sum` of a duration, and the functions
   PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`). `Round` over
   an integer is that integer (#1196), so it passes;
 - a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so
@@ -1437,10 +1437,19 @@ The part must be one its column holds — `Extract("date", "hour")` on a `DateFi
 `QueryBuildError` — and a filter on the result is held to the part's range. Both rules are the
 transforms' rules: see [Which columns a transform reads](#Which-columns-a-transform-reads).
 
-To change the result type, wrap the extract in `Cast`. `EPOCH` is fractional: it is a decimal on
-PostgreSQL and MySQL, rendered `EXTRACT(EPOCH FROM x)::numeric` on PostgreSQL so that it is one on
-every server version (`extract` returns a `double precision` before PostgreSQL 14). For whole seconds,
-cast it:
+To change the result type, wrap the extract in `Cast`. Four parts are decimals on every engine that
+has them, and read back as a `Decimal`. PostgreSQL renders each `EXTRACT(… FROM x)::numeric`, so the
+type is the same on every server version (`extract` returns a `double precision` before PostgreSQL 14):
+
+| Part | Value | Whole? |
+| :--- | :--- | :--- |
+| `EPOCH` | the seconds, with their fraction | no |
+| `MILLISECONDS` | the seconds with their fraction, times 1000 (`1500.000`) | no: a fraction below a millisecond |
+| `MICROSECONDS` | the seconds times 10^6 (`1500000`) | yes |
+| `JULIAN` (PostgreSQL) | the Julian day | over a date; over a timestamp it has the fraction of the day |
+
+A fractional part is a decimal's text, so `Concat` refuses it (#1027, #1552) and asks for a cast to text.
+A whole one, like the integer parts, builds. For whole seconds, cast `EPOCH`:
 
 ```julia
 using PormG.Functions: Cast, Extract

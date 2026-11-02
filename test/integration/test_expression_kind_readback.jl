@@ -160,6 +160,29 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | subquery", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
   ("Extract epoch F time - time | alone", :postgres) => (type = "Decimal", value = "0", read = nothing),
   ("Extract epoch F time - time | subquery", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  # #1552: `MILLISECONDS`, `MICROSECONDS` and `JULIAN` are decimals too, so their cells are flagged the
+  # same read gap `EPOCH`'s are (no read kind is recorded; the driver delivers the `Decimal`). Race 1
+  # starts at `06:00:00` on 2009-03-29 (Julian day 2454920, a quarter into it at 06:00 UTC), so the
+  # sub-second parts read `0`. A CTE column over one builds now, typed `DecimalField`. SQLite has none of
+  # the three parts, and MySQL no `JULIAN`.
+  ("Extract milliseconds time | alone", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds time | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds time | subquery", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | alone", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | subquery", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract microseconds time | cte", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract julian date | cte", :postgres) => (type = "Decimal", value = "2454920", read = nothing),
+  ("Extract julian start_at | alone", :postgres) => (type = "Decimal", value = "2454920.25", read = nothing),
+  ("Extract julian start_at | cte", :postgres) => (type = "Decimal", value = "2454920.25", read = nothing),
+  ("Extract julian start_at | subquery", :postgres) => (type = "Decimal", value = "2454920.25", read = nothing),
+  ("Extract milliseconds time | alone", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds time | cte", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds time | subquery", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | alone", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | cte", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract milliseconds start_at | subquery", :mysql) => (type = "Decimal", value = "0", read = nothing),
+  ("Extract microseconds time | cte", :mysql) => (type = "Decimal", value = "0", read = nothing),
   # (#1457: the `Sum F int|bigint + epoch / 2` rows left this table when `EPOCH` became a decimal: the
   # walk names the sum, so the cells no longer disagree. They read back `Decimal` on PostgreSQL, as
   # recorded here before; `test_sql_functions.jl` reads `EPOCH` itself back against Julia.)

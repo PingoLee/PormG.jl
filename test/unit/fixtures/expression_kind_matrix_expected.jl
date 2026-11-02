@@ -8223,41 +8223,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case zero-scale cast + 1 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract milliseconds time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds time | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds time | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds time | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract microseconds time | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract microseconds time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: microseconds"),
   ("Extract microseconds time | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract microseconds time | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract microseconds time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: microseconds"),
   ("Extract microseconds time | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract microseconds time | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract microseconds time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: microseconds"),
   ("Extract microseconds time | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract second time | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract second time | alone", :sqlite) =>
@@ -8277,59 +8277,59 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract second time | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_second_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Extract julian date | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract julian date | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian date | alone", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract julian date | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract julian date | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian date | cte", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract julian date | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract julian date | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian date | subquery", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract julian start_at | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract julian start_at | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian start_at | alone", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract julian start_at | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract julian start_at | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian start_at | cte", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract julian start_at | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract julian start_at | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: julian"),
   ("Extract julian start_at | subquery", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for MySQL: julian"),
   ("Extract milliseconds start_at | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds start_at | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds start_at | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds start_at | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds start_at | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds start_at | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is EXTRACT(…), whose result type PormG cannot name. Name the type the column holds "),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds start_at | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Extract milliseconds start_at | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: milliseconds"),
   ("Extract milliseconds start_at | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
@@ -8453,6 +8453,42 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Round json key / 2 | subquery", :mysql) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Extract milliseconds time | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds time | alone", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds time | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds time | cte", :mysql) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds time | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds time | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract microseconds time | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal")],
+  ("Extract microseconds time | cte", :mysql) =>
+    [(:gap, "read=none vs cte_field=decimal")],
+  ("Extract julian date | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal")],
+  ("Extract julian start_at | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract julian start_at | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract julian start_at | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | alone", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | cte", :mysql) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Extract milliseconds start_at | subquery", :mysql) =>
+    [(:gap, "read=none vs textless=decimal")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

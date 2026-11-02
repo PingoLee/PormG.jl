@@ -9235,20 +9235,52 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = ? THEN CAST(\"R2\".\"grid\" AS NUMERIC(4,0))\nELSE ?\nEND\n + ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Extract milliseconds time | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) / 1000) > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds time | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) / 1000) > ?", params = [("\"10.5\"", "String")]),
   ("Extract milliseconds time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"time\") > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds time | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds time | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract milliseconds time | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds time | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract milliseconds time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract microseconds time | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) AS DECIMAL(65,0)) > ?", params = [("10", "Int64")]),
+  ("Extract microseconds time | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "CAST(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`time`) AS DECIMAL(65,0)) > ?", params = [("\"10.5\"", "String")]),
   ("Extract microseconds time | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(MICROSECONDS FROM \"Tb\".\"time\") > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(MICROSECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract microseconds time | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MICROSECONDS FROM \"Tb\".\"time\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract microseconds time | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract microseconds time | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract microseconds time | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract microseconds time | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) AS DECIMAL(65,0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract microseconds time | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(EXTRACT(SECOND_MICROSECOND FROM `R2`.`time`) AS DECIMAL(65,0)) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract microseconds time | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MICROSECONDS FROM \"R2\".\"time\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MICROSECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract microseconds time | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MICROSECONDS FROM \"R2\".\"time\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract second time | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "EXTRACT(SECOND FROM `Tb`.`time`) > ?", params = [("10", "Int64")]),
   ("Extract second time | alone", :postgres, "v__@gt", "10") =>
@@ -9268,19 +9300,51 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Extract second time | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(strftime('%S', \"R2\".\"time\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Extract julian date | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"date\") > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"date\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract julian date | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"date\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian date | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract julian date | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract julian date | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"date\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract julian date | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"date\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract julian start_at | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"start_at\") > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract julian start_at | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(JULIAN FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract julian start_at | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract julian start_at | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract julian start_at | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract julian start_at | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(JULIAN FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract milliseconds start_at | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`start_at`) / 1000) > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | alone", :mysql, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(EXTRACT(SECOND_MICROSECOND FROM `Tb`.`start_at`) / 1000) > ?", params = [("\"10.5\"", "String")]),
   ("Extract milliseconds start_at | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"start_at\") > \$1", params = [("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | alone", :postgres, "v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "EXTRACT(MILLISECONDS FROM \"Tb\".\"start_at\")::numeric > \$1", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | cte", :mysql, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("\"10.5\"", "String")]),
+  ("Extract milliseconds start_at | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("10", "Int64")]),
+  ("Extract milliseconds start_at | cte", :postgres, "g__v__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$1", params = [("\"10.5\"", "String")]),
   ("Extract milliseconds start_at | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`start_at`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds start_at | subquery", :mysql, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (EXTRACT(SECOND_MICROSECOND FROM `R2`.`start_at`) / 1000) as `t`\nFROM `race` as `R2`\nWHERE `R2`.`raceid` = `Tb`.`raceid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Extract milliseconds start_at | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"start_at\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Extract milliseconds start_at | subquery", :postgres, "w__@gt", "decimal 10.50") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    EXTRACT(MILLISECONDS FROM \"R2\".\"start_at\")::numeric as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
 )

@@ -471,8 +471,10 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
   # operand. Its rule stays `:unknown` until phase 3 states it, so the read kind is unchanged.
   _integer_transform(p) && return _integer_transform_kind(instruc.connection)
-  # #1457: `EPOCH` is a decimal on every engine that has it (`_epoch_extract`).
-  _epoch_extract(p) && return CDecimal(nothing, nothing)
+  # #1457, #1552: `EPOCH`, `MILLISECONDS`, `MICROSECONDS` and `JULIAN` are decimals on every engine
+  # that has them (`_decimal_extract_kind`).
+  decimal = _decimal_extract_kind(p, instruc, policy)
+  decimal === nothing || return decimal
   rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)

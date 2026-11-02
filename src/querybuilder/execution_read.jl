@@ -1029,9 +1029,9 @@ function _parsed_columns(columns, parsers::Dict{Symbol,Function})
 end
 
 # #564 / #582 — which result-row columns need a read-side parser on THIS connection, or `nothing`
-# when none does. The one selection both row terminals (`_list_raw`) and the Tables.jl source
-# (`Tables.columns(query)`, which `DataFrame(query)` reads) consult, so the two cannot disagree about
-# what is coerced.
+# when none does. The one selection the row terminals (`_list_raw`), the typed read (`list(T)`, #1544)
+# and the Tables.jl source (`Tables.columns(query)`, which `DataFrame(query)` reads) consult, so they
+# cannot disagree about what is coerced.
 #
 # The build records the canonical kind of each projection (`projection_kinds`), and the
 # representation table (`value_repr.jl`) says which parser undoes that kind on this backend. Django

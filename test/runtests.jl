@@ -206,6 +206,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Value Representation Property (#564)" include("unit/test_value_repr_property.jl")
     @testset "Column-wise Row Read (#1073)" include("unit/test_list_raw_columnwise_1073.jl")
     @testset "Typed read: list(T) / first(T) / get(T) (#1352)" include("unit/test_typed_read_1352.jl")
+    @testset "Typed read decodes driver columns into T (#1544)" include("unit/test_typed_read_columns_1544.jl")
     @testset "Query as a Tables.jl Source (#1344)" include("unit/test_tables_source.jl")
     @testset "No DataFrames or CSV in PormG; Internal Reads Use Rows (#1344)" include("unit/test_internal_rows_1344.jl")
     @testset "Bulk Writers Take Any Tables.jl Table (#1344)" include("unit/test_bulk_tables_input_1344.jl")

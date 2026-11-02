@@ -7,11 +7,12 @@
 # site types only what comes back, never the container's inside. Here the caller states the shape once,
 # and everything after the query is concrete.
 #
-# Step 1 of the issue, deliberately: the query path inside PormG stays what it is. The rows are the
-# `Dict{Symbol,Any}` rows `_list_raw` already reads, with the #564 projection parsers already applied,
-# so a `DateTimeField` arrives as the same `ZonedDateTime` it reads as in `list()`; this file only turns
-# them into `T`. Decoding straight from the driver's columns into `T` (step 2) waits on the benchmark
-# in `test/performance/read_path_list.jl`.
+# The rows are built straight from the driver's result (#1544, step 2 of the issue): its columns, or
+# SQLite's materialized `NamedTuple` rows, with the #564 projection parser of each column applied to its
+# cells, so a `DateTimeField` arrives as the same `ZonedDateTime` it reads as in `list()`. No
+# `Dict{Symbol,Any}` per row is built in between, which on PostgreSQL was most of a `list(T)` call
+# (`test/performance/read_path_list.jl`). Step 1 built `T` from `_list_raw`'s Dict rows; that path
+# (`_typed_rows` over a `Vector{Dict}`) remains, and the step-2 tests use it as their oracle.
 #
 # The three rules the maintainer chose (#1352):
 #   - COLUMNS ↔ FIELDS. With no `values(...)`, `list(T)` projects exactly `fieldnames(T)`. With
@@ -111,12 +112,103 @@ struct _TypedReadSite
   model::String
 end
 
+# Step 1's path: `T` from `Dict{Symbol,Any}` rows (`_list_raw`'s). No terminal reads through it since
+# #1544; it is the oracle the step-2 tests compare against, and its allocation test pins the cell rules.
 function _typed_rows(::Type{T}, rows::Vector{Dict{Symbol,Any}}, site::_TypedReadSite)::Vector{T} where T
   out = Vector{T}(undef, length(rows))
   for i in eachindex(rows)
     out[i] = _typed_row(T, rows[i], i, site)
   end
   return out
+end
+
+# ── Step 2 (#1544): the driver's result straight into `T` ──────────────────────────────────────────
+#
+# Step 1 read the `Dict{Symbol,Any}` rows `_list_raw` builds and turned each into a `T`. On
+# PostgreSQL those Dicts were most of a `list(T)` call — about 86% of its time and 94% of its bytes for
+# 100 000 five-column rows (`test/performance/read_path_list.jl`) — and step 2 skips them: the result's
+# columns are read once (`Tables.columntable`, the read `_rows_from_result` does) and each `T` is built
+# from them, with the #564 parser of a column applied to its cells and the cell rules above unchanged.
+#
+# ROW BY ROW over typed columns, not column by column, on purpose: the first refusal is the same cell
+# step 1 reports (rows in order, fields in declaration order), so step 1's refusal tests stay the
+# oracle, and no column is copied into an intermediate vector.
+function _typed_rows(::Type{T}, result, parsers::Union{Nothing,Dict{Symbol,Function}}, site::_TypedReadSite)::Vector{T} where T
+  columns = Tables.columntable(result)
+  # An empty result can name no column at all (MySQL's materialized result when the driver reports no
+  # schema), and its columns are never read.
+  Tables.rowcount(columns) == 0 && return T[]
+  # The generated loop indexes every column `1:n`; step 1 zipped them. Every driver's column is 1-based
+  # today, and a driver whose column is not fails here rather than reading the wrong cells.
+  Base.require_one_based_indexing(values(columns)...)
+  return _typed_rows_from_columns(T, columns, _typed_parsers(T, parsers), site)
+end
+
+# The parser of each field's column, in field order: `nothing` where none applies. A field's column is
+# keyed by the field's name (the projection is exactly `fieldnames(T)`), and a parser keyed by any
+# other name (the wildcard recorder's `db_column` spelling) never fires, as in `_rows_from_result`.
+_typed_parsers(::Type{T}, ::Nothing) where T = ntuple(_ -> nothing, Val(fieldcount(T)))
+_typed_parsers(::Type{T}, parsers::Dict{Symbol,Function}) where T =
+  Tuple(Base.get(parsers, name, nothing) for name in fieldnames(T))
+
+@inline _typed_parse(::Nothing, v) = v
+@inline _typed_parse(parser::F, v) where F = parser(v)
+
+# The function barrier: `columns` and `parsers` arrive concretely typed, so each column read, parser
+# call and cell rule below is static. GENERATED for `_typed_row`'s reason: one `_typed_value` call per
+# field, written out, each typed by its own field and its own column.
+@generated function _typed_rows_from_columns(::Type{T}, columns::NamedTuple, parsers::Tuple,
+                                             site::_TypedReadSite)::Vector{T} where T
+  n = fieldcount(T)
+  col = [Symbol(:col_, k) for k in 1:n]
+  par = [Symbol(:par_, k) for k in 1:n]
+  binds = Expr[]
+  for k in 1:n
+    push!(binds, :($(col[k]) = getfield(columns, $(QuoteNode(fieldname(T, k))))))
+    push!(binds, :($(par[k]) = parsers[$k]))
+  end
+  cells = [:(_typed_value($(fieldtype(T, k)), _typed_parse($(par[k]), $(col[k])[i]),
+                          $(QuoteNode(fieldname(T, k))), i, site)) for k in 1:n]
+  build = T <: NamedTuple ? :(T(($(cells...),))) : :(T($(cells...)))
+  return quote
+    $(binds...)
+    out = Vector{T}(undef, length($(col[1])))
+    for i in eachindex(out)
+      out[i] = $build
+    end
+    return out
+  end
+end
+
+# SQLite's result is already rows (`_sqlite_execute_materialized`): a `Vector` of `NamedTuple`s, each
+# its own type, since SQLite types each cell. Read by column, each column would be re-derived by
+# widening (#1073 measured that slower than the row walk), so the rows are read as rows, and each `T`
+# is built straight from its `NamedTuple`, with no Dict. `_typed_row_from_namedtuple` compiles once
+# per distinct row type: when every row has the same one the vector is concretely typed and the walk
+# is static; a NULL makes another row type, and then each row costs one dynamic call, which boxes its
+# arguments and its row (about 3 allocations a row). Measured on 100 000 five-integer rows with no NULL:
+# 3 allocations and 3.5 ms, against 500 006 and 65 ms for step 1's Dict rows; on 10 000 rows mixing NULL
+# and values, about 29 500 allocations against step 1's ~5 a row.
+function _typed_rows(::Type{T}, result::AbstractVector{<:NamedTuple}, parsers::Union{Nothing,Dict{Symbol,Function}},
+                     site::_TypedReadSite)::Vector{T} where T
+  return _typed_rows_from_namedtuples(T, result, _typed_parsers(T, parsers), site)
+end
+
+function _typed_rows_from_namedtuples(::Type{T}, rows::AbstractVector{<:NamedTuple}, parsers::P,
+                                      site::_TypedReadSite)::Vector{T} where {T,P<:Tuple}
+  out = Vector{T}(undef, length(rows))
+  for (i, row) in enumerate(rows)
+    out[i] = _typed_row_from_namedtuple(T, row, parsers, i, site)
+  end
+  return out
+end
+
+@generated function _typed_row_from_namedtuple(::Type{T}, row::NamedTuple, parsers::Tuple, i::Int,
+                                               site::_TypedReadSite)::T where T
+  cells = [:(_typed_value($(fieldtype(T, k)),
+                          _typed_parse(parsers[$k], getfield(row, $(QuoteNode(fieldname(T, k))))),
+                          $(QuoteNode(fieldname(T, k))), i, site)) for k in 1:fieldcount(T)]
+  return T <: NamedTuple ? :(T(($(cells...),))) : :(T($(cells...)))
 end
 
 # One row: one `_typed_value(fieldtype(T, k), row[:name_k], …)` call per field, written out, then the
@@ -147,9 +239,10 @@ end
 # What a field holds once NULL is set aside: `Union{Nothing,Int64}` holds `Int64`.
 _typed_held(::Type{FT}) where FT = Base.nonmissingtype(Base.nonnothingtype(FT))
 
-# The conversion rules, for a concrete `X` (`_check_typed_read_target` refuses any other). The column
-# arrives as `Any` (a `Dict{Symbol,Any}` cell), so the driver types the rules see are tested one by one
-# — a union split by hand. Each arm then runs on a concrete source type and returns a concrete `X`, so
+# The conversion rules, for a concrete `X` (`_check_typed_read_target` refuses any other). A cell can
+# arrive as `Any` (a `Dict{Symbol,Any}` cell on step 1's path, a parser's untyped result), so the driver
+# types the rules see are tested one by one — a union split by hand, which costs nothing when the cell
+# is already concrete (a typed column, #1544). Each arm then runs on a concrete source type and returns a concrete `X`, so
 # a converted cell allocates nothing: a generic `convert(X, v::Any)` was a dynamic call returning a
 # boxed value, and on PostgreSQL, where an `IntegerField` arrives as `Int32`, that was seven allocations
 # a row on a five-column read (`test/performance/read_path_list.jl`). Anything the arms do not name
@@ -272,7 +365,9 @@ Base.@constprop :aggressive function list(objct::SQLObjectHandler, ::Type{T}; sh
   q = _typed_query(objct, T)
   show_query !== :execute && return query_list(q, show_query=show_query)
   # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
-  return _typed_rows(T, _list_raw(q), _TypedReadSite("a typed read into $(T)", q.object.model.name))
+  result, built, connection = _execute_select(q)
+  return _typed_rows(T, result, _projection_parsers(built, connection),
+                     _TypedReadSite("a typed read into $(T)", q.object.model.name))
 end
 
 """

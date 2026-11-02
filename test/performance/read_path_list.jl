@@ -118,13 +118,15 @@ report(stdout, measure(ROUNDS))
 
 ## ── The typed read (#1352) at 1k and 100k rows ───────────────────────────────────────────────────
 ##
-## `list(T)` is step 1 of #1352: the `Dict{Symbol,Any}` rows `list(:dict)` builds, then one `T` per
-## row. Step 2 — decoding the driver's columns straight into `T` — would save the Dict per row and
-## nothing else, so the steps below split a `list(T)` call into the parts that decision needs:
+## Step 1 of #1352 built `list(T)` from the `Dict{Symbol,Any}` rows `list(:dict)` builds, then one `T`
+## per row. Step 2 (#1544) decodes the driver's result straight into `T`, with no Dict per row. The
+## steps below split a `list(T)` call so both paths read the same result:
 ##
 ##   execute        — build + fetch, as above;
-##   Dict rows      — `_rows_from_result` over that result: what step 2 would remove;
-##   T rows         — `_typed_rows` over those Dicts: the conversion `list(T)` adds to `list(:dict)`;
+##   Dict rows      — `_rows_from_result` over that result: what step 1 built and step 2 skips;
+##   T rows         — `_typed_rows` over those Dicts: step 1's conversion;
+##   T from result  — `_typed_rows` over the driver's result: step 2's whole decode (left out on a
+##                    build from before #1544, so the same script gives the before column);
 ##   list(:dict), list(T), list() — the terminals end to end.
 ##
 ## A `Lap_times` read ordered by its natural key, five integer columns, at `limit(n)`. Rounds are
@@ -145,14 +147,16 @@ function typed_report(io::IO, n::Int, rounds::Int)
   end
   dicts = QB._rows_from_result(held.result, held.parsers)
   site = QB._TypedReadSite("list(LapRow1352)", "Lap_times")
-  steps = (
+  steps = Tuple(filter(!isnothing, [
     ("execute (build + fetch)", () -> QB._execute_select(q())),
     ("Dict rows (_rows_from_result)", () -> QB._rows_from_result(held.result, held.parsers)),
     ("T rows (_typed_rows over the Dicts)", () -> QB._typed_rows(LapRow1352, dicts, site)),
+    isdefined(QB, :_typed_parsers) ?
+      ("T from result (step 2, #1544)", () -> QB._typed_rows(LapRow1352, held.result, held.parsers, site)) : nothing,
     ("list(:dict)", () -> q().list(:dict)),
     ("list(T)", () -> q().list(LapRow1352)),
     ("list()", () -> q().list()),
-  )
+  ]))
   for (_, f) in steps, _ in 1:2
     _alloc(f); _time_ns(f)
   end

@@ -1,5 +1,5 @@
 """
-Unit coverage for a `.with(...)` declared INSIDE a subquery (#433, #1292, #1523).
+Unit coverage for a `.with(...)` declared INSIDE a subquery (#433, #1292, #1523, #1557).
 
 The contract: every consumer BUILDS — `Subquery(...)`, `"col__@in" => sub` / `__@nin` and
 `Exists(...)`. The nested `WITH` renders inside the subquery's parentheses, and its values bind in
@@ -40,6 +40,10 @@ What is pinned here (deterministic, DB-free — rendered via `inspect_query` on 
     spellings, and the message names that rule. A CTE on the outer query beside a subquery that
     does not reference it is legal. Together these pin every shape the *Rules and limitations*
     list in `docs/src/read/subqueries_and_ctes.md` states.
+  - #1557: an `OuterRef` in a CTE **body** is refused under `Exists`, `Subquery`, `__@in` and at top
+    level with a message naming the CTE and the rule (a body is built with no enclosing query), bare
+    and wrapped; the remedy the message prints builds, and an `OuterRef` outside a CTE body keeps
+    its old text.
 
 Sibling coverage:
   - `test_cte_ergonomics.jl` (#44)            -> CROSS-joined CTEs and `F()` correlation.
@@ -828,5 +832,192 @@ end
     @test occursin("as \"pid\"", insp[:sql_text])
     # CTE body first, then the subquery's value — text order, on both engines.
     @test insp[:parameters] == ["CTEVAL", "PLAINVAL"]
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1557: an `OuterRef` in a CTE BODY is refused with the rule, not with "build a correlated subquery"
+# `build_cte_clause` builds each body as a query of its own, with no enclosing query, even when the
+# CTE belongs to a subquery under `Exists`, `Subquery` or `__@in`. The refusal used to tell a user
+# already inside an `Exists` to build one; it now names the CTE, the rule and where the correlation
+# goes. The contract is a refusal (maintainer decision on #1557), not resolution against the
+# subquery's enclosing query.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import PormG.QueryBuilder: Lower
+
+# A CTE body that reaches for the outer row: `ncg_grand.code` against the outer child's `note`.
+_ncg_correlated_body(; wrapped = false) = begin
+  g = NCG.Ncg_grand.objects
+  if wrapped
+    g.values("id", "code", "lc" => Lower(OuterRef("note")))
+  else
+    g.filter("code" => OuterRef("note"))
+    g.values("id", "code")
+  end
+  g
+end
+
+# The subquery declaring that CTE, correlated on its own filter as an `Exists` usually is.
+_ncg_inner_correlated_body(; wrapped = false) = begin
+  s = NCG.Ncg_parent.objects
+  s.with("gv" => _ncg_correlated_body(wrapped = wrapped), join_field = "grandparent" => "id")
+  s.filter("id" => OuterRef("parent"))
+  s.values("id")
+  s
+end
+
+const _NCG_CTE_BODY_OUTERREF = [
+  ("Exists(...) in a filter", (; kw...) -> begin
+    q = NCG.Ncg_child.objects
+    q.filter(Exists(_ncg_inner_correlated_body(; kw...)))
+    q.values("note")
+    q
+  end),
+  ("Subquery(...) projected", (; kw...) -> begin
+    q = NCG.Ncg_child.objects
+    q.values("note", "pid" => Subquery(_ncg_inner_correlated_body(; kw...)))
+    q
+  end),
+  ("__@in membership", (; kw...) -> begin
+    q = NCG.Ncg_child.objects
+    q.filter("parent__@in" => _ncg_inner_correlated_body(; kw...))
+    q.values("note")
+    q
+  end),
+]
+
+# Where the declaring query has no enclosing query, there is nowhere up the chain to move the
+# `OuterRef` to, so the text must not print the remedy (it would send the user to a second refusal).
+const _NCG_CTE_BODY_UNCORRELATED = [
+  ("a top-level query's CTE", "gv", (; kw...) -> begin
+    q = NCG.Ncg_parent.objects
+    q.with("gv" => _ncg_correlated_body(; kw...), join_field = "grandparent" => "id")
+    q.values("sku", "gv__code")
+    q
+  end),
+  ("a CTE inside another CTE's body", "deep", (; kw...) -> begin
+    mid = NCG.Ncg_grand.objects
+    mid.with("deep" => _ncg_correlated_body(; kw...), join_field = "id" => "id")
+    mid.values("id", "code")
+    q = NCG.Ncg_parent.objects
+    q.with("gv" => mid, join_field = "grandparent" => "id")
+    q.values("sku", "gv__code")
+    q
+  end),
+  # The same nesting under an `Exists`: "deep" is declared by `mid`'s body, which has no enclosing
+  # query although the subquery holding `mid` does, so the flag is decided per level and not inherited.
+  ("a CTE inside another CTE's body, under Exists", "deep", (; kw...) -> begin
+    mid = NCG.Ncg_grand.objects
+    mid.with("deep" => _ncg_correlated_body(; kw...), join_field = "id" => "id")
+    mid.values("id", "code")
+    s = NCG.Ncg_parent.objects
+    s.with("gv" => mid, join_field = "grandparent" => "id")
+    s.filter("id" => OuterRef("parent"))
+    s.values("id")
+    q = NCG.Ncg_child.objects
+    q.filter(Exists(s))
+    q.values("note")
+    q
+  end),
+]
+
+# The new text names the CTE and the rule; the old one ("such as Exists(subquery)") named neither.
+_ncg_names_cte_body(msg, name) =
+  occursin("is in the body of CTE \"$(name)\"", msg) &&
+  occursin("a CTE body has no enclosing query", msg) &&
+  !occursin("such as Exists(subquery)", msg)
+# Under a correlated declaring query, it also names where the expression goes.
+_ncg_names_cte_body_rule(msg) =
+  _ncg_names_cte_body(msg, "gv") &&
+  occursin("filter(\"gv__<column>\" => OuterRef(\"note\"))", msg)
+
+@testset "an OuterRef in a CTE body is refused with the rule, under Exists, Subquery and __@in (#1557)" begin
+  # Expected: `QueryBuildError` whose text names CTE "gv", says a CTE body has no enclosing query even
+  # inside a correlated subquery, and points at `filter("gv__<column>" => OuterRef("note"))`. Why:
+  # the CTE body is built with no `outer` (`build_cte_clause`), so the old text, "can only be
+  # resolved while building a correlated subquery such as Exists(subquery)", sent a user already
+  # inside an `Exists` the wrong way. Bare and wrapped (`Lower(OuterRef(...))` projected), because
+  # both reach the one refusal point (`_get_filter_query(::OuterRefObject)`).
+  for (backend, conn) in _NCG_BACKENDS, (label, build_q) in _NCG_CTE_BODY_OUTERREF, wrapped in (false, true)
+    @testset "$backend, $label, $(wrapped ? "wrapped" : "bare")" begin
+      err = _ncg_err(() -> build_q(wrapped = wrapped), conn)
+      @test err isa PormG.QueryBuildError
+      @test _ncg_names_cte_body_rule(sprint(showerror, err))
+    end
+  end
+end
+
+@testset "an OuterRef in a CTE body whose declaring query is not correlated is refused without a remedy (#1557)" begin
+  # Expected: `QueryBuildError` naming the CTE whose body holds the `OuterRef` ("gv" at top level,
+  # "deep" for a CTE inside a CTE body), saying the declaring query has no enclosing query either, and
+  # NOT printing `filter("<cte>__<column>" => OuterRef(…))`. Why: in the declaring query that advice
+  # raises again ("such as Exists(subquery)" at top level, the same refusal for `mid`'s body), so a
+  # message that prints it sends the user to a second refusal.
+  for (backend, conn) in _NCG_BACKENDS, (label, name, build_q) in _NCG_CTE_BODY_UNCORRELATED, wrapped in (false, true)
+    @testset "$backend, $label, $(wrapped ? "wrapped" : "bare")" begin
+      err = _ncg_err(() -> build_q(wrapped = wrapped), conn)
+      @test err isa PormG.QueryBuildError
+      msg = sprint(showerror, err)
+      @test _ncg_names_cte_body(msg, name)
+      @test occursin("The query that declares the CTE has no enclosing query either", msg)
+      @test !occursin("__<column>", msg)
+    end
+  end
+end
+
+@testset "an OuterRef outside any CTE body keeps its message, and the #1557 remedy builds" begin
+  # Expected: (1) a top-level `filter("code" => OuterRef("note"))` still says "such as
+  # Exists(subquery)", which IS the fix there; (2) the remedy the refusal names, correlating in the
+  # subquery's own filter on the CTE's column, builds as `"R?_1"."code" = "Tb"."note"` inside the
+  # EXISTS; (3) an `OuterRef` in a subquery INSIDE a CTE body resolves against that body. Why: the
+  # marker must only change the text for an `OuterRef` in a CTE body, and the remedy it prints has to
+  # be a query that actually builds.
+  for (backend, conn) in _NCG_BACKENDS
+    @testset "$backend" begin
+      top = _ncg_err(() -> begin
+        q = NCG.Ncg_grand.objects
+        q.filter("code" => OuterRef("note"))
+        q.values("id")
+        q
+      end, conn)
+      @test top isa PormG.QueryBuildError
+      msg = sprint(showerror, top)
+      @test occursin("such as Exists(subquery)", msg)
+      @test !occursin("body of CTE", msg)
+
+      remedy = _ncg_sql(() -> begin
+        s = NCG.Ncg_parent.objects
+        s.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+        s.filter("id" => OuterRef("parent"), "gv__code" => OuterRef("note"))
+        s.values("id")
+        q = NCG.Ncg_child.objects
+        q.filter(Exists(s))
+        q.values("note")
+        q
+      end, conn)
+      @test occursin(_NCG_EXISTS_WITH, remedy[:sql_text])
+      @test occursin(r"[\"`]R\d+_1[\"`]\.[\"`]code[\"`] = [\"`]Tb[\"`]\.[\"`]note[\"`]", remedy[:sql_text])
+      @test remedy[:parameters] == ["CTEVAL"]
+
+      inside = _ncg_sql(() -> begin
+        kids = NCG.Ncg_parent.objects
+        kids.filter("grandparent" => OuterRef("id"))
+        g = NCG.Ncg_grand.objects
+        g.filter(Exists(kids))
+        g.values("id", "code")
+        q = NCG.Ncg_parent.objects
+        q.with("gv" => g, join_field = "grandparent" => "id")
+        q.values("sku", "gv__code")
+        q
+      end, conn)
+      @test startswith(inside[:sql_text], "WITH \"gv\" AS (")
+      # The correlation binds the body's own alias (the `ncg_grand` row), not the declaring query's.
+      body_alias = match(r"FROM [\"`]ncg_grand[\"`] as [\"`](\w+)[\"`]", inside[:sql_text])
+      @test body_alias !== nothing
+      body_alias === nothing ||
+        @test occursin(Regex("[\"`]R\\d+[\"`]\\.[\"`]grandparent[\"`] = [\"`]$(body_alias[1])[\"`]\\.[\"`]id[\"`]"),
+                       inside[:sql_text])
+    end
   end
 end

@@ -634,11 +634,14 @@ Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
   `ctes` field comment in `types.jl` for why a plain `Dict` was not enough.
 - `connection`: Database connection for quoting identifiers
 - `parameters`: Parameterized query object to collect all parameters
+- `correlated`: the declaring query has an enclosing query (`Exists`, `Subquery`, `__@in`), so the
+  `OuterRef` refusal in a body can point at it (#1557)
 
 # Returns
 - String containing the WITH clause SQL, or empty string if no CTEs
 """
-function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias})
+function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias};
+                          correlated::Bool = false)
   isempty(ctes) && return ""
 
   @pormg_debug false
@@ -671,7 +674,8 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
     cte_sql = with_bucket(parameters, :cte) do
       nested_mark = nested_parameter_mark(parameters)
       # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
-      sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields)
+      sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields,
+                  cte_body=cte_name, cte_body_correlated=correlated)
       reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
       sql
     end

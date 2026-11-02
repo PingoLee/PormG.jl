@@ -2188,12 +2188,15 @@ mutable struct DeletionCollector{T}
   # `finally`. Read only for its depth (`MAX_CASCADE_DEPTH`) and to name the path in the error —
   # see the guard in `deletion.jl` for why membership is deliberately NOT what is checked (#459 (b)).
   traversal_path::Vector{PormGModel}
+  # The root model's self-referential CASCADE was walked by keys, level by level (#1377), so this plan
+  # covers one level and does not descend that relation again.
+  skip_self_cascade::Bool
 
   # The seeded literals below must match the field annotations. They used to disagree for
   # `field_updates` and `fast_deletes` (both were seeded `Dict{PormGModel,Dict{Symbol,String}}`),
   # which compiled only because assignment converts — so the constructor documented a shape the
   # struct did not have.
-  DeletionCollector(model, settings, show_query=:execute) = new{Union{String,SQLObjectHandler}}(
+  DeletionCollector(model, settings, show_query=:execute, skip_self_cascade::Bool=false) = new{Union{String,SQLObjectHandler}}(
     model,
     settings,
     settings.connections,
@@ -2204,6 +2207,7 @@ mutable struct DeletionCollector{T}
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
     Vector{PormGModel}(),
     show_query,
-    Vector{PormGModel}()
+    Vector{PormGModel}(),
+    skip_self_cascade
   )
 end

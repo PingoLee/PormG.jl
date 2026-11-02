@@ -21,7 +21,8 @@ Shapes:
   - a self-referential SET_NULL / SET_DEFAULT key, and a cycle through a child: the statement targets
     a model already in the cascade. `topological_sort` refused these as a cycle until #1374, which
     stopped a SET_NULL / SET_DEFAULT relation from ordering the deletes; the key read is what keeps
-    them right, and each now gives Django's result. A self-referential CASCADE is still refused;
+    them right, and each now gives Django's result. A self-referential CASCADE is walked by keys and
+    deleted deepest level first (#1377);
   - controls: the same schemas over rows that do not cycle, and an unfiltered delete, which keeps its
     statements.
 
@@ -69,6 +70,13 @@ Ln_lineage_cascade = Models.Model("ln_lineage_cascade",
   name        = Models.CharField(),
   predecessor = Models.ForeignKey("Ln_lineage_cascade", on_delete = "CASCADE", related_name = "successors", null = true),
 )
+# The cascade lineage's drivers, with no constraint (`db_constraint = false`): only PormG's statements
+# delete them, so a driver left behind shows a DELETE whose scope read rows already gone (#1377).
+Ln_lineage_driver = Models.Model("ln_lineage_driver",
+  id      = Models.IDField(),
+  surname = Models.CharField(),
+  team    = Models.ForeignKey(Ln_lineage_cascade, on_delete = "CASCADE", related_name = "drivers", db_constraint = false),
+)
 Ln_team = Models.Model("ln_team",
   id               = Models.IDField(),
   name             = Models.CharField(),
@@ -108,15 +116,21 @@ _ln_caught(f) = try f(); nothing catch e; e end
 _ln_key_read(conn) = conn isa PormG.PormGSQLite ? :select : :lock
 
 function _ln_reset!()
-  for t in (_LN_LINEAGES..., "ln_driver", "ln_team", "ln_squad_driver", "ln_squad")
+  for t in (_LN_LINEAGES..., "ln_lineage_driver", "ln_driver", "ln_team", "ln_squad_driver", "ln_squad")
     fetch(_LN_POOL, "DROP TABLE IF EXISTS $(t);")
   end
-  # Tyrrell <- BAR <- Honda <- Brawn in every lineage table. No ON DELETE clause: only PormG's
-  # statements act on the rows.
+  # Tyrrell <- BAR <- Honda <- Brawn in every lineage table. No ON DELETE clause on the SET_NULL /
+  # SET_DEFAULT ones: only PormG's statements act on the rows. The CASCADE lineage's key carries
+  # `ON DELETE CASCADE`, as PormG's migrations write it (#1377): a DELETE of a row that still has
+  # children then makes the database delete them too, which the walk's order must never let happen.
   for t in _LN_LINEAGES
-    fetch(_LN_POOL, "CREATE TABLE $(t) (id INTEGER PRIMARY KEY, name TEXT NOT NULL, predecessor INTEGER REFERENCES $(t) (id));")
+    on_delete = t == "ln_lineage_cascade" ? " ON DELETE CASCADE" : ""
+    fetch(_LN_POOL, "CREATE TABLE $(t) (id INTEGER PRIMARY KEY, name TEXT NOT NULL, predecessor INTEGER REFERENCES $(t) (id)$(on_delete));")
     fetch(_LN_POOL, "INSERT INTO $(t) (id, name, predecessor) VALUES (1, 'Tyrrell', NULL), (2, 'BAR', 1), (3, 'Honda', 2), (4, 'Brawn', 3);")
   end
+  # Stewart races for Tyrrell, Barrichello for Honda, Button for Brawn.
+  fetch(_LN_POOL, "CREATE TABLE ln_lineage_driver (id INTEGER PRIMARY KEY, surname TEXT NOT NULL, team INTEGER NOT NULL);")
+  fetch(_LN_POOL, "INSERT INTO ln_lineage_driver (id, surname, team) VALUES (10, 'Stewart', 1), (30, 'Barrichello', 3), (40, 'Button', 4);")
   # Tyrrell has no favourite driver. McLaren's is Stewart, who races for Tyrrell. Williams's is its own.
   for (team, driver) in (("ln_team", "ln_driver"), ("ln_squad", "ln_squad_driver"))
     fetch(_LN_POOL, "CREATE TABLE $(team) (id INTEGER PRIMARY KEY, name TEXT NOT NULL, favourite_driver INTEGER);")
@@ -279,17 +293,213 @@ end
   @test _ln_rows("ln_driver") == [(20, "Senna", 2), (30, "Mansell", 3)]
 end
 
-# What: a self-referential CASCADE under a filter on the root's own name.
-# SQL: none on the live pool; the same refusal.
-# Why: the control for the shapes above. A CASCADE relation orders the deletes, so a self-referential
-#      one with dependent rows is still a cycle (`docs/src/backends.md`).
-@testset "a self-referential CASCADE with dependent rows is refused (#1370)" begin
+# ─────────────────────────────────────────────────────────────────────────────
+# A self-referential CASCADE: walked by keys, deepest level first (#1377)
+#
+# A CASCADE relation orders the deletes, so a self-referential one used to be a cycle and was refused.
+# The delete's own model is now walked by keys: one read per level below the root's keys, each child
+# with its parent, every key on its deepest level, then one plan per level, deepest first. The tree's
+# key carries `ON DELETE CASCADE`, as PormG's migrations write it, and its drivers no constraint, so a
+# DELETE that ran while a row still had children would show as a short count or a driver left behind.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ln_cascade(name) = (q = LN.Ln_lineage_cascade.objects; q.filter("name" => name); q)
+_ln_cascade_ids() = [r[1] for r in _ln_rows("ln_lineage_cascade")]
+_ln_driver_ids() = [r[1] for r in _ln_rows("ln_lineage_driver")]
+_ln_tree_deletes(q) = [s[:parameters] for s in _ln_steps(q, nothing) if s[:operation] == :delete && s[:model] == "ln_lineage_cascade"]
+
+# What: an inner node, Honda, whose successor is Brawn; each has a driver.
+# SQL: the key read `… WHERE "Tb"."name" = ?`, the level reads `SELECT "Tb"."id", "Tb"."predecessor"
+#      FROM "ln_lineage_cascade" AS "Tb" WHERE "Tb"."predecessor" IN (?)` with Honda's key, then
+#      Brawn's (which finds none), then Brawn's driver and Brawn, then Honda's driver and Honda.
+# Why: Django deletes Honda, Brawn and both drivers. The deepest row goes first, so the database's own
+#      ON DELETE CASCADE never fires and no engine needs a deferred key.
+@testset "a self-referential CASCADE deletes an inner node, its descendants and their drivers, deepest first (#1377)" begin
   _ln_reset!()
-  _ln_assert_refused(Dict("ln_lineage_cascade" => _LN_LINEAGE_ROWS)) do
-    q = LN.Ln_lineage_cascade.objects
-    q.filter("name" => "Honda")
-    q
+  steps = _ln_steps(_ln_cascade("Honda"), nothing)
+  @test _ln_ops(steps) == [(:select, "ln_lineage_cascade"), (:select, "ln_lineage_cascade"), (:select, "ln_lineage_cascade"),
+                           (:delete, "ln_lineage_driver"), (:delete, "ln_lineage_cascade"),
+                           (:delete, "ln_lineage_driver"), (:delete, "ln_lineage_cascade")]
+  @test steps[2][:sql_text] ==
+        "SELECT \"Tb\".\"id\", \"Tb\".\"predecessor\" FROM \"ln_lineage_cascade\" AS \"Tb\" WHERE \"Tb\".\"predecessor\" IN (?)"
+  @test [s[:parameters] for s in steps[2:3]] == [[3], [4]]
+  @test [s[:parameters] for s in steps if s[:operation] == :delete && s[:model] == "ln_lineage_cascade"] == [[4], [3]]
+  for s in steps
+    @test count("?", s[:sql_text]) == length(s[:parameters])
   end
+
+  @test _ln_cascade("Honda").delete() == (4, Dict("ln_lineage_cascade" => 2, "ln_lineage_driver" => 2))
+  @test _ln_cascade_ids() == [1, 2]
+  @test _ln_driver_ids() == [10]
+end
+
+# What: the root of the tree, a leaf, and a filter that matches a node and one of its descendants.
+# SQL: Tyrrell: three levels read, the tree deleted Brawn, Honda, BAR, Tyrrell. Brawn: one level read
+#      that finds none. Tyrrell and Honda together: Honda is found again below BAR and moves down to its
+#      own level, so the order is the same as for Tyrrell alone.
+# Why: every level is collected and the counts add up across them. A matched row that descends from
+#      another matched row is deleted at its depth, not with its ancestor: deleted with Tyrrell, the
+#      database would cascade it away first and the count and the drivers would be wrong.
+@testset "a self-referential CASCADE deletes a whole tree, a leaf, and nested matches at their own depth (#1377)" begin
+  _ln_reset!()
+  @test _ln_tree_deletes(_ln_cascade("Tyrrell")) == [[4], [3], [2], [1]]
+  @test _ln_cascade("Tyrrell").delete() == (7, Dict("ln_lineage_cascade" => 4, "ln_lineage_driver" => 3))
+  @test isempty(_ln_cascade_ids()) && isempty(_ln_driver_ids())
+
+  _ln_reset!()
+  @test _ln_cascade("Brawn").delete() == (2, Dict("ln_lineage_cascade" => 1, "ln_lineage_driver" => 1))
+  @test _ln_cascade_ids() == [1, 2, 3]
+
+  _ln_reset!()
+  nested() = (q = LN.Ln_lineage_cascade.objects; q.filter("name__@in" => ["Tyrrell", "Honda"]); q)
+  @test _ln_tree_deletes(nested()) == [[4], [3], [2], [1]]
+  @test nested().delete() == (7, Dict("ln_lineage_cascade" => 4, "ln_lineage_driver" => 3))
+  @test isempty(_ln_cascade_ids()) && isempty(_ln_driver_ids())
+end
+
+# What: rows in a loop: Tyrrell's predecessor set to Brawn, so the four teams reference each other.
+# SQL: the level reads find Brawn, Tyrrell, BAR, and then Honda again below BAR: a loop. SQLite checks
+#      the key at COMMIT, so after the drivers the four teams go in one `DELETE … IN (?, ?, ?, ?)`.
+# Why: no order of statements satisfies a loop under a per-statement check, and with ON DELETE
+#      CASCADE a loop split over several statements would be cascaded away by the first one. Where the
+#      key is checked at COMMIT the delete runs, as in Django; on MySQL it is refused before any write,
+#      naming `deferred_foreign_keys` (the refusal itself is checked here, since a mock reads no keys).
+@testset "rows in a self-referential loop are deleted in one statement where the key is checked at COMMIT (#1377)" begin
+  _ln_reset!()
+  fetch(_LN_POOL, "UPDATE ln_lineage_cascade SET predecessor = 4 WHERE id = 1;")
+  @test _ln_tree_deletes(_ln_cascade("Honda")) == [[1, 2, 3, 4]]
+  @test _ln_cascade("Honda").delete() == (7, Dict("ln_lineage_cascade" => 4, "ln_lineage_driver" => 3))
+  @test isempty(_ln_cascade_ids()) && isempty(_ln_driver_ids())
+
+  e = PormG.QueryBuilder._self_loop_refusal(LnMockMySQL(), LN.Ln_lineage_cascade, "predecessor", [3, 1, 2, 4, 5, 6])
+  @test e isa PormG.BackendCapabilityError
+  msg = sprint(showerror, e)
+  @test occursin("foreign keys checked at COMMIT", msg) && occursin("MySQL does not support", msg)
+  @test occursin("keys 3, 1, 2, 4, 5, … 6 in all", msg)
+  @test occursin("update(\"predecessor\" => nothing)", msg)
+  @test !PormG.Kernel._supports(LnMockMySQL(), :deferred_foreign_keys)
+  @test PormG.Kernel._supports(LnMockSQLite(), :deferred_foreign_keys) && PormG.Kernel._supports(LnMockPostgres(), :deferred_foreign_keys)
+end
+
+# Replace the cascade lineage with `(id, predecessor)` rows, each with one driver (id × 10). The keys are
+# set after every row exists, so the rows may reference each other in loops.
+function _ln_load_tree!(rows::Vector{Tuple{Int,Int}})
+  fetch(_LN_POOL, "DELETE FROM ln_lineage_driver;")
+  fetch(_LN_POOL, "UPDATE ln_lineage_cascade SET predecessor = NULL;")
+  fetch(_LN_POOL, "DELETE FROM ln_lineage_cascade;")
+  fetch(_LN_POOL, "INSERT INTO ln_lineage_cascade (id, name, predecessor) VALUES " *
+    join(("($(id), 'Team $(id)', NULL)" for (id, _) in rows), ", ") * ";")
+  for (id, predecessor) in rows
+    predecessor == 0 || fetch(_LN_POOL, "UPDATE ln_lineage_cascade SET predecessor = $(predecessor) WHERE id = $(id);")
+  end
+  fetch(_LN_POOL, "INSERT INTO ln_lineage_driver (id, surname, team) VALUES " *
+    join(("($(10id), 'Driver $(id)', $(id))" for (id, _) in rows), ", ") * ";")
+  return nothing
+end
+_ln_ids_in(names...) = (q = LN.Ln_lineage_cascade.objects; q.filter("name__@in" => collect(names)); q)
+
+# What: a loop with tails: Team 1 and Team 2 name each other; Team 3 succeeds 1, Team 4 succeeds 3,
+#       Team 5 succeeds 2. Deleted from the loop, from two roots both on the loop, from a tail, and two
+#       separate loops at once.
+# SQL: the tails' levels first, deepest first, then the loop's rows in one DELETE; a tail alone never
+#      reaches the loop.
+# Why: the order the rows come back in decides how the levels split, but every split must delete each
+#      row after its children, count every row, and leave no driver behind (the drivers have no key).
+@testset "self-referential loops with tails, roots on the loop, and two loops at once (#1377)" begin
+  loop_with_tails = [(1, 2), (2, 1), (3, 1), (4, 3), (5, 2)]
+  for (label, q, tree, kept) in (("from the loop", () -> _ln_ids_in("Team 1"), 5, Int[]),
+                                 ("all roots on the loop", () -> _ln_ids_in("Team 1", "Team 2"), 5, Int[]),
+                                 ("a nested root and the loop", () -> _ln_ids_in("Team 1", "Team 4"), 5, Int[]),
+                                 ("from a tail", () -> _ln_ids_in("Team 3"), 2, [1, 2, 5]))
+    @testset "$(label)" begin
+      _ln_reset!()
+      _ln_load_tree!(loop_with_tails)
+      @test q().delete() == (2tree, Dict("ln_lineage_cascade" => tree, "ln_lineage_driver" => tree))
+      @test _ln_cascade_ids() == kept
+      @test _ln_driver_ids() == 10 .* kept
+    end
+  end
+
+  _ln_reset!()
+  _ln_load_tree!([(1, 2), (2, 1), (5, 6), (6, 5), (7, 5), (8, 0)])
+  @test _ln_ids_in("Team 1", "Team 5").delete() == (10, Dict("ln_lineage_cascade" => 5, "ln_lineage_driver" => 5))
+  @test _ln_cascade_ids() == [8]
+end
+
+# What: a loop of 52 rows, and one of 51.
+# SQL: a cycle of n rows reaches n - 1 levels below its root. The 52-row loop's 51st read finds a row
+#      and is refused before any write; the 51-row loop closes at its 51st read and goes in one DELETE.
+# Why: a loop can only go in one DELETE (split over two, the first one's ON DELETE CASCADE would remove
+#      the second one's rows before their statements ran). The depth cap is what keeps every loop
+#      within one key chunk on every engine: at most 51 rows.
+@testset "a self-referential loop deeper than MAX_CASCADE_DEPTH is refused; one at the cap is deleted (#1377)" begin
+  _ln_reset!()
+  _ln_load_tree!([(i, i == 52 ? 1 : i + 1) for i in 1:52])
+  e = _ln_caught(() -> _ln_ids_in("Team 1").delete())
+  @test e isa PormG.QueryBuildError && occursin("more than 50 levels", sprint(showerror, e))
+  @test length(_ln_cascade_ids()) == 52 && length(_ln_driver_ids()) == 52
+
+  _ln_reset!()
+  _ln_load_tree!([(i, i == 51 ? 1 : i + 1) for i in 1:51])
+  @test _ln_tree_deletes(_ln_ids_in("Team 1")) == [collect(1:51)]
+  @test _ln_ids_in("Team 1").delete() == (102, Dict("ln_lineage_cascade" => 51, "ln_lineage_driver" => 51))
+end
+
+# What: a level wider than one SQLite bind chunk (2047 keys): 2100 more teams succeed Tyrrell.
+# SQL: the level's children are read in two chunks, and the level is deleted by two plans.
+# Why: the walk's reads and the level plans chunk like the root's keys, and the counts add up.
+@testset "a self-referential CASCADE level wider than one bind chunk is read and deleted in chunks (#1377)" begin
+  _ln_reset!()
+  values_sql = join(("($(i), 'Privateer $(i)', 1)" for i in 1001:3100), ", ")
+  fetch(_LN_POOL, "INSERT INTO ln_lineage_cascade (id, name, predecessor) VALUES $(values_sql);")
+  steps = _ln_steps(_ln_cascade("Tyrrell"), nothing)
+  @test count(s -> s[:operation] == :select && occursin("\"predecessor\" IN", s[:sql_text]), steps) == 5
+  @test _ln_cascade("Tyrrell").delete() == (2107, Dict("ln_lineage_cascade" => 2104, "ln_lineage_driver" => 3))
+  @test isempty(_ln_cascade_ids())
+end
+
+# What: a chain exactly 50 levels below its root, and one 51 levels below.
+# SQL: 51 level reads (the last finds none) and 51 DELETEs; the deeper chain is refused when its 51st
+#      level read finds a row, before any write.
+# Why: `MAX_CASCADE_DEPTH` bounds the levels below the deleted rows, inclusive: 50 levels are allowed.
+@testset "a self-referential CASCADE stops at MAX_CASCADE_DEPTH levels, inclusive (#1377)" begin
+  for (below, allowed) in ((50, true), (51, false))
+    _ln_reset!()
+    rows = join(("($(100 + i), 'Chain $(i)', $(i == 0 ? "NULL" : string(99 + i)))" for i in 0:below), ", ")
+    fetch(_LN_POOL, "INSERT INTO ln_lineage_cascade (id, name, predecessor) VALUES $(rows);")
+    if allowed
+      @test _ln_cascade("Chain 0").delete() == (below + 1, Dict("ln_lineage_cascade" => below + 1))
+    else
+      e = _ln_caught(() -> _ln_cascade("Chain 0").delete())
+      @test e isa PormG.QueryBuildError && occursin("more than 50 levels", sprint(showerror, e))
+      @test length(_ln_cascade_ids()) == 4 + below + 1
+    end
+  end
+end
+
+# What: the same delete on each engine's mock, an unfiltered delete of the tree, and a self-referential
+#       DO_NOTHING.
+# SQL: on a mock the key read reads no keys, so no level is read and the plan is the root's alone.
+#      `allow_delete_all` takes no key read, so there is no walk, and the collector refuses the cycle.
+# Why: inspection on a mock shows the first statements only; the unfiltered shape stays refused, and
+#      the refusal names the model, the cycle and the way out, with the tree hint only for a CASCADE.
+@testset "a self-referential CASCADE on a mock, and unfiltered, which stays refused (#1377)" begin
+  _ln_reset!()
+  for (_, conn) in _LN_MOCKS
+    steps = _ln_steps(_ln_cascade("Honda"), conn)
+    @test first(steps)[:operation] == _ln_key_read(conn)
+    @test last(steps)[:operation] == :delete
+  end
+  e = _ln_caught(() -> LN.Ln_lineage_cascade.objects.delete(allow_delete_all = true))
+  @test e isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  @test occursin("Circular dependency", msg)
+  @test occursin("ln_lineage_cascade -> ln_lineage_cascade", msg)
+  @test occursin("allow_delete_all", msg)
+  @test _ln_cascade_ids() == [1, 2, 3, 4]
+  # The level-by-level hint is for a CASCADE key to itself only.
+  plain = PormG.QueryBuilder._delete_cycle_message(PormG.PormGModel[LN.Ln_team, LN.Ln_team])
+  @test !occursin("level by level", plain)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

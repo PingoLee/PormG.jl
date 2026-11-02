@@ -242,18 +242,60 @@ M.Team.objects.filter("name" => "Tyrrell").delete()
 The order is the statements': the `UPDATE`s, then the drivers, then the team, so MySQL's check at
 each statement holds too.
 
+### A tree: a self-referential CASCADE
+
+A model with a `CASCADE` foreign key to itself is a tree: a category and its subcategories, a
+threaded comment and its replies, a team lineage. Deleting a node deletes everything below it, and
+the dependents of every row deleted, as in Django:
+
+```julia
+# `predecessor = ForeignKey("Team", on_delete = CASCADE, null = true)`, Tyrrell <- BAR <- Honda <- Brawn,
+# and a driver CASCADEs from its team. Deletes Honda, Brawn and the drivers of both.
+M.Team.objects.filter("name" => "Honda").delete()
+```
+
+PormG reads the node's descendants by their keys, one level per query, each with its parent
+(`SELECT "Tb"."id", "Tb"."predecessor" FROM "team" AS "Tb" WHERE "Tb"."predecessor" IN (…)`,
+`FOR UPDATE` on PostgreSQL and MySQL). Every row is deleted at its deepest level, deepest first, each
+level after its own dependents: when the filter matches a node and one of its descendants
+(`filter("name__@in" => ["Tyrrell", "Honda"])`), Honda is deleted at its depth, not with Tyrrell.
+Every `DELETE` then removes rows that nothing still references, so the foreign key's own
+`ON DELETE CASCADE` (which PormG's migrations write) never has a row to act on, and no engine needs
+to defer the key.
+
+Each level is a plan of its own, in chunks on SQLite and MySQL like the root's keys: it repeats the
+dependents' existence checks, their locks, their `SET_NULL` / `SET_DEFAULT` updates and their
+`DELETE`s, so a tree costs about one cascade per level, plus one read per level. A matched row found
+again below another matched row is read again with its subtree, so a filter matching many rows of one
+deep tree ("every category of a site") reads more than once per row. The tree's depth is capped at 50
+levels below the deleted rows.
+
+Rows whose references form a loop (Ligier's predecessor is Prost, and Prost's is Ligier) have no such
+order. PostgreSQL and SQLite check the key at `COMMIT`, so the loop's rows go in one `DELETE`, after
+everything below them, and the delete counts every one of them. MySQL checks the key at each
+statement, so the delete raises `BackendCapabilityError` naming `deferred_foreign_keys` and the
+looped keys, before anything is written. The 50-level cap bounds a loop too, to 51 rows. Break the
+loop first (`update("predecessor" => nothing)` on one of the rows), then delete.
+
+The walk covers the model the delete is on, when that model has one `CASCADE` key to itself. A tree
+reached through another model (deleting a constructor whose teams form a lineage), a model with two
+self-referential `CASCADE` keys, and an unfiltered delete (`allow_delete_all`) of a tree whose rows
+reference each other are still refused as a cycle, below. `show_query` on a mock connection shows the
+root's statements only, since a mock reads no keys.
+
 !!! note "A cycle through CASCADE is refused"
     A `CASCADE` relation does order the deletes: the child goes before the parent it was collected
-    from. When the rows a delete reaches close a loop of such relations, the delete raises
-    `QueryBuildError` ("Circular dependency detected in model relationships") while it plans, before
-    anything is written, on every engine. `PROTECT` / `RESTRICT` raise `ProtectedError` first, and a
-    `DO_NOTHING` relation (or one with no `on_delete`) counts as `CASCADE` here, since the database's
-    constraint decides those rows. Delete such rows in stages: clear the references first
-    (`update("predecessor" => nothing)`), then delete. The check reads the rows, so the same schema
-    deletes a row that nothing references.
+    from. When the rows a delete reaches close a loop of such relations, other than the tree above,
+    the delete raises `QueryBuildError` ("Circular dependency detected in model relationships") while
+    it plans, before anything is written, on every engine. The message names the models on the loop.
+    `PROTECT` / `RESTRICT` raise `ProtectedError` first, and a `DO_NOTHING` relation (or one with no
+    `on_delete`) counts as `CASCADE` here, since the database's constraint decides those rows. Delete
+    such rows in stages: clear the references first (`update("predecessor" => nothing)`), then delete.
+    The check reads the rows, so the same schema deletes a row that nothing references.
 
     Until [#1374](https://github.com/PingoLee/PormG.jl/issues/1374) a `SET_NULL` or `SET_DEFAULT`
-    relation counted as well, and the lineage above was refused.
+    relation counted as well, and the lineage above was refused; until
+    [#1377](https://github.com/PingoLee/PormG.jl/issues/1377) so was every tree with children.
 
 ### Filters are a fence on PostgreSQL
 

@@ -319,20 +319,35 @@ function delete(objct::SQLObjectHandler;
     end
     root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
     show_query === :execute && isempty(root_keys) && return nothing
-    # Every chunk is PLANNED before any statement runs, so a refusal the planner raises
+    key = key_plan.entry[:key]
+    # #1377: a self-referential CASCADE is walked by keys, one level per read, and every level is a
+    # plan of its own, run deepest first; see `_walk_self_levels!`.
+    self_fks = _self_cascade_fields(model)
+    walked = length(self_fks) == 1 && !isempty(root_keys)
+    walk = walked ? _walk_self_levels!(results, connection, model, key, only(self_fks), root_keys, objct, show_query, conn) :
+                    (sets = AbstractVector[root_keys], loop_index = 0)
+    # Every chunk of every set is PLANNED before any statement runs, so a refusal the planner raises
     # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
-    # one plan — a caller who catches it inside its own transaction finds nothing deleted.
-    collectors = [plan(_keyed_root(model, key_plan.entry[:key], chunk, objct))
-                  for chunk in _root_key_chunks(connection, root_keys)]
-    for collector in collectors
+    # one plan — a caller who catches it inside its own transaction finds nothing deleted. A loop's set
+    # is one chunk (at most MAX_CASCADE_DEPTH + 1 rows, see `_walk_self_levels!`), tagged by its index.
+    collectors = [(plan(_keyed_root(model, key, chunk, objct), length(self_fks) == 1), i == walk.loop_index, length(level_keys))
+                  for (i, level_keys) in enumerate(walk.sets)
+                  for chunk in _root_key_chunks(connection, level_keys)]
+    for (collector, is_loop, loop_rows) in collectors
+      before = get(deleted_counter, model.name, 0)
       run_plan(conn, collector, true)
+      # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
+      # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
+      # transaction (locked, or behind SQLite's single writer), so when the DELETE succeeds exactly
+      # these rows are gone: count them.
+      is_loop && show_query === :execute && (deleted_counter[model.name] = before + loop_rows)
     end
     return nothing
   end
 
   # One plan over one root query: collect the cascade, probing each path.
-  plan = function(root_objct)
-    collector = DeletionCollector(model, settings, show_query)
+  plan = function(root_objct, skip_self_cascade::Bool = false)
+    collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
     add_objects_to_collector!(collector, root_objct, model)
     process_collector!(collector)
     return collector
@@ -348,9 +363,9 @@ function delete(objct::SQLObjectHandler;
     # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
     # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
     # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
-    # The root is locked here anyway when a self-referential cascade added entries of its own model:
-    # those rows are parents the key step did not lock. (Unreached while `topological_sort` refuses
-    # such a cycle, #1272; kept so lifting that refusal does not silently drop the lock.)
+    # The root is locked here anyway when the plan holds more entries of its own model than the key
+    # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
+    # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
     if _locks_cascade_parents(connection)
       for lock_model in _models_to_lock(collector)
         root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
@@ -590,6 +605,162 @@ function _keyed_root(model::PormGModel, key::String, keys::AbstractVector, objct
   return root
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A self-referential CASCADE, walked by keys (#1377)
+#
+# A model with a CASCADE foreign key to itself (a constructor lineage, a category tree) used to depend
+# on itself in the collector, which `topological_sort` refused as a cycle. Django deletes the node and
+# everything below it. One DELETE over all of them would need a deferred foreign key, which MySQL does
+# not have (#1272): InnoDB checks each row as it goes. So the delete reads the root's descendants by
+# keys, one level per read, and runs each level as a plan of its own, deepest first. A level's rows
+# reference only rows of the level above, so every DELETE removes rows nothing still references. Each
+# level's plan carries the model's other dependents (a team's drivers), and none descends the self
+# relation again (`skip_self_cascade`).
+#
+# Only the delete's own model, and only when the model has one self-referential CASCADE: reached
+# through another model, the tree's rows are a nested query the walk has no keys for, and with two
+# self-references a row can sit at two depths. Both stay refused by `topological_sort`, whose message
+# says so.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+The fields of `model` that are a CASCADE foreign key to `model` itself, by reverse relation.
+"""
+function _self_cascade_fields(model::PormGModel)::Vector{String}
+  fields = String[]
+  for related_value in values(model.related_objects)
+    related_value isa Models.ManyToManyRelation && continue
+    rel = related_value::Models.ReverseRelation
+    rel.model_resolved === model || continue
+    fk = String(rel.fk_field)
+    model.fields[fk].on_delete === CASCADE && push!(fields, fk)
+  end
+  return fields
+end
+
+"""
+The key sets to delete, in order, for a delete of `root_keys` on a model whose foreign key `fk` is a
+CASCADE to itself: every level below the roots, deepest first, then the rows whose references form a
+loop (one set), then the roots that no other root sits above.
+
+The walk reads each level's children with their parents (`_read_self_children!`) and gives every key
+its DEEPEST level, so a matched row that descends from another matched row moves down to its real
+depth instead of being deleted with its ancestor. Every row has one parent, so a key found again whose
+parent chain leads back to itself is a loop: such rows can only go in one statement, after everything
+below them, where the engine checks a foreign key at COMMIT, and are refused before any write where it
+checks at each statement. A level a row is deleted at is then always below its parent's, and with PormG's
+own `ON DELETE CASCADE` keys the database never has a child left to cascade to.
+"""
+function _walk_self_levels!(results::Vector, connection::_SQLEngine, model::PormGModel, key::String, fk::String,
+    root_keys::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn) where {K}
+  depth = Dict{K, Int}(k => 0 for k in root_keys)
+  parent = Dict{K, K}()
+  looped = Set{K}()
+  frontier = collect(root_keys)
+  level = 0
+  while !isempty(frontier)
+    level += 1
+    next = K[]
+    for chunk in _root_key_chunks(connection, frontier)
+      children, parents = _read_self_children!(results, connection, model, key, fk, chunk, objct, show_query, conn)
+      for (child, from) in zip(children, parents)
+        chain = _parent_chain(from, child, parent)
+        if chain !== nothing
+          union!(looped, chain)
+          continue
+        end
+        depth[child] = level
+        parent[child] = from
+        push!(next, child)
+      end
+    end
+    # A row found at level 51: the read that finds none below level 50 is allowed.
+    level > MAX_CASCADE_DEPTH && !isempty(next) && throw(QueryBuildError(
+      "Error in delete: \e[4m\e[31m$(model.name)\e[0m's rows reach more than $(MAX_CASCADE_DEPTH) levels " *
+      "below the deleted ones through \e[4m\e[31m$(fk)\e[0m, the fixed ceiling " *
+      "\e[4m\e[32mMAX_CASCADE_DEPTH\e[0m in src/querybuilder/deletion.jl. Delete the tree in stages, " *
+      "from its deepest rows up."))
+    frontier = unique!(next)
+  end
+
+  # A loop's rows are its cycle, and a cycle of n rows reaches n - 1 levels below its root, so it holds
+  # at most MAX_CASCADE_DEPTH + 1 rows: one key chunk on every engine, and one DELETE.
+  isempty(looped) || _supports(connection, :deferred_foreign_keys) ||
+    throw(_self_loop_refusal(connection, model, fk, collect(looped)))
+  sets = AbstractVector[]
+  for d in maximum(values(depth)):-1:1
+    rows = K[k for (k, kd) in depth if kd == d && !(k in looped)]
+    isempty(rows) || push!(sets, sort!(rows))
+  end
+  loop = sort!(collect(looped))
+  isempty(loop) || push!(sets, loop)
+  loop_index = isempty(loop) ? 0 : length(sets)
+  tops = K[k for k in root_keys if depth[k] == 0 && !(k in looped)]
+  isempty(tops) || push!(sets, tops)
+  return (sets = sets, loop_index = loop_index)
+end
+
+# The keys from `from` up to `child` through the walk's parents, when `child` is `from` or one of its
+# ancestors (a loop in the rows); `nothing` otherwise. A chain is at most the walk's depth.
+function _parent_chain(from::K, child::K, parent::Dict{K, K})::Union{Nothing, Vector{K}} where {K}
+  chain = K[from]
+  node = from
+  while node != child
+    haskey(parent, node) || return nothing
+    node = parent[node]
+    push!(chain, node)
+  end
+  return chain
+end
+
+"""
+The children of `chunk` through `fk`, with the parent each was found from: `SELECT <key>, <fk> …
+WHERE <fk> IN (…)`, read like the root's keys (`_resolve_root_keys!`): `FOR UPDATE` where the engine
+locks a cascade's parents, and recorded but not locked under inspection, reading only a live pool.
+"""
+function _read_self_children!(results::Vector, connection::_SQLEngine, model::PormGModel, key::String, fk::String,
+    chunk::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn)::Tuple{Vector{K}, Vector{K}} where {K}
+  read = _keyed_root(model, fk, chunk, objct)
+  read.values(key)
+  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => read)
+  where_sql, parameters, alias = _collector_predicate(connection, [entry])
+  locks = _locks_cascade_parents(connection)
+  key_column = safe_column_identifier(Models.model_column(model, key), connection)
+  fk_column = safe_column_identifier(Models.model_column(model, fk), connection)
+  select_sql = "SELECT $(alias).$(key_column), $(alias).$(fk_column) FROM " *
+    "$(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias) WHERE $(where_sql)"
+  sql = locks ? select_sql * " FOR UPDATE" : select_sql
+  local columns
+  if show_query !== :execute
+    push!(results, _show_query_result(show_query, sql, connection, model, locks ? :lock : :select, parameters=parameters))
+    _is_live_pool(connection) || return (K[], K[])
+    columns = Tables.columntable(fetch(connection, select_sql, parameters))
+  else
+    result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
+    columns = Tables.columntable(result)
+  end
+  isempty(columns) && return (K[], K[])
+  first_column, second_column = columns[1], columns[2]
+  return (K[k for k in first_column], K[p for p in second_column])
+end
+
+"""
+The refusal for rows whose self-referential foreign key forms a loop, on an engine that checks a
+foreign key at each statement: no order of DELETEs removes rows that reference each other.
+"""
+function _self_loop_refusal(connection::_SQLEngine, model::PormGModel, fk::String, looped::AbstractVector)::BackendCapabilityError
+  return _capability_error(connection, :deferred_foreign_keys,
+    "delete() of $(model.name) rows whose `$(fk)` references form a loop (keys $(_key_list_text(looped)))";
+    why = "No order of DELETE statements removes rows that reference each other when every statement " *
+          "is checked. Break the loop first, e.g. `update(\"$(fk)\" => nothing)` on one of the rows, then delete.")
+end
+
+# At most five keys, as text: a function barrier, so the keys' element type is decided here (#1346).
+function _key_list_text(keys::AbstractVector{T})::String where {T}
+  shown = join((string(k) for k in Iterators.take(keys, 5)), ", ")
+  return length(keys) > 5 ? "$(shown), … $(length(keys)) in all" : shown
+end
+
 # Ceiling on how deep `find_related_objects!` will descend before refusing (#459). See the guard
 # itself for why this is a depth cap rather than a cycle-membership test.
 const MAX_CASCADE_DEPTH = 50
@@ -724,9 +895,9 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
   #
   #   - A self-referential CASCADE foreign key (category tree, org chart) is a legitimate Django
   #     shape, and it puts the same model on the path at every level. A membership test refuses it
-  #     outright. PormG deletes a row of one that nothing references; where the probes read rows, one
-  #     with dependent rows is refused after the walk, by `topological_sort` (#1272), a refusal that
-  #     is not this guard's.
+  #     outright. On the delete's own model it is walked by keys (#1377, `_walk_self_levels!`) and
+  #     never descends here; reached through another model, one with dependent rows is refused after
+  #     this walk, by `topological_sort`, a refusal that is not this guard's.
   #   - A membership test is not sufficient either. Termination is a property of the DATA, not the
   #     schema: cyclic rows keep every `_exists` probe non-empty while the nested subquery grows
   #     without bound, so even the probing path needs a ceiling.
@@ -760,6 +931,9 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
     rel = related_value::Models.ReverseRelation
     field_name = rel.fk_field
     related_model = rel.model_resolved
+    # #1377: the root's self-referential CASCADE was walked by keys; this plan is one level of it.
+    collector.skip_self_cascade && model === collector.model && related_model === model &&
+      related_model.fields[String(field_name)].on_delete === CASCADE && continue
 
     _query = related_model |> object;
     if size(dict, 1) == 1
@@ -903,25 +1077,49 @@ for it, as a "Circular dependency", where Django deletes both.
 """
 _orders_deletes(field::PormGField)::Bool = !(field.on_delete === SET_NULL || field.on_delete === SET_DEFAULT)
 
-# Children first: the reverse of a parents-first walk. A cycle in `dependencies` — two tables whose
-# rows reference each other, or one table's rows referencing others of the same table — has no such
-# order, and is refused on every engine; on MySQL, which checks a foreign key at each statement
-# (#1272), no order of statements could carry it either.
+# `cycle` runs child to parent, its first model repeated at the end: each model's rows reference the
+# next one's.
+function _delete_cycle_message(cycle::Vector{PormGModel})::String
+  chain = join((m.name for m in cycle), " -> ")
+  # The level-by-level hint applies only to a CASCADE key to itself: a self-referential DO_NOTHING or
+  # unset on_delete is never walked.
+  self = length(cycle) == 2 && !isempty(_self_cascade_fields(first(cycle)))
+  return "Error in delete: Circular dependency detected in model relationships. The rows this delete " *
+    "reaches reference each other through foreign keys that order the deletes " *
+    "(\e[4m\e[31m$(chain)\e[0m: each model's rows reference the next one's). A CASCADE, DO_NOTHING or " *
+    "unset on_delete deletes the child before its parent, so no order of DELETE statements satisfies " *
+    "a loop of them. " *
+    (self ? "A self-referential CASCADE is deleted level by level only when it is the model of a " *
+            "filtered delete and that model's one CASCADE key to itself; reached through another " *
+            "model, beside a second one, or under allow_delete_all, it is refused here. " : "") *
+    "Break the loop first: clear the references on one side (e.g. " *
+    "\e[4m\e[32mupdate(\"<foreign key>\" => nothing)\e[0m), then delete."
+end
+
+# Children first: the reverse of a parents-first walk, over the links that order the DELETEs
+# (`delete_order`, #1374). A cycle there — two tables whose rows reference each other through CASCADE
+# (or DO_NOTHING / unset) keys — has no such order, and is refused on every engine; on MySQL, which
+# checks a foreign key at each statement (#1272), no order of statements could carry it either. The
+# delete's own self-referential CASCADE is walked by keys instead (#1377) and never reaches here.
 function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   result = Vector{PormGModel}()
   temp_mark = Set{PormGModel}()
   perm_mark = Set{PormGModel}()
-  
+  path = Vector{PormGModel}()   # the walk from the current start, for naming the cycle
+
   function visit(node)
     if node in temp_mark
-      throw(QueryBuildError("Circular dependency detected in model relationships"))
+      cycle = PormGModel[path[findfirst(m -> m === node, path):end]..., node]
+      throw(QueryBuildError(_delete_cycle_message(cycle)))
     end
-    
+
     if !(node in perm_mark)
       push!(temp_mark, node)
+      push!(path, node)
       for dep in get(dependencies, node, Set{PormGModel}())
         visit(dep)
       end
+      pop!(path)
       delete!(temp_mark, node)
       push!(perm_mark, node)
       push!(result, node)

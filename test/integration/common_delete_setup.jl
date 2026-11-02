@@ -281,6 +281,22 @@ Ot_rival_driver_scratch = Models.Model("ot_rival_driver_scratch",
                   related_name = "ot_rival_drivers")
 )
 
+# A self-referential CASCADE lineage whose teams have drivers (#1377): deleting a team deletes the
+# teams that descend from it, and every one of their drivers.
+Ot_tree_scratch = Models.Model("ot_tree_scratch",
+    id          = Models.IDField(),
+    name        = Models.CharField(),
+    predecessor = Models.ForeignKey("Ot_tree_scratch", pk_field = "id", on_delete = "CASCADE",
+                      null = true, related_name = "ot_tree_successors")
+)
+
+Ot_tree_driver_scratch = Models.Model("ot_tree_driver_scratch",
+    id      = Models.IDField(),
+    surname = Models.CharField(),
+    team    = Models.ForeignKey(Ot_tree_scratch, pk_field = "id", on_delete = "CASCADE",
+                  related_name = "ot_tree_drivers")
+)
+
 end
 
 if !@isdefined(OwnTableM)

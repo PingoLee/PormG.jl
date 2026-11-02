@@ -34,7 +34,7 @@ which the `DELETE` then removes, so the database refuses it with `IntegrityError
 | the `SET_DEFAULT` lineage: `filter("id" => 1).delete()`, deleting the default row itself while rows point at it | `QueryBuildError` | `IntegrityError`, nothing written |
 | any `SET_DEFAULT` key whose default row the same delete removes, where the relation closed a cycle | `QueryBuildError` | `IntegrityError`, nothing written |
 | a team whose favourite driver (`SET_NULL`) races for a deleted team | `QueryBuildError` | deletes the team and its drivers, nulls the favourite |
-| a self-referential `CASCADE` with dependent rows | `QueryBuildError` | `QueryBuildError`, unchanged |
+| a self-referential `CASCADE` with dependent rows | `QueryBuildError` | deletes the subtree since #1377 (its own entry) |
 
 `IntegrityError` is a `DatabaseError`, not a `QueryBuildError`.
 

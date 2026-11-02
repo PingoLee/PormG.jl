@@ -340,6 +340,58 @@ function _reset_own_table_scratch_schema!()
     return nothing
 end
 
+# ── Schema helpers: ot_tree_scratch (#1377) ──────────────────────────────────
+
+function _drop_tree_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"ot_tree_driver_scratch\";")
+    # SQLite's DROP TABLE deletes the rows under the key check, and the rows reference each other.
+    try _scratch_sql(pool, "UPDATE \"ot_tree_scratch\" SET \"predecessor\" = NULL;") catch end
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"ot_tree_scratch\";")
+    return nothing
+end
+
+# Tyrrell <- BAR <- Honda <- Brawn, with drivers: Stewart (Tyrrell), Barrichello (Honda), Button (Brawn).
+# And two teams whose predecessors are each other, Ligier <-> Prost, with Panis (Prost): rows in a loop.
+# The tree's key is `ON DELETE CASCADE` on every engine and DEFERRABLE INITIALLY DEFERRED on
+# PostgreSQL, as PormG's migrations write it: a DELETE of a row that still has children would make the
+# database delete them itself, which shows as a short count. The drivers' key has no ON DELETE action
+# and is checked at each statement on PostgreSQL and MySQL, so a driver left behind fails loudly.
+function _reset_tree_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_tree_scratch_schema!()
+    id_type = _scratch_id_type(pool)
+    deferrable = by_engine(pool; postgres = " DEFERRABLE INITIALLY DEFERRED", sqlite = "", mysql = "")
+    _scratch_sql(pool, """
+    CREATE TABLE "ot_tree_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "predecessor" INTEGER,
+        FOREIGN KEY ("predecessor") REFERENCES "ot_tree_scratch" ("id") ON DELETE CASCADE$(deferrable)
+    );
+    """)
+    _scratch_sql(pool, """
+    CREATE TABLE "ot_tree_driver_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "surname" TEXT NOT NULL,
+        "team" INTEGER NOT NULL,
+        FOREIGN KEY ("team") REFERENCES "ot_tree_scratch" ("id")
+    );
+    """)
+    for (id, name, predecessor) in ((1, "Tyrrell", nothing), (2, "BAR", 1), (3, "Honda", 2), (4, "Brawn", 3),
+                                    (5, "Ligier", nothing), (6, "Prost", 5))
+        OwnTableM.Ot_tree_scratch.objects.create("id" => id, "name" => name, "predecessor" => predecessor)
+    end
+    OwnTableM.Ot_tree_scratch.objects.filter("id" => 5).update("predecessor" => 6)
+    for (id, surname, team) in ((10, "Stewart", 1), (30, "Barrichello", 3), (40, "Button", 4), (60, "Panis", 6))
+        OwnTableM.Ot_tree_driver_scratch.objects.create("id" => id, "surname" => surname, "team" => team)
+    end
+    return nothing
+end
+
+_tree_ids() = sort((OwnTableM.Ot_tree_scratch.objects.values("id") |> DataFrame).id)
+_tree_driver_ids() = sort((OwnTableM.Ot_tree_driver_scratch.objects.values("id") |> DataFrame).id)
+
 # ── Schema helpers: set_null_guard_scratch ────────────────────────────────────
 
 function _drop_set_null_guard_scratch_schema!()
@@ -1899,6 +1951,107 @@ end
             @test ismissing(mclaren[:favourite_driver]) || isnothing(mclaren[:favourite_driver])
         finally
             _drop_own_table_scratch_schema!()
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A self-referential CASCADE: a node of a tree with children (#1377)
+#
+# The collector used to record the model as depending on itself and refuse the delete as a cycle
+# (#1272). It now reads the root's descendants by keys, one level per query, and deletes the deepest
+# level first, each level with its own dependents (the drivers), so no engine needs a deferred foreign
+# key. Rows whose `predecessor`s form a loop have no such order: PostgreSQL and SQLite check the key at
+# COMMIT and delete them; MySQL checks it at each statement and refuses before any write.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DELETE: a self-referential CASCADE deletes the node's descendants, deepest first (#1377)" begin
+    # What: an inner node. SQL: the key read, one key read per level (`SELECT "Tb"."id" FROM
+    #       "ot_tree_scratch" AS "Tb" WHERE "Tb"."predecessor" IN (…)`, `FOR UPDATE` on PostgreSQL and
+    #       MySQL), then Brawn's driver and Brawn, then Honda's driver and Honda.
+    # Why: Django deletes Honda, Brawn and both their drivers; PormG refused it.
+    @testset "an inner node takes its descendants and their drivers" begin
+        _reset_tree_scratch_schema!()
+        try
+            total, counts = OwnTableM.Ot_tree_scratch.objects.filter("name" => "Honda").delete()
+            @test counts == Dict("ot_tree_scratch" => 2, "ot_tree_driver_scratch" => 2)
+            @test total == 4
+            @test _tree_ids() == [1, 2, 5, 6]
+            @test _tree_driver_ids() == [10, 60]
+        finally
+            _drop_tree_scratch_schema!()
+        end
+    end
+
+    # What: the tree's root, three levels below it. SQL: four DELETEs of the tree, deepest first.
+    # Why: every level is collected, and the counts add up across them.
+    @testset "the root of the tree takes the whole lineage" begin
+        _reset_tree_scratch_schema!()
+        try
+            total, counts = OwnTableM.Ot_tree_scratch.objects.filter("name" => "Tyrrell").delete()
+            @test counts == Dict("ot_tree_scratch" => 4, "ot_tree_driver_scratch" => 3)
+            @test total == 7
+            @test _tree_ids() == [5, 6]
+        finally
+            _drop_tree_scratch_schema!()
+        end
+    end
+
+    # What: a leaf. SQL: the key read, one level read that finds nothing, the driver, the team.
+    # Why: the control; this already worked, and the walk adds one empty read.
+    # What: a filter matching Tyrrell and Honda, one below the other.
+    # SQL: Honda is found again below BAR and moves down to its own level; the tree goes Brawn, Honda,
+    #      BAR, Tyrrell, each after its driver.
+    # Why: deleted with Tyrrell instead, BAR would go while Honda still references it, and the
+    #      database's ON DELETE CASCADE would remove Honda and Brawn first: a short count, and drivers
+    #      their own statements no longer find.
+    @testset "a filter matching a node and its descendant deletes each at its own depth" begin
+        _reset_tree_scratch_schema!()
+        try
+            total, counts = OwnTableM.Ot_tree_scratch.objects.filter("name__@in" => ["Tyrrell", "Honda"]).delete()
+            @test counts == Dict("ot_tree_scratch" => 4, "ot_tree_driver_scratch" => 3)
+            @test total == 7
+            @test _tree_ids() == [5, 6]
+            @test _tree_driver_ids() == [60]
+        finally
+            _drop_tree_scratch_schema!()
+        end
+    end
+
+    @testset "a leaf is deleted alone" begin
+        _reset_tree_scratch_schema!()
+        try
+            @test OwnTableM.Ot_tree_scratch.objects.filter("name" => "Brawn").delete() ==
+                  (2, Dict("ot_tree_scratch" => 1, "ot_tree_driver_scratch" => 1))
+            @test _tree_ids() == [1, 2, 3, 5, 6]
+        finally
+            _drop_tree_scratch_schema!()
+        end
+    end
+
+    # What: Ligier and Prost name each other as predecessor. SQL: the key reads find Prost, then
+    #       Ligier again below it: a loop. After Panis, both teams go in one `DELETE … IN (…)`.
+    # Why: no order of statements satisfies a key checked at each statement. Where the engine checks at
+    #      COMMIT the delete runs (Django's result), and counts both teams although the key's ON DELETE
+    #      CASCADE removes one of them inside the statement; on MySQL it is refused before any write,
+    #      naming the feature (`deferred_foreign_keys`).
+    @testset "rows in a loop are deleted where the key is checked at COMMIT, refused otherwise" begin
+        _reset_tree_scratch_schema!()
+        try
+            pool = PormG.config[PORMG_DB_FOLDER].connections
+            q = OwnTableM.Ot_tree_scratch.objects
+            q.filter("name" => "Ligier")
+            if PormG.Kernel._supports(pool, :deferred_foreign_keys)
+                @test q.delete() == (3, Dict("ot_tree_scratch" => 2, "ot_tree_driver_scratch" => 1))
+                @test _tree_ids() == [1, 2, 3, 4]
+            else
+                err = try q.delete(); nothing catch e; e end
+                @test err isa PormG.BackendCapabilityError
+                @test occursin("foreign keys checked at COMMIT", _strip_ansi(sprint(showerror, err)))
+                @test _tree_ids() == [1, 2, 3, 4, 5, 6]
+                @test _tree_driver_ids() == [10, 30, 40, 60]
+            end
+        finally
+            _drop_tree_scratch_schema!()
         end
     end
 end

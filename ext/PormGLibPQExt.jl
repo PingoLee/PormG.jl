@@ -12,6 +12,7 @@ module PormGLibPQExt
 using PormG
 import PormG: PormGPostgres, PormGPostgresParam
 import LibPQ
+import Dates
 
 # ── Connection-string preflight (#657) ───────────────────────────────────────
 #
@@ -218,8 +219,74 @@ function _open_connection(pool::PormGPostgres)
   PormG.postgres_driver(pool) === :libpq ||
     throw(PormG.InvalidConfigurationError(PormG._pg_driver_hint(pool)))
   _preflight_conninfo(pool.connection_string)
-  return LibPQ.Connection(pool.connection_string)
+  return LibPQ.Connection(pool.connection_string; conversions = _CONNECTION_CONVERSIONS)
 end
+
+# ── The interval read (#1568) ────────────────────────────────────────────────
+#
+# LibPQ.jl opens every connection with `IntervalStyle=iso_8601`, and its text parser for that style
+# (`pqparse(::Type{Dates.CompoundPeriod}, ::AbstractString)`, 1.18.0) takes the seconds' sign from the
+# whole seconds and reads the fraction unsigned. A negative interval with a fraction then reads back
+# wrong, with no error: `PT-2M-37.754S` as `-2m -37s +754ms` (157.754 s less twice the fraction), and
+# `PT-0.754S` — whose whole seconds are `-0`, which is `0` — as a POSITIVE 754 ms. PormG cannot repair
+# that after the read: the second case arrives identical to a real +0.754 s.
+#
+# Every connection PormG opens therefore reads an interval through `_interval_conversion`, a
+# connection-level override LibPQ.jl documents (`Connection(…; conversions = …)`), which every result
+# on the connection consults before LibPQ's defaults — so `fetch`, `list`, a DataFrame and the typed
+# read (#1352) all get it. `_parse_iso_interval` is LibPQ's parser with one difference, the rule of
+# LibPQ.jl#321: the fraction takes the sign of the seconds it belongs to. Its regex and decomposition
+# are LibPQ's, so every interval LibPQ read correctly reads back identically, components included.
+#
+# LibPQ.jl#321 is merged but in no release yet. Once one ships it, raise the LibPQ floor to it and
+# delete this block; `test/unit/test_libpq_interval_sign_1568.jl` says which assertions go with it.
+
+const _ISO_INTERVAL = r"^P(?:(?<Y>-?\d+)Y)?(?:(?<M>-?\d+)M)?(?:(?<D>-?\d+)D)?(?:T(?:(?<h>-?\d+)H)?(?:(?<m>-?\d+)M)?(?:(?<whole>-?\d+)(?:\.(?<frac>\d{1,9}))?S)?)?$"
+
+# The fraction's period: the largest of millisecond, microsecond, nanosecond that holds it exactly,
+# as LibPQ chooses it (`.5` is 500 ms, `.0005` is 500 µs).
+function _fraction_period(digits::AbstractString, negative::Bool)::Dates.Period
+  len = length(digits)
+  coeff = cld(len, 3)
+  value = parse(Int, digits) * 10^(3 * coeff - len)
+  negative && (value = -value)
+  return coeff == 1 ? Dates.Millisecond(value) : coeff == 2 ? Dates.Microsecond(value) : Dates.Nanosecond(value)
+end
+
+"""
+    _parse_iso_interval(str) -> Dates.CompoundPeriod
+
+PostgreSQL's `iso_8601` interval text as a `Dates.CompoundPeriod`, decomposed as LibPQ.jl decomposes
+it, with the fraction of a second signed like the seconds it belongs to (#1568). Text the pattern
+does not match goes to LibPQ's own parser, so its error is LibPQ's.
+"""
+function _parse_iso_interval(str::AbstractString)::Dates.CompoundPeriod
+  m = match(_ISO_INTERVAL, str)
+  m === nothing && return LibPQ.pqparse(Dates.CompoundPeriod, str)
+  periods = Dates.Period[]
+  for (key, P) in (("Y", Dates.Year), ("M", Dates.Month), ("D", Dates.Day), ("h", Dates.Hour), ("m", Dates.Minute))
+    s = m[key]
+    s === nothing || push!(periods, P(parse(Int, s)))
+  end
+  whole = m["whole"]
+  if whole !== nothing
+    w = parse(Int, whole)
+    w == 0 || push!(periods, Dates.Second(w))
+    frac = m["frac"]
+    if frac !== nothing
+      p = _fraction_period(frac, startswith(whole, '-'))
+      iszero(p) || push!(periods, p)
+    end
+  end
+  return Dates.CompoundPeriod(periods)
+end
+
+# A text value is the `iso_8601` text; a binary one is LibPQ's own parse, which splits a signed count of
+# microseconds and is already right. PormG reads text, but the override covers both.
+_interval_conversion(pqv::LibPQ.PQValue)::Dates.CompoundPeriod =
+  pqv isa LibPQ.PQBinaryValue ? parse(Dates.CompoundPeriod, pqv) : _parse_iso_interval(LibPQ.string_view(pqv))
+
+const _CONNECTION_CONVERSIONS = Dict((:interval, Dates.CompoundPeriod) => _interval_conversion)
 
 # ── Backend interface methods ────────────────────────────────────────────────
 

@@ -53,6 +53,10 @@ const PINNED_NAMES = _NamePin[
   (name = "LibPQ.conninfo",                     status = :documented, reader = "_preflight_conninfo (its `Ptr` method: PINNED_METHODS)"),
   (name = "LibPQ.error_field",                  status = :internal,   reader = "_raise_if_failed, _server_named_failure"),
   (name = "LibPQ.lock",                         status = :internal,   reader = "PormG.backend_is_alive, _drain_postgres_connection! (`Base.lock`: PINNED_METHODS)"),
+  (name = "LibPQ.PQValue",                      status = :documented, reader = "_interval_conversion, on every interval read (#1568)"),
+  (name = "LibPQ.PQBinaryValue",                status = :internal,   reader = "_interval_conversion (its `parse` method: PINNED_METHODS)"),
+  (name = "LibPQ.string_view",                  status = :documented, reader = "_interval_conversion"),
+  (name = "LibPQ.pqparse",                      status = :internal,   reader = "_parse_iso_interval's fallback (its interval method: PINNED_METHODS)"),
   (name = "LibPQ.Errors.LibPQException",        status = :documented, reader = "PormG.backend_classify_error, backend_is_retry_safe"),
   (name = "LibPQ.Errors.JLResultError",         status = :documented, reader = "PormG.backend_copy_in!"),
   (name = "LibPQ.Errors.JLConnectionError",     status = :documented, reader = "PormG.backend_is_connection_error"),
@@ -180,6 +184,12 @@ const PINNED_METHODS = _MethodPin[
    reader = "_preflight_conninfo, on every LibPQ connect"),
   (f = LibPQ.Errors.PQConnectionError, sig = Tuple{LibPQ.Connection}, status = :internal,
    reader = "_drain_postgres_connection!"),
+  # #1568: the interval read. `pqparse` is LibPQ's own name with many methods, and the binary `parse`
+  # is a `Base.parse` method the scan cannot see (it is called unqualified).
+  (f = LibPQ.pqparse, sig = Tuple{Type{LibPQ.Dates.CompoundPeriod}, String}, status = :internal,
+   reader = "_parse_iso_interval, for text its pattern does not match"),
+  (f = Base.parse, sig = Tuple{Type{LibPQ.Dates.CompoundPeriod}, LibPQ.PQBinaryValue{LibPQ.oid(:interval)}},
+   status = :internal, reader = "_interval_conversion, for a binary interval"),
 ]
 
 # ── The socket layer under Postgres.jl and MySQL.jl ────────────────────────────────────────────────

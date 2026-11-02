@@ -83,12 +83,8 @@ function _resolve_outer_ref_field_name(ref::OuterRefObject, outer::SQLInstructio
   return ref.field_name
 end
 
+# Both positions render here: the projected form (`_get_select_query`) delegates to the filter form.
 function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction)::String
-  # #433 — before the deepcopy: this renderer emits no `WITH` prefix at all, so a CTE declared on
-  # the subquery would be dropped from the SQL while still being resolvable by path. Guarding here
-  # covers `Exists` in BOTH positions, because the projected form (`_get_select_query`) delegates
-  # to the filter form. `Subquery` and `__@in` render the nested `WITH` and are not guarded (#1292).
-  _refuse_exists_nested_cte(subquery)
   q = deepcopy(subquery)
   # #1066: the projection is kept, and probed, when it decides the subquery's rows — as `exists()`.
   keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
@@ -108,6 +104,13 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # files under its OWN clause roles, which is what the run sorts by, and restores the parent's
   # ambient bucket itself, on return and on throw (#936, #939).
   nested_mark = nested_parameter_mark(instruc)
+  # #1523: the subquery's own `.with(...)` renders inside the parentheses, as `Subquery` and `__@in`
+  # render theirs through `query()` (#1292). It is built before `build()` and on the copy `q`, because
+  # `build_cte_clause` is what materializes each CTE's model (`_build_cte_custom_model` writes it into
+  # `q.object.ctes`), and `build()` resolves `<cte>__col` through that. Its values bind under a scoped
+  # `:cte` bucket, so the run detached below lifts them first — where the `WITH` text sits (#432).
+  # Until #1523 this renderer emitted no `WITH`, and `Exists` refused such a subquery (#433).
+  with_clause = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias)
   instruction = build(
     q.object,
     table_alias=instruc.table_alias,
@@ -137,9 +140,11 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # `OuterRef` still correlates from inside it, on both engines, since it names an enclosing query.
   # An unprojected `distinct()` past an offset is probed the same way, over the model's own columns
   # (`DISTINCT "Tb".*`, #1359), so the offset skips rows and not one per related row, as `exists()` does.
+  # The `WITH` heads the EXISTS body, so a derived table's inner SELECT is in its scope too.
   derived = keep_values || (q.object.distinct && offset > 0)
-  print(io, derived ? "EXISTS (SELECT 1 FROM (SELECT " * _exists_projection(q.object, instruction, keep_values) * "\n" :
-                      "EXISTS (SELECT 1\n")
+  print(io, "EXISTS (", with_clause)
+  print(io, derived ? "SELECT 1 FROM (SELECT " * _exists_projection(q.object, instruction, keep_values) * "\n" :
+                      "SELECT 1\n")
   print(io, "FROM ", safe_table_name, " as ", safe_alias, "\n")
 
   for join_sql in instruction.join

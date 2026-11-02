@@ -80,7 +80,7 @@ WHERE "Tb"."driverid" IN (
 
 ## A Subquery Can Declare Its Own CTE
 
-A subquery consumed by `@in` / `@nin` or `Subquery(...)` can declare a CTE of its own. The `WITH` renders inside the subquery's parentheses, and its values bind where their text sits, on every backend:
+A subquery consumed by `@in` / `@nin`, `Subquery(...)` or `Exists(...)` can declare a CTE of its own. The `WITH` renders inside the subquery's parentheses, and its values bind where their text sits, on every backend:
 
 ```julia
 fast_laps = M.Lap_times.objects
@@ -113,10 +113,38 @@ WHERE "Tb"."nationality" = ? AND
    WHERE "R2_1"."milliseconds" IS NOT NULL)
 ```
 
-`Exists(...)` is the exception. It renders its subquery without a `WITH` clause, so an `Exists` subquery that declares its own `.with(...)` raises a `QueryBuildError` naming the CTE rather than building SQL that never declares it. Test membership with `"driverid__@in" => inner`, as above, or fold the CTE's predicate into the subquery's own `filter(...)`.
+An `Exists(...)` subquery works the same way, in a filter or projected as a column (correlated with `OuterRef`, [below](#Scalar-correlated-subqueries)). The `WITH` opens the `EXISTS (…)` body:
+
+```julia
+fast_start = M.Result.objects
+fast_start.with("fast" => fast_laps, join_field = "raceid" => "raceid")
+fast_start.filter("driverid" => OuterRef("driverid"),
+                  "fast__milliseconds__@isnull" => false)
+
+query = M.Driver.objects
+query.filter("nationality" => "Brazilian")
+query.values("driverid", "surname", "has_fast" => Exists(fast_start))
+```
+
+Generated SQL (SQLite), bound `[75000, "Brazilian"]`:
+```sql
+SELECT "Tb"."driverid" AS "driverid", "Tb"."surname" AS "surname",
+  EXISTS (WITH "fast" AS (
+      SELECT "R1"."raceid" AS "raceid", "R1"."milliseconds" AS "milliseconds"
+      FROM "lap_times" AS "R1"
+      WHERE "R1"."milliseconds" < ?
+   )
+   SELECT 1
+   FROM "result" AS "R2"
+   LEFT JOIN "fast" AS "R2_1" ON "R2"."raceid" = "R2_1"."raceid"
+   WHERE "R2"."driverid" = "Tb"."driverid" AND "R2_1"."milliseconds" IS NOT NULL
+   LIMIT 1) AS "has_fast"
+FROM "driver" AS "Tb"
+WHERE "Tb"."nationality" = ?
+```
 
 !!! note
-    Up to #1292 PormG refused a nested CTE in every one of these consumers (#433), because its values bound ahead of earlier text on a backend that binds parameters by position. They now bind in text order on every backend, so only `Exists` refuses. A CTE declared **inside another CTE's body** was always supported: it renders in the leading `WITH`.
+    Up to #1292 PormG refused a nested CTE in every one of these consumers (#433), because its values bound ahead of earlier text on a backend that binds parameters by position. They now bind in text order on every backend. `Exists` refused one until #1523, because it rendered its subquery without a `WITH` clause. A CTE declared **inside another CTE's body** was always supported: it renders in the leading `WITH`.
 
 Likewise, a CTE can only be referenced by a statement that actually emits a `WITH` clause. Reads (`list`, `first`, `count`, `exists`) do; `update(...)` does not, so referencing a CTE from it raises a `QueryBuildError` rather than building SQL against a relation the statement never declares. `bulk_update(...)` does not emit one either, and refuses a handler that declares a CTE up front with an `UnsafeMutationError` — the type `delete()` uses below, because the refusal is about the statement being a mutation.
 
@@ -402,8 +430,8 @@ The rules are those of a projected scalar subquery (below), with two differences
     A window function is not an aggregate here: it runs after grouping, so a subquery in its argument is checked.
 
     One deliberate strictness: PostgreSQL also accepts correlating on *any* column of a table whose **primary key** is grouped (every column is then functionally dependent on it), but PormG does not infer that dependency: it asks the query to name the column it groups by, on every engine — add the correlated column to `values(...)` if you hit it.
-- **A CTE and a subquery.** A subquery sees only the CTEs it declares itself, and an `Exists` subquery cannot declare one.
-    - A `Subquery` or `__@in`/`__@nin` subquery may declare its own `.with(...)`: the `WITH` renders inside its parentheses and binds in text order on every backend (#1292). An `Exists` subquery may not: `Exists` renders no `WITH`, so it raises a `QueryBuildError` naming the CTE (#433). Use `__@in`, or fold the CTE's predicate into the subquery's own `.filter(...)`.
+- **A CTE and a subquery.** A subquery sees only the CTEs it declares itself.
+    - A `Subquery`, `__@in`/`__@nin` or `Exists` subquery may declare its own `.with(...)`: the `WITH` renders inside its parentheses and binds in text order on every backend (#1292, #1523).
     - A subquery has its own CTE namespace, so it cannot reference a CTE its *enclosing* query declares — `CTE("ev", "status")` and `"ev__status"` inside it both raise an `UnknownFieldError` that says the CTE belongs to the enclosing query (#444). Put that condition in the enclosing query's `filter(...)`.
     - A CTE declared on the outer query **beside** a projected subquery that does not reference it is ordinary and builds on every backend.
     - A CTE declared inside another CTE's **body** is also legal: it renders in the leading `WITH`, where its values bind in text order.

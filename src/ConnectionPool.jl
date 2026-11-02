@@ -902,8 +902,9 @@ end
 
 Opt a pool into idle-connection reaping / max-lifetime (#125). `idle_timeout`/`max_lifetime` are in
 seconds; `0` (the default) leaves that dimension off, and if both are off this is a no-op. Registers
-(or updates) the pool's `PoolMonitorState` and starts the shared background sweeper. Called by
-`Configuration` after a pool is built from `connection.yml`.
+(or updates) the pool's `PoolMonitorState` and starts the shared background sweeper, except while
+precompiling: there the next run-time call starts it (#1562). Called by `Configuration` after a pool
+is built from `connection.yml`.
 
 Re-configuring (calling again, or after `enable_leak_detection!` already registered the state) only
 swaps the reap config — the per-slot clocks are deliberately NOT reset: `created_at`/`last_used`
@@ -940,9 +941,10 @@ end
 
 # Scan LEASED slots for a lease held past the leak threshold and @warn once per culprit (#127). Directly
 # callable so tests drive it deterministically. `last_used[i]` is the checkout instant for a leased slot,
-# so no separate checkout timestamp is needed.
-function _leak_check!(pool)
-  st = _monitor_state(pool); st === nothing && return
+# so no separate checkout timestamp is needed. The acquire path passes the state it already looked up.
+_leak_check!(pool) = _leak_check!(pool, _monitor_state(pool))
+function _leak_check!(pool, st::Union{PoolMonitorState, Nothing})
+  st === nothing && return
   st.leak_threshold <= 0 && return
   now = time()
   leaked = Tuple{Int, Float64}[]
@@ -968,7 +970,19 @@ const _reaper_lock = ReentrantLock()
 const _reaper_started = Ref(false)
 
 # Start the single global sweeper task (spawn-once, mirroring `_ensure_sqlite_async_worker!`).
-function _ensure_reaper!()
+#
+# Never while generating output (#1562). The sweeper never ends, and a precompile worker waits for
+# every open task before it writes the cache, so a package whose module body loads a configuration
+# with `idle_timeout`/`max_lifetime` never finished precompiling (nor did a package depending on one
+# whose `__init__` loads it). Nothing is latched then either, so a later run-time call starts it:
+# - a package image saves none of PormG's state, so the run-time `load` in `__init__` registers the
+#   pool again and comes back here;
+# - a sysimage or `juliac` build saves the whole heap, the loaded key and the pool's monitor state
+#   included, so that `load` returns early and never reaches `enable_reaping!`. The first acquire
+#   starts the sweeper instead (`_start_reaper_if_reaping!`).
+# `generating` is a keyword so the unit test can take the precompile branch.
+function _ensure_reaper!(; generating::Bool = ccall(:jl_generating_output, Cint, ()) == 1)
+  generating && return nothing
   _reaper_started[] && return
   Base.lock(_reaper_lock) do
     _reaper_started[] && return
@@ -984,6 +998,24 @@ function _ensure_reaper!()
     end
     _reaper_started[] = true
   end
+  return nothing
+end
+
+# The lazy start (#1562): this pool reaps but the sweeper is not running, because its configuration
+# was loaded while generating output and the image kept it (see `_ensure_reaper!`). A pool with leak
+# detection only needs no sweeper, so it starts none.
+function _start_reaper_if_reaping!(st::PoolMonitorState)
+  (st.config.idle_timeout > 0 || st.config.max_lifetime > 0) && _ensure_reaper!()
+  return nothing
+end
+
+# What every acquire does while some pool is monitored: the leak scan (#127) and the lazy start of the
+# sweeper (#1562). One registry lookup serves both; the lazy start adds one `Ref` read once the
+# sweeper runs.
+function _monitor_on_acquire!(pool)
+  st = _monitor_state(pool); st === nothing && return nothing
+  _leak_check!(pool, st)
+  _reaper_started[] || _start_reaper_if_reaping!(st)
   return nothing
 end
 
@@ -1330,7 +1362,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
   # per-call `timeout_seconds` still wins.
   to = timeout_seconds === nothing ? _pool_timeout(pool) : Float64(timeout_seconds)
   deadline = start_time + to
-  _MONITOR_ANY[] && _leak_check!(pool)   # leak detection (#127): warn about connections held past the threshold
+  _MONITOR_ANY[] && _monitor_on_acquire!(pool)   # leak scan (#127) and the sweeper's lazy start (#1562)
   # `attempts` counts scan/materialize loop iterations (event-driven wait, not the old 100ms poll),
   # so it is small — typically 1 on a clean saturated timeout. It is a diagnostic field on
   # PoolTimeoutError; `max_retries` still bounds it as a safety limit on pathological create loops.
@@ -1548,7 +1580,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
   # per-call `timeout_seconds` still wins.
   to = timeout_seconds === nothing ? _pool_timeout(pool) : Float64(timeout_seconds)
   deadline = start_time + to
-  _MONITOR_ANY[] && _leak_check!(pool)   # leak detection (#127): warn about connections held past the threshold
+  _MONITOR_ANY[] && _monitor_on_acquire!(pool)   # leak scan (#127) and the sweeper's lazy start (#1562)
   attempts = 0
   # See the PormGPostgres twin: hook runs off the lock at most once; `owned[]` is the slot this call
   # holds for itself, handed or reserved (#1535, #1540); direct-handoff wait replaces the busy-poll (#124).

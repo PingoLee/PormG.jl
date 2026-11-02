@@ -25,7 +25,7 @@
 # ============================================================
 
 using Test
-using Dates, UUIDs
+using Dates, UUIDs, Random
 using PormG
 using PormG.Models: Model, IDField, CharField, TextField, IntegerField, BigIntegerField, FloatField,
   DecimalField, BooleanField, DateField, DateTimeField, TimeField, DurationField, UUIDField,
@@ -158,4 +158,169 @@ BCS1344_LAPS.connect_key = "bcs1344_pg"
   @test endswith(first_chunk, "\"VER\",10000\n")
   @test second_chunk == "\"HAM\",10001\n"
   @test r == (count = n, rows = nothing)
+end
+
+# ── #1541: the writer against the phase 5 writer, on random chunks ──
+# #1541 replaced phase 5's writer (each column into an `IOBuffer`) with one that writes the cells
+# straight into a byte vector. The reference below is the phase 5 writer, copied verbatim apart from
+# the names: it produced `BCS1344_WRITER_EXPECTED` above, and it is kept here as the oracle the
+# random chunks are checked against, since no fixed list of cells covers every width, type and byte
+# a formatter can hand the writer.
+bcs1541_cell!(io::IO, ::Union{Missing, Nothing}, ::Vector{UInt8}) = (write(io, "\\N"); nothing)
+bcs1541_cell!(io::IO, value::Bool, ::Vector{UInt8}) = (write(io, value ? "true" : "false"); nothing)
+bcs1541_cell!(io::IO, value::Integer, ::Vector{UInt8}) = (print(io, value); nothing)
+function bcs1541_cell!(io::IO, value::Base.BitInteger, digits::Vector{UInt8})
+  n = value < 0 ? -unsigned(value) : unsigned(value)
+  k = length(digits)
+  while true
+    digits[k] = UInt8('0') + (rem(n, oftype(n, 10)) % UInt8)
+    n = div(n, oftype(n, 10))
+    iszero(n) && break
+    k -= 1
+  end
+  value < 0 && write(io, UInt8('-'))
+  write(io, view(digits, k:length(digits)))
+  return nothing
+end
+function bcs1541_cell!(io::IO, value::AbstractString, ::Vector{UInt8})
+  write(io, '"')
+  start = firstindex(value)
+  while (q = findnext(==('"'), value, start)) !== nothing
+    write(io, SubString(value, start, q), '"')
+    start = nextind(value, q)
+  end
+  write(io, SubString(value, start), '"')
+  return nothing
+end
+function bcs1541_column(column::AbstractVector, nrows::Int)
+  io = IOBuffer()
+  ends = Vector{Int}(undef, nrows)
+  digits = Vector{UInt8}(undef, 40)
+  for row in 1:nrows
+    bcs1541_cell!(io, column[row], digits)
+    ends[row] = position(io)
+  end
+  return take!(io), ends
+end
+function bcs1541_reference_chunk(columns, nrows::Int)::String
+  written = Tuple{Vector{UInt8}, Vector{Int}}[bcs1541_column(column, nrows) for column in columns]
+  out = IOBuffer()
+  starts = zeros(Int, length(written))
+  for row in 1:nrows
+    for (j, (bytes, ends)) in enumerate(written)
+      j > 1 && write(out, UInt8(','))
+      stop = ends[row]
+      write(out, view(bytes, (starts[j] + 1):stop))
+      starts[j] = stop
+    end
+    write(out, UInt8('\n'))
+  end
+  return String(take!(out))
+end
+
+# Text built from the pieces that matter to CSV and to the byte walk: `"` alone and doubled, the
+# NULL marker's two characters, every line break, a comma, a backslash, multi-byte UTF-8, and bytes
+# that are not UTF-8 (a lone continuation byte, an overlong lead, a truncated sequence, 0xff).
+const BCS1541_PIECES = ["\"", "\"\"", "\\N", "\n", "\r\n", "\r", ",", "\\", "Senna", "Räikkönen",
+  "😀", " ", "", "\x80", "\xc0", "\xe2\x82", "\xff", "a\xc0\"b"]
+bcs1541_text(rng) = join(rand(rng, BCS1541_PIECES, rand(rng, 0:6)))
+const BCS1541_INT_TYPES = (Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128)
+# An integer of type `T` near an edge: an extreme, zero, one, or a power of ten and its neighbours
+# (where the digit count changes), else anywhere in the range.
+function bcs1541_int(rng, ::Type{T}) where {T}
+  r = rand(rng)
+  r < 0.15 && return rand(rng, (typemin(T), typemax(T), zero(T), one(T)))
+  if r < 0.5
+    p = T(10)^rand(rng, 0:(ndigits(typemax(T)) - 1))
+    return rand(rng, (p, p - one(T), T <: Signed ? -p : p))
+  end
+  return rand(rng, T)
+end
+
+# One random column of `nrows` cells: a kind, NULLs as `missing` or `nothing` at a random rate, and
+# either an `Any` vector (a dynamic dispatch per cell) or the narrowest element type, concrete or a
+# small `Union`, which is what a formatter's `map` gives.
+function bcs1541_column_of(rng, nrows::Int)
+  kind = rand(rng, 1:6)
+  cell = if kind == 1
+    T = rand(rng, BCS1541_INT_TYPES)
+    () -> bcs1541_int(rng, T)
+  elseif kind == 2
+    () -> rand(rng, (big(2)^130, -big(10)^40, big(0), big(-1)))
+  elseif kind == 3
+    () -> rand(rng, Bool)
+  elseif kind == 4
+    () -> bcs1541_text(rng)
+  elseif kind == 5
+    () -> (s = "x" * bcs1541_text(rng) * "x"; SubString(s, 2, prevind(s, lastindex(s))))
+  else
+    () -> Test.GenericString(bcs1541_text(rng))
+  end
+  null_rate = rand(rng, (0.0, 0.0, 0.2, 1.0))
+  values = Any[rand(rng) < null_rate ? rand(rng, (missing, nothing)) : cell() for _ in 1:nrows]
+  return rand(rng, Bool) ? values : identity.(values)
+end
+
+@testset "bulk_copy's writer: random chunks give the phase 5 writer's bytes (#1541)" begin
+  # What: 300 seeded random chunks of 0–70 columns and 0–40 rows, every machine-integer width at its
+  # edges, `BigInt`, `Bool`, and text as `String`, `SubString` and `GenericString` carrying `"`,
+  # `\N`, line breaks and invalid UTF-8, with `missing`/`nothing` cells, in concrete, `Union` and
+  # `Any` vectors. Expected: `_copy_csv_chunk` returns exactly the bytes of the phase 5 writer kept
+  # above. Why: the byte-vector writer (#1541) is a speed change only; a differing byte would be a
+  # different value stored by COPY.
+  rng = Random.Xoshiro(1541)
+  for _ in 1:300
+    nrows = rand(rng, 0:40)
+    # An `AbstractVector` of columns, as `bulk_copy` passes them: a tuple would compile both writers
+    # once per random tuple of column types.
+    columns = AbstractVector[bcs1541_column_of(rng, nrows) for _ in 1:rand(rng, 0:70)]
+    expected = bcs1541_reference_chunk(columns, nrows)
+    got = PormG.QueryBuilder._copy_csv_chunk(columns, nrows)
+    @test got == expected
+    got == expected || break   # one failing chunk is enough to read
+  end
+end
+
+@testset "bulk_copy's writer: each cell's reserve covers the bytes it writes (#1541)" begin
+  # What: every cell method, called on an EMPTY buffer, so its `_copy_csv_reserve!` grows the buffer
+  # to exactly the bytes it asked for, with the cells that need the most per input: text of nothing
+  # but `"` (each doubled), every machine integer's extremes, a negative `BigInt`, `Bool`, NULL.
+  # Expected: the end position it returns is within the buffer, and the bytes are the phase 5
+  # writer's. Why: the reserve is what makes the cell's `@inbounds` writes safe, and the random
+  # chunks cannot see a text reserve one byte short, since the column buffer's first size and its
+  # doubling leave slack; here there is none, so a short reserve returns a position past the end,
+  # with or without bounds checking.
+  cell! = PormG.QueryBuilder._copy_csv_cell!
+  quotes = [repeat("\"", n) for n in (0, 1, 2, 3, 15)]
+  cells = Any[missing, nothing, true, false, big(2)^130, -big(10)^40,
+    quotes..., (SubString("x" * q * "x", 2, 1 + length(q)) for q in quotes)...,
+    (Test.GenericString(q) for q in quotes)...]
+  for T in BCS1541_INT_TYPES
+    append!(cells, T <: Signed ? (typemin(T), typemax(T), zero(T), -one(T)) : (typemax(T), zero(T)))
+  end
+  for v in cells
+    buf = UInt8[]
+    p = cell!(buf, 0, v)
+    @test p <= length(buf)
+    @test String(buf[1:min(p, length(buf))]) == bcs1541_reference_chunk(Any[Any[v]], 1)[1:end-1]
+  end
+end
+
+# A string type whose code units are bytes but not UTF-8: one byte per character, Latin-1.
+struct BCS1541Latin1 <: AbstractString
+  data::Vector{UInt8}
+end
+Base.ncodeunits(s::BCS1541Latin1) = length(s.data)
+Base.codeunit(::BCS1541Latin1) = UInt8
+Base.codeunit(s::BCS1541Latin1, i::Integer) = s.data[i]
+Base.isvalid(s::BCS1541Latin1, i::Integer) = checkbounds(Bool, s.data, i)
+Base.iterate(s::BCS1541Latin1, i::Int = 1) = i > length(s.data) ? nothing : (Char(s.data[i]), i + 1)
+
+@testset "bulk_copy's writer: a string type that is not UTF-8 is written as its characters (#1541)" begin
+  # What: a Latin-1 string type, whose `ä` is the single code unit 0xe4. Expected: the cell is the
+  # UTF-8 text `"Rä"""` (`ä` as 0xc3 0xa4), what the phase 5 writer's `write` gave. Why: copying
+  # such a type's code units would send PostgreSQL the byte 0xe4, invalid UTF-8 in place of `ä`; only
+  # `String`'s code units are walked as bytes.
+  s = BCS1541Latin1(UInt8[0x52, 0xe4, 0x22])
+  @test PormG.QueryBuilder._copy_csv_chunk((Any[s],), 1) == "\"R\xc3\xa4\"\"\"\n"
 end

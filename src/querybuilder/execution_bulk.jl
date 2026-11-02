@@ -2019,7 +2019,7 @@ _bulk_copy_cell(value::PormGBytes) = "\\x" * bytes2hex(value.bytes)
 _bulk_copy_cell(value::PormGArrayLiteral) = value.literal
 _bulk_copy_cell(value) = value
 
-# ── The COPY text (#1344 phase 5) ──
+# ── The COPY text (#1344 phase 5, #1541) ──
 # PormG writes the `FORMAT CSV` stream itself; it used to call `CSV.write(…; header = false,
 # quotestrings = true, missingstring = _BULK_COPY_NULL)`, and `test_bulk_copy_stream.jl` holds the
 # bytes that writer produced, which this one reproduces. Every cell has been formatted by its field
@@ -2030,38 +2030,78 @@ _bulk_copy_cell(value) = value
 #     those two characters; a comma, a line break or a backslash inside the quotes is data;
 #   - an integer is its digits, a `Bool` `true`/`false`, which nothing in CSV needs to quote.
 # There is no method for any other type: no formatter returns one, and a new formatter that did
-# should fail here by name rather than have its value's text guessed. `digits` is a scratch buffer
-# the column writer owns, used only by the machine-integer method.
-_copy_csv_cell!(io::IO, ::Union{Missing, Nothing}, ::Vector{UInt8}) = (write(io, _BULK_COPY_NULL); nothing)
-_copy_csv_cell!(io::IO, value::Bool, ::Vector{UInt8}) = (write(io, value ? "true" : "false"); nothing)
-_copy_csv_cell!(io::IO, value::Integer, ::Vector{UInt8}) = (print(io, value); nothing)   # a `BigInt`, …
-# A machine integer's digits, filled from the end of `digits` and written in one call: `print`
-# builds a `String` for each one (#1346). `-unsigned(value)` is the magnitude for `typemin` too,
-# which `abs` is not. `digits` holds 40 bytes; the widest, a `UInt128`, has 39 digits.
-function _copy_csv_cell!(io::IO, value::Base.BitInteger, digits::Vector{UInt8})
-  n = value < 0 ? -unsigned(value) : unsigned(value)
-  k = length(digits)
+# should fail here by name rather than have its value's text guessed.
+#
+# A cell is written straight into a byte vector, `_copy_csv_cell!(buf, pos, value)`: its bytes go
+# after byte `pos` of `buf` and the new end is returned (#1541). Phase 5 wrote into an `IOBuffer`,
+# and each `write` call there cost 8–11 ns, three or four of them a text cell — twice `CSV.write`'s
+# time on a narrow model. Each method first grows `buf` to its own worst case
+# (`_copy_csv_reserve!`), which is what makes its `@inbounds` writes in bounds.
+
+# Grow `buf` so that `need` bytes fit after byte `pos`. Doubling keeps a column to a handful of
+# `resize!` calls whatever its length.
+@inline function _copy_csv_reserve!(buf::Vector{UInt8}, pos::Int, need::Int)
+  pos + need > length(buf) && resize!(buf, max(2 * length(buf), pos + need))
+  return nothing
+end
+
+# A short text written as is, unquoted: the NULL marker, `true`/`false`, a `BigInt`'s digits.
+function _copy_csv_put!(buf::Vector{UInt8}, pos::Int, text::String)::Int
+  units = codeunits(text)
+  _copy_csv_reserve!(buf, pos, length(units))
+  for b in units
+    @inbounds buf[pos += 1] = b   # in bounds: the reserve above covers `pos + length(units)`
+  end
+  return pos
+end
+
+_copy_csv_cell!(buf::Vector{UInt8}, pos::Int, ::Union{Missing, Nothing})::Int = _copy_csv_put!(buf, pos, _BULK_COPY_NULL)
+_copy_csv_cell!(buf::Vector{UInt8}, pos::Int, value::Bool)::Int = _copy_csv_put!(buf, pos, value ? "true" : "false")
+_copy_csv_cell!(buf::Vector{UInt8}, pos::Int, value::Integer)::Int = _copy_csv_put!(buf, pos, string(value))   # a `BigInt`, …
+# A machine integer's digits, counted first and then filled from the end in place: `print` builds a
+# `String` for each one (#1346). `-unsigned(value)` is the magnitude for `typemin` too, which `abs`
+# is not.
+function _copy_csv_cell!(buf::Vector{UInt8}, pos::Int, value::Base.BitInteger)::Int
+  negative = value < 0
+  n = negative ? -unsigned(value) : unsigned(value)
+  len = ndigits(n) + negative
+  _copy_csv_reserve!(buf, pos, len)
+  # in bounds: every index below is in `pos+1:pos+len`, which the reserve above covers; the loop
+  # writes exactly `ndigits(n)` digits, from `pos + len` down to `pos + negative + 1`.
+  negative && (@inbounds buf[pos + 1] = UInt8('-'))
+  k = pos + len
   while true
-    digits[k] = UInt8('0') + (rem(n, oftype(n, 10)) % UInt8)
+    @inbounds buf[k] = UInt8('0') + (rem(n, oftype(n, 10)) % UInt8)
     n = div(n, oftype(n, 10))
     iszero(n) && break
     k -= 1
   end
-  value < 0 && write(io, UInt8('-'))
-  write(io, view(digits, k:length(digits)))
-  return nothing
+  return pos + len
 end
-function _copy_csv_cell!(io::IO, value::AbstractString, ::Vector{UInt8})
-  write(io, '"')
-  # The text between one `"` and the next, written in one call each, then the `"` doubled; with no
-  # `"` that is the whole value in one call. Nothing is allocated (`replace` copied the text).
-  start = firstindex(value)
-  while (q = findnext(==('"'), value, start)) !== nothing
-    write(io, SubString(value, start, q), '"')
-    start = nextind(value, q)
+# Text, quoted, each `"` byte doubled. Byte by byte over a `String`'s code units, so invalid UTF-8
+# passes through as the bytes it is, as `write` passed it: a `"` (0x22) is never part of a
+# multi-byte character, so doubling the byte doubles exactly the `"` characters. Any other string
+# type is converted to a `String` first: its code units need not be UTF-8 (a Latin-1 type's `ä` is
+# one byte, which `write` wrote as two), and `String(value)` writes each character as `write` did.
+_copy_csv_cell!(buf::Vector{UInt8}, pos::Int, value::Union{String, SubString{String}})::Int =
+  _copy_csv_quoted!(buf, pos, codeunits(value))
+_copy_csv_cell!(buf::Vector{UInt8}, pos::Int, value::AbstractString)::Int =
+  _copy_csv_quoted!(buf, pos, codeunits(String(value)))
+function _copy_csv_quoted!(buf::Vector{UInt8}, pos::Int, units::AbstractVector{UInt8})::Int
+  # Every byte a `"`, doubled, plus the two quotes around them: the most this cell can take. That
+  # worst case is what a very large text cell costs in memory, about twice its length, until the
+  # chunk is assembled.
+  _copy_csv_reserve!(buf, pos, 2 * length(units) + 2)
+  # in bounds: at most `2 * length(units) + 2` bytes are written after `pos`, which the reserve covers.
+  @inbounds begin
+    buf[pos += 1] = UInt8('"')
+    for b in units
+      buf[pos += 1] = b
+      b == UInt8('"') && (buf[pos += 1] = UInt8('"'))
+    end
+    buf[pos += 1] = UInt8('"')
   end
-  write(io, SubString(value, start), '"')
-  return nothing
+  return pos
 end
 
 # One column's first `nrows` cells, written back to back, and the byte offset each cell ends at. A
@@ -2069,36 +2109,54 @@ end
 # element type is concrete or a small `Union` (what `_format_copy_column`'s `map` gives for every
 # field formatter) is written without a dynamic dispatch per cell.
 function _copy_csv_column(column::AbstractVector, nrows::Int)::Tuple{Vector{UInt8}, Vector{Int}}
-  io = IOBuffer()
+  buf = Vector{UInt8}(undef, 16 * nrows)   # a first guess; each cell grows it as it needs
   ends = Vector{Int}(undef, nrows)
-  digits = Vector{UInt8}(undef, 40)
+  pos = 0
   for row in 1:nrows
-    _copy_csv_cell!(io, column[row], digits)
-    ends[row] = position(io)
+    # `::Int`: every method returns one, but over an `Any` column the call is dynamic and inference
+    # would not carry that to `pos`.
+    pos = _copy_csv_cell!(buf, pos, column[row])::Int
+    @inbounds ends[row] = pos   # in bounds: `ends` has `nrows` slots and `row` runs over `1:nrows`
   end
-  return take!(io), ends
+  return resize!(buf, pos), ends
 end
 
 # One chunk's rows, cells joined by `,` and every row ended by `\n`, in `columns` order — the order
 # of the COPY column list (HEADER FALSE). Each column is written on its own (`_copy_csv_column`) and
-# the rows are then assembled from the byte ranges. Writing row by row over a tuple of the columns,
-# the shape `CSV.write` uses, compiles once per tuple of column types and costs more per cell the
-# wider the model: measured in #1344 phase 5's review, 60 columns took seconds to compile, again for
-# each new tuple (a nullable column with and without a `missing` in the chunk), and ran 1 µs a cell.
+# the rows are then assembled from the byte ranges into a vector of the exact size. Writing row by
+# row over a tuple of the columns, the shape `CSV.write` uses, compiles once per tuple of column
+# types and costs more per cell the wider the model: measured in #1344 phase 5's review, 60 columns
+# took seconds to compile, again for each new tuple (a nullable column with and without a `missing`
+# in the chunk), and ran 1 µs a cell.
 function _copy_csv_chunk(columns::Union{Tuple, AbstractVector}, nrows::Int)::String
   written = Tuple{Vector{UInt8}, Vector{Int}}[_copy_csv_column(column, nrows) for column in columns]
-  out = IOBuffer(; sizehint = sum(length(first(w)) for w in written; init = 0) + nrows * length(written))
-  starts = zeros(Int, length(written))   # where each column's next cell begins, 0-based
+  ncols = length(written)
+  # Every cell's bytes, and per row `ncols - 1` commas and one `\n` (a row of no columns is `\n`).
+  total = sum(length(first(w)) for w in written; init = 0) + nrows * max(ncols, 1)
+  out = Vector{UInt8}(undef, total)
+  starts = zeros(Int, ncols)   # where each column's next cell begins, 0-based
+  pos = 0
   for row in 1:nrows
-    for (j, (bytes, ends)) in enumerate(written)
-      j > 1 && write(out, UInt8(','))
+    for j in 1:ncols
+      @inbounds bytes, ends = written[j]   # in bounds: `j` runs over `1:ncols`, `written`'s length
+      # in bounds: `out` holds `total` bytes, the sum of everything this loop writes, and the rows
+      # are written once each in order, so `pos` never passes `total`.
+      j > 1 && (@inbounds out[pos += 1] = UInt8(','))
       stop = ends[row]
-      write(out, view(bytes, (starts[j] + 1):stop))
+      n = stop - starts[j]
+      # in bounds: the cell is `bytes[starts[j]+1:stop]` (`_copy_csv_column` recorded `stop` as a
+      # position it wrote up to, and `bytes` was resized to the last of them), and it fits in `out`
+      # for the reason above.
+      unsafe_copyto!(out, pos + 1, bytes, starts[j] + 1, n)
+      pos += n
       starts[j] = stop
     end
-    write(out, UInt8('\n'))
+    @inbounds out[pos += 1] = UInt8('\n')
   end
-  return String(take!(out))
+  # A tripwire for an over-counted `total` (undefined bytes left at the end). An under-count would
+  # have overrun `out` before reaching here; what prevents that is `total`'s derivation above.
+  @assert pos == total
+  return String(out)
 end
 
 # One column of a `bulk_copy` chunk, rows `first_row` to `first_row + nrows - 1`, each cell validated
@@ -2224,7 +2282,7 @@ end
 # quotes every string value (`_copy_csv_cell!`): a genuine string equal to this sentinel is
 # written *quoted* and read back as the literal string, while a `missing`/`nothing` is written
 # *unquoted* and read as NULL. So "" (quoted) ≠ NULL (unquoted \N). The COPY `NULL '…'` clause and
-# `_copy_csv_cell!(io, ::Missing)` must use this same value.
+# `_copy_csv_cell!(buf, pos, ::Missing)` must use this same value.
 const _BULK_COPY_NULL = "\\N"
 
 """

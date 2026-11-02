@@ -183,6 +183,8 @@ end
 
 function _drop_multipath_set_null_scratch_schema!()
     pool = PormG.config[PORMG_DB_FOLDER].connections
+    # #1376's rollback test adds a table referencing `mp_root_scratch`; a killed run can leave it.
+    _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_block_scratch\";")
     _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_leaf_scratch\";")
     _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_mid_scratch\";")
     _scratch_sql(pool, "DROP TABLE IF EXISTS \"mp_root_scratch\";")

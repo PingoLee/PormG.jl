@@ -17,7 +17,7 @@ This is the same contract Elixir's Ecto (`Task.async`) and Go's `database/sql` (
 
 ## How it works
 
-`list()` → `fetch()` → `fetch_async()` → `await_result()`. On PostgreSQL the round-trip is real non-blocking I/O (`LibPQ.async_execute`); on MySQL each statement runs on a task of its own; on SQLite every statement is funnelled through one serialized worker task. Every path *yields* while waiting, so concurrency is always safe — but only PostgreSQL and MySQL execute queries in parallel across connections. See the [Architecture](architecture.md) guide's *"Async-first" is backend-specific* note for the full picture.
+`list()` → `fetch()` → `fetch_async()` → `await_result()`. On PostgreSQL the round-trip is real non-blocking I/O (`LibPQ.async_execute` on the LibPQ driver, a task per statement on Postgres.jl); on MySQL each statement runs on a task of its own; on SQLite every statement is funnelled through one serialized worker task. Every path *yields* while waiting, so concurrency is always safe — but only PostgreSQL and MySQL execute queries in parallel across connections. See the [Architecture](architecture.md) guide's *"Async-first" is backend-specific* note for the full picture.
 
 ## `@async` vs `Threads.@spawn`
 
@@ -65,6 +65,19 @@ Results arrive in *input* order with `fetch.(tasks)` / `asyncmap` — tasks may 
 Each in-flight query leases one pooled connection for its duration; a 10-way fan-out briefly holds up to 10 connections. The pool starts at `pool_size` and grows lazily to a `pool_size × 10` ceiling; beyond that, callers park until a connection frees, and a genuine saturation raises a catchable `PoolTimeoutError` (tune with `pool_timeout`). Diagnose with `pool_stats("db")`. Details and YAML examples live in [Advanced Configuration](configuration/advanced.md).
 
 A task-wrapped terminal **cannot leak** a connection: the query acquires and releases its connection inside the task, even if you never `fetch` the task.
+
+## Under a web server's load
+
+A web server runs each request as a task, and Julia does not preempt a task that computes. So what matters under load is where each driver waits for the database. The numbers below come from `test/performance/async_concurrency_probe.jl` (#1280): Julia 1.13.3, PostgreSQL 18 on the same machine, two runs each, on a machine shared with other work. They show the shape, not a benchmark. MySQL was not measured.
+
+- **On PostgreSQL, a waiting query frees its thread.** On 8 threads, 32 tasks each waiting on a 200 ms statement completed about 158 statements per second. If each wait held a thread, the most would be 40. Meanwhile a 10 ms heartbeat on the same threads woke with a p99 lateness of at most 2.3 ms, against 1.2 ms when idle. Its single worst wake was 4.5 ms late. A server can have many more queries in flight than it has threads.
+- **On the Postgres.jl driver and on SQLite, an `:interactive` caller still needs a free `:default` thread.** Both run the statement itself on a `:default` task: Postgres.jl spawns one per statement, and SQLite's single worker lives there. With every `:default` thread computing, an `:interactive` task's lookup waited until the computation ended, one lookup in 6 s instead of 60. With one `:default` thread free, the lookups ran at their normal pace (a median of 1–4 ms). The LibPQ driver runs the statement on the caller's thread and was not affected. MySQL spawns its statement on `:default` the same way as Postgres.jl. That is read in the code, not measured. If an `:interactive` task, such as a heartbeat or a lease renewal, must reach the database on time, keep at least one `:default` thread out of long CPU-bound work (#1577).
+- **SQLite runs one statement at a time per process.** Every statement goes through one worker task, so once a few tasks keep that worker busy, neither more tasks nor more threads raise the statement rate:
+  - **Raw statements:** primary-key lookups stayed between about 9 and 31 thousand per second at `-t 1`, `-t 4` and `-t 8`. Going from 1 task to 8 raised the rate, because a single task leaves the worker idle between its own statements. Beyond 8 tasks, nothing raised it.
+  - **ORM lookups:** they gain from threads, up to that ceiling, because the query is built on the caller's thread before it reaches the worker. That was about 3–4.5 thousand per second at `-t 1`, and 4–15 thousand (most runs above 7) at `-t 4` and `-t 8` with 8 or more tasks.
+  - **A long statement delays every other:** with one 200 ms statement always in flight, the median concurrent lookup took as long as that statement (200–260 ms) at every thread count, against under 2 ms without it.
+
+  Serve concurrent web traffic from PostgreSQL or MySQL. On SQLite, keep long statements out of a process that serves requests.
 
 ## Raw SQL: `fetch_async`, `await_result`, `FetchTask`
 

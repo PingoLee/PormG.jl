@@ -179,7 +179,11 @@ function build(object::SQLObject;
   mutation::Bool=false,
   # #1431: the caller checks the RIGHT/FULL capability rows against the statement it prints, which is
   # not always this build's join text (`update()`; see `_require_outer_join`).
-  defer_outer_join_check::Bool=false)
+  defer_outer_join_check::Bool=false,
+  # #1557: the CTE whose body this build renders ("" for none), and whether the query declaring it is
+  # correlated, for the `OuterRef` refusal.
+  cte_body::String="",
+  cte_body_correlated::Bool=false)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
   ensure_transaction_scope(object.model, connection)
@@ -199,6 +203,8 @@ function build(object::SQLObject;
     django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
     parameters=parameters,
     outer=outer,
+    cte_body=cte_body,
+    cte_body_correlated=cte_body_correlated,
     mutation=mutation,
     defer_outer_join_check=defer_outer_join_check,
   )

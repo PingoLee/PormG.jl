@@ -682,6 +682,15 @@ end
   django::OptionalString = nothing
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
+  # #1557: the name of the CTE whose BODY this instruction builds, or "" when it builds no CTE body.
+  # `build_cte_clause` builds each body as a query of its own, with `outer = nothing` even when the
+  # CTE belongs to a correlated subquery, so an `OuterRef` there has nothing to resolve against. The
+  # one refusal point (`_get_filter_query(::OuterRefObject)`) reads this to say so, instead of telling
+  # a user already inside an `Exists` to build a correlated subquery.
+  cte_body::String = ""
+  # #1557: whether the query that DECLARES that CTE is itself correlated (has an enclosing query), so
+  # the refusal only sends the user there when an `OuterRef` would resolve in it.
+  cte_body_correlated::Bool = false
   # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
   # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
   # survivor by `_flag_to_many!`) or `AnchorlessJoin.to_many` (#174, `_cjoin_on_to_many`) and the many-side alias set is derived from the *deduped* row_join at check time

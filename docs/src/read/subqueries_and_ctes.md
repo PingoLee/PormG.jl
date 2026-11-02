@@ -435,6 +435,27 @@ The rules are those of a projected scalar subquery (below), with two differences
     - A subquery has its own CTE namespace, so it cannot reference a CTE its *enclosing* query declares — `CTE("ev", "status")` and `"ev__status"` inside it both raise an `UnknownFieldError` that says the CTE belongs to the enclosing query (#444). Put that condition in the enclosing query's `filter(...)`.
     - A CTE declared on the outer query **beside** a projected subquery that does not reference it is ordinary and builds on every backend.
     - A CTE declared inside another CTE's **body** is also legal: it renders in the leading `WITH`, where its values bind in text order.
+    - A CTE **body** cannot correlate to an enclosing query. Each body is built as a query of its own, so an `OuterRef(...)` in the body has nothing to resolve against, even when the CTE belongs to a correlated subquery. (A subquery *inside* the body still correlates to the body, as anywhere else.) It raises a `QueryBuildError` that names the CTE (#1557). When the CTE belongs to a correlated subquery, project the column from the CTE and correlate in the subquery that declares it:
+
+      ```julia
+      # ✗ refused: the OuterRef sits in the CTE body
+      fast = M.Lap_times.objects
+      fast.filter("milliseconds__@lt" => 75_000, "driverid" => OuterRef("driverid"))
+      fast.values("raceid", "milliseconds")
+
+      # ✓ the CTE projects driverid; the subquery that declares it correlates on it
+      fast = M.Lap_times.objects
+      fast.filter("milliseconds__@lt" => 75_000)
+      fast.values("raceid", "driverid", "milliseconds")
+
+      inner = M.Result.objects
+      inner.with("fast" => fast, join_field = "raceid" => "raceid")
+      inner.filter("driverid" => OuterRef("driverid"), "fast__driverid" => OuterRef("driverid"))
+
+      query = M.Driver.objects
+      query.filter(Exists(inner))
+      query.values("driverid", "surname")   # drivers with a sub-75-second lap in a race they entered
+      ```
 
 ### CTE-aggregate vs scalar `Subquery`
 

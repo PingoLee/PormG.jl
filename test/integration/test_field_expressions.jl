@@ -883,6 +883,30 @@ end
     end
   end
 
+  # #1572, #1576 — interval arithmetic with no meaning, and a fraction of a month, are refused when the
+  # query is built, on a live connection. Expected: `F("time") + 5` and `F("lap") + F("time")` raise
+  # `QueryBuildError` on every engine. PostgreSQL used to send them, and the server rejected them with a
+  # `StatementError`. A month times a float column (`Result.points`) raises `QueryBuildError` on
+  # PostgreSQL, where it spread the fraction at 30 days a month, and `BackendCapabilityError` on SQLite
+  # and MySQL. Why it matters: the error type is the contract — a `QueryBuildError` is raised by the
+  # build, where the server's rejection arrived as a `StatementError` — and this checks it through a
+  # real driver's connection, not a mock.
+  @testset "meaningless interval arithmetic and a fraction of a month are refused at build (#1572, #1576)" begin
+    for expr in (F("time") + 5, F("lap") + F("time"), F("time") * F("time"))
+      q = M.Lap_times.objects
+      q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1)
+      q.values("driverid", "x" => expr)
+      err = try q |> DataFrame; nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+    end
+    q = M.Result.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1)
+    q.values("driverid", "m" => F("points") * Dates.Month(1))
+    err = try q |> DataFrame; nothing catch e; e end
+    @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
+                   PormG.QueryBuildError : PormG.BackendCapabilityError)
+  end
+
   # #1301 — a `Case` whose value is a duration, in arithmetic. SQLite holds the value as its `HH:MM:SS`
   # text and multiplied that text (`'00:01:30' * 2` is `0`), with no error: it is refused there now, as
   # an interval with no millisecond form (#881). PostgreSQL computes `interval * bigint`, and the result

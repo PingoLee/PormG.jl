@@ -201,48 +201,83 @@ end
   end
 end
 
-# The scratch package, and the script that loads it, in `dir`. `dir` is also an explicit
-# environment whose manifest lists the package and names its two dependencies by UUID: Julia then
-# locates them in the test environment further down the stack, with no Pkg operation and no registry.
-function _write_paddock1562(dir::String)
-  pkg = joinpath(dir, "Paddock1562")
+# A scratch package `name` in `dir`, with `connection.yml` and its module source, plus the script that
+# loads it. `dir` is also an explicit environment whose manifest lists the package and names its
+# dependencies (`PormG` and the `drivers`) by UUID: Julia then locates them in the test environment
+# further down the stack, with no Pkg operation and no registry.
+function _write_scratch_package(dir::String, name::String, uuid::String; drivers::Vector{String},
+                                yml::String, src::String, script::String)::String
+  pkg = joinpath(dir, name)
   mkpath(joinpath(pkg, "src")); mkpath(joinpath(pkg, "db"))
-  sqlite = Base.identify_package("SQLite")
-  sqlite === nothing && error("the test environment has no SQLite")
-  uuid, pormg = "6a1f5c2e-8d4b-4e7a-9c3f-1562b0d5e7a9", Base.PkgId(PormG).uuid
-  write(joinpath(pkg, "Project.toml"), """
-    name = "Paddock1562"
-    uuid = "$(uuid)"
-    version = "0.1.0"
+  deps = Pair{String, Base.UUID}["PormG" => Base.PkgId(PormG).uuid]
+  for d in drivers
+    id = Base.identify_package(d)
+    id === nothing && error("the test environment has no $(d)")
+    push!(deps, d => id.uuid)
+  end
+  deplines(indent) = join(("$(indent)$(n) = \"$(u)\"" for (n, u) in deps), "\n")
+  write(joinpath(pkg, "Project.toml"),
+        "name = \"$(name)\"\nuuid = \"$(uuid)\"\nversion = \"0.1.0\"\n\n[deps]\n$(deplines(""))\n")
+  write(joinpath(dir, "Project.toml"), "[deps]\n$(name) = \"$(uuid)\"\n")
+  write(joinpath(dir, "Manifest.toml"),
+        "manifest_format = \"2.0\"\n\n[[deps.$(name)]]\npath = \"$(name)\"\nuuid = \"$(uuid)\"\n" *
+        "version = \"0.1.0\"\n\n    [deps.$(name).deps]\n$(deplines("    "))\n")
+  write(joinpath(pkg, "db", "connection.yml"), yml)
+  write(joinpath(pkg, "src", "$(name).jl"), src)
+  path = joinpath(dir, "load_$(name).jl")
+  write(path, script)
+  return path
+end
 
-    [deps]
-    PormG = "$(pormg)"
-    SQLite = "$(sqlite.uuid)"
-    """)
-  write(joinpath(dir, "Project.toml"), """
-    [deps]
-    Paddock1562 = "$(uuid)"
-    """)
-  write(joinpath(dir, "Manifest.toml"), """
-    manifest_format = "2.0"
+# Run `script` in a child process that precompiles the scratch package `name` from `dir`, and stop it
+# at `deadline` seconds or as soon as `marker` exists. The child gets its own first depot, so the
+# scratch package's cache never lands in the user's depot; PormG's and the drivers' caches are found
+# in the depots after it, built with the same flags (`Base.julia_cmd()` carries the parent's). It runs
+# detached, in its own process group, so a hang is cleaned up with the precompile worker it spawned:
+# killing the child alone orphans it. Returns plain values: a failed `@test success(proc)` would
+# print the command, and its environment with it.
+function _precompile_in_child(dir::String, name::String, script::String;
+                              marker::Union{Nothing, String} = nothing, deadline::Float64 = 300.0)
+  sep = Sys.iswindows() ? ";" : ":"
+  depot = joinpath(dir, "depot"); mkpath(depot)
+  env = copy(ENV)
+  env["JULIA_DEPOT_PATH"] = join([depot; DEPOT_PATH], sep)
+  env["JULIA_LOAD_PATH"] = join(["@", dir, "@stdlib"], sep)
+  env["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
+  out, err = joinpath(dir, "child.out"), joinpath(dir, "child.err")
+  marked() = marker !== nothing && isfile(marker)
+  cmd = setenv(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(script)`, env)
+  started = time()
+  proc = run(pipeline(Cmd(cmd; detach = true); stdout = out, stderr = err); wait = false)
+  while process_running(proc) && !marked() && time() < started + deadline
+    sleep(0.5)
+  end
+  timed_out = process_running(proc) && !marked()
+  if process_running(proc)
+    if Sys.iswindows()
+      run(ignorestatus(`taskkill /T /F /PID $(getpid(proc))`))   # the tree, worker included
+    else
+      ccall(:kill, Cint, (Cint, Cint), -getpid(proc), Base.SIGKILL)   # the whole group
+    end
+    wait(proc)
+  end
+  compiled = joinpath(depot, "compiled", "v$(VERSION.major).$(VERSION.minor)", name)
+  return (; ok = success(proc), timed_out,
+            precompiled = isdir(compiled) && !isempty(readdir(compiled)),
+            out = read(out, String), err = isfile(err) ? read(err, String) : "")
+end
 
-    [[deps.Paddock1562]]
-    path = "Paddock1562"
-    uuid = "$(uuid)"
-    version = "0.1.0"
-
-        [deps.Paddock1562.deps]
-        PormG = "$(pormg)"
-        SQLite = "$(sqlite.uuid)"
-    """)
-  write(joinpath(pkg, "db", "connection.yml"), """
+function _write_paddock1562(dir::String)::String
+  return _write_scratch_package(dir, "Paddock1562", "6a1f5c2e-8d4b-4e7a-9c3f-1562b0d5e7a9";
+    drivers = ["SQLite"],
+    yml = """
     dev:
       adapter: SQLite
       database: f1.sqlite
       idle_timeout: 300
       max_lifetime: 3600
-    """)
-  write(joinpath(pkg, "src", "Paddock1562.jl"), """
+    """,
+    src = """
     module Paddock1562
     using PormG, SQLite
     const ROOT = dirname(@__DIR__)
@@ -255,14 +290,12 @@ function _write_paddock1562(dir::String)
       touch(joinpath(ROOT, "sweeper_started_while_precompiling"))
     __init__() = (PormG.Configuration.load("db"; root = ROOT, env = "dev", force = true); nothing)
     end
-    """)
-  script = joinpath(dir, "load1562.jl")
-  write(script, """
+    """,
+    script = """
     using Paddock1562
     import PormG
     print(PormG.ConnectionPool._reaper_started[] ? "REAPER_RUNNING" : "REAPER_OFF")
     """)
-  return script
 end
 
 @testset "#1562: a package whose module-body load sets idle_timeout precompiles" begin
@@ -271,46 +304,64 @@ end
   #   and once loaded the sweeper is running: the run-time `load` started it.
   # Why: before the fix the precompile worker waited forever ("Waiting for background task / IO /
   #   timer to finish"), because `load` → `enable_reaping!` spawned a task that never ends.
-  # The child gets its own first depot, so the scratch package's cache never lands in the user's
-  # depot; PormG's and SQLite's caches are found in the depots after it, built with the same flags
-  # (`Base.julia_cmd()` carries the parent's). The child runs detached, in its own process group, so
-  # a hang is cleaned up with the precompile worker it spawned: killing the child alone orphans it.
+  # The child and its cleanup: `_precompile_in_child`.
   # The other shape of the bug, a package depending on one whose `__init__` loads the configuration,
   # takes the same branch: the dependent's worker runs that `__init__` while generating output.
   mktempdir() do dir
     script = _write_paddock1562(dir)
-    sep = Sys.iswindows() ? ";" : ":"
-    depot = joinpath(dir, "depot"); mkpath(depot)
-    env = copy(ENV)
-    env["JULIA_DEPOT_PATH"] = join([depot; DEPOT_PATH], sep)
-    env["JULIA_LOAD_PATH"] = join(["@", dir, "@stdlib"], sep)
-    env["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-    out, err = joinpath(dir, "child.out"), joinpath(dir, "child.err")
     marker = joinpath(dir, "Paddock1562", "sweeper_started_while_precompiling")
-    cmd = setenv(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(script)`, env)
-    proc = run(pipeline(Cmd(cmd; detach = true); stdout = out, stderr = err); wait = false)
-    deadline = time() + 300           # a healthy run takes seconds
-    while process_running(proc) && !isfile(marker) && time() < deadline
-      sleep(0.5)
-    end
-    timed_out = process_running(proc) && !isfile(marker)
-    if process_running(proc)
-      if Sys.iswindows()
-        run(ignorestatus(`taskkill /T /F /PID $(getpid(proc))`))   # the tree, worker included
-      else
-        ccall(:kill, Cint, (Cint, Cint), -getpid(proc), Base.SIGKILL)   # the whole group
-      end
-      wait(proc)
-    end
-    # Plain Bools: a failed `@test success(proc)` would print the command, and its environment with it.
-    ok = success(proc)
-    compiled = joinpath(depot, "compiled", "v$(VERSION.major).$(VERSION.minor)", "Paddock1562")
-    precompiled = isdir(compiled) && !isempty(readdir(compiled))
+    r = _precompile_in_child(dir, "Paddock1562", script; marker)   # a healthy run takes seconds
     @test !isfile(marker)
-    @test !timed_out
-    @test ok
-    @test precompiled                 # not loaded uncompiled (`--compiled-modules=no`), which proves nothing
-    @test read(out, String) == "REAPER_RUNNING"
-    ok || @info "child stderr (#1562)" errtext = (isfile(err) ? read(err, String) : "")
+    @test !r.timed_out
+    @test r.ok
+    @test r.precompiled               # not loaded uncompiled (`--compiled-modules=no`), which proves nothing
+    @test r.out == "REAPER_RUNNING"
+    r.ok || @info "child stderr (#1562)" errtext = r.err
+  end
+end
+
+@testset "#1570: a package whose module-body load sets extensions: queries nothing while precompiling" begin
+  # What: a scratch package whose module body loads a PostgreSQL configuration with
+  #   `extensions: [unaccent]`, pointed at a port nothing listens on, precompiles, and its worker's
+  #   output carries no "Could not verify PostgreSQL extension state" warning.
+  # Expected SQL: none while precompiling. Before the fix the worker ran
+  #   `SELECT 1 FROM pg_extension WHERE extname = 'unaccent'`, the one query `load` issues.
+  # Why: that probe made precompiling a package need its database and credentials; with the database
+  #   down the build waited out the pool's connect timeout (30 s by default) and then warned. Measured
+  #   on both PostgreSQL drivers before the fix. The warning is the proof the probe ran: it is what the
+  #   failed fetch turns into, and the worker's output reaches the child's stderr when the worker
+  #   exits. The package has no `__init__` load, so a warning can only come from the worker.
+  #   `pool_timeout: 2` keeps a regression to seconds instead of the default 30.
+  mktempdir() do dir
+    script = _write_scratch_package(dir, "Paddock1570", "6a1f5c2e-8d4b-4e7a-9c3f-1570b0d5e7a9";
+      drivers = ["LibPQ"],
+      yml = """
+      dev:
+        adapter: PostgreSQL
+        postgres_driver: LibPQ
+        database: f1
+        host: 127.0.0.1
+        port: 1
+        username: f1
+        password: f1
+        pool_timeout: 2
+        extensions:
+          - unaccent
+      """,
+      src = """
+      module Paddock1570
+      using PormG, LibPQ
+      const ROOT = dirname(@__DIR__)
+      PormG.Configuration.load("db"; root = ROOT, env = "dev")
+      end
+      """,
+      script = "using Paddock1570\nprint(\"LOADED\")\n")
+    r = _precompile_in_child(dir, "Paddock1570", script)
+    @test !r.timed_out
+    @test r.ok
+    @test r.precompiled
+    @test r.out == "LOADED"
+    @test !occursin("Could not verify PostgreSQL extension state", r.err)
+    r.ok || @info "child stderr (#1570)" errtext = r.err
   end
 end

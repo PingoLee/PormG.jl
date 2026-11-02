@@ -298,6 +298,9 @@ avoids the problem it describes.
     baked into the image, and again from your module's `__init__`, so it is right in the running
     session. Route both through one helper so they cannot drift apart. Repeating it costs nothing:
     a `load` of a folder already loaded with the same environment keeps the existing pool.
+    The module-body `load` opens no connection either: pools connect on first use, and the
+    `extensions:` probe and the connection sweeper wait for the run-time `load`, so the machine
+    that precompiles the package does not need the database.
 
 ```julia
 module RaceControl

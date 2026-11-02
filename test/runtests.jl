@@ -85,6 +85,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
     @testset "Columns Named Like a Lookup (#1030)" include("unit/test_lookup_named_columns.jl")
     @testset "F/Joined Date Operands (#494)" include("unit/test_f_date_operands.jl")
+    @testset "A Duration as an Interval Value (#1553)" include("unit/test_duration_value_1553.jl")
     @testset "SQLite Interval Ordering (#894)" include("unit/test_sqlite_interval_order.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
     @testset "LPad/RPad String Padding (#122)" include("unit/test_lpad_rpad.jl")

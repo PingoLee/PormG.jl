@@ -827,6 +827,62 @@ end
     @test sort((under |> DataFrame).milliseconds) == sort(filter(<(120_000), df.milliseconds))
   end
 
+  # #1553 — a duration literal as an interval VALUE. Each lap of the 2009 Australian GP, lap 1 to 3:
+  # `lap` (an integer) times 90 seconds, either way round; three minutes split across the lap number; the
+  # lap time less a second; four minutes less the lap time; and the race start shifted by the scaled
+  # duration. The oracle is the stored `milliseconds` and the lap number, computed in Julia: every value
+  # reads back as a `Dates.CompoundPeriod` (a timestamp for the shift), on every engine. A month is a value
+  # only on PostgreSQL (`calendar_intervals`): it reads back as the months it is, and SQLite and MySQL
+  # refuse it with `BackendCapabilityError`. Four minutes, not two, keeps every value positive: LibPQ reads
+  # a NEGATIVE interval with a fraction back with the fraction's sign lost (`-00:00:37.754` as -36.246 s),
+  # a driver defect older than #1553 and reproducible with `F("time") - F("time") * 2` (#1568).
+  @testset "a duration is an interval value: scaled, divided, beside an interval (#1553)" begin
+    q = M.Lap_times.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    q.values("driverid", "lap", "milliseconds", "raceid__start_at",
+             "scaled" => F("lap") * Dates.Second(90),
+             "flipped" => Dates.Second(90) * F("lap"),
+             "split" => Dates.Minute(3) / F("lap"),
+             "less" => F("time") - Dates.Second(1),
+             "from_four" => Dates.Minute(4) - F("time"),
+             "paced_at" => F("raceid__start_at") + F("lap") * Dates.Second(90))
+    q.order_by("driverid", "lap")
+    df = q |> DataFrame
+    @test size(df, 1) > 3
+    @test all(x -> x isa Dates.CompoundPeriod, df.scaled)
+    @test [Dates.toms(x) for x in df.scaled] == 90_000 .* df.lap
+    @test [Dates.toms(x) for x in df.flipped] == 90_000 .* df.lap
+    @test [Dates.toms(x) for x in df.split] == [round(Int, 180_000 / l) for l in df.lap]
+    @test [Dates.toms(x) for x in df.less] == df.milliseconds .- 1_000
+    @test all(>(0), 240_000 .- df.milliseconds)   # the premise of the comment above
+    @test [Dates.toms(x) for x in df.from_four] == 240_000 .- df.milliseconds
+    @test [Dates.DateTime(x) for x in df.paced_at] ==
+          [Dates.DateTime(s) + Dates.Millisecond(90_000 * l) for (s, l) in zip(df.raceid__start_at, df.lap)]
+
+    # Filtered by a scaled duration: the laps slower than 90 seconds per lap number.
+    slow = M.Lap_times.objects
+    slow.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3, F("time") > F("lap") * Dates.Second(90))
+    slow.values("driverid", "lap")
+    slow.order_by("driverid", "lap")
+    kept = slow |> DataFrame
+    expected = df[df.milliseconds .> 90_000 .* df.lap, [:driverid, :lap]]
+    @test (kept.driverid, kept.lap) == (expected.driverid, expected.lap)
+
+    months = M.Lap_times.objects
+    months.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    months.values("lap", "m" => F("lap") * Dates.Month(1))
+    months.order_by("lap")
+    if by_engine(sqlite = false, postgres = true, mysql = false)
+      dm = months |> DataFrame
+      @test size(dm, 1) > 3
+      @test all(x -> x isa Dates.CompoundPeriod, dm.m)
+      @test dm.m == [Dates.CompoundPeriod(Dates.Month(l)) for l in dm.lap]
+    else
+      err = try months |> DataFrame; nothing catch e; e end
+      @test err isa PormG.BackendCapabilityError
+    end
+  end
+
   # #1301 — a `Case` whose value is a duration, in arithmetic. SQLite holds the value as its `HH:MM:SS`
   # text and multiplied that text (`'00:01:30' * 2` is `0`), with no error: it is refused there now, as
   # an interval with no millisecond form (#881). PostgreSQL computes `interval * bigint`, and the result

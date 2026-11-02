@@ -1767,6 +1767,198 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("F hop datetime + interval | subquery", :sqlite, "w__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"R2_1\".\"start_at\") + ((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) / 86400000.0)) as \"t\"\nFROM \"result\" as \"R2\"\n INNER JOIN \"race\" AS \"R2_1\" ON \"R2\".\"raceid\" = \"R2_1\".\"raceid\" \nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("F int col * Hour(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("F int col * Hour(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" * make_interval(hours => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F int col * Hour(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(round((\"Tb\".\"grid\") * (?)) AS INTEGER) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("F int col * Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * Hour(1) | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("F int col * Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * Hour(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F int col * Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * Hour(1) | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("F int col * Hour(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((`R2`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("F int col * Hour(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * make_interval(hours => \$3::integer)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F int col * Hour(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Hour(1) | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R2\".\"grid\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) * F int col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(ROUND((`Tb`.`grid`) * (?)) AS SIGNED) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) * F int col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" * make_interval(hours => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) * F int col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(round((\"Tb\".\"grid\") * (?)) AS INTEGER) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) * F int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) * F int col | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) * F int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) * F int col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) * F int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) * F int col | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) * F int col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((`R2`.`grid`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) * F int col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * make_interval(hours => \$3::integer)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) * F int col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) * F int col | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R2\".\"grid\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) / F int col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(ROUND((?) * 1.0 / (`Tb`.`grid`)) AS SIGNED) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) / F int col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(make_interval(hours => \$2::integer) / \"Tb\".\"grid\") > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) / F int col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(round((?) * 1.0 / (\"Tb\".\"grid\")) AS INTEGER) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) / F int col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) / F int col | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) / F int col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) / F int col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) / F int col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) / F int col | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) / F int col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(ROUND((?) * 1.0 / (`R2`.`grid`)) AS SIGNED) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) / F int col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (make_interval(hours => \$3::integer) / \"R2\".\"grid\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) / F int col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) / F int col | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((?) * 1.0 / (\"R2\".\"grid\")) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("F interval - Hour(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(`Tb`.`fastestlaptime` - ?) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("F interval - Hour(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\" - make_interval(hours => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F interval - Hour(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("F interval - Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval - Hour(1) | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("F interval - Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval - Hour(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F interval - Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F interval - Hour(1) | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("F interval - Hour(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (`R2`.`fastestlaptime` - ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("F interval - Hour(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\" - make_interval(hours => \$3::integer)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F interval - Hour(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F interval - Hour(1) | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - F interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(? - `Tb`.`fastestlaptime`) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - F interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(make_interval(hours => \$2::integer) - \"Tb\".\"fastestlaptime\") > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - F interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(? - ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - F interval | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - F interval | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R1_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - F interval | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - F interval | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - F interval | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - F interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - F interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (? - `R2`.`fastestlaptime`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - F interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (make_interval(hours => \$3::integer) - \"R2\".\"fastestlaptime\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - F interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - F interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (? - ((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("F int col * Month(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Month(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"grid\" * make_interval(months => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F int col * Month(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("F int col * Month(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("F int col * Month(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("F int col * Month(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"grid\" * make_interval(months => \$3::integer)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("F datetime diff + Month(1) | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F datetime diff + Month(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
@@ -1779,6 +1971,114 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("F datetime diff + Month(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ((\"R2\".\"start_at\" - \"R2\".\"start_at\") + make_interval(months => \$3::integer)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE int col * Hour(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(ROUND((`R1_1`.`n`) * (?)) AS SIGNED) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("CTE int col * Hour(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"n\" * make_interval(hours => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE int col * Hour(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CAST(round((\"R1_1\".\"n\") * (?)) AS INTEGER) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE int col * Hour(1) | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("CTE int col * Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE int col * Hour(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE int col * Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE int col * Hour(1) | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("CTE int col * Hour(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    CAST(ROUND((`R4_1`.`n`) * (?)) AS SIGNED) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("CTE int col * Hour(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"n\" * make_interval(hours => \$3::integer)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE int col * Hour(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE int col * Hour(1) | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((\"R4_1\".\"n\") * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("CTE interval col - Hour(1) | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(`R1_1`.`u` - ?) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col - Hour(1) | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(\"R1_1\".\"u\" - make_interval(hours => \$2::integer)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col - Hour(1) | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(((CASE WHEN substr(\"R1_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col - Hour(1) | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col - Hour(1) | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col - Hour(1) | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col - Hour(1) | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("CTE interval col - Hour(1) | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("CTE interval col - Hour(1) | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (`R4_1`.`u` - ?) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("CTE interval col - Hour(1) | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (\"R4_1\".\"u\" - make_interval(hours => \$3::integer)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("CTE interval col - Hour(1) | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("CTE interval col - Hour(1) | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(\"R4_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R4_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER))) - ?) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - CTE interval col | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(? - `R1_1`.`u`) > ?", params = [("3600000000", "Int64"), ("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - CTE interval col | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(make_interval(hours => \$2::integer) - \"R1_1\".\"u\") > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - CTE interval col | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(? - ((CASE WHEN substr(\"R1_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"u\", instr(\"R1_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) > ?", params = [("3600000", "Int64"), ("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :mysql, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - CTE interval col | cte", :mysql, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "`R2_1`.`v` > ?", params = [("3600000000", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - CTE interval col | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - CTE interval col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\"R2_1\".\"v\" > \$2", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - CTE interval col | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
+  ("Hour(1) - CTE interval col | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R2_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2_1\".\"v\", instr(\"R2_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("3600000", "Int64"), ("60000", "Int64")]),
+  ("Hour(1) - CTE interval col | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH `c` AS (\n  SELECT\n    `R3`.`resultid` as `resultid`, \n  `R3`.`grid` as `n`, \n  `R3_1`.`date` as `d`, \n  `R3`.`fastestlaptime` as `u`\nFROM `result` as `R3`\n INNER JOIN `race` AS `R3_1` ON `R3`.`raceid` = `R3_1`.`raceid` \n\n)\nSELECT\n    (? - `R4_1`.`u`) as `t`\nFROM `result` as `R4`\n LEFT JOIN `c` AS `R4_1` ON `R4`.`resultid` = `R4_1`.`resultid` \nWHERE `R4`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("3600000000", "Int64"), ("1", "Int64"), ("3600000000", "Int64"), ("1", "Int64"), ("60000000", "Int64")]),
+  ("Hour(1) - CTE interval col | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (make_interval(hours => \$3::integer) - \"R4_1\".\"u\") as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Hour(1) - CTE interval col | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Hour(1) - CTE interval col | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (WITH \"c\" AS (\n  SELECT\n    \"R3\".\"resultid\" as \"resultid\", \n  \"R3\".\"grid\" as \"n\", \n  \"R3_1\".\"date\" as \"d\", \n  \"R3\".\"fastestlaptime\" as \"u\"\nFROM \"result\" as \"R3\"\n INNER JOIN \"race\" AS \"R3_1\" ON \"R3\".\"raceid\" = \"R3_1\".\"raceid\" \n\n)\nSELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (? - ((CASE WHEN substr(\"R4_1\".\"u\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R4_1\".\"u\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R4_1\".\"u\", instr(\"R4_1\".\"u\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R4\"\n LEFT JOIN \"c\" AS \"R4_1\" ON \"R4\".\"resultid\" = \"R4_1\".\"resultid\" \nWHERE \"R4\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("3600000", "Int64"), ("1", "Int64"), ("3600000", "Int64"), ("1", "Int64"), ("60000", "Int64")]),
   ("F @year + 1 | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(EXTRACT(YEAR FROM `Tb`.`start_at`) + ?) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("F @year + 1 | alone", :postgres, "v__@gt", "10") =>

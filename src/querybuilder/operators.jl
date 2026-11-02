@@ -89,9 +89,32 @@ function Base.:-(f::FExpression, operand::_DurationOperand)
   )
 end
 
-# Reversed + only: `Day(30) + F("date")` commutes to `F("date") + Day(30)`. Reversed - is omitted
-# on purpose (`interval - date` is not valid date arithmetic).
+# Reversed +: `Day(30) + F("date")` commutes to `F("date") + Day(30)`.
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
+
+# #1553 — a duration as an interval VALUE, not only a shift: scaled by a number (`F("grid") * Hour(1)`,
+# and `Hour(1) * F("grid")`, which commutes), divided by one (`Minute(3) / F("lap")`), or minus an
+# interval (`Minute(2) - F("time")`). `-` and `/` keep the duration on the left of its node, as
+# `_number_left` keeps a number there (#1476): neither commutes. The render decides what the other side
+# is: a number beside `*` and `/`, an interval beside `-`, and refuses the rest on every engine
+# (`_render_interval_left`, `_render_duration_product`). `/` with the duration on the RIGHT stays refused
+# by the right-hand catch-all: a number or an interval divided by a duration has no meaning, and
+# PostgreSQL has no `interval / interval`.
+function Base.:*(f::FExpression, operand::_DurationOperand)
+  return FExpression(
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="*",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    aggregate=f.aggregate
+  )
+end
+Base.:*(operand::_DurationOperand, f::FExpression) = f * operand
+Base.:-(d::_DurationOperand, f::FExpression) = _duration_left(d, "-", f)
+Base.:/(d::_DurationOperand, f::FExpression) = _duration_left(d, "/", f)
+_duration_left(d::_DurationOperand, op::String, f::Union{FExpression,CTEReference}) =
+  FExpression(field_name=d, operation=op, operand=f, function_name="F", column="", aggregate=_is_agg(f))
 
 # #814 — a date or timestamp LITERAL as the right side of `-`: the time from that instant to the
 # expression's, `F("date") - Date(2009, 3, 1)`. `-` only: adding, multiplying or dividing two
@@ -354,7 +377,7 @@ for (op, sym) in ((:+, "+"), (:-, "-"), (:*, "*"), (:/, "/"))
     return FExpression(field_name=c, operation=$sym, operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
   end
 end
-for (op, sym) in ((:+, "+"), (:-, "-"))
+for (op, sym) in ((:+, "+"), (:-, "-"), (:*, "*"))   # `*`: a duration value (#1553)
   @eval function Base.$op(c::CTEReference, operand::_DurationOperand)
     _reject_cte_desc(c, "arithmetic")
     return FExpression(field_name=c, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
@@ -370,6 +393,10 @@ Base.:*(operand::_ArithmeticNumber, c::CTEReference) = c * operand
 Base.:-(operand::_ArithmeticNumber, c::CTEReference) = _number_left(operand, "-", _reject_cte_desc(c, "arithmetic"))
 Base.:/(operand::_ArithmeticNumber, c::CTEReference) = _number_left(operand, "/", _reject_cte_desc(c, "arithmetic"))
 Base.:+(operand::_DurationOperand, c::CTEReference) = c + operand
+# #1553: a duration value on the left, as on `F`: `*` commutes, `-` and `/` keep it on the left.
+Base.:*(operand::_DurationOperand, c::CTEReference) = c * operand
+Base.:-(d::_DurationOperand, c::CTEReference) = _duration_left(d, "-", _reject_cte_desc(c, "arithmetic"))
+Base.:/(d::_DurationOperand, c::CTEReference) = _duration_left(d, "/", _reject_cte_desc(c, "arithmetic"))
 
 function Base.:+(f::WindowFunction, operand::Union{_ArithmeticNumber,String,FExpression,SQLTypeFunction,CTEReference})
   return FExpression(field_name=f, operation="+", operand=_arith_number(operand), function_name="F", column="", aggregate=_is_agg(operand))
@@ -444,8 +471,10 @@ Base.:/(operand::_ArithmeticNumber, f::FObject) = _number_left(operand, "/", f)
 # #1549 — the LEFT side's other operands, which missed the `::Number` arm and reached Julia's raw
 # `MethodError`: a date, a duration and `missing`. Caught as their own union, for the same Aqua reason,
 # and refused by `_unsupported_left_arithmetic_operand`, which names what the left of each family takes.
-# The two that build are more specific methods below: a date on the left of `-` (`_temporal_left`), and a
-# duration on the left of `+`, which commutes.
+# The ones that build are more specific methods: a date on the left of `-` (`_temporal_left`, below), and,
+# on `F` and `CTE(...)`, a duration on the left of every operator (`+` and `*` commute, `-` and `/` keep
+# it on the left, #1553; above). On a function or a window function a duration under `+` commutes into
+# that family's right-hand refusal, and under `- * /` it is refused here.
 # `Nothing` and `Dates.Time` too: the right side refuses both (`F("grid") + nothing`, `F("at") - Time(6)`).
 const _LeftArithmeticRefused = Union{_TemporalLiteral,_DurationOperand,Dates.Time,Missing,Nothing}
 for op in (:+, :-, :*, :/), T in (:FExpression, :WindowFunction, :FObject, :CTEReference)

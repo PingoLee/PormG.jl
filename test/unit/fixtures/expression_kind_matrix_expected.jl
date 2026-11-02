@@ -1119,185 +1119,185 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop datetime + interval | subquery", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F int col * Hour(1) | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Hour(1) | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Floa"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) * F int col | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of * is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) / F int col | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of / is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | alone", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | alone", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | alone", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CInterval()", formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | cte", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | cte", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | subquery", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | subquery", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval - Hour(1) | subquery", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "F(\"fastestlaptime\") ± a duration requires a DATE/TIMESTAMP field; \"fastestlaptime\" is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - F interval | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on an `F(...)` expression takes a number ("),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Month(1) | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Month(1) | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Month(1) | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Month(1) | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Month is not an operand of * here (#1476). Arithmetic on an `F(...)` expression takes a number (an Integer, Float64, Flo"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime diff + Month(1) | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on SQL"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on MyS"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime diff + Month(1) | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on SQL"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on MyS"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime diff + Month(1) | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on SQL"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "A duration of months or years (1 month) has no fixed length, so it cannot be combined with a timestamp difference on MyS"),
+    (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("CTE int col * Hour(1) | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE int col * Hour(1) | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour is not an operand of * here (#1476). Arithmetic on a CTE(...) column takes a number (an Integer, Float64, Float32 o"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | alone", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | alone", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | alone", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | cte", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | cte", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | subquery", :postgres) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | subquery", :sqlite) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("CTE interval col - Hour(1) | subquery", :mysql) =>
-    (stage = :build, error = "InvalidValueError", message = "CTE(\"c\", \"u\") ± a duration requires a DATE/TIMESTAMP column; that CTE column is not a date/time column"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | alone", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | alone", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | alone", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | cte", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | cte", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | cte", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | subquery", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | subquery", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Hour(1) - CTE interval col | subquery", :mysql) =>
-    (stage = :call, error = "QueryBuildError", message = "Hour on the left of - is not an operand here (#1549). On the left, arithmetic on a CTE(...) column takes a number (10 - "),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F @year + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | alone", :sqlite) =>

@@ -619,6 +619,57 @@ _duration_value_sql(conn::PormGSQLite, d::_DurationOperand, instruc::SQLInstruct
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
 _duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
+# #1576 — A MONTH OR A YEAR AS A VALUE IS SCALED BY A WHOLE NUMBER ONLY, AND NEVER DIVIDED, on every
+# engine. A month has 28 to 31 days, so 1.5 months, or a year over 7, has no single answer: PostgreSQL
+# spreads the fraction at 30 days a month (`interval '1 month' * 1.5` is `1 mon 15 days`), which is its
+# convention, not what a month means. Whole is decided by the factor's TYPE, through the walk: an
+# integer, or a decimal of scale 0 (#1087, #1550). A float, a decimal with places and a side the walk
+# cannot name are refused, whatever the value (explicit intent). SQLite and MySQL reach this only past
+# the `calendar_intervals` capability, which refuses a month value there first.
+#
+# The month is found wherever PormG can SEE it: a duration literal, or interval-valued F arithmetic over
+# one, so `(F("grid") * Month(1)) * 1.5` and `(F("time") + Month(1)) / 2` are refused as
+# `F("points") * Month(1)` is (review of #1576). The walk descends only through sides that are
+# intervals: a timestamp shifted by a month, then subtracted from one (`(F("at") + Month(1)) - F("at")`),
+# is a difference of two instants, which carries no month. A stored or projected interval (a
+# `DurationField` column, a CTE column, a `Subquery`) holds whatever value it holds, and its type says
+# nothing about months, so it is not refused.
+#
+# The render (`_render_interval_left`, `_render_interval_right`) and the walk (`_temporal_result_kind`,
+# `_interval_left_kind`) ask `_calendar_scale_refused`, so the SQL and the kind cannot disagree.
+_has_calendar_part(d::_DurationOperand)::Bool =
+  any(c -> first(c) in (:year, :month), _decompose_period(d isa Interval ? d.period : d))
+_carries_calendar_part(d::_DurationOperand, ::SQLInstruction)::Bool = _has_calendar_part(d)
+# A structural read first, which asks no kind: arithmetic with no month literal in it — nearly all of
+# it — costs one pass over the tree. Only a tree that names a month is walked by kind, and that walk is
+# one question (`_memo_kind`), so each node's kind is computed once however deep the chain is. Asked at
+# every level of a chain, it is quadratic in the depth at worst, never exponential (the #1034 step 5b
+# guard in `test_temporal_arithmetic_kind.jl`).
+function _carries_calendar_part(p::FExpression, instruc::SQLInstruction)::Bool
+  _names_calendar_part(p) || return false
+  return _memo_kind(() -> _calendar_walk(p, instruc), p, instruc, :calendar)
+end
+_carries_calendar_part(::Any, ::SQLInstruction)::Bool = false
+_names_calendar_part(d::_DurationOperand)::Bool = _has_calendar_part(d)
+_names_calendar_part(p::FExpression)::Bool =
+  p.operation !== nothing && (_names_calendar_part(p.field_name) || _names_calendar_part(p.operand))
+_names_calendar_part(::Any)::Bool = false
+# Each side recurses through the memoized entry point, so a node is decided once per question.
+_calendar_walk(p::FExpression, instruc::SQLInstruction)::Bool =
+  p.operation !== nothing && _expression_kind(p, instruc) isa CInterval &&
+  (_carries_calendar_part(p.field_name, instruc) || _carries_calendar_part(p.operand, instruc))
+# `interval` scaled (`op` is `*`) or divided (`/`) by `factor`. The factor is read first: a whole one,
+# the common case, never walks the interval.
+_calendar_scale_refused(interval, op::AbstractString, factor, instruc::SQLInstruction)::Bool =
+  (op == "/" || !_whole_kind(_arithmetic_side_kind(factor, instruc, _AllKinds()))) &&
+  _carries_calendar_part(interval, instruc)
+_calendar_scale_error() =
+  QueryBuildError("A month or a year has no fixed length, so as an interval value it is multiplied by a " *
+                  "whole number only, and never divided: 1.5 months, or a year over 7, has no single " *
+                  "answer. Multiply by an integer column or integer arithmetic " *
+                  "(\e[4m\e[32mF(\"grid\") * Month(1)\e[0m), or by a CTE column that casts to an integer " *
+                  "first. Or use a duration of fixed length: \e[4m\e[32mDay(45) * F(\"points\")\e[0m.")
+
 # A zero-length duration is zero whatever its unit (`Month(0)` too), as the shift's identity treats it,
 # so only a duration with a calendar component reaches the `calendar_intervals` refusal.
 _duration_operand_units(d::_DurationOperand, conn)::Int64 =
@@ -1339,6 +1390,8 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     end
     # `*` and `/`, by a number only.
     if _is_number_side(v.operand, right_kind, instruc)
+      # #1576: a month the left carries, divided or scaled by a factor that is not whole.
+      _calendar_scale_refused(v.field_name, op, v.operand, instruc) && throw(_calendar_scale_error())
       sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
       lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
       lms === nothing &&
@@ -1391,6 +1444,9 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
   if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
+    # #1576: a month the right carries (a duration value, or arithmetic over one), scaled by a factor
+    # that is not whole.
+    _calendar_scale_refused(v.operand, op, v.field_name, instruc) && throw(_calendar_scale_error())
     sqlite || return "($(left_side) * $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
     rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
     rms === nothing &&

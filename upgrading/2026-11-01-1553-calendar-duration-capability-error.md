@@ -1,7 +1,7 @@
 ## A month or a year beside an interval on SQLite or MySQL raises `BackendCapabilityError` (#1553)
 
 - **Version**: Unreleased
-- **PormG ref**: #1553 ; `src/capabilities.jl`, `src/querybuilder/expression_render.jl`
+- **PormG ref**: #1553, #1576 ; `src/capabilities.jl`, `src/querybuilder/expression_render.jl`
 - **Recorded**: 2026-11-01
 - **Severity**: behavior, only for SQLite or MySQL code that catches the error by its type. The same calls still raise; the type changed. Nothing that built before builds differently.
 
@@ -21,6 +21,7 @@ before raise the same capability error. Before, they raised a `QueryBuildError`.
 | on SQLite or MySQL: `F("grid") * Month(1)`, `F("time") - Month(1)` (new in #1553) | `QueryBuildError` / `InvalidValueError` | `BackendCapabilityError` |
 | the first two rows on PostgreSQL | builds | builds, unchanged |
 | the third row on PostgreSQL | `QueryBuildError` / `InvalidValueError` | builds (`make_interval(months => …)`), new in #1553 |
+| on PostgreSQL: a month times a factor that is not whole (`F("points") * Month(1)`, a `DecimalField` with places, `(F("grid") * Month(1)) * 1.5`) or a month divided (`Year(1) / F("grid")`) | `QueryBuildError` | `QueryBuildError`, unchanged: a month has no fixed length, so only a whole number scales one (#1576) |
 | on every engine: `F("date") + Month(1)`, a date shifted by a month | builds | builds, unchanged |
 
 `BackendCapabilityError` is a `PormGError`, not a `QueryBuildError`, so a `catch` that tests for

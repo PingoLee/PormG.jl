@@ -893,7 +893,7 @@ end
     q.values("driverid", "lap", "milliseconds", "neg" => F("time") - F("time") * 2)
     q.order_by("driverid", "lap")
     df = q |> DataFrame
-    @test size(df, 1) > 0
+    @test size(df, 1) == 3   # 157754, 158132 and 184966 ms, each a lap 1
     @test all(x -> x isa Dates.CompoundPeriod, df.neg)
     @test any(!iszero, df.milliseconds .% 1000)   # the premise: a fraction to lose the sign of
     @test [Dates.toms(x) for x in df.neg] == .-df.milliseconds

@@ -53,9 +53,10 @@ const _NEGATIVE_FRACTIONS = [
     @test got.periods == periods
   end
   @test Dates.toms(_ivl("PT-2M-37.754S")) == -157754
-  # The date part, the days and the time each carry their own sign; only the time's fraction was lost.
-  mixed = _ivl("P-1Y2M-3DT-4H-5M-6.789S")
-  @test mixed.periods == [Year(-1), Month(2), Day(-3), Hour(-4), Minute(-5), Second(-6), Millisecond(-789)]
+  # The months, the days and the time each carry their own sign (years and months share one count, so
+  # one sign); only the time's fraction was lost.
+  mixed = _ivl("P-1Y-2M3DT-4H-5M-6.789S")
+  @test mixed.periods == [Year(-1), Month(-2), Day(3), Hour(-4), Minute(-5), Second(-6), Millisecond(-789)]
 end
 
 @testset "every interval LibPQ read correctly reads back identically, components included (#1568)" begin
@@ -79,10 +80,40 @@ end
   end
 end
 
+# The integration testset is what proves the read end to end, and no CI job runs it. So the wiring is
+# pinned here from the source: every `LibPQ.Connection(…)` call in the extension passes the override.
+# Without this, deleting the keyword left this file green.
+function _connection_calls(ex, found = Expr[])
+  if ex isa Expr
+    ex.head === :call && ex.args[1] == :(LibPQ.Connection) && push!(found, ex)
+    foreach(a -> _connection_calls(a, found), ex.args)
+  end
+  return found
+end
+_is_override_kw(k) = k isa Expr && k.head === :kw && k.args == [:conversions, :_CONNECTION_CONVERSIONS]
+# After a `;` or after a comma: both spell the keyword.
+_passes_override(call::Expr) = any(call.args) do a
+  _is_override_kw(a) || (a isa Expr && a.head === :parameters && any(_is_override_kw, a.args))
+end
+
 @testset "every LibPQ connection reads an interval through the override (#1568)" begin
   conv = LibPQ.PQConversions(_IVL_EXT._CONNECTION_CONVERSIONS)
   @test conv[(:interval, Dates.CompoundPeriod)] === _IVL_EXT._interval_conversion
   @test length(conv) == 1
+  src = read(joinpath(pkgdir(PormG), "ext", "PormGLibPQExt.jl"), String)
+  calls = _connection_calls(Meta.parseall(src))
+  # One construction site, `_open_connection`. A second one — or a spelling the scan cannot see, such as
+  # an unqualified `Connection` imported from LibPQ — changes this count and gets a look.
+  @test length(calls) == 1
+  @test !occursin(r"(using|import)\s+LibPQ\s*:", src)
+  for call in calls
+    @test _passes_override(call) || error("`$(call)` opens a LibPQ connection without `conversions = _CONNECTION_CONVERSIONS`")
+  end
+  # The binary arm is LibPQ's own parse, chosen by dispatch: a binary value reaches the method on
+  # `PQBinaryValue`, a text value the one on `PQValue`.
+  f = _IVL_EXT._interval_conversion
+  @test which(f, Tuple{LibPQ.PQBinaryValue{LibPQ.oid(:interval)}}).sig == Tuple{typeof(f), LibPQ.PQBinaryValue}
+  @test which(f, Tuple{LibPQ.PQValue{LibPQ.oid(:interval), LibPQ.TEXT}}).sig == Tuple{typeof(f), LibPQ.PQValue}
 end
 
 if pkgversion(LibPQ) <= v"1.18.0"

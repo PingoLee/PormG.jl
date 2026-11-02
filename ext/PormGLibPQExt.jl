@@ -283,8 +283,8 @@ end
 
 # A text value is the `iso_8601` text; a binary one is LibPQ's own parse, which splits a signed count of
 # microseconds and is already right. PormG reads text, but the override covers both.
-_interval_conversion(pqv::LibPQ.PQValue)::Dates.CompoundPeriod =
-  pqv isa LibPQ.PQBinaryValue ? parse(Dates.CompoundPeriod, pqv) : _parse_iso_interval(LibPQ.string_view(pqv))
+_interval_conversion(pqv::LibPQ.PQValue)::Dates.CompoundPeriod = _parse_iso_interval(LibPQ.string_view(pqv))
+_interval_conversion(pqv::LibPQ.PQBinaryValue)::Dates.CompoundPeriod = parse(Dates.CompoundPeriod, pqv)
 
 const _CONNECTION_CONVERSIONS = Dict((:interval, Dates.CompoundPeriod) => _interval_conversion)
 

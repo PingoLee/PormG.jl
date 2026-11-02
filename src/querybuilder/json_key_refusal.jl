@@ -206,17 +206,17 @@ function _json_key_refusal(p::_JSONKeyArithmetic, side::Tuple{String,String})
   return QueryBuildError(
     "\e[4m\e[31m$(_json_key_spelling(p.name, p.style))\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say which number it computes on (#1483). Say the number type you mean: " *
-    "\e[32mCast(\"$(side[2])\", \"numeric\")\e[0m keeps the fraction on every engine, and " *
-    "\e[32mCast(\"$(side[2])\", BigIntegerField())\e[0m computes on integers.")
+    "\e[32mCast($(side[2]), \"numeric\")\e[0m keeps the fraction on every engine, and " *
+    "\e[32mCast($(side[2]), BigIntegerField())\e[0m computes on integers.")
 end
 
 _json_key_ordering_refusal(what::String, side::Tuple{String,String}, issue::String, projected::Bool) =
   QueryBuildError(
     "\e[4m\e[31m$(what)\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say whether it orders numbers or text ($(issue)). Say the type you mean: " *
-    "\e[32mCast(\"$(side[2])\", \"numeric\")\e[0m orders numbers on every engine, and " *
-    "\e[32mCast(\"$(side[2])\", \"text\")\e[0m orders text." *
-    (projected ? " Project it and order by its name: \e[32mvalues(\"n\" => Cast(\"$(side[2])\", \"numeric\"))\e[0m, " *
+    "\e[32mCast($(side[2]), \"numeric\")\e[0m orders numbers on every engine, and " *
+    "\e[32mCast($(side[2]), \"text\")\e[0m orders text." *
+    (projected ? " Project it and order by its name: \e[32mvalues(\"n\" => Cast($(side[2]), \"numeric\"))\e[0m, " *
                  "then \e[32morder_by(\"n\")\e[0m." : ""))
 _json_key_refusal(p::_JSONKeyExtremum, side::Tuple{String,String}) =
   _json_key_ordering_refusal(_json_key_spelling(p.name, p.style), side, "#1491", false)
@@ -225,8 +225,8 @@ _json_key_refusal(p::_JSONKeyOrdering, side::Tuple{String,String}) =
 
 function _json_key_refusal(p::_JSONKeyNullIf, side::Tuple{String,String})
   flag = side[2]
-  spell(type, other) = p.comparing == 1 ? "NullIf(Cast(\"$(flag)\", \"$(type)\"), $(other))" :
-                                          "NullIf(…, Cast(\"$(flag)\", \"$(type)\"))"
+  spell(type, other) = p.comparing == 1 ? "NullIf(Cast($(flag), \"$(type)\"), $(other))" :
+                                          "NullIf(…, Cast($(flag), \"$(type)\"))"
   return QueryBuildError(
     "\e[4m\e[31m`NullIf`\e[0m over $(side[1]) is not supported: a JSON key's value has no declared type, " *
     "so the query does not say whether it compares numbers or text (#1510). Cast the key where it sits: " *
@@ -238,16 +238,16 @@ end
 _json_key_refusal(p::_JSONKeyCarrierFilter, side::Tuple{String,String}) = FilterError(
   "A filter on \e[31m$(p.comparison ? string("the comparison (`", p.operator, "`)") : p.label)\e[0m is not supported: it holds $(side[1]), and a JSON key's value has no " *
   "declared type, so the query does not say what the comparison means (#1506). Cast the key inside the " *
-  "expression, to the type you mean: \e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every " *
-  "engine (for example \e[32mCoalesce(Cast(\"$(side[2])\", \"numeric\"), 0)\e[0m), " *
-  "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
+  "expression, to the type you mean: \e[32mCast($(side[2]), \"numeric\")\e[0m compares numbers on every " *
+  "engine (for example \e[32mCoalesce(Cast($(side[2]), \"numeric\"), 0)\e[0m), " *
+  "\e[32mCast($(side[2]), \"text\")\e[0m text and \e[32mCast($(side[2]), \"date\")\e[0m a date.")
 
 _json_key_refusal(::_JSONKeyRightOperand, side::Tuple{String,String}) = FilterError(
   "A comparison with \e[31m$(side[1])\e[0m on its right is not supported: a JSON key's value has no " *
   "declared type, so the query does not say what the comparison means (#1528). A key compares as its " *
   "lookup does only on the left, against a value. Cast the key to the type you mean: " *
-  "\e[32mCast(\"$(side[2])\", \"numeric\")\e[0m compares numbers on every engine, " *
-  "\e[32mCast(\"$(side[2])\", \"text\")\e[0m text and \e[32mCast(\"$(side[2])\", \"date\")\e[0m a date.")
+  "\e[32mCast($(side[2]), \"numeric\")\e[0m compares numbers on every engine, " *
+  "\e[32mCast($(side[2]), \"text\")\e[0m text and \e[32mCast($(side[2]), \"date\")\e[0m a date.")
 
 # The lookup a caller wrote for an internal operator (`"BETWEEN"` → `"@range"`), for a refusal.
 function _operator_spelling(op::AbstractString)::String

@@ -3166,6 +3166,42 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1552: `MILLISECONDS`, `MICROSECONDS` and `JULIAN` read back as the decimals PormG states for them
+# Expected, on race 1 shifted by 1.5 s (`F("start_at") + Millisecond(1500)`, 06:00:01.500 UTC on
+# 2009-03-29): `MILLISECONDS` reads the `Decimal` 1500 and `MICROSECONDS` the `Decimal` 1500000 on
+# PostgreSQL (`EXTRACT(… FROM …)::numeric`) and MySQL (`EXTRACT(SECOND_MICROSECOND …) / 1000`, `CAST(… AS
+# DECIMAL(65,0))`); `JULIAN` of the race's date is the whole `Decimal` 2454920 and of its start the
+# day's fraction, 2454920.25, on PostgreSQL. SQLite has none of the three parts and raises
+# `BackendCapabilityError`. Why it matters: the walk names them decimals (#1552), so the read must be one
+# on every driver, and `JULIAN` over a timestamp must keep the fraction that makes `Concat` refuse it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1552: Extract's sub-second parts and JULIAN read back as decimals" begin
+    shifted = F("start_at") + Millisecond(1500)
+    if by_engine(sqlite = true, postgres = false, mysql = false)   # SQLite has none of the three parts
+        for part in ("milliseconds", "microseconds", "julian")
+            q = M.Race.objects
+            q.values("raceid", "v" => Extract("start_at", part))
+            @test_throws PormG.BackendCapabilityError q.list()
+        end
+    else
+        q = M.Race.objects
+        q.filter("raceid" => 1)
+        q.values("ms" => Extract(shifted, "milliseconds"), "us" => Extract(shifted, "microseconds"))
+        row = only(q.list())
+        @test row[:ms] isa PormG.QueryBuilder.Decimals.Decimal && row[:ms] == 1500
+        @test row[:us] isa PormG.QueryBuilder.Decimals.Decimal && row[:us] == 1500000
+        if by_engine(postgres = true, mysql = false, sqlite = false)   # MySQL has no JULIAN part
+            q = M.Race.objects
+            q.filter("raceid" => 1)
+            q.values("jd" => Extract("date", "julian"), "jt" => Extract("start_at", "julian"))
+            row = only(q.list())
+            @test row[:jd] isa PormG.QueryBuilder.Decimals.Decimal && row[:jd] == 2454920
+            @test row[:jt] isa PormG.QueryBuilder.Decimals.Decimal && Float64(row[:jt]) == 2454920.25
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # D5 (#1034): a zero-scale cast in `Concat` writes the integer, where it builds
 # A cast to `numeric(p,0)` is a whole number. PostgreSQL (`CONCAT($1::text, ("Tb"."grid")::numeric(2,0))`)
 # and MySQL round it and write the integer; SQLite's cast to NUMERIC keeps a REAL as it is, so it writes

@@ -1432,16 +1432,16 @@ end
 
 # #571 — parts PostgreSQL defines as fractional are not cast to an integer, which would be lossy, and
 # SQLite's fail-closed whitelist below has no twin for any of them, so there is no parity to keep.
-# #1457: `EPOCH` is cast to `numeric`, the type PormG states for it (`_epoch_extract`): `extract` is a
-# `numeric` from PostgreSQL 14, where the cast changes nothing, and a `double precision` below it.
+# #1457, #1552: each is cast to `numeric`, the type PormG states for it (`_decimal_extract_kind`):
+# `extract` is a `numeric` from PostgreSQL 14, where the cast changes nothing, and a `double precision`
+# below it.
 const _PG_EXTRACT_FRACTIONAL = ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   # #691 — the rendered field is the table's spelling, so no caller text reaches the SQL. The
   # 3-arg `Extract(x, part, format)` raw cast suffix is gone too: `Cast(Extract(x, part), type)`.
   up = extract_part(format["part"])
   bare = "EXTRACT($(up) FROM $(column))"
-  up == "EPOCH" && return "$(bare)::numeric"
-  up in _PG_EXTRACT_FRACTIONAL && return bare
+  up in _PG_EXTRACT_FRACTIONAL && return "$(bare)::numeric"
   # `numeric::integer` ROUNDS (45.6 → 46) where SQLite's `%S` truncates; `trunc` keeps parity.
   up == "SECOND" && return "trunc($(bare))::integer"
   # See the note above `QUARTER` for why `::integer` and not `::bigint`.

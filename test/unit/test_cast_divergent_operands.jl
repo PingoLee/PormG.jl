@@ -961,6 +961,12 @@ end
                     q.with("c" => CCD.Ccd_driver.objects.values("id", "b" => "born"), join_field = "id" => "id");
                     q.values("x" => Fn.Cast(PormG.CTE("c", "b"), Models.IntegerField())); _ccd_sql(q; conn = conn))
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1260", run = cte_cast)
+  # #1554: the part advice spells the operand as written. A path takes its transform or `Extract("born",
+  # …)`; a CTE handle takes `Extract` over the handle, unquoted (it was `Extract(x, …)`, the handle lost).
+  born_msg = _ccd_msg(_ccd_refusal(Fn.Cast("born", Models.IntegerField()); conn = _CCD_SL))
+  @test occursin("\"born__@year\" or Extract(\"born\", \"year\")", born_msg)
+  cte_msg = try cte_cast(_CCD_SL); "" catch e; _ccd_msg(e) end
+  @test occursin("Extract(CTE(\"c\", \"b\"), \"year\")", cte_msg) && !occursin("<flag>", cte_msg)
   # The number the message names, a day count, and a text cast build on both engines.
   for expr in (Fn.Cast("born__@year", Models.IntegerField()), Fn.Cast(Fn.Extract("born", "year"), Models.IntegerField()),
                Fn.Cast("clock__@hour", Models.IntegerField()), Fn.Cast(_CF("born") - _CF("born"), Models.IntegerField()),
@@ -1059,6 +1065,13 @@ end
   @test occursin("SQLite computes a day in January 2000", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
   @test occursin("MySQL computes today's date", _ccd_msg(_ccd_refusal(Fn.Cast("clock", "date"); conn = _CCD_MY)))
   @test occursin("F(\"date\") + F(\"laptime\")", _ccd_msg(_ccd_refusal(Fn.Cast("laptime", "date"); conn = _CCD_SL)))
+  # #1554: the advice's operand in arithmetic is one a caller can build: a path as `F("…")`, a `CTE(…)`
+  # handle as written, and a `Joined(…)` handle, which takes no arithmetic, as `x` (review of #1554).
+  QB = PormG.QueryBuilder
+  @test QB._f_flag(QB._concat_flag("laptime")) == "F(\"laptime\")"
+  @test QB._f_flag(QB._concat_flag(PormG.CTE("c", "d"))) == "CTE(\"c\", \"d\")"
+  @test QB._f_flag(QB._concat_flag(PormG.Joined("a", "dur"))) == "x"
+  @test QB._f_flag(QB._concat_flag(Fn.Max("laptime"))) == "x"
   # A date and a timestamp have a date; a duration and a time have a text. All build on every engine.
   for expr in (Fn.Cast("start_at", "date"), Fn.Cast("born", "date"), Fn.Cast(Fn.Value(Date(2009, 3, 29)), "date"),
                Fn.Cast("laptime", "text"), Fn.Cast("clock", "text"))

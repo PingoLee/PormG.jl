@@ -39,7 +39,7 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "its text, `true` or `false`",
    computes = (PormGSQLite => _ -> "`1` or `0`, the integer it stores",
                PormGMySQL => _ -> "`1` or `0`, the integer it stores"),
-   fix = (flag, _) -> "Write the text you mean: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"true\")), default = \"false\")\e[0m."),
+   fix = (flag, _) -> "Write the text you mean: \e[32mCase(When($(_when_flag(flag)) => true, then = Value(\"true\")), default = \"false\")\e[0m."),
   # #1028: a fractional number cast to an integer is the nearest one; SQLite's cast truncates. MySQL's
   # `CAST(… AS SIGNED)` rounds (measured: `1.5` → `2`, `-1.5` → `-2`; a double's tie to even, `2.5E0` →
   # `2`, as PostgreSQL's `float8`), so it keeps the meaning.
@@ -59,7 +59,7 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "an error, since an interval has no numeric value",
    computes = (PormGSQLite => _ -> "the leading digits of its `HH:MM:SS` text, the hours",
                PormGMySQL => _ -> "a number it does not mean: the duration's count of microseconds, which is how MySQL stores it"),
-   fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast(\"$(flag)\", \"text\")\e[0m, which each engine writes in its own form."),
+   fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast($(flag), \"text\")\e[0m, which each engine writes in its own form."),
   # #1260: a date, a timestamp or a time is no number either, so its cast is an error by the same
   # tie-breaker. SQLite casts the stored text (`2009-03-29`, `2009-03-29T06:00:00.000+00:00`,
   # `06:00:00`) and reads its leading digits: the year, or a time's hour. A part names the number.
@@ -84,7 +84,7 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "an error, since a boolean is a number only as the integer `1` or `0`",
    computes = (PormGSQLite => _ -> "the integer it stores, `1` or `0` (`1.0` as a float)",
                PormGMySQL => _ -> "`1` or `0`, the integer it stores"),
-   fix = (flag, declared) -> "Cast it to the integer first, which every engine computes alike: \e[32mCast(Cast(\"$(flag)\", IntegerField()), \"$(something(declared, "float8"))\")\e[0m, or say the values: \e[32mCase([When(\"$(flag)\" => true, then = Value(1.0)), When(\"$(flag)\" => false, then = Value(0.0))])\e[0m."),
+   fix = (flag, declared) -> "Cast it to the integer first, which every engine computes alike: \e[32mCast(Cast($(flag), IntegerField()), \"$(something(declared, "float8"))\")\e[0m, or say the values: \e[32mCase([When($(_when_flag(flag)) => true, then = Value(1.0)), When($(_when_flag(flag)) => false, then = Value(0.0))])\e[0m."),
   # #1325: a duration and a time of day have no calendar date, so their cast to a date is an error:
   # PostgreSQL has no `interval::date` and no `time::date`. SQLite's `date()` reads the stored
   # `HH:MM:SS` text as a time on 2000-01-01 (measured on 3.45.1: `date('01:23:45')` is `2000-01-01`,
@@ -94,7 +94,7 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "an error, since a duration has no calendar date",
    computes = (PormGSQLite => _ -> "a day in January 2000, its `HH:MM:SS` text read as a time on `2000-01-01`, or NULL past 24 hours",
                PormGMySQL => _ -> "the digits of its count of microseconds, which is how MySQL stores it, read as a date"),
-   fix = (flag, _) -> "A duration places a date only from another one: add it to a date, \e[32mF(\"date\") + F(\"$(flag)\")\e[0m."),
+   fix = (flag, _) -> "A duration places a date only from another one: add it to a date, \e[32mF(\"date\") + $(_f_flag(flag))\e[0m."),
   (targets = (:date,), kinds = (:time,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1325",
    meaning = _ -> "an error, since a time of day has no date",
    computes = (PormGSQLite => _ -> "`2000-01-01`, the date it gives a time of day",
@@ -161,8 +161,8 @@ const _MEANING_DEPARTURES = (
 # or `Extract` over it; any other operand (`Max("born")`, a `Case`, a literal) only `Extract`, since a
 # transform applies to a path.
 _temporal_part_spelling(flag::AbstractString, part::AbstractString) =
-  flag == "<flag>" ? "\e[32mExtract(x, \"$(part)\")\e[0m" :
-  "\e[32m\"$(flag)__@$(part)\"\e[0m or \e[32mExtract(\"$(flag)\", \"$(part)\")\e[0m"
+  _flag_is_path(flag) ? "\e[32m\"$(chop(flag; head = 1, tail = 1))__@$(part)\"\e[0m or \e[32mExtract($(flag), \"$(part)\")\e[0m" :
+  "\e[32mExtract($(flag), \"$(part)\")\e[0m"
 
 # #1111 — an integer quotient over a `Sum` the type walk cannot name (`_DIVISION_KINDS`, classified by
 # `_whole_numeric_operand`). Not a row of the table above: which engine departs is not a fixed type
@@ -203,7 +203,7 @@ _meaning_kind(target::Symbol, kind::Symbol) =
 # computes, and the explicit spelling. It names that engine only — never a pair (#1129 item 3).
 # RETURNS the exception; the call site throws it.
 function _meaning_refusal(fname::AbstractString, what::AbstractString, row, conn;
-                          flag::AbstractString = "<flag>", declared = nothing)
+                          flag::AbstractString = "x", declared = nothing)
   engine = _backend_name(conn)
   return QueryBuildError(
     "\e[4m\e[31m$(fname)\e[0m of $(what) means $(row.meaning(declared)); $(engine) computes " *

@@ -538,8 +538,8 @@ end
 # classified as an operand of its own, the first such branch answering for the `Case` (an integer
 # quotient answering wherever it is, `_division_first`). A float branch
 # makes it a `float8` on PostgreSQL (`Cast` to an integer rounds there and truncates on SQLite); a
-# `DecimalField` branch keeps its own places, which the type walk drops (`_unify_kinds`), so a
-# zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
+# `DecimalField` branch keeps its own places, which the type walk keeps only where the branches agree
+# on them (`_unify_decimals`, #1550), so a zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
 # (`_textless_number`), and that cast is checked against the branches (#1217, `_declared_case`).
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
 _declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
@@ -883,6 +883,10 @@ end
 # `numeric(p, s)` in the body, a `DecimalField` path), which the meaning kind (the read path's width-less
 # decimal, #1121) and the CTE model's `DecimalField()` both drop, so a zero-scale cast is whole through a
 # CTE as it is alone; otherwise the kind's own. As the scale classifier reads a scale (#1034 step 2b).
+# #1550: the walk keeps scale 0 through whole arithmetic and an agreeing `Case`, so a CTE column over
+# `F("grid") + 1` (a zero-scale `grid`) is whole here as it is alone. The meaning kind keeps dropping
+# the places on purpose (#1212: a computed number's decimal meaning claims no width), so this reader
+# stays the one that asks the walk for them.
 function _cte_decimal_places(p::CTEReference, k::CDecimal, instruc::SQLInstruction)
   walk = _expression_kind(p, instruc)
   return walk isa CDecimal && walk.scale !== nothing ? walk.scale : k.scale
@@ -1225,14 +1229,14 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   # interval is no number whatever the float's width (#1259, #1260), and MySQL reads the digits of one
   # (`CAST(DATE '2009-03-29' AS FLOAT)` is `20090329`). The other rules below do not apply to a float.
   if _single_precision_cast(declared)
-    d = departs(:value, "any value", :single_precision, "<flag>")
+    d = departs(:value, "any value", :single_precision, "x")
     d === nothing || return d
   end
   # #1252: a declared length cuts whatever text the cast writes, so the node is checked once, like
   # single precision. On an engine that keeps the length the operands are still read below, as for any
   # cast to text.
   if _sized_text_length(declared) !== nothing
-    d = departs(:value, "any value", :sized_text, "<flag>")
+    d = departs(:value, "any value", :sized_text, "x")
     d === nothing || return d
   end
   size = _numeric_cast_size(declared)
@@ -1364,14 +1368,25 @@ _textless_literal(::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:inter
 _textless_literal(::Any) = nothing
 
 # The column an operand names, as the caller spelled it, or `nothing` for any other expression.
-# `_concat_flag` hands a path to the refusal's `Case(When("<path>" => true, …))` suggestion.
 _concat_operand_label(p::AbstractString) = String(p)
 _concat_operand_label(p::CTEReference) = "CTE(\"$(p.name)\", \"$(p.path)\")"
 _concat_operand_label(p::JoinedReference) = "Joined(\"$(p.alias)\", \"$(p.path)\")"
 _concat_operand_label(p::SQLField) = _concat_operand_label(p.field)
 _concat_operand_label(p::FExpression) = p.operation === nothing ? _concat_operand_label(p.field_name) : nothing
 _concat_operand_label(::Any) = nothing
-_concat_flag(p) = (l = _concat_operand_label(p); l isa String && !occursin('(', l) ? l : "<flag>")
+# #1554 — the operand as a refusal's advice spells it, as Julia a caller can paste: a path quoted
+# (`Cast("price", "text")`), a `CTE(…)`/`Joined(…)` handle as written and unquoted
+# (`Cast(CTE("tc", "v"), "text")`), and any other expression `x`, as the other refusals write a computed
+# operand (`Extract(x, "year")`, `Cast(x, IntegerField())`). Until #1554 everything but a path was
+# `"<flag>"` — a boolean's placeholder, quoted as if it were a path. The templates insert it bare.
+_concat_flag(p) = (l = _concat_operand_label(p); l === nothing ? "x" : occursin('(', l) ? l : "\"$(l)\"")
+_flag_is_path(flag::AbstractString) = startswith(flag, '"')
+# `When` takes a path or a `Q`, so a boolean that is no path keeps the placeholder there: `When(x => true)`
+# would advise a call that does not exist.
+_when_flag(flag::AbstractString) = _flag_is_path(flag) ? flag : "\"<flag>\""
+# A path is a column in arithmetic only as `F("path")`, and a `CTE(…)` handle is an expression already.
+# A `Joined(…)` handle takes no arithmetic (`operators.jl`), so it is advised as `x`, as a computed value is.
+_f_flag(flag::AbstractString) = _flag_is_path(flag) ? "F($(flag))" : startswith(flag, "Joined(") ? "x" : flag
 
 function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   field = _alias_column_field(p, instruc)
@@ -1529,8 +1544,8 @@ end
 # answers an integer, since the list types the value, not a comparison between engines (#1147). #1337:
 # an `EXTRACT` `QUARTER` is one, `EXTRACT(QUARTER FROM x)::integer` on PostgreSQL and MySQL's
 # `QUARTER(x)` an INT, as the `@quarter` transform already was.
-# The sub-second parts are fractional on PostgreSQL besides; `EPOCH` is a decimal, stated below
-# (`_epoch_extract`, #1457). Stated here because
+# `EPOCH`, the sub-second parts and `JULIAN` are decimals, stated below (`_decimal_extract_kind`,
+# #1457, #1552). Stated here because
 # `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
 # this list belongs once it does.
 const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
@@ -1543,16 +1558,31 @@ function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
 end
 
-# #1457 — `Extract(x, "EPOCH")` is a width-less decimal, the seconds with their fraction: PostgreSQL
-# renders `EXTRACT(EPOCH FROM x)::numeric` (`Dialect.EXTRACT`; `extract` is a `numeric` from 14 and a
-# `double precision` below, so the cast holds the type on every server), and MySQL's spelling is a
-# DECIMAL (`TIMESTAMPDIFF(MICROSECOND, …) / 1000000`, or a duration's microseconds over 10^6). SQLite
-# has no `EPOCH` part (`BackendCapabilityError`). Stated beside the integer parts for their reason:
-# `_result_rule(EXTRACT)` is `:unknown`, because the type is the part's.
-function _epoch_extract(p::Union{FObject,WindowFunction})::Bool
-  p.function_name == "EXTRACT" || return false
+# #1457, #1552 — the parts that are a decimal on every engine that has them, and SQLite has none of
+# them (`BackendCapabilityError`). PostgreSQL renders each `EXTRACT(… FROM x)::numeric`
+# (`Dialect.EXTRACT`; `extract` is a `numeric` from 14 and a `double precision` below, so the cast holds
+# the type on every server). Measured for #1552 on PostgreSQL 18.6, through LibPQ and Postgres.jl, and
+# on MySQL 8.4, each reading back as a `Decimal`:
+# - `EPOCH`, the seconds with their fraction; MySQL's spelling is a DECIMAL quotient
+#   (`TIMESTAMPDIFF(MICROSECOND, …) / 1000000`). A width-less decimal;
+# - `MILLISECONDS`, the seconds with their fraction, times 1000: PostgreSQL's `numeric` has 3 places
+#   (`1500.000`), MySQL's quotient over 1000 four. A width-less decimal: below a millisecond it has a
+#   fraction;
+# - `MICROSECONDS`, the seconds times 10^6: whole on both (PostgreSQL's scale 0, MySQL's
+#   `DECIMAL(65,0)`), so a zero-scale decimal (#1550), whose text is the integer's;
+# - `JULIAN` (PostgreSQL only; MySQL refuses it): the Julian day, whole over a date (`2454920`), with
+#   the fraction of the day over a timestamp (`2454920.25…`).
+# Stated beside the integer parts for their reason: `_result_rule(EXTRACT)` is `:unknown`, because the
+# type is the part's.
+function _decimal_extract_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind)::Union{CDecimal,Nothing}
+  p.function_name == "EXTRACT" || return nothing
   part = get(p.kwargs, "part", nothing)
-  return part isa AbstractString && Dialect.extract_part(part) == "EPOCH"
+  part isa AbstractString || return nothing
+  up = Dialect.extract_part(part)
+  up in ("EPOCH", "MILLISECONDS") && return CDecimal(nothing, nothing)
+  up == "MICROSECONDS" && return CDecimal(nothing, 0)
+  up == "JULIAN" && return CDecimal(nothing, _infer_kind(p.column, instruc, policy) isa CDate ? 0 : nothing)
+  return nothing
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
@@ -1599,12 +1629,13 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
 end
 # #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
 # names it (`_expression_kind`); any other kind has one text, `nothing`. A zero-scale decimal is whole,
-# as D5 decides for a declared one. A `Case` with no `output_field` is not this leaf's: its branches
-# are read one by one where it is an operand (`_case_textless_branch`), and the walk's unified kind
-# would lose a zero-scale branch's places (`Case(…, then = "grid") + 1` is whole). Inside arithmetic it
-# answers `nothing`, as before this leaf.
+# as D5 decides for a declared one. A `Case` with no `output_field` is classified by its branches, one
+# by one (`_case_textless_branch`), as it is where it is the operand itself: this leaf is where an
+# arithmetic side reaches it (#1551), so `Case(…, then = 1.5) + 1` has the float's text as the `Case`
+# alone has, and `Case(…, then = "grid") + 1` over a zero-scale `grid` is whole. Before #1551 it answered
+# `nothing` there, so `Concat` over the arithmetic built where `Concat` over the `Case` was refused.
 function _textless_walk_leaf(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
-  _undeclared_case(p) && return nothing
+  _undeclared_case(p) && return _case_textless_branch(p, instruc)
   k = _expression_kind(p, instruc)
   k isa CFloat64 && return (:float, "`$(p.function_name)(…)`")
   k isa CDecimal && !_whole_kind(k) && return (:decimal, "`$(p.function_name)(…)`")

@@ -583,6 +583,30 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Coalesce Subquery json key / 2", :Field_validation_scratch,
    m -> _EKM_FN.Coalesce(_EKM_Q.Subquery((s = m.Field_validation_scratch.objects; s.filter("id" => 1);
                                           s.values("v" => _EKM_FN.Coalesce("payload__n", 0)); s)), 0) / 2),
+  # #1550: a zero-scale decimal stays whole through `+`, `-`, `*` and through a `Case` or `Coalesce`
+  # that unifies it with an integer. The F1 models have no zero-scale column, so a zero-scale cast of
+  # `grid` stands in for one: the walk names both `CDecimal(p, 0)`. A two-place decimal (`points`)
+  # keeps no places through arithmetic, which SQLite computes as a REAL.
+  ("Cast zero-scale + 1",     :Result,              m -> _EKM_FN.Cast("grid", "numeric(4,0)") + 1),
+  ("Cast zero-scale * 2",     :Result,              m -> _EKM_FN.Cast("grid", "numeric(4,0)") * 2),
+  ("F bigint + Cast zero-scale", :Result,           m -> _EKM_Q.F("resultid") + _EKM_FN.Cast("grid", "numeric(4,0)")),
+  ("Case zero-scale cast int", :Result,             m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Cast("grid", "numeric(4,0)"))], default = 0)),
+  ("Coalesce zero-scale cast int", :Result,         m -> _EKM_FN.Coalesce(_EKM_FN.Cast("grid", "numeric(4,0)"), "grid")),
+  ("F decimal + 1",           :Constructor_results, m -> _EKM_Q.F("points") + 1),
+  # #1551: an undeclared `Case` inside arithmetic is classified by its branches, as it is alone.
+  ("Case float literal + 1",  :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0) + 1),
+  ("Case float literal * 2",  :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0) * 2),
+  ("1 + Case float literal",  :Result,              m -> 1 + _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0)),
+  ("Case int literal + 1",    :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1)], default = 0) + 1),
+  ("Case zero-scale cast + 1", :Result,             m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Cast("grid", "numeric(4,0)"))], default = 0) + 1),
+  # #1552: the parts PostgreSQL computes as a fractional `numeric` (MILLISECONDS, JULIAN over a
+  # timestamp), or a whole one (MICROSECONDS, JULIAN over a date), beside SECOND (`trunc(…)::integer`).
+  ("Extract milliseconds time", :Race,              m -> _EKM_FN.Extract("time", "milliseconds")),
+  ("Extract microseconds time", :Race,              m -> _EKM_FN.Extract("time", "microseconds")),
+  ("Extract second time",     :Race,                m -> _EKM_FN.Extract("time", "second")),
+  ("Extract julian date",     :Race,                m -> _EKM_FN.Extract("date", "julian")),
+  ("Extract julian start_at", :Race,                m -> _EKM_FN.Extract("start_at", "julian")),
+  ("Extract milliseconds start_at", :Race,          m -> _EKM_FN.Extract("start_at", "milliseconds")),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

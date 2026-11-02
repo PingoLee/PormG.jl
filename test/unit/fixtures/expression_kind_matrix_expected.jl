@@ -8025,95 +8025,95 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce Subquery json key / 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`/` over `COALESCE(…)` over a Subquery projecting `COALESCE(…)` over the JSON key `payload__n` is not supported: a JSON "),
   ("Cast zero-scale + 1 | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale + 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Cast zero-scale * 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F bigint + Cast zero-scale | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast int | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Coalesce zero-scale cast int | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("F decimal + 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal + 1 | alone", :sqlite) =>
@@ -8205,23 +8205,23 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case int literal + 1 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | alone", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | cte", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sDecimalField", kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Case zero-scale cast + 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, 0)", whole_numeric = nothing),
   ("Extract milliseconds time | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
   ("Extract milliseconds time | alone", :sqlite) =>
@@ -8481,36 +8481,6 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Cast zero-scale + 1", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Cast zero-scale + 1", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Cast zero-scale + 1", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Cast zero-scale * 2", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Cast zero-scale * 2", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Cast zero-scale * 2", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("F bigint + Cast zero-scale", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("F bigint + Cast zero-scale", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("F bigint + Cast zero-scale", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Case zero-scale cast int", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Case zero-scale cast int", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Case zero-scale cast int", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Coalesce zero-scale cast int", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Coalesce zero-scale cast int", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Coalesce zero-scale cast int", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
   ("Case float literal + 1", :postgres) =>
     ["drops textless: alone=none, cte=float, subquery=none"],
   ("Case float literal + 1", :sqlite) =>
@@ -8529,10 +8499,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops textless: alone=none, cte=float, subquery=none"],
   ("1 + Case float literal", :mysql) =>
     ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case zero-scale cast + 1", :postgres) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Case zero-scale cast + 1", :sqlite) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
-  ("Case zero-scale cast + 1", :mysql) =>
-    ["drops textless: alone=none, cte=decimal, subquery=none"],
 )

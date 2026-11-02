@@ -500,7 +500,9 @@ refusal covers:
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
-integer column does (#1087). Divided, it is a decimal quotient, and refused like any decimal.
+integer column does (#1087). It stays whole through `+`, `-` and `*` with an integer or another
+zero-scale decimal, through a `Case` or `Coalesce` over such values, and through a CTE column that
+projects one (#1550). Divided, it is a decimal quotient, and refused like any decimal.
 
 A cast to a zero-scale decimal is whole too: `Cast(x, "numeric(p,0)")`, `numeric(p)`, a
 `DecimalField(…, decimal_places = 0)`, or a `numeric(p,0)` `output_field`. PostgreSQL and MySQL round

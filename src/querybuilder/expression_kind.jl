@@ -132,7 +132,8 @@ _infer_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
 # (`integer < numeric < double precision`), and that is what the expression MEANS: `F("price") / 2`
 # is a decimal quotient. SQLite can compute it otherwise — it stores a whole decimal as INTEGER and
 # divides it as one — so its render casts the dividend (`_division_sql`); the kind is the meaning. A
-# decimal's width is dropped: the operation may change it. A date or an interval side is temporal
+# decimal's width is dropped: the operation may change it — except a whole one's, which `+`, `-` and
+# `*` keep whole (#1550, below). A date or an interval side is temporal
 # arithmetic, which `_temporal_arith_kind` answers first.
 #
 # #1153: the bitwise operators resolve their type as arithmetic does (`int4 & int8` is `int8`), and
@@ -162,7 +163,12 @@ function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_Every
   right = _arithmetic_side_kind(p.operand, instruc, policy)
   _numeric_rank(right) === nothing && return nothing
   kind = _unify_kinds(left, right, policy)
-  return kind isa CDecimal ? CDecimal(nothing, nothing) : kind
+  kind isa CDecimal || return kind
+  # #1550: a whole decimal stays whole through `+`, `-` and `*` — `numeric(4,0) + 1` is scale 0 on
+  # PostgreSQL and MySQL, and SQLite stores a zero-scale decimal as an INTEGER and adds it as one. Any
+  # other scale is dropped: SQLite computes it as a REAL, where `0.1 + 0.2` gains digits.
+  whole = p.operation in ("+", "-", "*") && _whole_kind(left) && _whole_kind(right)
+  return CDecimal(nothing, whole ? 0 : nothing)
 end
 _arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_EveryKind) = x isa Bool ? nothing : _literal_kind(x, policy)
 _arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_EveryKind) = _literal_kind(x, policy)
@@ -597,11 +603,25 @@ function _unify_kinds(a::CanonicalType, b::CanonicalType, ::_EveryKind)
   ra, rb = _numeric_rank(a), _numeric_rank(b)
   if ra !== nothing && rb !== nothing
     r = max(ra, rb)
-    return r == 4 ? CFloat64() : r == 3 ? CDecimal(nothing, nothing) : r == 2 ? CInt64() : r == 1 ? CInt32() : CInt16()
+    r == 3 && return _unify_decimals(a, b)
+    return r == 4 ? CFloat64() : r == 2 ? CInt64() : r == 1 ? CInt32() : CInt16()
   end
   a isa Union{CText,CVarChar} && b isa Union{CText,CVarChar} && return CText()
   return nothing
 end
+# #1550: a `Case`/`Coalesce` over decimals that agree on their places keeps them, as each row is one of
+# those values (an integer has none): `Case(…, then = "grid", default = 0)` over a zero-scale `grid` is
+# whole, as `grid` is. The precision is kept only where both declare the same one.
+function _unify_decimals(a::CanonicalType, b::CanonicalType)
+  sa, sb = _kind_scale(a), _kind_scale(b)
+  (sa === nothing || sa != sb) && return CDecimal(nothing, nothing)
+  pa, pb = a isa CDecimal ? a.precision : nothing, b isa CDecimal ? b.precision : nothing
+  return CDecimal(pa == pb ? pa : nothing, sa)
+end
+# The declared scale of a numeric kind (an integer has none to carry: 0). Not `_decimal_scale`, the
+# places a literal needs (`projection_types.jl`).
+_kind_scale(k::CDecimal) = k.scale
+_kind_scale(::Union{CInt16,CInt32,CInt64}) = 0
 _numeric_rank(::CInt16) = 0
 _numeric_rank(::CInt32) = 1
 _numeric_rank(::CInt64) = 2

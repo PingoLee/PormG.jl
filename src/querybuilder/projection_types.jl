@@ -538,8 +538,8 @@ end
 # classified as an operand of its own, the first such branch answering for the `Case` (an integer
 # quotient answering wherever it is, `_division_first`). A float branch
 # makes it a `float8` on PostgreSQL (`Cast` to an integer rounds there and truncates on SQLite); a
-# `DecimalField` branch keeps its own places, which the type walk drops (`_unify_kinds`), so a
-# zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
+# `DecimalField` branch keeps its own places, which the type walk keeps only where the branches agree
+# on them (`_unify_decimals`, #1550), so a zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
 # (`_textless_number`), and that cast is checked against the branches (#1217, `_declared_case`).
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
 _declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
@@ -883,6 +883,10 @@ end
 # `numeric(p, s)` in the body, a `DecimalField` path), which the meaning kind (the read path's width-less
 # decimal, #1121) and the CTE model's `DecimalField()` both drop, so a zero-scale cast is whole through a
 # CTE as it is alone; otherwise the kind's own. As the scale classifier reads a scale (#1034 step 2b).
+# #1550: the walk keeps scale 0 through whole arithmetic and an agreeing `Case`, so a CTE column over
+# `F("grid") + 1` (a zero-scale `grid`) is whole here as it is alone. The meaning kind keeps dropping
+# the places on purpose (#1212: a computed number's decimal meaning claims no width), so this reader
+# stays the one that asks the walk for them.
 function _cte_decimal_places(p::CTEReference, k::CDecimal, instruc::SQLInstruction)
   walk = _expression_kind(p, instruc)
   return walk isa CDecimal && walk.scale !== nothing ? walk.scale : k.scale

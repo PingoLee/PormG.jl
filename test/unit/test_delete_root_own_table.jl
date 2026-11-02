@@ -19,9 +19,9 @@ Shapes:
     teams with no favourite driver also deleted the team whose favourite driver the cascade had just
     nulled, and that team's drivers;
   - a self-referential SET_NULL / SET_DEFAULT key, and a cycle through a child: the statement targets
-    a model already in the cascade, so it closes a cycle in the collector's dependencies and
-    `topological_sort` refuses the delete while planning, before any write. The key read makes those
-    shapes safe too, if that refusal is ever lifted;
+    a model already in the cascade. `topological_sort` refused these as a cycle until #1374, which
+    stopped a SET_NULL / SET_DEFAULT relation from ordering the deletes; the key read is what keeps
+    them right, and each now gives Django's result. A self-referential CASCADE is still refused;
   - controls: the same schemas over rows that do not cycle, and an unfiltered delete, which keeps its
     statements.
 
@@ -185,57 +185,105 @@ try
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A statement that targets a model already in the cascade: refused before any write
+# A SET_NULL / SET_DEFAULT statement that targets a model already in the cascade (#1374)
+#
+# These shapes used to close a cycle in the collector's dependencies, and `topological_sort` refused
+# them while planning. A SET_NULL / SET_DEFAULT relation no longer orders the deletes
+# (`_orders_deletes`): its UPDATE runs before every DELETE. The key read (#1370) keeps the root's DELETE
+# from re-reading the column the UPDATE wrote, so each gives Django's result.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# What: a self-referential SET_NULL key, with a root filter on the very column the cascade nulls.
-# SQL: none on the live pool. Planning raises `QueryBuildError("Circular dependency …")` before the
-#      first statement; a mock shows the key read first.
-# Why: the plan would null BAR and then delete it with Tyrrell (#1370). Django deletes Tyrrell alone
-#      and nulls BAR. PormG refuses a self-referential delete with dependent rows on every engine
-#      (#1272), and keeps every row.
-@testset "a self-referential SET_NULL under a filter on the nulled column is refused before any write (#1370)" begin
-  _ln_reset!()
-  _ln_assert_refused(Dict("ln_lineage" => _LN_LINEAGE_ROWS)) do
-    q = LN.Ln_lineage.objects
-    q.filter("predecessor__@isnull" => true)
-    q
+# Every engine's mock builds the plan, the key read first. A mock reads no keys, so the plan after it
+# is over the empty set: the probes find nothing to update, and the root's DELETE is the last step.
+function _ln_assert_builds_on_mocks(make)
+  for (label, conn) in _LN_MOCKS
+    steps = _ln_steps(make(), conn)
+    @test first(steps)[:operation] == _ln_key_read(conn)
+    @test last(steps)[:operation] == :delete
   end
 end
 
-# What: the same with SET_DEFAULT, and a filter on the default value.
-# SQL: none on the live pool; the same refusal.
-# Why: the filter matches BAR, and `UPDATE … SET "predecessor" = 1` re-points BAR's successor Honda to
-#      the value that filter matches, so a root DELETE that re-read it would take Honda along with BAR.
-@testset "a self-referential SET_DEFAULT under a filter on the default is refused before any write (#1370)" begin
+# What: a self-referential SET_NULL key, with a root filter on the very column the cascade nulls.
+# SQL: `SELECT "Tb"."id" FROM "ln_lineage" AS "Tb" WHERE "Tb"."predecessor" IS NULL`, then
+#      `UPDATE "ln_lineage" … SET "predecessor" = NULL …` scoped by Tyrrell's key, then
+#      `DELETE FROM "ln_lineage" AS "Tb" WHERE "Tb"."id" IN (?)`.
+# Why: Django deletes Tyrrell and nulls BAR. Before #1374 this was refused as a cycle on every engine;
+#      before #1370 the root DELETE re-read `IS NULL` after the UPDATE and would have taken BAR too.
+@testset "a self-referential SET_NULL under a filter on the nulled column deletes the root and nulls its successor (#1374)" begin
   _ln_reset!()
-  _ln_assert_refused(Dict("ln_lineage_default" => _LN_LINEAGE_ROWS)) do
-    q = LN.Ln_lineage_default.objects
-    q.filter("predecessor" => 1)
-    q
+  make() = (q = LN.Ln_lineage.objects; q.filter("predecessor__@isnull" => true); q)
+  steps = _ln_steps(make(), nothing)
+  @test _ln_ops(steps) == [(:select, "ln_lineage"), (:update, "ln_lineage"), (:delete, "ln_lineage")]
+  @test last(steps)[:sql_text] == "DELETE FROM \"ln_lineage\" AS \"Tb\" WHERE \"Tb\".\"id\" IN (?)"
+  for s in steps[2:end]
+    @test !occursin("IS NULL", s[:sql_text])
+    @test s[:parameters] == [1]
   end
+  _ln_assert_builds_on_mocks(make)
+
+  @test make().delete() == (1, Dict("ln_lineage" => 1))
+  @test isequal(_ln_rows("ln_lineage"), [(2, "BAR", missing), (3, "Honda", 2), (4, "Brawn", 3)])
+end
+
+# What: the same with SET_DEFAULT (default 1), and a filter on the default value.
+# SQL: the key read `… WHERE "Tb"."predecessor" = ?` with `[1]`, which finds BAR; `UPDATE … SET
+#      "predecessor" = 1` over BAR's successors; `DELETE … WHERE "Tb"."id" IN (?)` with BAR's key.
+# Why: the UPDATE re-points Honda to the value the filter matches, so a root DELETE that re-read the
+#      filter would take Honda along with BAR. Django deletes BAR and re-points Honda to Tyrrell.
+@testset "a self-referential SET_DEFAULT under a filter on the default deletes the root and re-points its successor (#1374)" begin
+  _ln_reset!()
+  make() = (q = LN.Ln_lineage_default.objects; q.filter("predecessor" => 1); q)
+  steps = _ln_steps(make(), nothing)
+  @test _ln_ops(steps) == [(:select, "ln_lineage_default"), (:update, "ln_lineage_default"), (:delete, "ln_lineage_default")]
+  @test last(steps)[:parameters] == [2]
+  _ln_assert_builds_on_mocks(make)
+
+  @test make().delete() == (1, Dict("ln_lineage_default" => 1))
+  @test isequal(_ln_rows("ln_lineage_default"), [(1, "Tyrrell", missing), (3, "Honda", 1), (4, "Brawn", 3)])
+end
+
+# What: the SET_DEFAULT lineage, deleting the default row itself (Tyrrell, 1) while BAR points at it.
+# SQL: the key read, `UPDATE … SET "predecessor" = 1` over Tyrrell's successors, `DELETE … IN (?)`;
+#      SQLite checks the key at COMMIT, which fails, and the transaction rolls back.
+# Why: the UPDATE re-points BAR at the row being deleted, so no plan can succeed; Django raises
+#      IntegrityError here too. Before #1374 this was a QueryBuildError cycle refusal, so the type
+#      changed (the upgrade entry says so).
+@testset "a self-referential SET_DEFAULT delete of the default row itself raises IntegrityError, nothing written (#1374)" begin
+  _ln_reset!()
+  e = _ln_caught(() -> (q = LN.Ln_lineage_default.objects; q.filter("id" => 1); q.delete()))
+  @test e isa PormG.IntegrityError
+  @test isequal(_ln_rows("ln_lineage_default"), _LN_LINEAGE_ROWS)
 end
 
 # What: a cycle through a child: deleting a team CASCADEs to its drivers, and a team whose favourite
 # driver is one of them is nulled (SET_NULL on the root's own model).
-# SQL: none on the live pool; the same refusal.
-# Why: without the refusal and the key read, the root DELETE re-read `"favourite_driver" IS NULL`
-#      after McLaren's was nulled, and deleted McLaren and Senna too: measured `(4, ln_team => 2,
-#      ln_driver => 2)` with `topological_sort`'s refusal switched off.
-@testset "a cycle through a child that nulls the root's own column is refused before any write (#1370)" begin
+# SQL: the key read, `UPDATE "ln_team" … SET "favourite_driver" = NULL` over the favourites among
+#      Tyrrell's drivers, `DELETE FROM "ln_driver" …`, then `DELETE FROM "ln_team" … IN (?)`.
+# Why: the order a cycle used to hide. Only the CASCADE relation orders the deletes, so the drivers go
+#      before their team, and MySQL's check at each statement holds. Measured with the refusal switched
+#      off before the key read: `(4, ln_team => 2, ln_driver => 2)`; Django deletes Tyrrell and Stewart
+#      and nulls McLaren's favourite.
+@testset "a cycle through a child that nulls the root's own column deletes the drivers, then the team (#1374)" begin
   _ln_reset!()
-  _ln_assert_refused(Dict("ln_team" => _LN_TEAM_ROWS, "ln_driver" => _LN_DRIVER_ROWS)) do
-    q = LN.Ln_team.objects
-    q.filter("favourite_driver__@isnull" => true)
-    q
+  make() = (q = LN.Ln_team.objects; q.filter("favourite_driver__@isnull" => true); q)
+  steps = _ln_steps(make(), nothing)
+  @test _ln_ops(steps) == [(:select, "ln_team"), (:update, "ln_team"), (:delete, "ln_driver"), (:delete, "ln_team")]
+  for s in steps[2:end]
+    @test !occursin("IS NULL", s[:sql_text])
   end
+  _ln_assert_builds_on_mocks(make)
+
+  total, counts = make().delete()
+  @test total == 2 && counts == Dict("ln_team" => 1, "ln_driver" => 1)
+  @test isequal(_ln_rows("ln_team"), [(2, "McLaren", missing), (3, "Williams", 30)])
+  @test _ln_rows("ln_driver") == [(20, "Senna", 2), (30, "Mansell", 3)]
 end
 
 # What: a self-referential CASCADE under a filter on the root's own name.
 # SQL: none on the live pool; the same refusal.
-# Why: the control for the shapes above. A self-referential delete with dependent rows is refused for
-#      every on_delete, not only for those that write the root's table (`docs/src/backends.md`).
-@testset "a self-referential CASCADE with dependent rows is refused too (#1370)" begin
+# Why: the control for the shapes above. A CASCADE relation orders the deletes, so a self-referential
+#      one with dependent rows is still a cycle (`docs/src/backends.md`).
+@testset "a self-referential CASCADE with dependent rows is refused (#1370)" begin
   _ln_reset!()
   _ln_assert_refused(Dict("ln_lineage_cascade" => _LN_LINEAGE_ROWS)) do
     q = LN.Ln_lineage_cascade.objects

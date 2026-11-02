@@ -473,9 +473,11 @@ delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 #   - a filter on the root's own columns, when a SET_NULL / SET_DEFAULT statement writes the root's
 #     table (#1370). The UPDATE runs before the root's DELETE, which then matches the rows it
 #     re-pointed: `filter("favourite_driver__@isnull" => true)` deleted the team whose favourite
-#     driver the cascade had just nulled. The collector's cycle refusal (`topological_sort`) catches
-#     the statement when it targets a model already in the cascade, but not a second model over the
-#     same table (MEASURED: `(4, team => 2, driver => 2)` where Django deletes two rows). INFERRED,
+#     driver the cascade had just nulled. The collector's cycle refusal (`topological_sort`) used to
+#     catch the statement when it targeted a model already in the cascade, but never a second model
+#     over the same table (MEASURED: `(4, team => 2, driver => 2)` where Django deletes two rows); since
+#     #1374 a SET_NULL / SET_DEFAULT relation orders nothing, and the key read is what keeps both
+#     shapes right. INFERRED,
 #     not run: on PostgreSQL and MySQL the database's own ON DELETE SET NULL on a path a probe pruned
 #     (#460's window) writes the root's table the same way, since PostgreSQL does not defer a
 #     referential action other than NO ACTION.
@@ -648,6 +650,7 @@ function add_objects_to_collector!(collector::DeletionCollector, model::PormGMod
   if !haskey(collector.dependencies, model)
     collector.dependencies[model] = Set{PormGModel}()
   end
+  haskey(collector.delete_order, model) || (collector.delete_order[model] = Set{PormGModel}())
 end
 
 
@@ -684,7 +687,7 @@ function process_collector!(collector::DeletionCollector)
   collect_fast_deletes!(collector)
   
   # Topologically sort models for deletion
-  collector.sorted_models = topological_sort(collector.dependencies)
+  collector.sorted_models = topological_sort(collector.delete_order)
 end
 
 should_check_related_existence(collector::DeletionCollector)::Bool = _is_live_pool(collector.settings.connections)
@@ -781,18 +784,17 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
      
     # @info _query |> query
 
-    # THE ORDER IS correctly set?
-    if !haskey(collector.dependencies, related_model)
-      collector.dependencies[related_model] = Set{PormGModel}()
-    end  
-    push!(collector.dependencies[related_model], model)
+    field = related_model.fields[String(field_name)]
+    push!(get!(() -> Set{PormGModel}(), collector.dependencies, related_model), model)
+    # #1374: only some parent links order the DELETEs. See `_orders_deletes`.
+    order = get!(() -> Set{PormGModel}(), collector.delete_order, related_model)
+    _orders_deletes(field) && push!(order, model)
 
     _keys = Dict{Symbol, Union{String, SQLObjectHandler}}(
       :key => resolve_delete_key(related_model; fallback=string(field_name)),
       :objct => _query
     )
 
-    field = related_model.fields[String(field_name)]
     handle_on_delete!(collector, field_name, field, model, _keys, related_model)
 
   end
@@ -877,6 +879,29 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     _push_field_update!(collector, (field_name |> string, default_value), related_model, keys, field_name)
   end
 end
+
+"""
+Whether a reverse relation through `field` constrains the order of the DELETEs: its child must be
+deleted before the parent it was collected from (#1374).
+
+`CASCADE` does: the child's statement is scoped by `"<fk>__@in" => <parent's query>`, which reads the
+parent's table along the path, so the parent must still be there. On MySQL the child's row also still
+references the parent until it is deleted, and every statement is checked as it runs (#1272).
+`DO_NOTHING` and an unset `on_delete` do too: PormG writes nothing, so the database's constraint is
+what decides, and the edge keeps the parent's DELETE after everything PormG does delete.
+
+`SET_NULL` and `SET_DEFAULT` do not. Their UPDATE runs before every DELETE of a model that has
+dependents (`run_plan`; such a parent is never a fast delete, since `dependencies` keeps the link), so
+by the time those DELETEs run no child row references a parent through that column any more, and the
+UPDATE reads nothing a DELETE has removed. A child that is also deleted reaches the collector through
+a `CASCADE` path of its own, which records its edge. The link stays in `dependencies`, where the #770
+locks and the fast-delete test read who is a parent. Counting these relations as edges is what refused
+a team lineage with `on_delete = SET_NULL` (`predecessor`), or a team whose favourite driver races
+for it, as a "Circular dependency", where Django deletes both.
+
+`PROTECT` / `RESTRICT` never get here with rows: `handle_on_delete!` raises `ProtectedError` first.
+"""
+_orders_deletes(field::PormGField)::Bool = !(field.on_delete === SET_NULL || field.on_delete === SET_DEFAULT)
 
 # Children first: the reverse of a parents-first walk. A cycle in `dependencies` — two tables whose
 # rows reference each other, or one table's rows referencing others of the same table — has no such

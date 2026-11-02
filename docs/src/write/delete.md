@@ -222,15 +222,38 @@ WHERE "Tb"."raceid" = ANY($1)
     A genuinely acyclic hierarchy more than 50 levels deep hits the same ceiling; there is no way to
     raise it, so delete such a graph in stages, from the far end inward.
 
-!!! note "A delete whose rows reference each other is refused"
-    When the rows a delete reaches reference rows of a model already in the cascade — a
-    self-referencing foreign key with dependent rows (`PROTECT` / `RESTRICT` raise `ProtectedError`
-    first; every other `on_delete` reaches this check), or a team whose favourite driver races for a
-    team being deleted — no order of statements is valid, and the delete raises
+### Rows that reference each other
+
+A `SET_NULL` or `SET_DEFAULT` relation never constrains the order of the deletes: PormG runs its
+`UPDATE` before the `DELETE`s, so by the time a row is deleted nothing points at it through that
+column. A delete whose rows reference each other through such a relation runs as in Django, on every
+engine:
+
+```julia
+# A team lineage: `predecessor = ForeignKey("Team", on_delete = SET_NULL, null = true)`,
+# Tyrrell <- BAR <- Honda. Deletes Tyrrell and sets BAR's predecessor to NULL.
+M.Team.objects.filter("predecessor__@isnull" => true).delete()
+
+# A team's favourite driver (`SET_NULL`) races for another team; a driver CASCADEs from its team.
+# Deletes Tyrrell and its drivers, and nulls the favourite of every team that favoured one of them.
+M.Team.objects.filter("name" => "Tyrrell").delete()
+```
+
+The order is the statements': the `UPDATE`s, then the drivers, then the team, so MySQL's check at
+each statement holds too.
+
+!!! note "A cycle through CASCADE is refused"
+    A `CASCADE` relation does order the deletes: the child goes before the parent it was collected
+    from. When the rows a delete reaches close a loop of such relations, the delete raises
     `QueryBuildError` ("Circular dependency detected in model relationships") while it plans, before
-    anything is written, on every engine. Delete such rows in stages: clear the references first
+    anything is written, on every engine. `PROTECT` / `RESTRICT` raise `ProtectedError` first, and a
+    `DO_NOTHING` relation (or one with no `on_delete`) counts as `CASCADE` here, since the database's
+    constraint decides those rows. Delete such rows in stages: clear the references first
     (`update("predecessor" => nothing)`), then delete. The check reads the rows, so the same schema
     deletes a row that nothing references.
+
+    Until [#1374](https://github.com/PingoLee/PormG.jl/issues/1374) a `SET_NULL` or `SET_DEFAULT`
+    relation counted as well, and the lineage above was refused.
 
 ### Filters are a fence on PostgreSQL
 
@@ -319,9 +342,10 @@ deletes keep a single statement: a root with nothing to cascade to, and an unfil
 !!! note "Before #1370 a filter on the root's own columns was read again"
     The key read used to run only for a filter that reads another table. An own-column filter was
     read again by the root's `DELETE`, which deleted rows the cascade had only meant to update when a
-    `SET_NULL` / `SET_DEFAULT` statement wrote the root's table. The collector's cycle check refuses
-    that statement when it targets the root's own model (a self-referencing key), but not when a
-    second model mapped to the same table declares the foreign key.
+    `SET_NULL` / `SET_DEFAULT` statement wrote the root's table. The collector's cycle check refused
+    that statement when it targeted the root's own model (a self-referencing key), but not when a
+    second model mapped to the same table declared the foreign key. Since #1374 neither is refused,
+    and the key read is what keeps both right.
 
 - **The key read is the root's lock** on PostgreSQL and MySQL (`SELECT … FOR UPDATE`, below). Where
   the cascade has rows to write below the root, it replaces the root's own lock statement. Where it
@@ -332,9 +356,30 @@ deletes keep a single statement: a root with nothing to cascade to, and an unfil
 - **SQLite and MySQL bind a list one value at a time**, so a large key set runs the cascade in
   chunks, all inside the same transaction: the engine's bind limit divided by 16, the number of
   cascade paths into one table a statement can carry (2047 keys on SQLite, 256 on MySQL).
-  PostgreSQL binds the whole list as one array.
+  PostgreSQL binds the whole list as one array. Each chunk repeats the cascade's statements and its
+  existence checks, and a failure in any chunk rolls back every chunk before it. The cost per root
+  stays flat as long as each child table's foreign key has an index, which PormG's migrations create
+  for every `ForeignKey`: on SQLite, roots with one child each took about 7 µs per root at 1, 2 and
+  10 chunks (14 ms for 2047 roots, 153 ms for 20 470), and on MySQL 8.4 about 36–41 µs (11 ms for 256
+  roots, 91 ms for 2560). On a child table with no index on that column (a table PormG did not
+  create), each chunk's `DELETE` of the roots scans the whole child table for every root, because the
+  later chunks' children are still there: 10 chunks took 6.1 s on SQLite instead of 0.15 s. Index
+  the column.
 - **Inspection reads the keys** when the pool is a live one, as the cascade's existence checks
   already do, so `show_query` shows the statements that would run. Nothing is written.
+
+!!! warning "A cascading delete needs `UPDATE` privilege on PostgreSQL"
+    PostgreSQL takes a row lock (`SELECT … FOR UPDATE`) only with `UPDATE` privilege on the table, not
+    with `SELECT` and `DELETE` alone. A role granted only `SELECT` and `DELETE` therefore cannot
+    run a filtered delete on a model that has a reverse relation (`CASCADE`, `SET_NULL`,
+    `SET_DEFAULT`), even when the dependents hold no rows, since the key read is `FOR UPDATE`; nor an
+    unfiltered one whose dependents hold rows, which locks the root as their parent. The delete raises
+    before anything is written, with SQLSTATE `42501` ("permission denied for table"). A model that
+    nothing references is deleted with one `DELETE`, which that role can run.
+    Grant `UPDATE` on the tables a cascading delete starts from.
+
+    MySQL documents a different rule: `FOR UPDATE` needs `SELECT` plus one of `DELETE`,
+    `LOCK TABLES` or `UPDATE`, so a role that can delete can take the lock. SQLite has no privileges.
 
 ### A cascade locks its parents first on PostgreSQL
 

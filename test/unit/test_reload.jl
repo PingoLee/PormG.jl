@@ -85,12 +85,28 @@ function _run_child_julia(pkg_root::String, script::String; timeout::Float64 = 3
                           extra_args::Vector{String} = String[])
     seed_manifest = something(_parent_manifest_path(), "")
     cmd = `$(Base.julia_cmd()) --project=$(pkg_root) -e $script $pkg_root $seed_manifest $extra_args`
+    # A hang here is usually the precompile worker the child spawned (#1562), and killing the child
+    # alone left that worker running forever. `detach` gives the child its own session and process
+    # group, so a timeout signals the group. That also takes the child out of the terminal's group,
+    # so a Ctrl-C reaches only this process. Under `Pkg.test` (an `-e` run) and in the REPL it is an
+    # `InterruptException`, and the `catch` below forwards it; a direct `julia file.jl` run exits on
+    # SIGINT before any `catch`, so there a hung child outlives a Ctrl-C. The pid is read now,
+    # because `getpid` throws once the child has been reaped. Not on Windows, which has no process
+    # groups to signal this way.
+    Sys.iswindows() || (cmd = Cmd(cmd; detach = true))
     output_buffer = PipeBuffer()
     process = run(pipeline(ignorestatus(cmd), stdout=output_buffer, stderr=output_buffer), wait=false)
-    wait_status = Base.timedwait(() -> !process_running(process), timeout)
+    pid = getpid(process)
+    stop_child() = Sys.iswindows() ? kill(process) : ccall(:kill, Cint, (Cint, Cint), -pid, Base.SIGTERM)
+    wait_status = try
+        Base.timedwait(() -> !process_running(process), timeout)
+    catch
+        stop_child()
+        rethrow()
+    end
 
     if wait_status == :timed_out
-        kill(process)
+        stop_child()
         wait(process)
         return (false, String(take!(output_buffer)), true)
     end
@@ -590,4 +606,42 @@ end
     # an early `__init__` now leaves no trace at all — and the outcome it would have changed (the
     # key, the environment) is what the markers above pin.
     @test !occursin("loaded implicitly", output)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A timed-out child is stopped with every process it started (#1562 follow-up)
+# What it tests: `_run_child_julia` on a child that starts a grandchild and never exits reports the
+#   timeout, and afterwards the grandchild is gone too: the whole process group is signalled, not
+#   only the child. The child prints the grandchild's pid, and `kill(pid, 0)` asks whether it still
+#   exists. No SQL. Not on Windows, where the helper signals the child alone.
+# Why it matters: the hang these subprocess tests guard against is a precompile worker the child
+#   started. Before, a timeout killed the child and left that worker running forever; #1562's red
+#   run left one that had to be killed by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a timed-out child is stopped with every process it started (#1562 follow-up)" begin
+    if Sys.iswindows()
+        @test_skip "process groups are not signalled on Windows"
+    else
+        mktempdir() do dir
+            script = raw"""
+            grandchild = run(`sleep 600`; wait = false)
+            println("GRANDCHILD:", getpid(grandchild))
+            flush(stdout)
+            wait(grandchild)
+            """
+            ok, output, timed_out = _run_child_julia(dir, script; timeout = 20.0)
+            @test timed_out
+            @test !ok
+            m = match(r"GRANDCHILD:(\d+)", output)
+            @test m !== nothing
+            if m !== nothing
+                gpid = parse(Cint, m.captures[1])
+                alive() = ccall(:kill, Cint, (Cint, Cint), gpid, 0) == 0
+                # Bounded: the signal is sent before the helper returns, but the orphaned grandchild
+                # is reaped by init a moment later.
+                Base.timedwait(() -> !alive(), 10.0)
+                @test !alive()
+            end
+        end
+    end
 end

@@ -1361,6 +1361,25 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> PormG.QueryBuilder.OuterRef(PormG.QueryBuilder.OuterRef("raceid")),
     ),
+    # #1557 — the same section says an `OuterRef` in a CTE body raises, even when the CTE belongs to a
+    # correlated subquery: the body is built with no enclosing query. The message itself is pinned in
+    # `test/unit/test_nested_cte_guard.jl`.
+    (
+        "read/subqueries_and_ctes.md — an OuterRef in a CTE body is refused, inside Exists too (#1557)",
+        QueryBuildError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.filter("statusid" => PormG.QueryBuilder.OuterRef("statusid"))
+            ev.values("statusid", "status")
+            inner = DOCERR_RESULT_PG.objects
+            inner.with("ev" => ev, join_field = "statusid" => "statusid")
+            inner.filter("resultid" => PormG.QueryBuilder.OuterRef("resultid"))
+            q = DOCERR_RESULT_PG.objects
+            q.filter(PormG.QueryBuilder.Exists(inner))
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
     # #942 — the same section and the `When` docstring say a function whose result is not boolean is
     # refused as a `When` condition. Every refused function and spelling is pinned in
     # `test/unit/test_filter_aggregate_expression.jl`.

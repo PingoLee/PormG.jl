@@ -110,7 +110,8 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # `q.object.ctes`), and `build()` resolves `<cte>__col` through that. Its values bind under a scoped
   # `:cte` bucket, so the run detached below lifts them first — where the `WITH` text sits (#432).
   # Until #1523 this renderer emitted no `WITH`, and `Exists` refused such a subquery (#433).
-  with_clause = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias)
+  with_clause = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias;
+                                correlated = true)
   instruction = build(
     q.object,
     table_alias=instruc.table_alias,
@@ -279,8 +280,27 @@ end
 function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
   return _build_exists_query(v.query, instruc)
 end
+# #1557: why an `OuterRef` has nothing to resolve against. A CTE body is built by `build_cte_clause` as
+# a query of its own, with no enclosing query even when the CTE belongs to a correlated subquery
+# (`Exists`, `Subquery`, `__@in`), so "build a correlated subquery" would point a user already inside
+# one the wrong way. When the query declaring the CTE is correlated, the expression belongs there,
+# against a column the CTE projects; when it is not (a top-level query, or another CTE's body), no
+# query on the way up can resolve it, and saying "move it there" would send the user to a second
+# refusal. Only identifiers are printed: the field name and the CTE name (#971).
+function _outer_ref_unresolved_label(field_name::AbstractString, cte_name::AbstractString, correlated::Bool)
+  isempty(cte_name) && return string("OuterRef(\"", field_name,
+    "\") can only be resolved while building a correlated subquery such as Exists(subquery).")
+  head = string("OuterRef(\"", field_name, "\") is in the body of CTE \"", cte_name,
+    "\", which is built as a query of its own: a CTE body has no enclosing query to resolve an ",
+    "OuterRef against, even when the CTE belongs to a correlated subquery (Exists, Subquery, __@in). ")
+  correlated || return string(head, "The query that declares the CTE has no enclosing query either, ",
+    "so an OuterRef can only be used in a subquery passed to Exists(...), Subquery(...) or __@in.")
+  return string(head, "Move the expression that uses it to the query that declares the CTE, which is ",
+    "correlated, against a column the CTE projects: e.g. ",
+    "filter(\"", cte_name, "__<column>\" => OuterRef(\"", field_name, "\")).")
+end
 function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
-  instruc.outer === nothing && throw(QueryBuildError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
+  instruc.outer === nothing && throw(QueryBuildError(_outer_ref_unresolved_label(v.field_name, instruc.cte_body, instruc.cte_body_correlated)))
   outer = instruc.outer
   column = _resolve_outer_ref_field_name(v, outer)
   # #985: an `OuterRef` resolves in the outer statement, so inside an ON clause it is checked there as

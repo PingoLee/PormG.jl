@@ -337,7 +337,11 @@ function query(q::SQLObjectHandler;
   # projection. `_render_scalar_subquery` reads the projected column's formatter through it.
   built::Union{Nothing,Function} = nothing,
   # #1002: passed through to `build()` — a membership subquery (`__@in`) is a semi-join.
-  semi_join::Bool = false
+  semi_join::Bool = false,
+  # #1557: passed through to `build()` — the CTE whose body `build_cte_clause` renders here, and
+  # whether the query declaring it is correlated.
+  cte_body::String = "",
+  cte_body_correlated::Bool = false
   )
 
   @pormg_debug false
@@ -363,14 +367,14 @@ function query(q::SQLObjectHandler;
   # Build WITH clause - passes the SAME parameters object
   # CTE context is set inside build_cte_clause
   !is_subquery && set_context!(parameters, :cte)
-  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)  
+  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias; correlated = outer !== nothing)
 
   @pormg_debug false
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
-                      semi_join=semi_join)
+                      semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated)
   built === nothing || built(instruction)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.

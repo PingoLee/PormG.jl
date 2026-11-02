@@ -2170,7 +2170,12 @@ mutable struct DeletionCollector{T}
   settings::PormGSettings  # Connection settings
   connection::_SQLEngine  # Database connection
   objects::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Models and their objects to delete
-  dependencies::Dict{PormGModel,Set{PormGModel}}  # Model dependencies
+  # Every reverse relation with rows, child => the parents it was collected from: who is a parent, for
+  # the #770 locks and the fast-delete test.
+  dependencies::Dict{PormGModel,Set{PormGModel}}
+  # The subset of `dependencies` that orders the DELETEs (`_orders_deletes`, #1374): what
+  # `topological_sort` reads. A SET_NULL / SET_DEFAULT relation is a parent link but no ordering edge.
+  delete_order::Dict{PormGModel,Set{PormGModel}}
   # One entry per cascade path, exactly like `objects` (#459 (a)). This used to hold a BARE
   # `Dict{Symbol,T}` and `handle_on_delete!` ASSIGNED into it, so a SET_NULL/SET_DEFAULT child of a
   # multi-path parent kept only the last path's scoping query and the other path's rows were never
@@ -2193,6 +2198,7 @@ mutable struct DeletionCollector{T}
     settings,
     settings.connections,
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
+    Dict{PormGModel,Set{PormGModel}}(),
     Dict{PormGModel,Set{PormGModel}}(),
     Dict{Tuple{String,Any},Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}}(),
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),

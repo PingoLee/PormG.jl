@@ -222,15 +222,38 @@ WHERE "Tb"."raceid" = ANY($1)
     A genuinely acyclic hierarchy more than 50 levels deep hits the same ceiling; there is no way to
     raise it, so delete such a graph in stages, from the far end inward.
 
-!!! note "A delete whose rows reference each other is refused"
-    When the rows a delete reaches reference rows of a model already in the cascade — a
-    self-referencing foreign key with dependent rows (`PROTECT` / `RESTRICT` raise `ProtectedError`
-    first; every other `on_delete` reaches this check), or a team whose favourite driver races for a
-    team being deleted — no order of statements is valid, and the delete raises
+### Rows that reference each other
+
+A `SET_NULL` or `SET_DEFAULT` relation never constrains the order of the deletes: PormG runs its
+`UPDATE` before the `DELETE`s, so by the time a row is deleted nothing points at it through that
+column. A delete whose rows reference each other through such a relation runs as in Django, on every
+engine:
+
+```julia
+# A team lineage: `predecessor = ForeignKey("Team", on_delete = SET_NULL, null = true)`,
+# Tyrrell <- BAR <- Honda. Deletes Tyrrell and sets BAR's predecessor to NULL.
+M.Team.objects.filter("predecessor__@isnull" => true).delete()
+
+# A team's favourite driver (`SET_NULL`) races for another team; a driver CASCADEs from its team.
+# Deletes Tyrrell and its drivers, and nulls the favourite of every team that favoured one of them.
+M.Team.objects.filter("name" => "Tyrrell").delete()
+```
+
+The order is the statements': the `UPDATE`s, then the drivers, then the team, so MySQL's check at
+each statement holds too.
+
+!!! note "A cycle through CASCADE is refused"
+    A `CASCADE` relation does order the deletes: the child goes before the parent it was collected
+    from. When the rows a delete reaches close a loop of such relations, the delete raises
     `QueryBuildError` ("Circular dependency detected in model relationships") while it plans, before
-    anything is written, on every engine. Delete such rows in stages: clear the references first
+    anything is written, on every engine. `PROTECT` / `RESTRICT` raise `ProtectedError` first, and a
+    `DO_NOTHING` relation (or one with no `on_delete`) counts as `CASCADE` here, since the database's
+    constraint decides those rows. Delete such rows in stages: clear the references first
     (`update("predecessor" => nothing)`), then delete. The check reads the rows, so the same schema
     deletes a row that nothing references.
+
+    Until [#1374](https://github.com/PingoLee/PormG.jl/issues/1374) a `SET_NULL` or `SET_DEFAULT`
+    relation counted as well, and the lineage above was refused.
 
 ### Filters are a fence on PostgreSQL
 
@@ -319,9 +342,10 @@ deletes keep a single statement: a root with nothing to cascade to, and an unfil
 !!! note "Before #1370 a filter on the root's own columns was read again"
     The key read used to run only for a filter that reads another table. An own-column filter was
     read again by the root's `DELETE`, which deleted rows the cascade had only meant to update when a
-    `SET_NULL` / `SET_DEFAULT` statement wrote the root's table. The collector's cycle check refuses
-    that statement when it targets the root's own model (a self-referencing key), but not when a
-    second model mapped to the same table declares the foreign key.
+    `SET_NULL` / `SET_DEFAULT` statement wrote the root's table. The collector's cycle check refused
+    that statement when it targeted the root's own model (a self-referencing key), but not when a
+    second model mapped to the same table declared the foreign key. Since #1374 neither is refused,
+    and the key read is what keeps both right.
 
 - **The key read is the root's lock** on PostgreSQL and MySQL (`SELECT … FOR UPDATE`, below). Where
   the cascade has rows to write below the root, it replaces the root's own lock statement. Where it

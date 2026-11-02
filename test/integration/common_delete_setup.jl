@@ -249,12 +249,36 @@ Ot_driver_scratch = Models.Model("ot_driver_scratch",
 )
 
 # A self-referential SET_NULL lineage: the shape that statement takes when it targets the root's own
-# model, which the collector refuses as a dependency cycle before any write.
+# model, which the collector refused as a dependency cycle until #1374.
 Ot_lineage_scratch = Models.Model("ot_lineage_scratch",
     id          = Models.IDField(),
     name        = Models.CharField(),
     predecessor = Models.ForeignKey("Ot_lineage_scratch", pk_field = "id", on_delete = "SET_NULL",
                       null = true, related_name = "ot_successors")
+)
+
+# The same lineage with SET_DEFAULT (default 1, Tyrrell) (#1374).
+Ot_lineage_default_scratch = Models.Model("ot_lineage_default_scratch",
+    id          = Models.IDField(),
+    name        = Models.CharField(),
+    predecessor = Models.ForeignKey("Ot_lineage_default_scratch", pk_field = "id", on_delete = "SET_DEFAULT",
+                      null = true, default = 1, related_name = "ot_default_successors")
+)
+
+# A team whose favourite driver may race for another team, a real foreign key each way: deleting a team
+# CASCADEs to its drivers and nulls the favourite of a team that favours one of them (#1374).
+Ot_rival_team_scratch = Models.Model("ot_rival_team_scratch",
+    id               = Models.IDField(),
+    name             = Models.CharField(),
+    favourite_driver = Models.ForeignKey("Ot_rival_driver_scratch", pk_field = "id", on_delete = "SET_NULL",
+                           null = true, related_name = "ot_rival_fans")
+)
+
+Ot_rival_driver_scratch = Models.Model("ot_rival_driver_scratch",
+    id      = Models.IDField(),
+    surname = Models.CharField(),
+    team    = Models.ForeignKey(Ot_rival_team_scratch, pk_field = "id", on_delete = "CASCADE",
+                  related_name = "ot_rival_drivers")
 )
 
 end

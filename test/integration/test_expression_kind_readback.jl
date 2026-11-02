@@ -160,6 +160,18 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Extract epoch F interval * 2 | subquery", :mysql) => (type = "Decimal", value = "174.904", read = nothing),
   ("Extract epoch F time - time | alone", :postgres) => (type = "Decimal", value = "0", read = nothing),
   ("Extract epoch F time - time | subquery", :postgres) => (type = "Decimal", value = "0", read = nothing),
+  # #1539: a CTE date column minus itself is the day count `F date - date` is (`CInt32`, 0 on race 1),
+  # PostgreSQL's `integer` and a 64-bit integer elsewhere (#1307). #1539 flagged the cell and left these
+  # rows out, so this file failed on every engine until they were recorded.
+  ("CTE date col - CTE date col | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | cte", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | cte", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | alone", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | cte", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("CTE date col - CTE date col | subquery", :mysql) => (type = "Int64", value = "0", read = "CInt32()"),
   # #1552: `MILLISECONDS`, `MICROSECONDS` and `JULIAN` are decimals too, so their cells are flagged the
   # same read gap `EPOCH`'s are (no read kind is recorded; the driver delivers the `Decimal`). Race 1
   # starts at `06:00:00` on 2009-03-29 (Julian day 2454920, a quarter into it at 06:00 UTC), so the
@@ -223,6 +235,8 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
   "F date - date | cte", "Case untyped date col - date | cte",   # #1460: as CTE columns too
   "F date - date literal | alone", "F date - date literal | subquery", "F date - date literal | cte",
+  "CTE date col - CTE date col | alone", "CTE date col - CTE date col | cte",   # #1539: the same day count
+  "CTE date col - CTE date col | subquery",
   # #1471: `Round` over a JSON key, divided, is the same value on every engine, a REAL on SQLite
   # (representation). (`Floor`/`Ceil`/`Abs` over one left this set with #1471, and #1483 refuses them
   # on every engine.)

@@ -683,8 +683,10 @@ df = M.Result.objects.
 A date, timestamp or duration column of a CTE is typed as one, so its arithmetic is what it is on the
 model column, on every engine: with `start` a date, `CTE("r91", "start") + Day(7)` shifts it and
 `F("date") - CTE("r91", "start")` is the day count, as is a date literal on the left,
-`Date(1991, 3, 10) - CTE("r91", "start")` (#1549). A duration added to a CTE column that is no date or
-timestamp raises `InvalidValueError`, as `F("grid") + Day(1)` does.
+`Date(1991, 3, 10) - CTE("r91", "start")` (#1549). A duration column of a CTE takes a duration as an
+interval value, as a `DurationField` does (`CTE("laps", "best") - Second(1)`, #1553). A duration added to
+a CTE column that is no date, timestamp or duration raises `InvalidValueError`, as `F("grid") + Day(1)`
+does.
 A CTE column over a JSON key takes no arithmetic until it is cast (`Cast(CTE("ev", "n"), "integer") + 1`),
 because a key's value has no declared type to compute on.
 

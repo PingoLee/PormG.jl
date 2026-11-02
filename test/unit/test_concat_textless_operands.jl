@@ -319,6 +319,69 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Concat: arithmetic over an undeclared `Case` is classified by the `Case`'s branches, as the `Case`
+# alone is (#1551). Expected: `Concat(Value("-"), cs + 1)`, `cs * 2` and `1 + cs` raise #1027 on
+# PostgreSQL, SQLite and MySQL, naming "arithmetic over `CASE(…)` over a Float64 literal" and no engine;
+# no SQL. A `Case` whose branches are all whole (`then = 1`, `then = F("number")`) still builds inside
+# arithmetic, and so does one with an `output_field = "text"` — e.g. on PostgreSQL
+# `CONCAT($1::text, (CASE WHEN … THEN $2 ELSE $3 END + $4::bigint))`. Why: the arithmetic side never
+# reached the branches, so the float branch got past the refusal the same `Case` alone gets, and each
+# engine wrote its own text of the number.
+# ─────────────────────────────────────────────────────────────────────────────
+struct CtoMockMySQL <: PormG.PormGMySQL end
+@testset "#1551: arithmetic over a Case is classified by the Case's branches" begin
+  F = PormG.QueryBuilder.F
+  case(then; default = 0, kw...) = Fn.Case(Fn.When("number" => 1, then = then), default = default; kw...)
+  engines = (_CTO_PG, _CTO_SL, CtoMockMySQL())
+  for expr in (case(1.5) + 1, case(1.5) * 2, 1 + case(1.5), case(1; default = 2.5) - F("number")), conn in engines
+    err = _cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn)
+    @test err isa QueryBuildError
+    msg = _cto_msg(err)
+    @test occursin("Concat joins text, and arithmetic over `CASE(…)` over a Float64 literal is not text", msg)
+    @test occursin("(#1027)", msg)
+    @test _cto_names_no_engine(msg)
+  end
+  # A decimal branch with places is refused too, by the column it names.
+  for conn in engines
+    msg = _cto_msg(_cto_refusal(Fn.Concat(Fn.Value("-"), case(F("price")) + 1); conn = conn))
+    @test occursin("arithmetic over `CASE(…)` over the DecimalField `price`", msg)
+  end
+  for expr in (case(1) + 1, case(F("number")) * 2, 1 + case(1; default = nothing),
+               case(1.5; output_field = "text")), conn in engines
+    @test _cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1551, the cast half: the same classification reaches the casts that read it, so a declared cast of
+# arithmetic over a `Case` with a fractional branch is checked as a cast of the `Case` is. Expected on
+# SQLite: `Cast(Case(…, then = F("price")) + 1, IntegerField())` raises #1028 (SQLite truncates where the
+# cast means the nearest integer), and `Cast(Case(…, then = 1.5) + 1, "numeric(10,0)")` and the
+# `price` twin raise #1040 (SQLite keeps every digit where the cast rounds to the scale). PostgreSQL and
+# MySQL keep both meanings and build (`CAST((CASE … END + $4::bigint) AS integer)`). Over a `Case`
+# whose branches are whole, every engine builds. Why: before #1551 these built on SQLite and returned
+# a different value from PostgreSQL's, as the cast of the `Case` alone does not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1551: a cast of arithmetic over a Case is checked by the Case's branches" begin
+  F = PormG.QueryBuilder.F
+  case(then) = Fn.Case(Fn.When("number" => 1, then = then), default = 0)
+  for (expr, issue) in ((Fn.Cast(case(F("price")) + 1, Models.IntegerField()), "(#1028)"),
+                        (Fn.Cast(case(1.5) + 1, "numeric(10,0)"), "(#1040)"),
+                        (Fn.Cast(case(F("price")) + 1, "numeric(10,0)"), "(#1040)"))
+    err = _cto_refusal(expr; conn = _CTO_SL)
+    @test err isa QueryBuildError
+    @test occursin(issue, _cto_msg(err)) && occursin("SQLite", _cto_msg(err))
+    for conn in (_CTO_PG, CtoMockMySQL())
+      @test _cto_refusal(expr; conn = conn) === nothing
+    end
+  end
+  for expr in (Fn.Cast(case(1) + 1, Models.IntegerField()), Fn.Cast(case(F("number")) + 1, "numeric(10,0)")),
+      conn in (_CTO_PG, _CTO_SL, CtoMockMySQL())
+    @test _cto_refusal(expr; conn = conn) === nothing
+  end
+end
+
 @testset "#1027: integer, text, date and explicit-text operands pass" begin
   F = PormG.QueryBuilder.F
   allowed = [

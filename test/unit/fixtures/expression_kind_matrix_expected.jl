@@ -8133,11 +8133,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal + 1 | subquery", :mysql) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Case float literal + 1 | alone", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | alone", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | alone", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | cte", :sqlite) =>
@@ -8145,17 +8145,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case float literal + 1 | cte", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | subquery", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | subquery", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal + 1 | subquery", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | alone", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | alone", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | cte", :sqlite) =>
@@ -8163,17 +8163,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case float literal * 2 | cte", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | subquery", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal * 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | alone", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | alone", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | alone", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | cte", :sqlite) =>
@@ -8181,11 +8181,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("1 + Case float literal | cte", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | subquery", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | subquery", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("1 + Case float literal | subquery", :mysql) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case int literal + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Case int literal + 1 | alone", :sqlite) =>
@@ -8481,22 +8481,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Case float literal + 1", :postgres) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case float literal + 1", :sqlite) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case float literal + 1", :mysql) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case float literal * 2", :postgres) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case float literal * 2", :sqlite) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("Case float literal * 2", :mysql) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("1 + Case float literal", :postgres) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("1 + Case float literal", :sqlite) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
-  ("1 + Case float literal", :mysql) =>
-    ["drops textless: alone=none, cte=float, subquery=none"],
 )

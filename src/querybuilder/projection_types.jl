@@ -1603,12 +1603,13 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
 end
 # #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
 # names it (`_expression_kind`); any other kind has one text, `nothing`. A zero-scale decimal is whole,
-# as D5 decides for a declared one. A `Case` with no `output_field` is not this leaf's: its branches
-# are read one by one where it is an operand (`_case_textless_branch`), and the walk's unified kind
-# would lose a zero-scale branch's places (`Case(…, then = "grid") + 1` is whole). Inside arithmetic it
-# answers `nothing`, as before this leaf.
+# as D5 decides for a declared one. A `Case` with no `output_field` is classified by its branches, one
+# by one (`_case_textless_branch`), as it is where it is the operand itself: this leaf is where an
+# arithmetic side reaches it (#1551), so `Case(…, then = 1.5) + 1` has the float's text as the `Case`
+# alone has, and `Case(…, then = "grid") + 1` over a zero-scale `grid` is whole. Before #1551 it answered
+# `nothing` there, so `Concat` over the arithmetic built where `Concat` over the `Case` was refused.
 function _textless_walk_leaf(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
-  _undeclared_case(p) && return nothing
+  _undeclared_case(p) && return _case_textless_branch(p, instruc)
   k = _expression_kind(p, instruc)
   k isa CFloat64 && return (:float, "`$(p.function_name)(…)`")
   k isa CDecimal && !_whole_kind(k) && return (:decimal, "`$(p.function_name)(…)`")

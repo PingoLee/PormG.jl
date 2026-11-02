@@ -494,8 +494,9 @@ refusal covers:
   PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`). `Round` over
   an integer is that integer (#1196), so it passes;
 - a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so
-  `Case(When("grid" => 1, then = 1.5), default = 0)` is a float (#1187). A `Case` whose branches are
-  all text, integers or dates passes, and so does one with `output_field = "text"`, unless a branch
+  `Case(When("grid" => 1, then = 1.5), default = 0)` is a float (#1187). Arithmetic over such a `Case`
+  is read by the same branches, so `Concat` over `Case(…) + 1` is refused too (#1551). A `Case` whose
+  branches are all text, integers or dates passes (inside arithmetic too), and so does one with `output_field = "text"`, unless a branch
   is a boolean: that `Case` is refused on SQLite and MySQL by its own check (#1217).
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and

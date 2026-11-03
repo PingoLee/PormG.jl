@@ -19,7 +19,7 @@ Here `time` is a `DurationField` and `lap` an `IntegerField` on `Lap_times`:
 | `F("time") & 1`, `1 & F("time")` | PostgreSQL: `StatementError` when run. SQLite, MySQL: a number | `QueryBuildError` at build, every engine |
 | `F("lap") \| F("time")`, `F("time") << 1`, `F("lap") >> F("time")` | the same | `QueryBuildError` at build, every engine |
 | `~F("time")`, `xor(F("time"), 1)` | the same | `QueryBuildError` at build, every engine |
-| `(F("raceid__date") - F("raceid__date")) & 1` (a timestamp difference) | the same | `QueryBuildError` at build, every engine |
+| `(F("raceid__start_at") - F("raceid__start_at")) & 1` (a timestamp difference) | the same | `QueryBuildError` at build, every engine |
 
 Bitwise operators over integers are unchanged.
 
@@ -35,7 +35,8 @@ depend on the duration in any meaningful way.
 grep -rnE 'F\("[a-z_]+"\) *(&|\||<<|>>)|xor\(|~F\(' --include=*.jl .
 ```
 
-For each hit, check whether a side is a `DurationField` column or a difference of two dates.
+For each hit, check whether a side is a `DurationField` column or a difference of two timestamps (a
+difference of two `DateField` dates is a whole number of days, and keeps its bitwise SQL).
 
 ### Migrate your app
 

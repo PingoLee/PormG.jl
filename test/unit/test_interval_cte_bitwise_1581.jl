@@ -202,6 +202,9 @@ end
       @test occursin("`$(op)` (a bitwise operator) on an interval is not supported on $(name)", _ib_plain(err))
     end
   end
-  # Integers keep their bitwise SQL.
+  # Integers keep their bitwise SQL, and so does a difference of two dates, a whole number of days.
   @test occursin("(\"Tb\".\"grid\" & \$1::bigint)", _ib_sql(F("grid") & 1, _IB_PG))
+  for (conn, _) in _IB_ENGINES
+    @test _ib_sql((F("seen") - F("seen")) & 1, conn) isa String
+  end
 end

@@ -943,6 +943,7 @@ end
     r.values("driverid", "x" => F("points") + PormG.CTE("c", "best"))
     err = try r |> DataFrame; nothing catch e; e end
     @test err isa PormG.QueryBuildError
+    @test occursin("with an interval on the right of a value that is not one", sprint(showerror, err))
   end
 
   # #1568 — a negative interval with a fraction of a second reads back exact. The 2009 Australian GP's

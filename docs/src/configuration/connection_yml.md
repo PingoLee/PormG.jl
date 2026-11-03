@@ -100,7 +100,7 @@ The last one is refused rather than warned about because it cannot work at all: 
 
 ### Using MySQL
 
-To use a MySQL database, assign `adapter: MySQL`. It needs MySQL **8.4 or newer**, and MySQL.jl 2.0 loaded with `using MySQL`. What differs on MySQL, from its collation to its non-transactional DDL, is in the [MySQL Guide](../mysql.md).
+To use a MySQL database, assign `adapter: MySQL`. It needs MySQL **8.4 or newer**, and MySQL.jl 2.2 or newer loaded with `using MySQL`. What differs on MySQL, from its collation to its non-transactional DDL, is in the [MySQL Guide](../mysql.md).
 
 ```yaml
 default_env: dev

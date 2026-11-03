@@ -1,8 +1,8 @@
 # ==============================================================================
-# PormGMySQLExt — MySQL through MySQL.jl 2.0 (#1130)
+# PormGMySQLExt — MySQL through MySQL.jl 2.2 or newer (#1130)
 #
 # Loaded when the user runs `using MySQL`. Implements the backend generics declared in `src/Backend.jl`
-# for `MySQLConnectionPool` (src/ConnectionPool.jl). MySQL.jl 2.0 is a pure-Julia wire-protocol driver
+# for `MySQLConnectionPool` (src/ConnectionPool.jl). MySQL.jl 2 is a pure-Julia wire-protocol driver
 # on Reseau, the socket layer Postgres.jl uses, so the shapes here follow `ext/PormGPostgresExt.jl`.
 #
 # This file is the driver layer: connections, the pool, statements, transactions, cancellation and
@@ -13,9 +13,12 @@
 # `backend_classify_error`'s docstring records).
 #
 # What the phase-0 spike measured (#1130) and this file therefore does:
-#   * 2006 "MySQL server has gone away" is raised whether or not the statement ran (a committed INSERT
-#     whose reply was lost reports it too), so NO error is retry-safe here until the driver can say
-#     "refused before send" (JuliaDatabases/MySQL.jl#248);
+#   * a lost connection's error number says whether the statement was sent. Since MySQL.jl 2.2.0
+#     (JuliaDatabases/MySQL.jl#248, the `[compat]` floor) 2006 "MySQL server has gone away" means the
+#     command never left: its write failed, or the session was already known dead. 2013 "Lost
+#     connection to MySQL server during query" means it was written and may have committed. So 2006
+#     alone is retry-safe (#1502). Under MySQL.jl 2.0 and 2.1, 2006 also covered a command written
+#     before its reply was lost, which is why the floor is load-bearing;
 #   * closing a socket does not stop a statement on the server, so cancellation is `KILL QUERY` from a
 #     second connection;
 #   * the ERR packet carries an error number, a SQLSTATE and a text — no constraint, table or column
@@ -468,7 +471,7 @@ PormG.backend_is_duplicate_key(pool::_Pool, e) = _is_duplicate_key(e)
 # cannot classify.
 
 # The connection is gone: 2006 server gone away, 2013 lost during query, 4031 dropped by the server for
-# inactivity, 1927 killed. Renewed and swept; never retried (see the header).
+# inactivity, 1927 killed. Renewed and swept; only 2006 is retried (`backend_is_retry_safe`, the header).
 const _LOST_CONNECTION_ERRNOS = (2006, 2013, 4031, 1927)
 
 # MySQL.jl's own message for a connection it already closed (`checkconn`), raised with `error()`.
@@ -500,8 +503,20 @@ end
 
 PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 
-# `backend_is_retry_safe` keeps core's default, `false`, for every MySQL failure: no error MySQL or
-# MySQL.jl raises proves the statement never ran (the header). No method is defined, on purpose.
+# Did the statement provably never run (#1042)? Only for 2006, which MySQL.jl 2.2 raises from two places,
+# both before the server could have the whole command: `fault!` when the command's write failed (the
+# session still in `READY`), and `ensure_live!` when the session was already known dead before the
+# send. 2013 is the same loss after the write, so the statement may have committed: not retried. 4031
+# is the farewell the server sends before it closes an idle connection, which the client reads only
+# after writing its next command; that command never ran either, but it is not retried here (#1502
+# kept the rule to 2006; the idle ping, `validate_after_idle`, avoids it). 1927 is a server ERR, and a
+# socket error, an EOF or a timeout carries no phase: none is retried. Typed on the driver's error type,
+# so a mock pool keeps core's default. CR_SERVER_GONE_ERROR's "never sent" meaning starts at MySQL.jl 2.2.0, the `[compat]`
+# floor (`test/unit/test_compat_guards.jl`).
+const _NEVER_SENT_ERRNO = 2006
+
+PormG.backend_is_retry_safe(pool::_Pool, e::MySQL.Protocol.ServerError) =
+  Int(e.errno) == _NEVER_SENT_ERRNO
 
 # Permanent: the same configuration fails the same way on every retry. 1045 access denied, 1044 access
 # denied to the database, 1049 unknown database, 1130 host not allowed, 3159 an insecure transport the

@@ -66,13 +66,14 @@ end
     (PormG.backend_mysql_version, (_MyPool,)),
     (PormG.backend_error_fields, (MySQL.Error,)),
     (PormG.backend_is_cancellation, (MySQL.Error,)),
+    (PormG.backend_is_retry_safe, (_MyPool, MySQL.Error)),
   ]
   for (f, types) in rows
     @test which(f, Tuple{types...}).module === _MyExt
   end
-  # Deliberately NOT the extension's: every MySQL failure keeps core's "not retry-safe" (#1042),
-  # and COPY / the SQLite version are other engines' generics.
-  @test which(PormG.backend_is_retry_safe, Tuple{_MyPool, MySQL.Error}).module === PormG
+  # Deliberately NOT the extension's: a failure that is not the driver's error type keeps core's
+  # "not retry-safe" (#1042), so a mock pool or a socket error is never retried.
+  @test which(PormG.backend_is_retry_safe, Tuple{_MyPool, ErrorException}).module === PormG
   ext_modules = Tuple(m for m in (Base.get_extension(PormG, n) for n in
                      (:PormGMySQLExt, :PormGLibPQExt, :PormGPostgresExt, :PormGSQLiteExt)) if m !== nothing)
   ambiguous = filter(Test.detect_ambiguities(PormG, ext_modules...; recursive = true)) do (a, b)
@@ -193,11 +194,6 @@ end
   @test lost(_MyCauseWrapper1130(_my_err(2013)))
   @test lost(CompositeException([ErrorException("x"), _my_err(2006)]))
 
-  # 2006 is raised for a committed INSERT whose reply was lost, so nothing is retry-safe (#1042).
-  for e in (_my_err(2006), _my_err(2013), ErrorException("mysql connection has been closed or disconnected"))
-    @test PormG.backend_is_retry_safe(pool, e) === false
-  end
-
   permanent(e) = PormG.backend_is_permanent_connect_error(pool, e)
   @test permanent(_my_err(1045, "28000")) && permanent(_my_err(1049, "42000"))
   @test permanent(_my_err(1130)) && permanent(_my_err(3159))   # host not allowed; TLS required
@@ -205,6 +201,39 @@ end
   @test permanent(PormG.BackendCapabilityError("old server"))
   @test permanent(PormG.InvalidConfigurationError("bad"))
   @test !permanent(_my_err(2006)) && !permanent(_my_err(1062, "23000"))
+end
+
+# What: only error 2006, the one MySQL.jl raises before the command left, is retry-safe; 2013 and every
+#   other lost connection are not (#1502).
+# Why: `fetch` re-runs a statement on a renewed connection when `backend_is_retry_safe` says it never
+#   ran (#1042). Since MySQL.jl 2.2.0 (the `[compat]` floor), 2006 means the write failed or the session
+#   was already dead, while 2013 means the command was written and may have committed, so retrying it
+#   could apply an autocommit INSERT twice. 4031 (the server's farewell to an idle connection) is left
+#   out by choice, 1927 is a server ERR, and an EOF, a socket error, a timeout or MySQL.jl's "closed"
+#   refusal carry no phase. The exceptions are built as MySQL.jl builds them (`MySQL.Error`, SQLSTATE
+#   HY000). MySQL.jl never raises a `StmtError` for these numbers; the two `StmtError` rows only pin
+#   that the answer follows the number, not the subtype.
+@testset "only a MySQL statement that was never sent is retry-safe (#1502)" begin
+  pool = _my_pool()
+  safe(e) = PormG.backend_is_retry_safe(pool, e)
+  @test safe(MySQL.Error(2006, "MySQL server has gone away", "HY000")) === true
+  @test safe(MySQL.StmtError(2006, "MySQL server has gone away", "HY000")) === true
+  @test safe(MySQL.Error(2013, "Lost connection to MySQL server during query", "HY000")) === false
+  @test safe(MySQL.StmtError(2013, "Lost connection to MySQL server during query", "HY000")) === false
+  for e in (_my_err(4031), _my_err(1927), _my_err(1205), _my_err(1317, "70100"), _my_err(1062, "23000"),
+            ErrorException("mysql connection has been closed or disconnected"), EOFError(),
+            Base.IOError("reset", -104), _MyP.ProtocolError("TLS transport failure (read)"),
+            _MyP.TimeoutError("read timed out"))
+    @test safe(e) === false
+  end
+  # Core asks this of the driver's own cause, and a multi-result failure answers through any member.
+  @test safe(CompositeException([ErrorException("x"), MySQL.Error(2006, "gone", "HY000")])) === true
+  @test safe(CompositeException([ErrorException("x"), MySQL.Error(2013, "lost", "HY000")])) === false
+  # Both are a lost connection, so both renew the slot; only the bar for a re-run differs.
+  @test PormG.backend_is_connection_error(pool, MySQL.Error(2006, "gone", "HY000"))
+  @test PormG.backend_is_connection_error(pool, MySQL.Error(2013, "lost", "HY000"))
+  # A cancelled statement is never re-run, whatever its number (#1277): 1317 is not 2006.
+  @test PormG.backend_is_cancellation(MySQL.Error(1317, "Query execution was interrupted", "70100"))
 end
 
 # What: the error's fields carry MySQL's SQLSTATE, and its text only for numbers whose text names

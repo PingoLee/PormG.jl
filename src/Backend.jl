@@ -79,6 +79,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_connect(pool; read_only=false)            -> open a physical connection
 #   backend_renew_connection(pool, conn; read_only)   -> reset or recreate a dead connection
 #   backend_is_alive(pool, conn)                       -> Bool liveness probe
+#   backend_ping(pool, conn)                           -> nothing, or raises: a server round trip (#1548; below, not in the loop)
 #   backend_execute(pool, conn, sql, params)           -> SYNC execute (SQLite worker; PG parity)
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
@@ -128,6 +129,14 @@ end
 Kernel._server_version(pool::PormGSQLite)::Int = backend_sqlite_version(pool)
 # MySQL's is the server's, as announced in its greeting; the extension asks a pooled connection.
 Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
+
+# #1548: a server round trip on an idle connection, asked at checkout only for a slot idle past the pool's
+# `validate_after_idle`. Returns `nothing`, or raises when the connection is unusable. A separate hook
+# rather than an argument on `backend_is_alive`, so the probe every checkout runs stays local and free.
+# Not in the loop above, and no fallback: only a backend with the `idle_validation` capability (MySQL)
+# takes a threshold, so core never asks another backend, and one that gains the row must say how it
+# pings instead of inheriting a guess.
+function backend_ping end
 
 # The most parameters one MySQL prepared statement binds (#84, #1130). The protocol counts them in two
 # bytes (COM_STMT_PREPARE), which is this fallback's answer and what a pool without its driver renders

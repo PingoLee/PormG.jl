@@ -93,6 +93,12 @@ const _BACKEND_FEATURES = (
   # #1264: a server PormG is verified against. Every backend has it; a backend with a version row
   # refuses an older server once, when a connection opens, rather than serving it SQL no one ran there.
   :supported_server       => "a server version PormG is verified against",
+  # #1548: a pool setting, not SQL. MySQL's checkout probe is local (`isopen`), so a connection the server
+  # closed while it sat idle (`wait_timeout`) looks alive until a statement fails on it; a ping past the
+  # threshold asks the server first. PostgreSQL's and SQLite's probes already see a server that closed the
+  # connection (the driver reads what the server sent, or a `SELECT 1`), so they have no row: a threshold
+  # there is refused.
+  :idle_validation        => "a server round trip before reusing a connection that sat idle past a threshold",
 )
 const _FEATURE_NAMES = Tuple(first.(_BACKEND_FEATURES))
 
@@ -108,6 +114,7 @@ end
 _has_feature(::Type{<:PormGBackend}, ::Val) = false
 for f in _FEATURE_NAMES
   f === :table_list && continue   # SQLite's own catalog; PostgreSQL has no virtual tables to label
+  f === :idle_validation && continue   # #1548: its checkout probe already reads what the server sent
   @eval _has_feature(::Type{<:PormGPostgres}, ::Val{$(QuoteNode(f))}) = true
 end
 for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
@@ -122,9 +129,10 @@ end
 # (MySQL 8.0, below the floor), with ROWS and RANGE frames; GROUPS and EXCLUDE raise error 1235 there.
 # Phase 4a: migrations on a schema created from nothing — reading the schema from `information_schema`
 # and a migration plan's DDL, both from the 8.4 floor, with no version row of their own. `RIGHT JOIN`
-# (#1422): MySQL has it and has no `FULL JOIN`, so `join_type = "FULL"` is refused there.
+# (#1422): MySQL has it and has no `FULL JOIN`, so `join_type = "FULL"` is refused there. The idle ping
+# (#1548): its checkout probe cannot see a connection the server closed, so a ping past a threshold does.
 for f in (:supported_server, :advisory_locks, :negative_round_precision, :window_functions,
-          :schema_introspection, :migration_plans, :right_joins)
+          :schema_introspection, :migration_plans, :right_joins, :idle_validation)
   @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 

@@ -144,6 +144,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `ignore_tables` | every engine | Table-name prefixes that introspection skips on **this connection only**: `makemigrations`, `check` and the importers never read them. See [Tables PormG leaves alone](#Tables-PormG-leaves-alone). Never forwarded to the driver. |
 | `unignore_defaults` | PostgreSQL, MySQL | Entries of PormG's **built-in** ignore list that this connection reads and migrates after all, such as `account_` for a Django app labelled `account`. Each must equal a built-in entry exactly. See [Switching a built-in entry off](#Switching-a-built-in-entry-off). Any entry is refused on SQLite, whose list has none to remove. Never forwarded to the driver. |
 | `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | every engine | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
+| `validate_after_idle` | MySQL (`0` elsewhere) | Seconds a pooled connection may sit idle before a checkout pings it; default 60 on MySQL. Above `0` on PostgreSQL or SQLite it raises `BackendCapabilityError` — documented in [Advanced Configuration](advanced.md). |
 | `options` | every engine | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
 | `config` | every engine | The settings sub-dictionary described in the next section. |
 

@@ -620,7 +620,7 @@ The rule follows the month wherever PormG can see it. That includes `F` arithmet
 (`(F("grid") * Month(1)) * 1.5`, `(F("time") + Month(1)) / 2`) and any value that is one of its
 operands' (#1583): `Max`/`Min`/`Sum`, `Coalesce`, `Greatest`/`Least`, `NullIf`, `Case` (a month
 literal among its values too, `then = Month(1)`), a `Cast` to `"interval"`, a window function such as
-`Lag`, and a CTE column or a `Subquery` whose projection is a month product. So
+`Lag`, and a CTE column or a `Subquery` that projects a month value. So
 `Max(F("grid") * Month(1)) * 1.5` is refused too, while `Max(F("grid") * Month(1)) * 2` builds. A stored
 interval (a `DurationField` column, or a CTE or `Subquery` column over one) can hold months on
 PostgreSQL, but its type does not say so, so PormG does not refuse scaling it: `F("time") * 1.5` and

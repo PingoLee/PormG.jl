@@ -325,7 +325,7 @@ end
 # takes it. A NULL is never the value, so it is named (`_unnamed_side` skips it).
 _side_walk_kind(x::Bool, ::SQLInstruction) = CBool()
 _side_walk_kind(x::Union{Integer,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _literal_kind(x, _AllKinds())
-_side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval()
+_side_walk_kind(d::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval(_has_calendar_part(d))   # #1583
 _side_walk_kind(x::Union{_TemporalLiteral,Dates.Time}, ::SQLInstruction) = literal_canonical_kind(x)   # #1323: a Time too
 _side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
   x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
@@ -474,6 +474,9 @@ _literal_kind(::Integer, ::_EveryKind) = CInt64()
 _literal_kind(::AbstractFloat, ::_EveryKind) = CFloat64()
 _literal_kind(::Decimals.Decimal, ::_EveryKind) = CDecimal(nothing, nothing)   # a bound value has no declared width
 _literal_kind(::AbstractString, ::_EveryKind) = CText()
+# #1583: a duration literal with a month or a year may hold one (`Case(…, then = Month(1))`, a `Lag`
+# `default`), as the same duration in F arithmetic does (`_side_kind(::_DurationOperand)`).
+_literal_kind(d::_DurationOperand, ::_EveryKind) = CInterval(_has_calendar_part(d))
 _literal_kind(x, ::_EveryKind) = literal_canonical_kind(x)
 
 # ── Functions, by their `_result_rule` ───────────────────────────────────────────────────────────────

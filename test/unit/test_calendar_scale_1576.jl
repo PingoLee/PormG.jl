@@ -202,6 +202,9 @@ end
     "Case"     => () -> QB.Case(QB.When("grid" => 1, then = m()), default = F("time")),
     "Cast"     => () -> QB.Cast(m(), "interval"),
     "Lag"      => () -> QB.Lag(m(), over = over),
+    # A month LITERAL among the values (review of #1583): the literal's kind carries it too.
+    "Case of a month literal" => () -> QB.Case(QB.When("grid" => 1, then = Month(1)), default = F("time")),
+    "Lag default"  => () -> QB.Lag("time", over = over, default = Month(1)),
   )
   for (name, w) in wrapped
     @testset "$name" begin
@@ -230,6 +233,11 @@ end
     @test occursin("A month or a year has no fixed length", _cs_plain(err))
   end
   @test occursin("(\"R1_1\".\"m\" * \$", cte(PormG.CTE("c", "m") * 2))
+  # So does a `Subquery` whose one projection is a month product: PormG sees it, as it sees a CTE body's.
+  sub() = (s = CS.Cs_result.objects; s.filter("id" => QB.OuterRef("id")); s.values("t" => m()); s.limit(1); QB.Subquery(s))
+  err = _cs_err(() -> _cs_sql(QB.Coalesce(sub(), F("time")) * 1.5, _CS_PG))
+  @test err isa PormG.QueryBuildError
+  @test occursin("A month or a year has no fixed length", _cs_plain(err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

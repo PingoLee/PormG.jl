@@ -1497,7 +1497,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value interval | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Value interval month | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("Value interval month | alone", :sqlite) =>
     (stage = :build, error = "InvalidValueError", message = "A Month value cannot be bound as a SQLite parameter: DurationField only supports week/day/time-based periods. Months and"),
   ("Value interval month | alone", :mysql) =>
@@ -1509,7 +1509,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value interval month | cte", :mysql) =>
     (stage = :build, error = "InvalidValueError", message = "DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."),
   ("Value interval month | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("Value interval month | subquery", :sqlite) =>
     (stage = :build, error = "InvalidValueError", message = "A Month value cannot be bound as a SQLite parameter: DurationField only supports week/day/time-based periods. Months and"),
   ("Value interval month | subquery", :mysql) =>

@@ -632,11 +632,12 @@ _duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstructi
 # The month is found wherever PormG can SEE it, and the interval's kind says so (`CInterval.calendar`,
 # #1583): a duration literal with a month, F arithmetic over one, and every value that is one of its
 # operands' — `Max`/`Min`, `Coalesce`, `Greatest`/`Least`, `NullIf`, `Case`, a `Cast` to interval, the
-# window value functions, a CTE column over one. So `(F("grid") * Month(1)) * 1.5` and
+# window value functions, a duration literal among their values (`Case(…, then = Month(1))`), and a CTE
+# column or a `Subquery` whose projection is one. So `(F("grid") * Month(1)) * 1.5` and
 # `Max(F("grid") * Month(1)) * 1.5` are refused as `F("points") * Month(1)` is. A timestamp shifted by a
 # month, then subtracted from one (`(F("at") + Month(1)) - F("at")`), is a difference of two instants,
-# which carries no month. A stored interval (a `DurationField` column, a `Subquery`) holds whatever value
-# it holds, and its type says nothing about months, so it is not refused.
+# which carries no month. A stored interval (a `DurationField` column, a CTE or `Subquery` column over
+# one) holds whatever value it holds, and its type says nothing about months, so it is not refused.
 #
 # Until #1583 a second walk searched the tree for a month (`_carries_calendar_part`), through F
 # arithmetic only; a function hid the month from it. The kind is the one walk, memoized per question.

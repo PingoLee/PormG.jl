@@ -733,7 +733,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # No `__` in the alias: `_values!` refuses one (#757). The result is read positionally below.
     _values!(cq.object, Any["pormg_count" => Count(String(column); distinct = distinct)])
     show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
-    rows = list(cq, Val(:dict))
+    rows = _list_owned(cq, Val(:dict))   # #1589: `cq` is this call's own copy
     return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))
   end
 
@@ -865,7 +865,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
     return query(cq; show_query=show_query)
   end
 
-  rows = list(cq, Val(:dict))
+  rows = _list_owned(cq, Val(:dict))   # #1589: `cq` is this call's own copy
   # A SQL aggregate over an empty set still returns one row (COUNT→0, others→NULL); guard anyway.
   row = isempty(rows) ? Dict{Symbol,Any}() : Base.first(rows)
   return NamedTuple{Tuple(aliases)}(Tuple(get(row, a, nothing) for a in aliases))
@@ -952,16 +952,21 @@ end
 # this helper — its example ends `query |> DataFrame`. The split left it stranded here, so
 # BOTH functions were undocumented: this one by accident, `query_list` by omission.
 function _execute_select(objct::SQLObjectHandler)
-  # Resolve settings
-  settings, connection, conn_key = get_settings(objct)
-
   # #43: build on a copy so the read path never mutates the caller's handler.
   # query() writes back q.object.parameters and materializes the per-build CTE
   # "model" into q.object.ctes; doing that on `objct` would give .list()/.first()
   # a hidden write side effect and make .copy() aliasing corrupt re-execution.
   # deepcopy(SQLObjectQuery) now clones CTE state independently (see _copy_ctes),
   # so the copy is fully isolated. Mirrors _count/_exists/get, which already copy.
-  q = deepcopy(objct)
+  return _execute_select_owned(deepcopy(objct))
+end
+
+# #1589 — the same read on a handler the CALLER OWNS: a copy a terminal has already made (`_get`,
+# `_first`, `_typed_query`, …) and holds no one else. The build writes into it (see above), which is
+# why only a terminal that made the copy itself may hand it here: copying it a second time bought
+# nothing, and it was ~27 µs of a ~200 µs primary-key read on Postgres.jl (#41).
+function _execute_select_owned(q::SQLObjectHandler)
+  settings, connection, conn_key = get_settings(q)
   sql = query(q, connection=connection, show_query=:execute)
   return fetch(settings, sql, q.object.parameters), q, connection
 end
@@ -982,12 +987,14 @@ df = query |> DataFrame
 ```
 """
 function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
-  if show_query !== :execute
-    settings, connection, conn_key = get_settings(objct)
-    q = deepcopy(objct)
-    return query(q, connection=connection, show_query=show_query)
-  end
+  show_query !== :execute && return _query_list_owned(deepcopy(objct), show_query)
   return first(_execute_select(objct))
+end
+
+# #1589 — the inspection render on a handler the caller owns (see `_execute_select_owned`).
+function _query_list_owned(q::SQLObjectHandler, show_query::Symbol)
+  settings, connection, conn_key = get_settings(q)
+  return query(q, connection=connection, show_query=show_query)
 end
 
 # #1344 — a query is a Tables.jl source. `DataFrame(query)` is DataFrames' own `DataFrame(table)`, and
@@ -1056,8 +1063,11 @@ function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing
   return parsers
 end
 
-function _list_raw(objct::SQLObjectHandler)
-  result, built, connection = _execute_select(objct)
+_list_raw(objct::SQLObjectHandler) = _list_raw_owned(deepcopy(objct))
+
+# #1589 — on a handler the caller owns (see `_execute_select_owned`).
+function _list_raw_owned(q::SQLObjectHandler)
+  result, built, connection = _execute_select_owned(q)
   # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
   # plain column.
   #
@@ -1135,16 +1145,24 @@ function _fill_column!(rows::Vector{Dict{Symbol,Any}}, name::Symbol, column, par
 end
 
 """Return model-aware `PormGRow` objects. Default format."""
-function list(objct::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute)
-  show_query !== :execute && return query_list(objct, show_query=show_query)
-  model = objct.object.model
-  return [PormGRow(row, model) for row in _list_raw(objct)]
-end
+list(objct::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute) =
+  _list_owned(deepcopy(objct), Val(:row); show_query=show_query)
 
 """Return plain `Dict{Symbol,Any}` rows for framework integrations that need real dictionaries."""
-function list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute)
-  show_query !== :execute && return query_list(objct, show_query=show_query)
-  return _list_raw(objct)
+list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute) =
+  _list_owned(deepcopy(objct), Val(:dict); show_query=show_query)
+
+# #1589 — every `list` format, on a handler the caller owns: the one copy is the public `list`'s, or the
+# terminal's that called this (`_get`, `_first`, `_count`, …). See `_execute_select_owned`.
+function _list_owned(q::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute)
+  show_query !== :execute && return _query_list_owned(q, show_query)
+  model = q.object.model
+  return [PormGRow(row, model) for row in _list_raw_owned(q)]
+end
+
+function _list_owned(q::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute)
+  show_query !== :execute && return _query_list_owned(q, show_query)
+  return _list_raw_owned(q)
 end
 
 # #564 — a temporal value is serialized as the TEXT its own formatter writes, not by whatever
@@ -1280,9 +1298,12 @@ end
 _json_row(data::Dict{Symbol, Any}) = Dict(String(k) => _json_value(v) for (k, v) in data)
 
 """Return a JSON string without allocating `PormGRow` wrappers."""
-function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
-  show_query !== :execute && return query_list(objct, show_query=show_query)
-  return JSON.json([_json_row(row) for row in _list_raw(objct)])
+list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute) =
+  _list_owned(deepcopy(objct), Val(:json); show_query=show_query)
+
+function _list_owned(q::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
+  show_query !== :execute && return _query_list_owned(q, show_query)
+  return JSON.json([_json_row(row) for row in _list_raw_owned(q)])
 end
 
 # #641 — a `PormGRow` handed to `JSON.json` used to serialize the SCHEMA, not the row.
@@ -1342,7 +1363,7 @@ Base.@constprop :aggressive function _first(objct::SQLObjectHandler, format; sho
   # #199: copy-first like count/exists/list — limit(1) must not leak into the caller's handler
   q = deepcopy(objct)
   q.limit(_probe_limit(q.object.limit, 1))   # #1053: within the caller's slice, not instead of it
-  res = list(q, format; show_query=show_query)
+  res = _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
   if show_query !== :execute
     return res
   end
@@ -1408,7 +1429,7 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
     map!(_invert_order, q.object.order, q.object.order)
   end
   q.limit(1)
-  res = list(q, format; show_query=show_query)
+  res = _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
   if show_query !== :execute
     return res
   end
@@ -1423,15 +1444,14 @@ Base.@constprop :aggressive function _extreme(objct::SQLObjectHandler, order_fie
   q = deepcopy(objct)
   q.order_by(order_fields...)
   q.limit(1)
-  if show_query !== :execute
-    return list(q, format; show_query=show_query)
-  end
-  rows = list(q, format)
-  if isempty(rows)
-    model_name = q.object.model.name
-    filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
-    throw(DoesNotExist(model_name, "$(opname): $(filter_repr)"))
-  end
+  show_query !== :execute && return _list_owned(q, format; show_query=show_query)
+  # #1589: `q` is the only copy, so the build below runs on it — and on a query with CTEs it rewrites
+  # a CTE-path filter's column into a `CTEReference` in place (`_resolve_cte_string_paths!`, a no-op
+  # without CTEs). The message names the filters as written, so on such a query it is rendered first;
+  # otherwise it stays on the error path, where it was.
+  early_repr = isempty(q.object.ctes) ? nothing : _filters_repr(q)
+  rows = _list_owned(q, format)
+  isempty(rows) && throw(DoesNotExist(q.object.model.name, "$(opname): $(something(early_repr, _filters_repr(q)))"))
   return rows[1]
 end
 
@@ -1467,6 +1487,10 @@ function latest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execut
     throw(QueryBuildError("latest() requires at least one field to order by, e.g. latest(\"dob\")."))
   return _extreme(objct, _invert_order_token.(fields), "latest"; show_query=show_query)
 end
+
+# The filters a `DoesNotExist` / `MultipleObjectsReturned` message names.
+_filters_repr(q::SQLObjectHandler)::String =
+  isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
 
 function _get_filter_repr(filter::SQLTypeOper)::String
   column = filter.column isa SQLTypeField ? filter.column.field : filter.column
@@ -1518,12 +1542,14 @@ Base.@constprop :aggressive function _get(objct::SQLObjectHandler, format, filte
   q = q.limit(_probe_limit(q.object.limit, 2))   # #1053: within the caller's slice, not instead of it
 
   if show_query !== :execute
-    return list(q, format; show_query=show_query)
+    return _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
   end
 
-  rows = list(q, format)
+  # #1589: rendered BEFORE the build, which runs on this same copy and rewrites a CTE-path filter's
+  # column into a `CTEReference` in place; the messages name the filters as the caller wrote them.
   model_name = q.object.model.name
-  filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
+  filter_repr = _filters_repr(q)
+  rows = _list_owned(q, format)
 
   isempty(rows) && throw(DoesNotExist(model_name, filter_repr))
   length(rows) > 1 && throw(MultipleObjectsReturned(model_name, length(rows), filter_repr))

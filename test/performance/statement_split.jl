@@ -174,8 +174,10 @@ bare_closure(c, conn) = () -> PormG.backend_execute(c.connection, conn, c.sql, c
 
 # ── In situ: `get`'s own body, with the thread CPU clock read between its steps (see the header) ──
 #
-# `_get` → `list` → `_execute_select` (execution_read.jl) and `list(T)` (typed_read.jl), step by step.
-# When any of them changes, change this copy with it: the report's gap column is what notices.
+# `_get` → `_list_owned` → `_execute_select_owned` (execution_read.jl) and `_list_owned(q, T)`
+# (typed_read.jl), step by step: since #1589 the handler is copied once, in `_get`, and the typed
+# projection and the build run on that copy. When any of them changes, change this copy with it: the
+# report's gap column is what notices.
 const _CLOCK_THREAD_CPUTIME_ID = Cint(3)   # Linux <time.h>
 function thread_cpu_ns()::Int64
   ts = Ref(_Timespec(0, 0))
@@ -197,26 +199,25 @@ _finish(::Val{:row}, result, q, connection) =
 _finish(::Type{T}, result, q, connection) where T =
   QB._typed_rows(T, result, QB._projection_parsers(q, connection), QB._TypedReadSite("a typed read into $(T)", q.object.model.name))
 _shape(q, ::Val{:row}) = q
-_shape(q, ::Type{T}) where T = QB._typed_query(q, T)
+_shape(q, ::Type{T}) where T = (QB._check_typed_read_target(T); QB._typed_projection!(q, T))
 
 function get_in_situ(c, format, acc::InSitu)
   t0 = thread_cpu_ns()
-  # _get
+  # _get: the one copy, its filter and probe, and the message text (rendered before the build)
   q = deepcopy(c.model_handler())
   QB._filter!(q.object, (c.pk => rand(c.ids),))
   q = q.limit(QB._probe_limit(q.object.limit, 2))
-  # list → (_typed_query) → _execute_select
-  q = _shape(q, format)
-  settings, connection, _ = QB.get_settings(q)
-  qc = deepcopy(q)
-  sql = QB.query(qc, connection = connection, show_query = :execute)
-  t1 = thread_cpu_ns()
-  result = PormG.ConnectionPool.fetch(settings, sql, qc.object.parameters)
-  t2 = thread_cpu_ns()
-  rows = _finish(format, result, qc, connection)
-  # _get's checks after the read
   model_name = q.object.model.name
   filter_repr = isempty(q.object.filter) ? "(none)" : join(QB._get_filter_repr.(q.object.filter), ", ")
+  # _list_owned → (the typed projection, on the same copy) → _execute_select_owned
+  q = _shape(q, format)
+  settings, connection, _ = QB.get_settings(q)
+  sql = QB.query(q, connection = connection, show_query = :execute)
+  t1 = thread_cpu_ns()
+  result = PormG.ConnectionPool.fetch(settings, sql, q.object.parameters)
+  t2 = thread_cpu_ns()
+  rows = _finish(format, result, q, connection)
+  # _get's checks after the read
   isempty(rows) && throw(QB.DoesNotExist(model_name, filter_repr))
   length(rows) > 1 && throw(QB.MultipleObjectsReturned(model_name, length(rows), filter_repr))
   t3 = thread_cpu_ns()

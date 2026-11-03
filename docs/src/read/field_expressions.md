@@ -593,8 +593,10 @@ The rest has no meaning and raises `QueryBuildError` on every engine, PostgreSQL
   below);
 - a date, a text column or an interval multiplied by a duration.
 
-The refusal is decided by the side's type. A side PormG cannot type is taken as a number, as it is for a
-`DurationField` column (`d * x`). A side that is meaningless interval arithmetic itself, such as
+The refusal is decided by the side's type. A `CTE(...)` column has its column's type, on either side:
+`F("grid") * CTE("c", "u")` over a duration column scales it as `F("grid") * F("time")` does, and
+`F("points") + CTE("c", "u")` is refused as `F("points") + F("time")` is. A side PormG cannot type is
+taken as a number, as it is for a `DurationField` column (`d * x`). A side that is meaningless interval arithmetic itself, such as
 `F("time") / F("time")` or `F("time") + 5`, raises `QueryBuildError` where it is built, on every engine.
 
 A month or a year has no fixed length, so it is an interval value only on PostgreSQL, where an
@@ -1184,6 +1186,10 @@ All examples in this section are **100% real and executable** directly against t
 | `<<` | `<<` | Bitwise Shift Left |
 | `>>` | `>>` | Bitwise Shift Right |
 | `xor` / `⊻` | `#` (Postgres) / emulated (SQLite) / `^` (MySQL) | Bitwise XOR |
+
+The operands are integers. An interval has no bits, so a bitwise operator with a `DurationField`
+column, a timestamp difference or any other interval on either side (`F("time") & 1`) raises
+`QueryBuildError` on every engine (#1581).
 
 !!! note
     **XOR Dialect Support:**

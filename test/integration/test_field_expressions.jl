@@ -906,6 +906,37 @@ end
                    PormG.QueryBuildError : PormG.BackendCapabilityError)
   end
 
+  # #1581 — a number times a CTE duration column is the interval scaled, as it is with the model column.
+  # For laps 1 to 3 of the 2009 Australian GP, each lap number times the driver's best lap of the race,
+  # the best lap held in a CTE keyed on the driver beside its `milliseconds`. The oracle is the lap number
+  # times that `milliseconds` minimum, in Julia; the product reads back as a `Dates.CompoundPeriod` on
+  # every engine. Before, SQLite multiplied the best lap's `HH:MM:SS` text (`'00:01:28.020' * 2` is `0`)
+  # and MySQL read the product's microseconds back as an integer. A float column plus the CTE duration
+  # column raises `QueryBuildError` on every engine, as `F("points") + F("time")` does; it built and
+  # answered on SQLite and MySQL. Why it matters: both were wrong values with no error.
+  @testset "a number times a CTE duration column is the interval scaled (#1581)" begin
+    best() = (b = M.Lap_times.objects;
+              b.filter("raceid__year" => 2009, "raceid__round" => 1);
+              b.values("driverid", "best" => PormG.Functions.Min("time"), "best_ms" => PormG.Functions.Min("milliseconds"));
+              b)
+    q = M.Lap_times.objects
+    q.with("c" => best(), join_field = "driverid" => "driverid", join_type = "INNER")
+    q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    q.values("driverid", "lap", "best_ms" => PormG.CTE("c", "best_ms"), "scaled" => F("lap") * PormG.CTE("c", "best"))
+    q.order_by("driverid", "lap")
+    df = q |> DataFrame
+    @test size(df, 1) > 3
+    @test all(x -> x isa Dates.CompoundPeriod, df.scaled)
+    @test [Dates.toms(x) for x in df.scaled] == df.lap .* df.best_ms
+
+    r = M.Result.objects
+    r.with("c" => best(), join_field = "driverid" => "driverid", join_type = "INNER")
+    r.filter("raceid__year" => 2009, "raceid__round" => 1)
+    r.values("driverid", "x" => F("points") + PormG.CTE("c", "best"))
+    err = try r |> DataFrame; nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+  end
+
   # #1568 — a negative interval with a fraction of a second reads back exact. The 2009 Australian GP's
   # laps 1 to 3 slower than 157 s: each lap time less twice itself is minus the lap time, a negative
   # interval with milliseconds (`-00:02:37.754`). LibPQ.jl reads PostgreSQL's ISO 8601 text and lost the

@@ -1407,10 +1407,19 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     throw(_interval_error("`$(op)` between an interval and $(temporal ? "a date or an interval" : "a value that is not a number (text, a boolean, a UUID)")", instruc.connection))
   end
 
-  # Any other operator (bitwise, …) has no interval meaning; the interval is its text, as before #881.
-  left_side = _as_interval_text(left_side, left_kind, instruc.connection)
-  return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
+  # #1581: a bitwise operator (the only other binary operator) has no interval meaning on any engine.
+  # It kept "the interval is its text", as before #881: PostgreSQL rendered `interval & bigint`, which
+  # fails when the statement runs, and SQLite and MySQL computed on the text or the stored integer.
+  op in _BITWISE_OPERATIONS && throw(_bitwise_interval_error(op, instruc.connection))
+  throw(_interval_error("`$(op)` on an interval", instruc.connection))
 end
+
+# #1581 — a bitwise operator beside an interval, on either side, under `& | << >> xor ~`. Asked of a side
+# by the walk, after it rendered (`_expression_kind` names a joined path once its join resolved).
+_bitwise_interval_error(op::AbstractString, conn) =
+  _interval_error("`$(op)` (a bitwise operator) on an interval", conn)
+_refuse_bitwise_interval(op::AbstractString, side, instruc::SQLInstruction) =
+  _expression_kind(side, instruc) isa CInterval ? throw(_bitwise_interval_error(op, instruc.connection)) : nothing
 
 # #1553 — `x * d`, a duration literal scaled by a number side, an interval value. The left renders first
 # (the order rule), then the duration as its value (`_render_duration_value`), and the product is #881's
@@ -1948,13 +1957,18 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
   elseif v.operation == "~"
     # Unary NOT operator. Bitwise, never temporal; a signed integer on every engine (`_bitwise_not_sql`).
     left_side = _set_update_query_left(v.field_name, v.operation, instruc)
+    _refuse_bitwise_interval("~", v.field_name, instruc)   # #1581
     return _bitwise_not_sql(instruc.connection, left_side), nothing
   elseif v.operation == "xor"
     # Bitwise, never temporal. Each engine's own spelling (`_xor_sql`), which may name a side twice, so
     # the sides render on each call.
     sides = () -> (_set_update_query_left(v.field_name, v.operation, instruc),
                    _set_update_query_operand(v.operand, v.field_name, v.operation, instruc))
-    return _xor_sql(instruc.connection, sides), nothing
+    sql = _xor_sql(instruc.connection, sides)
+    # #1581: an interval on either side has no bits; asked once the sides have rendered.
+    _refuse_bitwise_interval("xor", v.field_name, instruc)
+    _refuse_bitwise_interval("xor", v.operand, instruc)
+    return sql, nothing
   elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
     # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
     # infix branch: a Period operand must NOT reach `_set_update_query_operand`, which would try to
@@ -2138,18 +2152,15 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # #564: the left's kind travels to the binder, so the representation the literal binds and the
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
     right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
-    # #1130: a `Subquery` or a CTE column is typed only once it has rendered; where an interval is its
-    # integer (MySQL), one holding an interval compared with this left, which is none, is refused.
-    v.operation in _COMPARISON_OPERATIONS && v.operand isa Union{SubqueryObject,CTEReference} &&
+    # #1130: a `Subquery` is typed only once it has rendered; where an interval is its integer (MySQL),
+    # one holding an interval compared with this left, which is none, is refused. (A `CTE(...)` handle
+    # is a typed right side since #1581, so it never reaches here under a comparison on MySQL, nor under
+    # `+`/`-`, where #1549 refused a CTE date beside an untyped left after the fact.)
+    v.operation in _COMPARISON_OPERATIONS && v.operand isa SubqueryObject &&
       _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
-    # #1549 — a CTE date or timestamp on the right of `+`/`-` beside a left that is no date, interval or
-    # count. `_typed_right_operand` does not take a handle, so the two date-on-the-right checks above
-    # never ran for one: `10 - CTE("g", "d")` rendered `(? - "R1_1"."d")`, which SQLite computed as
-    # `10 - 2009`, silently. The handle is typed now that it has rendered, and refused as its column is.
-    if v.operation in ("+", "-") && v.operand isa CTEReference && _side_kind(v.operand, instruc) isa Union{CDate,CDateTime}
-      v.operation == "-" && v.field_name isa Union{Integer,Float64} && throw(_count_minus_date_error())
-      _refuse_untyped_date_operand(v.operation, instruc)
-    end
+    # #1581: an interval on the right of a bitwise operator has no meaning on any engine (the left was
+    # decided by `_render_interval_left`). Asked once the right has rendered, the order rule.
+    v.operation in _BITWISE_OPERATIONS && _refuse_bitwise_interval(v.operation, v.operand, instruc)
 
     if v.operation == "/"
       _refuse_json_key_in_arithmetic(v, instruc)

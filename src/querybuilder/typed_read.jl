@@ -361,11 +361,22 @@ one. Integer widths convert, an integer converts to a float or `Decimal` when ex
 widens; any other mismatch, and a NULL into a field that admits neither, raises `InvalidValueError`
 naming the field and both types. See *Typed rows* in the read guide.
 """
-Base.@constprop :aggressive function list(objct::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
-  q = _typed_query(objct, T)
-  show_query !== :execute && return query_list(q, show_query=show_query)
+Base.@constprop :aggressive list(objct::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T =
+  _typed_read_owned(_typed_query(objct, T), T; show_query=show_query)
+
+# #1589 — the typed read on a handler the caller owns: the copy a terminal (`_get`, `_first`, `_last`,
+# `_extreme`) has already made. The projection is applied to that copy, so `get(T)` copies the handler
+# once, where it copied it three times (`_get`, `_typed_query`, `_execute_select`).
+Base.@constprop :aggressive function _list_owned(q::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
+  _check_typed_read_target(T)
+  return _typed_read_owned(_typed_projection!(q, T), T; show_query=show_query)
+end
+
+# The body both run, on a handler that is owned AND already carries `T`'s projection.
+Base.@constprop :aggressive function _typed_read_owned(q::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
+  show_query !== :execute && return _query_list_owned(q, show_query)
   # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
-  result, built, connection = _execute_select(q)
+  result, built, connection = _execute_select_owned(q)
   return _typed_rows(T, result, _projection_parsers(built, connection),
                      _TypedReadSite("a typed read into $(T)", q.object.model.name))
 end

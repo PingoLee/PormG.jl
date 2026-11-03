@@ -258,6 +258,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "PostgreSQL Driver Is a Property of the Pool (#785)" include("unit/test_postgres_driver_seam.jl")
     @testset "Postgres.jl Driver Extension (#788)" include("unit/test_postgres_ext.jl")
     @testset "MySQL Driver Extension, Phase 1 (#1130)" include("unit/test_mysql_ext.jl")
+    @testset "A Statement's Task Is in the Caller's Threadpool (#1577)" include("unit/test_statement_threadpool.jl")
     @testset "Writes Return the Declared Columns, Never * (#1490)" include("unit/test_write_returning_columns.jl")
     @testset "Driver Internals the Extensions Read Are Pinned (#1494)" include("unit/test_driver_internals.jl")
     @testset "LibPQ Reads a Negative Fractional Interval Exactly (#1568)" include("unit/test_libpq_interval_sign_1568.jl")

@@ -40,8 +40,9 @@
 ##   interactive One `:interactive` task runs a primary-key lookup every 100 ms, while S tasks on
 ##               `:default` compute without yielding, S = 0, nthreads(:default) − 1, nthreads(:default).
 ##               The question is whether an interactive caller's statement needs a free `:default`
-##               thread. It does on Postgres.jl, which spawns each statement on `:default` (#1577),
-##               and on SQLite, whose single worker task lives there.
+##               thread. It does on SQLite, whose single worker task lives there. It did on Postgres.jl
+##               and MySQL until #1577, which runs each statement in the caller's threadpool; the
+##               `4 of 4` row is that fix's regression check (about 60 lookups, not 1).
 ##   q4          The primary-key lookup on `drivers`, through the ORM and as raw SQL, by 1, 8 and 64
 ##               concurrent tasks: statements per second. Then the head-of-line case: 8 tasks of
 ##               lookups while one ~200 ms statement is always in flight, against the same 8 without

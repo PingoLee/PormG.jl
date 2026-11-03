@@ -68,6 +68,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "NUL in String Values (#951)"  begin include("test_nul_string_values.jl")  end
     @testset "Database Error Text Carries No Value (#987)"  begin include("test_database_error_no_value.jl")  end
     @testset "Postgres Statement Cache (#1479)"  begin include("test_postgres_statement_cache.jl")  end
+    @testset "Postgres.jl Interrupt Inside the Driver's Read (#1577)"  begin include("test_postgres_interrupt.jl")  end
     @testset "Writes Return the Model's Fields (#1490)"  begin include("test_write_returns_declared_fields.jl")  end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "migrate() at Boot (#737)"     begin include("test_migrate_boot.jl")       end

@@ -412,10 +412,11 @@ PormG.backend_execute(pool::_Pool, conn::MySQL.Connection, sql::String, params) 
   _run(conn, sql, _bind(pool, params))
 
 # The async handle is a plain Task, as the other extensions' are: core only `fetch`es and `wait`s it.
-# A MySQL.jl connection serializes concurrent use on its own lock.
+# A MySQL.jl connection serializes concurrent use on its own lock. The task is in the caller's
+# threadpool (`PormG._statement_task`, #1577), as LibPQ's statement runs on the caller's thread.
 function PormG.backend_execute_async(pool::_Pool, conn::MySQL.Connection, sql::String, params)
   bound = _bind(pool, params)
-  return Threads.@spawn _run(conn, sql, bound)
+  return PormG._statement_task(() -> _run(conn, sql, bound))
 end
 
 PormG.backend_num_rows(pool::_Pool, result::MySQLResult) = result.nrows

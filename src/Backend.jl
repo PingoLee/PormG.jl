@@ -143,6 +143,20 @@ backend_mysql_parameter_limit(::PormGMySQL)::Int = 65535
 function backend_postgres_parameter_limit end
 backend_postgres_parameter_limit(::PormGPostgres)::Int = 65535
 
+# The task a driver extension runs one statement in, for a `backend_execute_async` whose driver has no
+# asynchronous call of its own (Postgres.jl, MySQL.jl). It is in the caller's threadpool (#1577): a
+# statement from an `:interactive` task (a heartbeat, a lease renewal) runs on `:interactive`, and one
+# from a `:default` task on `:default`. A bare `Threads.@spawn` put every statement on `:default`, so with
+# every `:default` thread computing, an interactive caller's statement waited for one to free (one lookup
+# in 6 s instead of 60). LibPQ needs no task here: `LibPQ.async_execute` runs on the caller's thread.
+# `:samepool` sends a caller on a foreign thread to `:default`.
+# Under plain `julia`, `-t N` and `-t auto` the interactive thread is thread 1, which takes `Ctrl+C`, so
+# a statement awaited by the main task or the REPL now takes the interrupt inside its driver. Postgres.jl
+# then closes the connection, and its extension cancels the statement by key (`_cancel_by_key`).
+# A verb, so it stays in `PormG` with the extensions' generics; `test/unit/test_statement_threadpool.jl`
+# fails on a `Threads.@spawn` written in `ext/`.
+_statement_task(f::F) where {F} = Threads.@spawn :samepool f()
+
 """
     backend_classify_error(pool, e) -> Symbol
 

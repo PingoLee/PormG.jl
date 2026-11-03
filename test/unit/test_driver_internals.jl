@@ -41,9 +41,16 @@ const _NamePin = @NamedTuple{name::String, status::Symbol, reader::String}
 const _FieldPin = @NamedTuple{type::Type, fields::Vector{Symbol}, status::Symbol, reader::String}
 
 # ── Qualified names neither exported nor `public` in their driver ───────────────────────────────────
-# Postgres.jl declares `public` for every name its extension reads, so it has no row: the scan checks
-# those through `Base.ispublic`.
+# Postgres.jl declares `public` for every name its extension reads but the five the cancel by key
+# reads (#1577), which are its `cancel_query!` without the open-socket check; the scan checks the rest
+# through `Base.ispublic`. `API.cancel_request` is exported from `API`, but `API` is not public.
 const PINNED_NAMES = _NamePin[
+  # Postgres.jl
+  (name = "Postgres.API.cancel_request",        status = :internal,   reader = "_cancel_by_key (its positional method: PINNED_METHODS)"),
+  (name = "Postgres.API.GSSConn",               status = :internal,   reader = "_cancel_by_key"),
+  (name = "Postgres.cancel_sslmode",            status = :internal,   reader = "_cancel_by_key"),
+  (name = "Postgres.cancel_gssencmode",         status = :internal,   reader = "_cancel_by_key"),
+  (name = "Postgres.Reseau.TLS.Conn",           status = :internal,   reader = "_cancel_by_key"),
   # LibPQ.jl
   (name = "LibPQ.Connection",                   status = :documented, reader = "PormG.backend_execute, backend_is_alive, backend_cancel_query!, …"),
   (name = "LibPQ.Result",                       status = :documented, reader = "_raise_if_failed, _server_named_failure, _copy_completed"),
@@ -145,6 +152,13 @@ const PINNED_FIELDS = _FieldPin[
   (type = Postgres.Error, fields = [:routine], status = :internal, reader = "_is_stale_cached_statement"),
   (type = Postgres.PostgresInterfaceError, fields = [:msg], status = :internal,
    reader = "_is_lost_connection, PormG.backend_is_retry_safe"),
+  # The cancel by key (#1577) reads what `cancel_query!` reads: the backend's key, the server, and the
+  # TLS and GSSAPI settings the cancel connection must match.
+  (type = Postgres.Connection, fields = [:socket, :host, :port, :pid, :skey, :debug, :sslmode, :sslrootcert,
+                                         :sslcert, :sslkey, :sslcapath, :sslservername, :connect_timeout,
+                                         :gssencmode, :krbsrvname, :gssdelegation, :style],
+   status = :internal, reader = "PormG.backend_cancel_query!, _cancel_by_key"),
+  (type = Postgres.API.BufferedConn, fields = [:transport], status = :internal, reader = "_cancel_by_key"),
   # LibPQ.jl
   (type = LibPQ.Connection, fields = [:conn], status = :internal,
    reader = "PormG.backend_is_alive, backend_cancel_query!, _drain_postgres_connection!"),
@@ -176,6 +190,14 @@ const PINNED_FIELDS = _FieldPin[
 # Every pinned name that resolves to a Base or Core function must have a row here (checked below).
 const _MethodPin = @NamedTuple{f::Any, sig::Type, status::Symbol, reader::String}
 const PINNED_METHODS = _MethodPin[
+  # Sixteen positional arguments (#1577): a reordering of two arguments of different types fails here; a
+  # swap of two of the same type cannot be seen by any signature check.
+  (f = Postgres.API.cancel_request,
+   sig = Tuple{String, Int, Int32, Int32, Bool, Union{String, Nothing}, Union{String, Nothing},
+               Union{String, Nothing}, Union{String, Nothing}, Union{String, Nothing}, Union{String, Nothing},
+               Union{Int, Nothing}, Union{String, Nothing}, Union{String, Nothing}, Bool,
+               Postgres.API.AbstractPostgresStyle},
+   status = :internal, reader = "_cancel_by_key"),
   (f = Base.lock, sig = Tuple{LibPQ.Connection}, status = :internal,
    reader = "PormG.backend_is_alive, _drain_postgres_connection! (through `lock(f, conn)`)"),
   (f = Base.unlock, sig = Tuple{LibPQ.Connection}, status = :internal,

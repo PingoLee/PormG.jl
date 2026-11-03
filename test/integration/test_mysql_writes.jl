@@ -243,17 +243,33 @@ if only_on(:mysql, "writes through the MySQL query builder (phases 3a and 3b)")
             @test total == 1 && W.Driver.objects.filter("id" => extra.id).count() == 0
         end
 
-        # What: what MySQL cannot do without deferred foreign keys is refused, naming the feature.
-        # SQL: none for the refusals; a child INSERT before its parent fails at the statement (1452).
-        # Why: InnoDB checks a foreign key per statement, and `FOREIGN_KEY_CHECKS = 0` disables the check
-        #      without rechecking afterwards (#1272).
-        @testset "no deferred foreign keys: self-referencing deletes and without_foreign_keys are refused" begin
+        # What: a self-referential CASCADE on MySQL (#1377): a tree's root takes its descendants, and rows
+        #       whose keys form a loop are refused, naming the feature; `without_foreign_keys` is refused.
+        # SQL: the key read `SELECT … FROM `p3w_node` … WHERE `up` IN (…) FOR UPDATE`, one per level, then
+        #      `DELETE` the leaf, then the root. For the loop, the key reads only, and no DELETE. A child
+        #      INSERT before its parent fails at the statement (1452).
+        # Why: InnoDB checks a foreign key per statement (the DDL here says ON DELETE RESTRICT), so the tree
+        #      deletes only deepest level first, and a loop has no order of DELETEs that passes the check.
+        #      `FOREIGN_KEY_CHECKS = 0` disables the check without rechecking afterwards (#1272).
+        @testset "no deferred foreign keys: a tree deletes deepest first, a loop and without_foreign_keys are refused" begin
+            plain(e) = replace(msg(e), r"\e\[[0-9;]*m" => "")
+            # A tree: deleting the root deletes its child first, then the root, as in Django.
             root = W.Node.objects.create("name" => "root")
             W.Node.objects.create("up" => root.id, "name" => "leaf")
-            # Refused as on every engine: no order of statements leaves the rows' keys satisfied.
-            e = caught(() -> W.Node.objects.filter("id" => root.id).delete())
-            @test e isa PormG.QueryBuildError && occursin("Circular dependency", msg(e))
+            @test W.Node.objects.filter("id" => root.id).delete() == (2, Dict("p3w_node" => 2))
+            @test W.Node.objects.count() == 0
+            # A loop: Ligier's `up` is Prost and Prost's is Ligier. Refused before any write.
+            ligier = W.Node.objects.create("name" => "Ligier")
+            prost = W.Node.objects.create("up" => ligier.id, "name" => "Prost")
+            W.Node.objects.filter("id" => ligier.id).update("up" => prost.id)
+            e = caught(() -> W.Node.objects.filter("id" => ligier.id).delete())
+            @test e isa PormG.BackendCapabilityError
+            @test occursin("foreign keys checked at COMMIT", plain(e)) && occursin("MySQL", plain(e))
             @test W.Node.objects.count() == 2
+            # The documented way out: break the loop, then delete the tree it leaves.
+            W.Node.objects.filter("id" => ligier.id).update("up" => nothing)
+            @test W.Node.objects.filter("id" => ligier.id).delete() == (2, Dict("p3w_node" => 2))
+            @test W.Node.objects.count() == 0
             e = caught(() -> PormG.ConnectionPool.without_foreign_keys(() -> nothing, pool))
             @test e isa PormG.BackendCapabilityError && occursin("without_foreign_keys", msg(e))
             # A child written before its parent fails at once, inside a transaction too, and the

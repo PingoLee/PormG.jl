@@ -1209,37 +1209,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Hour(1) - F interval | subquery", :mysql) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "_format_mysql_duration", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * Month(1) | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = "CInterval(true)", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("F int col * Month(1) | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | alone", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | cte", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval(true)", whole_numeric = nothing),
   ("F int col * Month(1) | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | cte", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("F int col * Month(1) | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F int col * Month(1) | subquery", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = "CInterval(true)", column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("F datetime diff + Month(1) | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | alone", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | cte", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval(true)", whole_numeric = nothing),
   ("F datetime diff + Month(1) | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | cte", :mysql) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval(true)", read_parsed = true, render = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval(true)", whole_numeric = nothing),
   ("F datetime diff + Month(1) | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "A duration of months or years in interval arithmetic needs an interval type that keeps months and years apart (a `Month`"),
   ("F datetime diff + Month(1) | subquery", :mysql) =>

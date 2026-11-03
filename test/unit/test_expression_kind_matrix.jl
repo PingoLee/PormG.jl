@@ -255,6 +255,8 @@ function _ekm_kind_family(s::String)
   startswith(s, "CDateTime(") && return :datetime
   startswith(s, "CVarChar(") && return :text
   startswith(s, "CArray(") && return :array   # #1439: a cast to an array, PostgreSQL only
+  # #1583: an interval that may hold a calendar part (`CInterval(true)`) is an interval all the same.
+  startswith(s, "CInterval(") && return :interval
   return :other
 end
 # `format_number_sql` formats every number column (integer, float and decimal alike) and

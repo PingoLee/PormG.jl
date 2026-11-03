@@ -302,6 +302,8 @@ end
 _shift_result_kind(::Nothing, comps) = nothing
 _shift_result_kind(kind::CDate, comps) =
   any(c -> c[1] in (:hour, :minute, :second), comps) ? CDateTime(false) : kind
+# #1583: an interval shifted by a month or a year may hold one.
+_shift_result_kind(kind::CInterval, comps) = CInterval(kind.calendar || _calendar_comps(comps))
 _shift_result_kind(kind::CanonicalType, comps) = kind
 
 # #801 — the other half of the same table: the kind `a - b` evaluates to when BOTH sides are temporal.
@@ -386,7 +388,7 @@ _side_kind(value::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(v
 # #1553 — a duration on the LEFT (`Hour(1) - F("time")`, `Minute(3) / F("lap")`) is an interval value, so
 # the render and the walk both send it to the interval-on-the-left arm (`_render_interval_left`,
 # `_interval_left_kind`), as a `DurationField` column goes there.
-_side_kind(::_DurationOperand, ::SQLInstruction) = CInterval()
+_side_kind(d::_DurationOperand, ::SQLInstruction) = CInterval(_has_calendar_part(d))   # #1583: a month
 
 # #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
 # arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
@@ -613,7 +615,7 @@ _render_duration_value(d::_DurationOperand, instruc::SQLInstruction)::Tuple{Stri
   _duration_value_sql(instruc.connection, d, instruc)
 function _duration_value_sql(::PormGPostgres, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   args = _pg_interval_args(_decompose_period(d isa Interval ? d.period : d), instruc)
-  return "make_interval($(something(args, "")))", CInterval()
+  return "make_interval($(something(args, "")))", CInterval(_has_calendar_part(d))   # #1583
 end
 _duration_value_sql(conn::PormGSQLite, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
@@ -627,42 +629,30 @@ _duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstructi
 # cannot name are refused, whatever the value (explicit intent). SQLite and MySQL reach this only past
 # the `calendar_intervals` capability, which refuses a month value there first.
 #
-# The month is found wherever PormG can SEE it: a duration literal, or interval-valued F arithmetic over
-# one, so `(F("grid") * Month(1)) * 1.5` and `(F("time") + Month(1)) / 2` are refused as
-# `F("points") * Month(1)` is (review of #1576). The walk descends only through sides that are
-# intervals: a timestamp shifted by a month, then subtracted from one (`(F("at") + Month(1)) - F("at")`),
-# is a difference of two instants, which carries no month. A stored or projected interval (a
-# `DurationField` column, a CTE column, a `Subquery`) holds whatever value it holds, and its type says
-# nothing about months, so it is not refused.
+# The month is found wherever PormG can SEE it, and the interval's kind says so (`CInterval.calendar`,
+# #1583): a duration literal with a month, F arithmetic over one, and every value that is one of its
+# operands' — `Max`/`Min`, `Coalesce`, `Greatest`/`Least`, `NullIf`, `Case`, a `Cast` to interval, the
+# window value functions, a CTE column over one. So `(F("grid") * Month(1)) * 1.5` and
+# `Max(F("grid") * Month(1)) * 1.5` are refused as `F("points") * Month(1)` is. A timestamp shifted by a
+# month, then subtracted from one (`(F("at") + Month(1)) - F("at")`), is a difference of two instants,
+# which carries no month. A stored interval (a `DurationField` column, a `Subquery`) holds whatever value
+# it holds, and its type says nothing about months, so it is not refused.
+#
+# Until #1583 a second walk searched the tree for a month (`_carries_calendar_part`), through F
+# arithmetic only; a function hid the month from it. The kind is the one walk, memoized per question.
 #
 # The render (`_render_interval_left`, `_render_interval_right`) and the walk (`_temporal_result_kind`,
 # `_interval_left_kind`) ask `_calendar_scale_refused`, so the SQL and the kind cannot disagree.
-_has_calendar_part(d::_DurationOperand)::Bool =
-  any(c -> first(c) in (:year, :month), _decompose_period(d isa Interval ? d.period : d))
-_carries_calendar_part(d::_DurationOperand, ::SQLInstruction)::Bool = _has_calendar_part(d)
-# A structural read first, which asks no kind: arithmetic with no month literal in it — nearly all of
-# it — costs one pass over the tree. Only a tree that names a month is walked by kind, and that walk is
-# one question (`_memo_kind`), so each node's kind is computed once however deep the chain is. Asked at
-# every level of a chain, it is quadratic in the depth at worst, never exponential (the #1034 step 5b
-# guard in `test_temporal_arithmetic_kind.jl`).
-function _carries_calendar_part(p::FExpression, instruc::SQLInstruction)::Bool
-  _names_calendar_part(p) || return false
-  return _memo_kind(() -> _calendar_walk(p, instruc), p, instruc, :calendar)
-end
-_carries_calendar_part(::Any, ::SQLInstruction)::Bool = false
-_names_calendar_part(d::_DurationOperand)::Bool = _has_calendar_part(d)
-_names_calendar_part(p::FExpression)::Bool =
-  p.operation !== nothing && (_names_calendar_part(p.field_name) || _names_calendar_part(p.operand))
-_names_calendar_part(::Any)::Bool = false
-# Each side recurses through the memoized entry point, so a node is decided once per question.
-_calendar_walk(p::FExpression, instruc::SQLInstruction)::Bool =
-  p.operation !== nothing && _expression_kind(p, instruc) isa CInterval &&
-  (_carries_calendar_part(p.field_name, instruc) || _carries_calendar_part(p.operand, instruc))
+_calendar_comps(comps)::Bool = any(c -> first(c) in (:year, :month), comps)
+_has_calendar_part(d::_DurationOperand)::Bool = _calendar_comps(_decompose_period(d isa Interval ? d.period : d))
+_may_hold_calendar_part(d::_DurationOperand, ::SQLInstruction)::Bool = _has_calendar_part(d)
+_may_hold_calendar_part(x, instruc::SQLInstruction)::Bool =
+  (k = _expression_kind(x, instruc)) isa CInterval && k.calendar
 # `interval` scaled (`op` is `*`) or divided (`/`) by `factor`. The factor is read first: a whole one,
-# the common case, never walks the interval.
+# the common case, never asks the interval's kind.
 _calendar_scale_refused(interval, op::AbstractString, factor, instruc::SQLInstruction)::Bool =
   (op == "/" || !_whole_kind(_arithmetic_side_kind(factor, instruc, _AllKinds()))) &&
-  _carries_calendar_part(interval, instruc)
+  _may_hold_calendar_part(interval, instruc)
 _calendar_scale_error() =
   QueryBuildError("A month or a year has no fixed length, so as an interval value it is multiplied by a " *
                   "whole number only, and never divided: 1.5 months, or a year over 7, has no single " *

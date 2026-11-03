@@ -887,7 +887,7 @@ end
   # `QueryBuildError` on every engine. PostgreSQL used to send them, and the server rejected them with a
   # `StatementError`. A month times a float column (`Result.points`) raises `QueryBuildError` on
   # PostgreSQL, where it spread the fraction at 30 days a month, and `BackendCapabilityError` on SQLite
-  # and MySQL. Why it matters: the error type is the contract — a `QueryBuildError` is raised by the
+  # and MySQL; so does `Max` of a month product times 1.5, which PostgreSQL built until #1583. Why it matters: the error type is the contract — a `QueryBuildError` is raised by the
   # build, where the server's rejection arrived as a `StatementError` — and this checks it through a
   # real driver's connection, not a mock.
   @testset "meaningless interval arithmetic and a fraction of a month are refused at build (#1572, #1576)" begin
@@ -901,6 +901,14 @@ end
     q = M.Result.objects
     q.filter("raceid__year" => 2009, "raceid__round" => 1)
     q.values("driverid", "m" => F("points") * Dates.Month(1))
+    err = try q |> DataFrame; nothing catch e; e end
+    @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
+                   PormG.QueryBuildError : PormG.BackendCapabilityError)
+    # #1583: the month is seen through a function too. `Max` of a month product scaled by a float built on
+    # PostgreSQL and spread the fraction at 30 days a month.
+    q = M.Result.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1)
+    q.values("x" => PormG.Functions.Max(F("grid") * Dates.Month(1)) * 1.5)
     err = try q |> DataFrame; nothing catch e; e end
     @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
                    PormG.QueryBuildError : PormG.BackendCapabilityError)

@@ -616,12 +616,14 @@ answer. On every engine, `QueryBuildError` is raised for:
 value. Whole means an integer column, integer arithmetic, or a `DecimalField` with `decimal_places = 0`.
 Integer division is whole too: `(F("grid") / 2) * Month(1)` takes the integer quotient.
 
-The rule follows the month through `F` arithmetic: `(F("grid") * Month(1)) * 1.5` and
-`(F("time") + Month(1)) / 2` are refused too. It does not follow a month through a function.
-`Max(F("grid") * Month(1)) * 1.5`, a `Coalesce`, a `Case` or a `Cast` over one, or a window function
-over one, still builds ([#1583](https://github.com/PingoLee/PormG.jl/issues/1583)). A stored or
-computed interval (a `DurationField` column, a CTE column, a `Subquery`) can hold months on
-PostgreSQL, but its type does not say so, so PormG does not refuse scaling it.
+The rule follows the month wherever PormG can see it. That includes `F` arithmetic
+(`(F("grid") * Month(1)) * 1.5`, `(F("time") + Month(1)) / 2`) and any value that is one of its
+operands' (#1583): `Max`/`Min`/`Sum`, `Coalesce`, `Greatest`/`Least`, `NullIf`, `Case`, a `Cast` to
+`"interval"`, a window function such as `Lag`, and a CTE column whose body projects a month product.
+So `Max(F("grid") * Month(1)) * 1.5` is refused too, while `Max(F("grid") * Month(1)) * 2` builds. A
+stored interval (a `DurationField` column, or a `Subquery`) can hold months on PostgreSQL, but its type
+does not say so, so PormG does not refuse scaling it: `F("time") * 1.5` and `Max(F("time")) * 1.5`
+build.
 
 A float column cannot be cast to an integer inline here: a function takes no duration. To scale by one,
 cast it to an integer in a CTE column and multiply that column. Or use a duration of fixed length,

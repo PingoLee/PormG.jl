@@ -46,7 +46,6 @@ struct CBool    <: CanonicalType end
 struct CText    <: CanonicalType end
 struct CDate    <: CanonicalType end
 struct CTime    <: CanonicalType end
-struct CInterval<: CanonicalType end
 struct CUUID    <: CanonicalType end
 struct CJSON    <: CanonicalType end
 struct CBytes   <: CanonicalType end
@@ -85,6 +84,22 @@ end
 struct CDateTime <: CanonicalType
   with_timezone::Bool
 end
+
+# An interval. `calendar` says the value may hold a calendar part — a month or a year, which has no
+# fixed length — that PormG can SEE in the expression (#1583): a duration with a month
+# (`F("grid") * Month(1)`), arithmetic over one, and every value that is one of its operands' (`Max`,
+# `Coalesce`, `Case`, a `Cast` to interval, `Lag`, a CTE column over one). The #1576 rule reads it to
+# refuse a month scaled by a fraction or divided. It is a fact about an expression, not a column type:
+# a column, an introspected type and every migration kind are `CInterval()`, so the schema diff never
+# sees it, and a stored interval is not refused for months its type cannot show. Not a modifier of the
+# representation either — both kinds read, bind and render the same — so `value_repr.jl` dispatches
+# on the type and never on the field. Shown as `CInterval()` when false, which is how every recorded
+# kind spelled it before the field existed.
+struct CInterval <: CanonicalType
+  calendar::Bool
+end
+CInterval() = CInterval(false)
+Base.show(io::IO, k::CInterval) = print(io, k.calendar ? "CInterval(true)" : "CInterval()")
 
 # A one-dimensional PostgreSQL array of `element` (#28, `ArrayField`) — the first kind that holds
 # another kind. A parameterized kind rather than a family of singletons (`CIntArray`, …) because the

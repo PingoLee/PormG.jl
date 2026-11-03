@@ -15,6 +15,10 @@ kind for what the render refuses.
 Literals alone (`1.5 * Month(1)`, `Month(3) / 2`) never reach PormG: Julia's `Dates` computes them
 first.
 
+#1583 moved the month into the interval's kind (`CInterval(true)`: the value may hold a calendar part),
+so the rule sees it through every value that is one of its operands' — a function, a cast, a window
+function, a CTE column — and not only through `F` arithmetic, which a second tree walk searched before.
+
 Everything renders through mock connections — no live database.
 
 julia --project=test/integration test/unit/test_calendar_scale_1576.jl
@@ -73,7 +77,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #1576: a month or a year multiplied by a whole number builds on PostgreSQL.
 # Expected: an integer column, a `BigIntegerField`, a `DecimalField(4, 0)` and whole arithmetic over them
-# render `(<factor> * make_interval(months|years => $1::integer))`, and the walk names `CInterval`.
+# render `(<factor> * make_interval(months|years => $1::integer))`, and the walk names an interval that
+# may hold a calendar part, `CInterval(true)` (#1583).
 # Why it matters: a whole number of months is exact, and is the shape #1553 shipped. The rule must not
 # take it away.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,7 +92,7 @@ end
       ((F("whole") + 1) * Month(1), "(\"Tb\".\"whole\" + \$1::bigint)", "months"),
     )
     @test occursin("($(factor) * make_interval($(unit) => \$", _cs_sql(expr, _CS_PG))
-    @test _cs_walk(expr, _CS_PG) == PormG.CInterval()
+    @test _cs_walk(expr, _CS_PG) == PormG.CInterval(true)
   end
 end
 
@@ -161,13 +166,97 @@ end
     )
     @test occursin(sql, _cs_sql(expr, _CS_PG))
   end
-  # The walk still names the interval where the render builds a month the rule does not refuse.
-  for expr in ((F("grid") * Month(1)) * 2, ((F("at") + Month(1)) - F("at")) * 1.5,
-               (F("time") + Month(1)) * F("whole"), F("time") * 1.5)
-    @test _cs_walk(expr, _CS_PG) == PormG.CInterval()
+  # The walk still names the interval where the render builds a month the rule does not refuse, and
+  # says whether it may hold one (#1583): a difference of two instants and a stored column do not.
+  for (expr, calendar) in (((F("grid") * Month(1)) * 2, true), (((F("at") + Month(1)) - F("at")) * 1.5, false),
+                           ((F("time") + Month(1)) * F("whole"), true), (F("time") * 1.5, false))
+    @test _cs_walk(expr, _CS_PG) == PormG.CInterval(calendar)
   end
   for conn in (_CS_SL, _CS_MY),
       expr in (F("grid") * Month(1), F("points") * Month(1), Year(1) / F("grid"))
     @test _cs_err(() -> _cs_sql(expr, conn)) isa PormG.BackendCapabilityError
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1583: the interval's kind carries "may hold a calendar part", so the rule sees a month through a
+# function, a cast, a window function and a CTE column.
+# Expected on PostgreSQL: `QueryBuildError` (the #1576 text) for a month product under `Max`, `Min`,
+# `Sum`, `Coalesce`, `Greatest`, `NullIf`, `Case`, `Cast(…, "interval")` and `Lag`, scaled by a fraction or
+# divided, on either side of the factor, and for a CTE column whose body projects one. The walk names
+# each function `CInterval(true)`. Before, each built and PostgreSQL spread the fraction at 30 days a
+# month: `(MAX(("Tb"."grid" * make_interval(months => $1::integer))) * $2::double precision)`. The rule
+# found the month through `F` arithmetic only, by a second tree walk (`_carries_calendar_part`).
+# Why it matters: the same silent 30-day value #1576 refused, one function away.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1583: a month is seen through a function, a cast, a window and a CTE column" begin
+  m() = F("grid") * Month(1)
+  over = QB.WindowOver(order_by = ["id"])
+  wrapped = (
+    "Max"      => () -> QB.Max(m()),
+    "Min"      => () -> QB.Min(m()),
+    "Sum"      => () -> QB.Sum(m()),
+    "Coalesce" => () -> QB.Coalesce(m(), F("time")),
+    "Greatest" => () -> QB.Greatest(F("time"), m()),
+    "NullIf"   => () -> QB.NullIf(m(), F("time")),
+    "Case"     => () -> QB.Case(QB.When("grid" => 1, then = m()), default = F("time")),
+    "Cast"     => () -> QB.Cast(m(), "interval"),
+    "Lag"      => () -> QB.Lag(m(), over = over),
+  )
+  for (name, w) in wrapped
+    @testset "$name" begin
+      @test _cs_walk(w(), _CS_PG) == PormG.CInterval(true)
+      for expr in (w() * 1.5, w() / 2, w() * F("points"), F("points") * w())
+        err = _cs_err(() -> _cs_sql(expr, _CS_PG))
+        @test err isa PormG.QueryBuildError
+        @test occursin("A month or a year has no fixed length", _cs_plain(err))
+      end
+      # A whole factor scales a month exactly, so it still builds.
+      @test occursin(" * \$", _cs_sql(w() * 2, _CS_PG))
+    end
+  end
+  # A CTE column whose body projects a month product carries it (the maintainer's decision on #1583).
+  function cte(node)
+    body = CS.Cs_result.objects
+    body.values("id", "m" => m(), "t" => "time")
+    q = CS.Cs_result.objects
+    q.with("c" => body, join_field = "id" => "id", join_type = "INNER")
+    q.values("id", "v" => node)
+    return inspect_query(q; connection = _CS_PG)[:sql_text]
+  end
+  for expr in (PormG.CTE("c", "m") * 1.5, F("points") * PormG.CTE("c", "m"), PormG.CTE("c", "m") / 2)
+    err = _cs_err(() -> cte(expr))
+    @test err isa PormG.QueryBuildError
+    @test occursin("A month or a year has no fixed length", _cs_plain(err))
+  end
+  @test occursin("(\"R1_1\".\"m\" * \$", cte(PormG.CTE("c", "m") * 2))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1583: an interval PormG sees no month in is not refused, through a function either.
+# Expected on PostgreSQL: a stored `DurationField` under `Max`, `Coalesce` or a `Cast` to interval, a
+# CTE column over a stored duration, and a `Coalesce` of a month product with a column scaled by a whole
+# number render; the walk names the stored ones `CInterval()`, and a `Coalesce` of a month product
+# with a column `CInterval(true)` (either value may be the row's).
+# Why it matters: the rule is for the month PormG can see. A stored interval's type says nothing about
+# months, and refusing it would make `Max(F("time")) * 1.5` an error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1583: a stored interval is not refused, through a function either" begin
+  for expr in (QB.Max(F("time")) * 1.5, QB.Coalesce(F("time"), F("time")) / 2,
+               QB.Cast(F("time"), "interval") * 1.5, QB.Coalesce(F("grid") * Month(1), F("time")) * 2)
+    @test _cs_sql(expr, _CS_PG) isa String
+  end
+  @test _cs_walk(QB.Max(F("time")), _CS_PG) == PormG.CInterval()
+  @test _cs_walk(QB.Cast(F("time"), "interval"), _CS_PG) == PormG.CInterval()
+  @test _cs_walk(QB.Coalesce(F("grid") * Month(1), F("time")), _CS_PG) == PormG.CInterval(true)
+  body = CS.Cs_result.objects
+  body.values("id", "t" => "time")
+  q = CS.Cs_result.objects
+  q.with("c" => body, join_field = "id" => "id", join_type = "INNER")
+  q.values("id", "v" => PormG.CTE("c", "t") * 1.5)
+  @test occursin("(\"R1_1\".\"t\" * \$", inspect_query(q; connection = _CS_PG)[:sql_text])
+  # The flag is a fact about an expression, never a column's: `CInterval()` is still the column kind,
+  # and shows as it always did, so recorded kinds read the same.
+  @test PormG.CInterval() == PormG.CInterval(false)
+  @test repr(PormG.CInterval()) == "CInterval()" && repr(PormG.CInterval(true)) == "CInterval(true)"
 end

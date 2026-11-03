@@ -190,15 +190,23 @@ PormG.backend_renew_connection(pool::_Pool, conn::MySQL.Connection; read_only::B
   _open_connection(pool)
 
 # `isopen` is local and takes no lock: it sees a transport the driver already knows is closed, not a
-# server that dropped the connection silently. That one fails its next statement with 2006, a lost
-# connection, so the slot is renewed then (never retried). `MySQL.ping` would ask the server, but it
-# takes the connection lock and costs a round trip per acquire.
+# server that dropped the connection silently (the #1130 spike measured `true` for a connection the
+# server had killed). It runs at every checkout, so it stays free; asking the server is
+# `backend_ping`, which core calls only for a slot idle past `validate_after_idle` (#1548).
 function PormG.backend_is_alive(pool::_Pool, conn::MySQL.Connection)
   try
     return isopen(conn)
   catch
     return false
   end
+end
+
+# #1548: COM_PING, one round trip. It raises when the server closed the connection while it sat idle
+# (`wait_timeout`); core then renews the slot before the caller's statement is sent. It takes the
+# connection's lock, which is free at checkout: no statement runs on a slot the pool is handing out.
+function PormG.backend_ping(pool::_Pool, conn::MySQL.Connection)::Nothing
+  MySQL.ping(conn)
+  return nothing
 end
 
 # Asked through `fetch`, never by leasing a connection here: inside a transaction `fetch` uses the

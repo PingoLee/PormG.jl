@@ -56,6 +56,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no | no |
 | `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no | no |
 | `supported_server` | opening a connection: a backend with a version here refuses an older server when a connection opens | yes | yes | from 8.4 |
+| `idle_validation` | `validate_after_idle:` above 0 in `connection.yml`: a pooled connection idle longer than that is pinged before it is handed out, and renewed if the ping fails ([MySQL](mysql.md)). On by default on MySQL (60 s), whose checkout probe cannot see a connection the server closed. PostgreSQL's and SQLite's checkout probes already see a connection the server closed (PostgreSQL reads what the server sent, SQLite runs `SELECT 1`), so a value above 0 is refused there | no | no | yes |
 
 `with_advisory_lock` on SQLite without `on_missing_lock = :error` runs the body with no lock, and warns unless you pass `on_missing_lock = :ignore` ([Advisory Locks](advisory_lock.md)).
 

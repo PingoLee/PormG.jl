@@ -282,6 +282,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
     @testset "Direct-Handoff Pool Wait (#124)" include("unit/test_connection_pool_handoff.jl")
     @testset "Connect Runs Off the Pool Lock (#1540)" include("unit/test_connection_pool_connect_off_lock.jl")
+    @testset "An Idle MySQL Slot Is Pinged Before Use (#1548)" include("unit/test_connection_pool_idle_validation.jl")
     @testset "Idle-Reaping + Max-Lifetime Pool (#125)" include("unit/test_connection_pool_reaping.jl")
     @testset "Pool Stats Snapshot (#127)" include("unit/test_connection_pool_stats.jl")
     @testset "Connection-Leak Detection (#127)" include("unit/test_connection_pool_leak.jl")

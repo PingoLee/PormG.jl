@@ -96,9 +96,11 @@ end
   # the backend lacks it.
   e_pg = PormG._capability_error(_CtPg(), :arrays, "An ArrayField index")
   @test !occursin("does not support", _ct_msg(e_pg)) && occursin("no PostgreSQL renderer takes", _ct_msg(e_pg))
-  # PostgreSQL has every row but SQLite's own catalog (`table_list`), so nothing it renders is refused
-  # — on a server new enough for every version row (#1163).
-  @test all(f -> PormG._supports(_CtPg(), f; server_version = 180000) == (f !== :table_list), first.(PormG._BACKEND_FEATURES))
+  # PostgreSQL has every row but SQLite's own catalog (`table_list`) and MySQL's idle ping
+  # (`idle_validation`, #1548: a pool setting its checkout probe makes unnecessary), so nothing it
+  # renders is refused — on a server new enough for every version row (#1163).
+  @test all(f -> PormG._supports(_CtPg(), f; server_version = 180000) == (f ∉ (:table_list, :idle_validation)),
+            first.(PormG._BACKEND_FEATURES))
   @test !any(f -> PormG._supports(_CtOther(), f), first.(PormG._BACKEND_FEATURES))
   # A declaration a backend lacks is refused for any backend, not SQLite by name.
   arr = PormG.Models.ArrayField(PormG.Models.IntegerField())

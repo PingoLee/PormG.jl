@@ -745,7 +745,7 @@ end
 # Parse a seconds-valued pool setting from connection.yml. Returns `default` when the key is absent OR
 # the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
 # any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
-# leak_detection_threshold (#179).
+# leak_detection_threshold (#179) / validate_after_idle (#1548).
 function _config_secs(settings::PormGSettings, key::String, default::Float64 = 0.0)::Float64
   haskey(settings.db_config_settings, key) || return default
   v = settings.db_config_settings[key]
@@ -955,15 +955,25 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   end
 
   # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
-  # No-op when the respective keys are 0/absent. Both merge into one PoolMonitorState.
-  reap_on = idle_timeout > 0 || max_lifetime > 0
-  if reap_on || leak_detection_threshold > 0
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    reap_on &&
-      CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
-    leak_detection_threshold > 0 &&
-      CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
+  # No-op when the respective keys are 0/absent. All three merge into one PoolMonitorState.
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  # #1548: ping a connection idle past `validate_after_idle` seconds before it is handed out. Absent or
+  # unreadable, the engine's default: 60 on MySQL, off elsewhere. First, because above 0 on a backend
+  # without the feature it raises, and a refused configuration must not leave its pool installed: a
+  # second `load` would find it (`_already_loaded`) and run without the refusal. No pool is connected or
+  # monitored yet, so dropping it is all the undoing there is.
+  validate_after_idle = _config_secs(settings, "validate_after_idle", CP._default_validate_after_idle(settings.connections))
+  try
+    CP.enable_idle_validation!(settings.connections; after = validate_after_idle)
+  catch
+    settings.connections = nothing
+    rethrow()
   end
+  reap_on = idle_timeout > 0 || max_lifetime > 0
+  reap_on &&
+    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+  leak_detection_threshold > 0 &&
+    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
 
   return settings
 end
@@ -1236,7 +1246,7 @@ const VALID_CONNECTION_KEYS = (
   "sslmode", "sslrootcert", "sslcert", "sslkey",
   # Pool
   "pool_size", "pool_timeout", "idle_timeout", "max_lifetime",
-  "leak_detection_threshold", "fail_fast_on_connect",
+  "leak_detection_threshold", "fail_fast_on_connect", "validate_after_idle",
   # Backend behaviour
   "sqlite_split_read_write", "extensions", "postgres_driver",
   # Introspection (#749, #818): read by the migration code, never forwarded to the driver

@@ -9,6 +9,7 @@ import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, Por
 import PormG: PormGMySQL, _SQLEngine  # #1130: the MySQL marker, and every engine for the shared funnels
 import PormG: _backend_name  # #1129: an engine's name for a message, falling back to its type's name
 import PormG: _capability_error  # #1272: MySQL has no deferred foreign keys for without_foreign_keys
+import PormG: _supports, _require_feature  # #1548: the idle ping is a capability (MySQL)
 import PormG: @pormg_debug
 # #721: `PormG.sqlite_bind_value` (`value_repr.jl`) is included AFTER this module, so it is named
 # qualified inside a function body and resolved at call time — `Generator.jl`'s spelling.
@@ -28,7 +29,7 @@ import PormG: UnsafeMutationError
 # `SQLite.SQLiteException` / `LibPQ.Errors.*`.
 import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
-import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
+import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_ping, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
@@ -810,7 +811,9 @@ end
 # are older than `max_lifetime`, trimming the pool back toward its base `pool_size`. Reaping closes +
 # nils the slot IN PLACE (keeps available[i]=true, NEVER deleteat!), so #124's slot-index handoff and
 # #37's append-only `== ceiling` reasoning stay valid; it never touches a leased or a base slot.
-# When no pool has opted in (the default), every hook below is a single Atomic read — zero cost.
+# When no pool has opted in, every hook below is a single Atomic read — zero cost. A MySQL pool built from
+# connection.yml opts in by default (`validate_after_idle`, #1548), and from then on every pool's hooks
+# pay one registry lookup.
 
 mutable struct ReapConfig
   idle_timeout::Float64   # seconds; 0 = off
@@ -826,15 +829,16 @@ end
 mutable struct PoolMonitorState
   config::ReapConfig            # idle_timeout / max_lifetime (#125)
   leak_threshold::Float64       # seconds; 0 = off (#127)
+  validate_after_idle::Float64  # seconds idle before a checkout pings the slot; 0 = off (#1548)
   created_at::Vector{Float64}   # when the connection now in slot i was opened (#125)
   last_used::Vector{Float64}    # when slot i was last checked out / returned (== checkout time while leased)
   leak_warned::Vector{Bool}     # already warned for slot i's current lease (#127)
 end
 
-const _POOL_MONITOR = WeakKeyDict{Any, PoolMonitorState}()   # populated ONLY by enable_reaping!/enable_leak_detection!
+const _POOL_MONITOR = WeakKeyDict{Any, PoolMonitorState}()   # populated ONLY by the enable_*! functions
 const _POOL_MONITOR_LOCK = ReentrantLock()
-# Fast path: false (default — no pool opted in) → every hook returns immediately. Monotonic: set true by
-# the first enable_reaping!/enable_leak_detection!, never cleared. Lock order: pool.lock → _POOL_MONITOR_LOCK.
+# Fast path: false (no pool opted in) → every hook returns immediately. Monotonic: set true by the first
+# enable_reaping!/enable_leak_detection!/enable_idle_validation! above 0, never cleared. Lock order: pool.lock → _POOL_MONITOR_LOCK.
 const _MONITOR_ANY = Threads.Atomic{Bool}(false)
 const _REAP_INTERVAL = 15.0   # seconds between background sweeps (fixed)
 
@@ -857,7 +861,7 @@ function _monitor_state_for!(pool)::PoolMonitorState
       st === nothing || return st
       n = length(pool.connections)
       t = time()
-      st = PoolMonitorState(ReapConfig(0.0, 0.0), 0.0, fill(t, n), fill(t, n), fill(false, n))
+      st = PoolMonitorState(ReapConfig(0.0, 0.0), 0.0, 0.0, fill(t, n), fill(t, n), fill(false, n))
       _POOL_MONITOR[pool] = st
       return st
     end
@@ -880,8 +884,9 @@ end
 
 # Record that slot i was just checked out or returned: bump last_used and clear the leak warn so the
 # next lease starts fresh. Call UNDER pool.lock.
-function _monitor_note_touch!(pool, i::Int)
-  st = _monitor_state(pool); st === nothing && return
+_monitor_note_touch!(pool, i::Int) = _monitor_note_touch!(_monitor_state(pool), i)
+function _monitor_note_touch!(st::Union{PoolMonitorState, Nothing}, i::Int)
+  st === nothing && return
   if i <= length(st.last_used)
     st.last_used[i] = time()
     st.leak_warned[i] = false
@@ -937,6 +942,49 @@ function enable_leak_detection!(pool::_SQLEngine; threshold::Real = 0)
   st.leak_threshold = Float64(threshold)   # merge: reaping config (if any) preserved
   _MONITOR_ANY[] = true
   return pool
+end
+
+# The `validate_after_idle` a pool built from `connection.yml` gets when the key is absent (#1548): 60 s
+# where the backend has the feature (MySQL), well below the smallest common `wait_timeout`; off elsewhere.
+const DEFAULT_VALIDATE_AFTER_IDLE = 60.0
+_default_validate_after_idle(pool::_SQLEngine)::Float64 =
+  _supports(pool, :idle_validation) ? DEFAULT_VALIDATE_AFTER_IDLE : 0.0
+
+"""
+    enable_idle_validation!(pool; after) -> pool
+
+Ping a pooled connection that sat idle longer than `after` seconds before handing it out (#1548), and
+renew it **before** the caller's statement is sent if the ping fails. `after <= 0` turns it off. The
+idle time is the pool's own clock (`PoolMonitorState.last_used`, written at every checkout and
+return), so a busy slot is never pinged. The ping runs without the pool's lock (#1540).
+
+Only a backend with the `idle_validation` capability takes a threshold above 0 (MySQL, whose checkout
+probe is local and cannot see a connection the server closed past its `wait_timeout`); any other
+raises `BackendCapabilityError`. Called by `Configuration` with connection.yml `validate_after_idle`
+(60 s on MySQL when absent). The per-slot clocks are not reset, as for `enable_reaping!`.
+"""
+function enable_idle_validation!(pool::_SQLEngine; after::Real)
+  if after <= 0
+    st = _monitor_state(pool)
+    st === nothing || (st.validate_after_idle = 0.0)
+    return pool
+  end
+  _require_feature(pool, :idle_validation, "`validate_after_idle` above 0";
+                   why = "$(_backend_name(pool))'s checkout probe already sees a connection the server closed; " *
+                         "leave `validate_after_idle` out or set it to 0.")
+  st = _monitor_state_for!(pool)
+  st.validate_after_idle = Float64(after)   # merge: reaping and leak config (if any) preserved
+  _MONITOR_ANY[] = true
+  return pool
+end
+
+# Has the handle in slot i sat idle past the pool's `validate_after_idle` (#1548)? The answer decides
+# whether a checkout pings it first. Takes the state the caller already looked up (one registry lookup
+# per checkout). Call UNDER pool.lock. No monitor state, or a threshold of 0, is no.
+function _idle_past_threshold(st::Union{PoolMonitorState, Nothing}, i::Int)::Bool
+  st === nothing && return false
+  after = st.validate_after_idle
+  return after > 0 && i <= length(st.last_used) && (time() - st.last_used[i]) > after
 end
 
 # Scan LEASED slots for a lease held past the leak threshold and @warn once per culprit (#127). Directly
@@ -1282,6 +1330,59 @@ function _connect_reserved!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, last_co
   return new_conn
 end
 
+const _IDLE_RENEW = :__pormg_idle_renew__              # the idle ping failed: handle closed, slot reserved to connect into
+
+"""
+    _validate_idle!(pool, owned, i, conn) -> handle, `_CONNECT_LOST` or `_IDLE_RENEW`
+
+Ping `conn`, the handle of slot `i`, before its caller has it, because it sat idle past
+`validate_after_idle` (#1548). The scan took the handle out of the slot and left the slot leased and
+empty, held by this call as `owned[] == (i, nothing)`: a connect reservation (#1540). So the handle
+belongs to this call alone while the ping runs, and whatever ends the call, `acquire_connection`'s
+`_drop_owned!` frees an empty slot and never returns a handle the ping may have left half-read.
+Called **without** `pool.lock`: a ping is a round trip.
+
+- The ping answers: the handle goes back into the slot, and to the caller.
+- The ping fails: nothing was sent, so the slot is renewed before the caller's statement. The handle
+  is closed and the slot stays reserved for the caller's connect (`_IDLE_RENEW`). This is not a
+  statement failure: no retry decision is asked and no other slot is swept.
+- A cancellation during the ping (`_await_abandoned`): the handle is closed and the interrupt propagates.
+- Any other exit that leaves the handle uninstalled closes it too (the `finally`).
+
+`close_pool!` during the ping leaves the reserved slot leased, as it leaves a connect in progress, so a
+ping that answers reinstalls the handle; the `_CONNECT_LOST` arm is the identity check
+`_connect_reserved!` also makes, kept should that change.
+
+Not bounded by the acquire's `timeout_seconds`: MySQL.jl's `close` waits for the connection lock the
+ping holds, so nothing short of the driver's own read can end it (#1618). On a network path that drops packets
+without a reset, the ping waits for the kernel's retransmissions, as the statement did before #1548.
+"""
+function _validate_idle!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, conn)
+  # Set in the same locked step that puts the handle back, so no interrupt can fall between the two
+  # and have the `finally` close a handle the slot already holds.
+  installed = Base.RefValue{Bool}(false)
+  try
+    try
+      backend_ping(pool, conn)
+    catch e
+      _await_abandoned(e) && rethrow()
+      @debug "An idle $(_backend_name(pool)) connection failed its ping; renewing it before use" slot=i cause=_redacted_cause(e)
+      return _IDLE_RENEW
+    end
+    Base.lock(pool.lock) do
+      ours = owned[] === (i, nothing) && !pool.available[i] && pool.connections[i] === nothing
+      owned[] = nothing
+      if ours
+        pool.connections[i] = conn
+        installed[] = true
+      end
+    end
+    return installed[] ? conn : _CONNECT_LOST
+  finally
+    installed[] || _close_driver_handle!(pool, conn)
+  end
+end
+
 """
     acquire_connection(pool::PormGPostgres; timeout_seconds=nothing, max_retries=300)
     acquire_connection(pool::PormGMySQL; timeout_seconds=nothing, max_retries=300)
@@ -1422,7 +1523,18 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
           return (:retry, nothing)
         end
         if conn !== nothing && backend_is_alive(pool, conn)
-          _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
+          # Idle past `validate_after_idle`: ping it off the lock before the caller has it (#1548).
+          # The touch first, as for every lease: the leak scan (#127) must not read the idle time as
+          # a held connection while the ping runs.
+          st = _monitor_state(pool)
+          idle = _idle_past_threshold(st, i)
+          _monitor_note_touch!(st, i)                     # checkout timestamp (#125)
+          if idle
+            # The handle leaves the slot for the ping: leased and empty, like a connect reservation.
+            pool.connections[i] = nothing
+            owned[] = (i, nothing)
+            return (:validate, (i, conn))
+          end
           owned[] = nothing                                # the caller has it now (#1535)
           return (:got, conn)                          # live handle handed over — reuse as-is
         end
@@ -1444,7 +1556,19 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
         if pool.available[i]
           if pool.connections[i] !== nothing && backend_is_alive(pool, pool.connections[i])
             pool.available[i] = false
-            _monitor_note_touch!(pool, i)                  # checkout timestamp (#125)
+            st = _monitor_state(pool)                      # one registry lookup for both reads
+            idle = _idle_past_threshold(st, i)             # read before the touch resets the clock
+            _monitor_note_touch!(st, i)                    # checkout timestamp (#125)
+            if idle
+              # Idle past `validate_after_idle` (#1548): ping it off the lock before the caller has it.
+              # The handle leaves the slot for the ping, which stays leased and empty, reserved like a
+              # connect's (#1540): whatever ends this call, `_drop_owned!` frees an empty slot, so a
+              # handle the ping may have left half-read can never go back to the pool.
+              conn = pool.connections[i]
+              pool.connections[i] = nothing
+              owned[] = (i, nothing)
+              return (:validate, (i, conn))
+            end
             return (:got, pool.connections[i])
           end
           # Slot is empty or dead. Retire a handle the probe rejected instead of overwriting it
@@ -1502,6 +1626,16 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
     end
 
     kind = outcome[1]
+    if kind === :validate
+      # The ping, off the lock (#1548). A live answer is the caller's connection; a failed ping leaves
+      # the slot reserved, leased and empty, and the connect below renews it before any statement.
+      vi, vconn = outcome[2]::Tuple{Int, Any}
+      validated = _validate_idle!(pool, owned, vi, vconn)
+      validated === _CONNECT_LOST && continue
+      validated === _IDLE_RENEW || return validated
+      kind = :connect
+      outcome = (:connect, vi)
+    end
     if kind === :got
       return outcome[2]
     elseif kind === :connect

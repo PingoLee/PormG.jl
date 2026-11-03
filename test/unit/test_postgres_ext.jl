@@ -87,13 +87,14 @@ struct NetClosingError <: Exception end
   # LibPQ's marker-typed method for a Postgres.jl pool. The engine-only ones are not PostgreSQL's: the
   # two version probes, MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266), and
   # MySQL's bulk INSERT report and duplicate-key test (PostgreSQL counts rows and reads SQLSTATE, #1267),
-  # and MySQL's driver parameter limit (PostgreSQL's own is `backend_postgres_parameter_limit`, a row above).
+  # and MySQL's driver parameter limit (PostgreSQL's own is `backend_postgres_parameter_limit`, a row above),
+  # and MySQL's idle ping (#1548: only a backend with the `idle_validation` capability is ever pinged).
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
     (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id,
                                              :backend_insert_report, :backend_is_duplicate_key,
-                                             :backend_mysql_parameter_limit) &&
+                                             :backend_mysql_parameter_limit, :backend_ping) &&
      getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end

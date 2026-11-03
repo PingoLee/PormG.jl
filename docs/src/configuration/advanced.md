@@ -77,6 +77,19 @@ dev:
   You vouch that the block is safe to run twice; PormG does not check. Only `OperationalError` is retried, except a cancelled statement, on any engine (on PostgreSQL SQLSTATE `57014`: a `statement_timeout`, a `pg_cancel_backend`; on MySQL error 1317, a `KILL QUERY`, and 3024, `max_execution_time`), and each retry is logged as a warning. Inside a transaction `with_read_retry` raises `TransactionError` without running the block: retry the whole `atomic` block instead (see [Error types](../errors.md)). Library code that reads on an application's behalf, such as a session or task store, cannot know whether the application's own transaction is open around the call; it passes `inside_transaction = :run_once`, and inside a transaction the block then runs once, with no retry and no error, so a drop propagates and the application's `atomic` block rolls back as a whole. The default stays strict because application code that wraps a read inside its own transaction has misread what the helper can do.
 
   The remaining case is a connection dropped with no bytes delivered at all — a silently broken network path rather than a server that announced itself. Nothing can see that without a round trip, so it surfaces on first use as a socket failure: the pool recovers as above and the statement raises. Bound how long a connection can sit in that state with the `max_lifetime` reaper.
+- **Idle validation (`validate_after_idle`, MySQL):** MySQL's checkout probe is local: it sees a connection the driver already knows is closed, not one the server closed while it sat idle in the pool past its `wait_timeout` (8 hours by default, often less on a hosted server). So a MySQL pool pings a connection that sat idle longer than `validate_after_idle` seconds before handing it out (one COM_PING round trip). If the ping fails, the pool opens a new connection in that slot **before** your statement is sent, so the statement runs on the new one and nothing raises. A failed ping counts as no statement failure, and nothing is retried. A busy connection, one returned to the pool less than `validate_after_idle` seconds ago, is handed out without a ping. The default is 60 seconds; keep it below the server's `wait_timeout`, or set `0` to turn the ping off:
+
+  ```yaml
+  dev:
+    adapter: MySQL
+    database: 'formula1'
+    pool_size: 10
+    validate_after_idle: 30   # ping a connection idle > 30s before handing it out (default 60; 0 = off)
+  ```
+
+  The ping runs without holding the pool's lock: other callers borrow and return connections while it waits, and the connection being pinged counts as `in_use` in `pool_stats`. A Ctrl-C during the ping closes that connection rather than returning it. The ping is not bounded by the checkout's `timeout_seconds` or `pool_timeout`: on a network path that drops packets without a reset (a firewall or NAT that forgot the connection), it waits for the kernel's TCP retransmissions to give up, which takes minutes, as the statement did without the ping ([#1618](https://github.com/PingoLee/PormG.jl/issues/1618)). If the server cannot be reached at all, the new connection fails too: the checkout then retries the connect until its deadline and raises `PoolConnectError`, where without the ping the statement raised `OperationalError` at once.
+
+  PostgreSQL and SQLite have no such setting, so a `validate_after_idle` above `0` there raises `BackendCapabilityError` (`idle_validation`) when the configuration loads. Their checkout probe already sees a connection the server closed: PostgreSQL's reads what the server sent, SQLite's runs `SELECT 1` (see *Dropped connections* above). Neither sends a round trip, so a path that dropped silently still surfaces at the first statement there.
 - **Health snapshot (`pool_stats`):** `pool_stats` (exported) returns a `NamedTuple` for debugging saturation — pass a pool object or a connection key/path:
 
   ```julia

@@ -73,10 +73,9 @@ function _ekr_observe(id::String)
   label, base, build, ctx = _ekr_cell(id)
   q, name = ekm_query(M, base, build, ctx; prep! = get(EKM_PREP, label, nothing))
   q.filter(EKM_PK[base] => _EKR_ROW[base])
-  # The read kind from a build of its own: `list()` builds a copy, so its record never reaches `q`.
-  probe = deepcopy(q)
-  PormG.QueryBuilder.query(probe; show_query = :sql)
-  kind = get(probe.object.projection_kinds, name, nothing)
+  # The read kind from a build of its own, read off the build's instruction (#1624: the build writes
+  # nothing into `q`).
+  kind = get(PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds, name, nothing)
   v = only(q.list())[name]
   read = kind === nothing ? nothing : replace(string(kind), "PormG.Kernel." => "")
   # #1439: an array prints its element type qualified or not by what `Main` has `using`-ed

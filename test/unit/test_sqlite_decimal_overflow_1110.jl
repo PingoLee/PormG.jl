@@ -57,12 +57,12 @@ function err1110(f)
   return nothing
 end
 
-# The projection kinds a built query records, and the parsers the read terminals pick from them.
+# The projection kinds a built query records, and the parsers the read terminals pick from them: the
+# build's instruction, which carries both (#1624: the build no longer writes them into the handler).
 function built1110(mod, build!)
   q = mod.Driver.objects
   build!(q)
-  PormG.QueryBuilder.query(q; show_query = :sql)
-  return q
+  return PormG.QueryBuilder._render_select(q; show_query = :sql).instruction
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,16 +126,16 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1110: the read view records a declared numeric(p, s) on SQLite, and the parser names the alias" begin
   sl = built1110(M1110SL, q -> q.values("driverid", "x" => _FN1110.Cast("driverid", "numeric(2,0)")))
-  @test sl.object.projection_kinds[:x] == PormG.CDecimal(2, 0)
+  @test sl.projection_kinds[:x] == PormG.CDecimal(2, 0)
   pg = built1110(M1110PG, q -> q.values("driverid", "x" => _FN1110.Cast("driverid", "numeric(2,0)")))
-  @test pg.object.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
+  @test pg.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
 
   wide = built1110(M1110SL, q -> q.values("driverid", "x" => _FN1110.Cast("driverid", "numeric(20,2)")))
-  @test wide.object.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
+  @test wide.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
 
   # An output_field that declares one is read the same way.
   co = built1110(M1110SL, q -> q.values("driverid", "c" => _FN1110.Coalesce("driverid", 0; output_field = "numeric(4,2)")))
-  @test co.object.projection_kinds[:c] == PormG.CDecimal(4, 2)
+  @test co.projection_kinds[:c] == PormG.CDecimal(4, 2)
 
   # The parser the read terminals (`list`, `DataFrame`) pick names the projection's alias.
   parsers = PormG.QueryBuilder._projection_parsers(sl, _SL1110)
@@ -147,9 +147,9 @@ end
 
   # The width SQLite stores exactly is the limit: 15 digits are checked, 16 are not.
   at15 = built1110(M1110SL, q -> q.values("driverid", "x" => _FN1110.Cast("driverid", "numeric(15,2)")))
-  @test at15.object.projection_kinds[:x] == PormG.CDecimal(15, 2)
+  @test at15.projection_kinds[:x] == PormG.CDecimal(15, 2)
   at16 = built1110(M1110SL, q -> q.values("driverid", "x" => _FN1110.Cast("driverid", "numeric(16,2)")))
-  @test at16.object.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
+  @test at16.projection_kinds[:x] == PormG.CDecimal(nothing, nothing)
 
   # A row a write reads back names its field (`create()`'s read-back, `_row_to_field_keyed_dict`).
   model = M1110SL.Constructor_results
@@ -191,18 +191,18 @@ end
         q.values("driverid", "w" => "g__v", "c" => _FN1110.Coalesce("g__v", 0),
                  "l" => _FN1110.Least("g__v", 1), "m" => _FN1110.Max("g__v"))
       end)
-      @test q.object.projection_kinds[:w] == plain
-      @test q.object.projection_kinds[:c] == PormG.CDecimal(nothing, nothing)
-      @test q.object.projection_kinds[:l] == PormG.CDecimal(nothing, nothing)
-      @test q.object.projection_kinds[:m] == PormG.CDecimal(nothing, nothing)
+      @test q.projection_kinds[:w] == plain
+      @test q.projection_kinds[:c] == PormG.CDecimal(nothing, nothing)
+      @test q.projection_kinds[:l] == PormG.CDecimal(nothing, nothing)
+      @test q.projection_kinds[:m] == PormG.CDecimal(nothing, nothing)
 
       sub() = (inner = mod.Driver.objects;
                inner.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"));
                inner.values("t" => cast());
                PormG.QueryBuilder.Subquery(inner))
       s = built1110(mod, q -> q.values("driverid", "w" => sub(), "c" => _FN1110.Coalesce(sub(), 0)))
-      @test s.object.projection_kinds[:w] == plain
-      @test s.object.projection_kinds[:c] == PormG.CDecimal(nothing, nothing)
+      @test s.projection_kinds[:w] == plain
+      @test s.projection_kinds[:c] == PormG.CDecimal(nothing, nothing)
     end
   end
 end
@@ -223,8 +223,7 @@ end
                          "f" => _FN1110.Lead("points", default = PormG.QueryBuilder.F("points"), over = over),
                          "z" => _FN1110.Lag("points", default = missing, over = over),
                          "n" => _FN1110.Lag("points", over = over));
-                PormG.QueryBuilder.query(q; show_query = :sql);
-                q.object.projection_kinds)
+                PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds)
   sl, pg = kinds(M1110SL), kinds(M1110PG)
   @test sl[:d] == PormG.CDecimal(nothing, nothing)
   @test sl[:f] == PormG.CDecimal(nothing, nothing)

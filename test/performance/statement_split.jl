@@ -138,10 +138,11 @@ function prepare(label::String, model_handler::Function, pk::String, ::Type{T}) 
   id = first(ids)
   # The statement `get` runs: its filter plus the `limit(2)` probe (`_get` in execution_read.jl).
   q = model_handler().filter(pk => id).limit(2)
-  built_q = deepcopy(q)
-  settings, connection, _ = QB.get_settings(built_q)
-  sql = QB.query(built_q, connection = connection, show_query = :execute)
-  params = built_q.object.parameters
+  settings, connection, _ = QB.get_settings(q)
+  # #1624: the build writes nothing into `q`; its SQL and parameters are the render's.
+  rendered = QB._render_select(q; connection = connection, show_query = :execute)
+  sql = rendered.sql
+  params = rendered.instruction.parameters
   result, built, conn = QB._execute_select(q)
   parsers = QB._projection_parsers(built, conn)
   model = q.object.model
@@ -174,10 +175,12 @@ bare_closure(c, conn) = () -> PormG.backend_execute(c.connection, conn, c.sql, c
 
 # ── In situ: `get`'s own body, with the thread CPU clock read between its steps (see the header) ──
 #
-# `_get` → `_list_owned` → `_execute_select_owned` (execution_read.jl) and `_list_owned(q, T)`
+# `_get` → `_list_owned` → `_execute_select` (execution_read.jl) and `_list_owned(q, T)`
 # (typed_read.jl), step by step: since #1589 the handler is copied once, in `_get`, and the typed
-# projection and the build run on that copy. When any of them changes, change this copy with it: the
-# report's gap column is what notices.
+# projection and the build run on that copy; since #1624 that copy is shallow (`_terminal_copy`), the
+# build writes nothing (`_render_select` returns the SQL and the instruction), and the messages are
+# rendered only when thrown. When any of them changes, change this copy with it: the report's gap
+# column is what notices.
 const _CLOCK_THREAD_CPUTIME_ID = Cint(3)   # Linux <time.h>
 function thread_cpu_ns()::Int64
   ts = Ref(_Timespec(0, 0))
@@ -194,32 +197,31 @@ mutable struct InSitu
 end
 InSitu() = InSitu(0, 0, 0)
 
-_finish(::Val{:row}, result, q, connection) =
-  [QB.PormGRow(r, q.object.model) for r in QB._rows_from_result(result, QB._projection_parsers(q, connection))]
-_finish(::Type{T}, result, q, connection) where T =
-  QB._typed_rows(T, result, QB._projection_parsers(q, connection), QB._TypedReadSite("a typed read into $(T)", q.object.model.name))
+_finish(::Val{:row}, result, q, instruction, connection) =
+  [QB.PormGRow(r, q.object.model) for r in QB._rows_from_result(result, QB._projection_parsers(instruction, connection))]
+_finish(::Type{T}, result, q, instruction, connection) where T =
+  QB._typed_rows(T, result, QB._projection_parsers(instruction, connection), QB._TypedReadSite("a typed read into $(T)", q.object.model.name))
 _shape(q, ::Val{:row}) = q
 _shape(q, ::Type{T}) where T = (QB._check_typed_read_target(T); QB._typed_projection!(q, T))
 
 function get_in_situ(c, format, acc::InSitu)
   t0 = thread_cpu_ns()
-  # _get: the one copy, its filter and probe, and the message text (rendered before the build)
-  q = deepcopy(c.model_handler())
+  # _get: the one (shallow) copy, its filter and probe
+  q = QB._terminal_copy(c.model_handler())
   QB._filter!(q.object, (c.pk => rand(c.ids),))
   q = q.limit(QB._probe_limit(q.object.limit, 2))
-  model_name = q.object.model.name
-  filter_repr = isempty(q.object.filter) ? "(none)" : join(QB._get_filter_repr.(q.object.filter), ", ")
-  # _list_owned → (the typed projection, on the same copy) → _execute_select_owned
+  # _list_owned → (the typed projection, on the same copy) → _execute_select
   q = _shape(q, format)
   settings, connection, _ = QB.get_settings(q)
-  sql = QB.query(q, connection = connection, show_query = :execute)
+  rendered = QB._render_select(q; connection = connection, show_query = :execute)
+  QB._refuse_lock_outside_transaction(q, rendered.instruction)
   t1 = thread_cpu_ns()
-  result = PormG.ConnectionPool.fetch(settings, sql, q.object.parameters)
+  result = PormG.ConnectionPool.fetch(settings, rendered.sql, rendered.instruction.parameters)
   t2 = thread_cpu_ns()
-  rows = _finish(format, result, q, connection)
-  # _get's checks after the read
-  isempty(rows) && throw(QB.DoesNotExist(model_name, filter_repr))
-  length(rows) > 1 && throw(QB.MultipleObjectsReturned(model_name, length(rows), filter_repr))
+  rows = _finish(format, result, q, rendered.instruction, connection)
+  # _get's checks after the read; the messages are rendered only when one is thrown
+  length(rows) == 1 || throw(isempty(rows) ? QB.DoesNotExist(q.object.model.name, QB._filters_repr(q)) :
+                                             QB.MultipleObjectsReturned(q.object.model.name, length(rows), QB._filters_repr(q)))
   t3 = thread_cpu_ns()
   acc.build += t1 - t0
   acc.execute_thread += t2 - t1

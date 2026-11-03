@@ -85,7 +85,7 @@ end
 function _ccf_fields(q; conn)
   fields = Ref{Any}(nothing)
   PormG.QueryBuilder.query(q; show_query = :sql, connection = conn,
-                           built = instr -> (fields[] = instr.object.ctes["r"]["model"].fields))
+                           built = instr -> (fields[] = PormG.QueryBuilder._cte_state(instr, "r").model.fields))
   return fields[]
 end
 _ccf_params(pair; conn) = inspect_query(_ccf_query(pair); connection = conn)[:parameters]

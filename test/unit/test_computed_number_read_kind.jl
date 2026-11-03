@@ -62,8 +62,8 @@ const _CN_ENGINES = ((:postgres, CnPGModels), (:sqlite, CnSLModels))
 function _cn_read_kind(model, node)
   q = model.objects
   q.values("v" => node)
-  _CN_QB.query(q; show_query = :sql)
-  return get(q.object.projection_kinds, :v, nothing)
+  q_kinds = _CN_QB._render_select(q; show_query = :sql).instruction.projection_kinds
+  return get(q_kinds, :v, nothing)
 end
 
 const _CN_FLOAT = PormG.CFloat64()
@@ -177,8 +177,8 @@ end
              join_field = "resultid" => "resultid", join_type = "INNER")
       q.values("resultid", "v" => "g__a")
       instr = Ref{Any}(nothing)
-      _CN_QB.query(q; show_query = :sql, built = i -> (instr[] = i))
-      @test q.object.projection_kinds[:v] == _CN_FLOAT
+      q_kinds = _CN_QB._render_select(q; show_query = :sql, built = i -> (instr[] = i)).instruction.projection_kinds
+      @test q_kinds[:v] == _CN_FLOAT
       handle = instr[].object.values[findfirst(v -> _CN_QB._projection_output_name(v) == "v", instr[].object.values)].field
       @test handle isa _CN_QB.CTEReference
       @test _CN_QB._render_side_kind(handle, instr[]) === nothing
@@ -189,8 +189,8 @@ end
       s = mod.Result.objects
       s.values("v" => _CN_QB.Subquery(inner))
       sinstr = Ref{Any}(nothing)
-      _CN_QB.query(s; show_query = :sql, built = i -> (sinstr[] = i))
-      @test s.object.projection_kinds[:v] == _CN_FLOAT
+      s_kinds = _CN_QB._render_select(s; show_query = :sql, built = i -> (sinstr[] = i)).instruction.projection_kinds
+      @test s_kinds[:v] == _CN_FLOAT
       node = only(sinstr[].object.values).field
       @test _CN_QB._render_side_kind(node, sinstr[]) === nothing
 
@@ -321,8 +321,8 @@ end
              join_field = "resultid" => "resultid", join_type = "INNER")
       q.values("resultid", "v" => "g__a")
       instr = Ref{Any}(nothing)
-      _CN_QB.query(q; show_query = :sql, built = i -> (instr[] = i))
-      @test q.object.projection_kinds[:v] == want
+      q_kinds = _CN_QB._render_select(q; show_query = :sql, built = i -> (instr[] = i)).instruction.projection_kinds
+      @test q_kinds[:v] == want
       handle = instr[].object.values[findfirst(v -> _CN_QB._projection_output_name(v) == "v", instr[].object.values)].field
       @test _CN_QB._render_side_kind(handle, instr[]) == binder
 
@@ -332,8 +332,8 @@ end
       s = mod.Result.objects
       s.values("v" => _CN_QB.Subquery(inner))
       sinstr = Ref{Any}(nothing)
-      _CN_QB.query(s; show_query = :sql, built = i -> (sinstr[] = i))
-      @test s.object.projection_kinds[:v] == want
+      s_kinds = _CN_QB._render_select(s; show_query = :sql, built = i -> (sinstr[] = i)).instruction.projection_kinds
+      @test s_kinds[:v] == want
       @test _CN_QB._render_side_kind(only(sinstr[].object.values).field, sinstr[]) == binder
     end
   end

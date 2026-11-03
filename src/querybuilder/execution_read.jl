@@ -106,11 +106,10 @@ inspection = q |> inspect_query()
 ```
 """
 function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, _SQLEngine} = nothing, operation::Union{Nothing, Symbol} = nothing)
-  # #43: inspection must not mutate the caller. The dry-runs below (query/insert/update)
-  # write back onto the handler they build — q.object.parameters, the transient CTE "model"
-  # into q.object.ctes, and update()'s auto-now fields into q.object.insert. Build on a copy
-  # so inspect_query() matches the execution read path (query_list), which already copies.
-  q = deepcopy(q)
+  # #43: inspection must not mutate the caller. A SELECT dry run builds on the caller's handler
+  # itself, because the build writes nothing (#1624). The insert/update/delete dry runs still write
+  # into what they are handed — `insert()` fills defaults and `update()` its auto-now fields into
+  # `q.object.insert` — so they get a copy, below.
 
   # Force builder to run without execution
   # We reuse the internal query building logic
@@ -131,9 +130,9 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, _SQLEngin
   end
   
   # 2. Delegate to appropriate dry-run
-  if operation === :select
-      return query(q, show_query=:inspection, connection=conn)
-  elseif operation === :insert
+  operation === :select && return query(q, show_query=:inspection, connection=conn)
+  q = deepcopy(q)
+  if operation === :insert
       return insert(q.object, show_query=:inspection, connection=conn)
   elseif operation === :update
       return update(q.object, show_query=:inspection, connection=conn)
@@ -325,11 +324,55 @@ function _lock_join_label(instruction::SQLInstruction, row::JoinRow)::Tuple{Stri
     "; on(\"$(path)\", join_type = \"INNER\") locks it too$(inner_tail)")
 end
 
-function query(q::SQLObjectHandler; 
+function query(q::SQLObjectHandler;
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, _SQLEngine} = nothing,
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
-  cte::Union{Nothing, CTEDict} = nothing,
+  outer::Union{Nothing, SQLInstruction} = nothing,
+  show_query::Symbol = :execute,
+  built::Union{Nothing,Function} = nothing,
+  semi_join::Bool = false,
+  cte_body::String = "",
+  cte_body_correlated::Bool = false)
+  rendered = _render_select(q; table_alias, connection, parameters, outer, show_query, built, semi_join,
+                            cte_body, cte_body_correlated)
+  instruction = rendered.instruction
+  if show_query !== :execute
+    return _show_query_result(show_query, rendered.sql, instruction.connection, q.object.model.name, :select;
+                            parameters=instruction.parameters)
+  end
+  _refuse_lock_outside_transaction(q, instruction)
+  return rendered.sql
+end
+
+# #26: a locked read executed OUTSIDE a transaction is a footgun — the lock is taken then
+# immediately released at autocommit. Fail loudly (Django's TransactionManagementError analog).
+# Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE without a
+# live transaction. On both engines (#1237): SQLite takes no row lock, but inside a transaction its
+# writers are serialized, which is the exclusion the caller asked for — and a missing transaction
+# is a bug in the call that would otherwise surface only in production on PostgreSQL.
+# The transaction must be on the pool this read runs on (#831): a transaction open on another
+# database does not hold this lock. Inside one, `build`'s `ensure_transaction_scope` already
+# refuses a read routed to a pool with no transaction (#838), so what reaches here unguarded is
+# a read with no transaction open anywhere.
+function _refuse_lock_outside_transaction(q::SQLObjectHandler, instruction::SQLInstruction)
+  if q.object.for_update !== nothing && transaction_connection_for(instruction.connection) === nothing
+    throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic): under autocommit a locked read holds nothing once it returns."))
+  end
+  return nothing
+end
+
+# #1624 — the SELECT render, which WRITES NOTHING into `q`: it returns the SQL and the build's
+# instruction, and the instruction carries what the build produced — the parameter collector
+# (`instruction.parameters`), the kind of each projection (`instruction.projection_kinds`, #564), the
+# CTE state (`instruction.cte_state`) — where `query()` used to write the first two back into
+# `q.object` and the CTE state into `q.object.ctes`. That write-back is why every read deep-copied the
+# caller's handler (#43, #199), and why a membership subquery's handler, which is not copied, was
+# written into (#1625). `query()` is this plus the inspection modes and the execute-only checks.
+function _render_select(q::SQLObjectHandler;
+  table_alias::Union{Nothing, SQLTableAlias} = nothing,
+  connection::Union{Nothing, _SQLEngine} = nothing,
+  parameters::Union{Nothing, AbstractPormGParam} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
   show_query::Symbol = :execute,
   # #929: called with the inner build's instruction right after `build()`, while its memos still hold
@@ -367,14 +410,15 @@ function query(q::SQLObjectHandler;
   # Build WITH clause - passes the SAME parameters object
   # CTE context is set inside build_cte_clause
   !is_subquery && set_context!(parameters, :cte)
-  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias; correlated = outer !== nothing)
+  with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias; correlated = outer !== nothing)
 
   @pormg_debug false
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
-                      semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated)
+                      semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated,
+                      cte_state=cte_state)
   built === nothing || built(instruction)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
@@ -385,11 +429,6 @@ function query(q::SQLObjectHandler;
     throw(QueryBuildError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
   end
 
-  if cte !== nothing
-    @pormg_debug false
-    _build_cte_custom_model(cte, instruction)
-  end
-  
   # Quote table name and alias to prevent SQL injection
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)  
@@ -483,30 +522,10 @@ function query(q::SQLObjectHandler;
     end
   end
 
-  # Store the final parameters object with all CTEs + main query parameters
-  q.object.parameters = instruction.parameters
-  # #564 — and what each result column IS, for the read path. Written back beside `parameters` for
-  # the same reason: both are per-build artifacts the caller needs after the build has finished.
-  q.object.projection_kinds = instruction.projection_kinds
-
-  if show_query !== :execute
-    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
-                            parameters=instruction.parameters)
-  end
-  # #26: a locked read executed OUTSIDE a transaction is a footgun — the lock is taken then
-  # immediately released at autocommit. Fail loudly (Django's TransactionManagementError analog).
-  # Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE without a
-  # live transaction. On both engines (#1237): SQLite takes no row lock, but inside a transaction its
-  # writers are serialized, which is the exclusion the caller asked for — and a missing transaction
-  # is a bug in the call that would otherwise surface only in production on PostgreSQL.
-  # The transaction must be on the pool this read runs on (#831): a transaction open on another
-  # database does not hold this lock. Inside one, `build`'s `ensure_transaction_scope` already
-  # refuses a read routed to a pool with no transaction (#838), so what reaches here unguarded is
-  # a read with no transaction open anywhere.
-  if q.object.for_update !== nothing && transaction_connection_for(instruction.connection) === nothing
-    throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic): under autocommit a locked read holds nothing once it returns."))
-  end
-  return resposta
+  # #1624: nothing is written back into `q`. The parameters and the projection kinds are the
+  # instruction's (`instruction.parameters`, `instruction.projection_kinds`), and the caller reads them
+  # there.
+  return (sql = resposta, instruction = instruction)
 end
 """
     show_query(q::SQLObjectHandler, mode::Symbol = :sql)
@@ -529,14 +548,14 @@ println(show_query(query))              # SELECT "Tb"."forename" … WHERE "Tb".
 params = show_query(query, :params)     # ["British"]
 ```
 
-Inspection builds on a `deepcopy`, so it never mutates the query you pass (#43) — the same chain
-can be inspected and then executed.
+Inspection writes nothing into the query you pass (#43, #1624) — the same chain can be inspected
+and then executed.
 
 For `INSERT`/`UPDATE`/`DELETE`, pass `show_query=` to the terminal method itself
 (`query.delete(show_query = :sql)`); this function always renders a `SELECT`. Use
 [`inspect_query`](@ref) when you want the metadata `Dict` with an explicit operation override.
 """
-show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(deepcopy(q); show_query=mode)
+show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)   # #1624: no copy, the build writes nothing
 
 # ---
 # Count or check if exists
@@ -725,7 +744,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   # COUNT(DISTINCT *)), so no subquery is needed for this form.
   if column !== nothing
     _refuse_sliced(oq.object, "count(column)", "the column is counted over every matching row, not over the slice")
-    cq = deepcopy(oq)
+    cq = _terminal_copy(oq)   # #1624: shallow; the build writes nothing
     cq.object.order = []
     cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
     cq.object.limit = nothing
@@ -733,14 +752,14 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # No `__` in the alias: `_values!` refuses one (#757). The result is read positionally below.
     _values!(cq.object, Any["pormg_count" => Count(String(column); distinct = distinct)])
     show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
-    rows = _list_owned(cq, Val(:dict))   # #1589: `cq` is this call's own copy
+    rows = _list_owned(cq, Val(:dict))
     return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))
   end
 
   # Resolve settings
   settings, connection, conn_key = get_settings(oq)
   
-  q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
+  q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
   # #1066: the projection is kept when it decides which rows `list()` returns — see
   # `_projection_shapes_rows`. Otherwise it is cleared, and a plain `values(...)` counts as before.
   is_distinct = distinct || q.object.distinct
@@ -755,12 +774,12 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
 
   # Build WITH clause first — CTE params land in :cte bucket before main params.
   set_context!(parameters, :cte)
-  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+  with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
   # Main query continues from where CTE numbering left off. #1002: `count()` counts the rows `list()`
   # returns, so a projection cleared above still declares the joins it reaches.
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
-                      distinct_rows = is_distinct,
+                      cte_state = cte_state, distinct_rows = is_distinct,
                       declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
   _refuse_constant_terminal(instruction, keep_values, "count()")
   
@@ -851,7 +870,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
   end
   _refuse_sliced(oq.object, "aggregate()", "the aggregate is computed over every matching row, not over the slice")
 
-  cq = deepcopy(oq)
+  cq = _terminal_copy(oq)   # #1624: shallow; the build writes nothing
   cq.object.order = []
   cq.object.limit = nothing
   cq.object.offset = 0
@@ -865,7 +884,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
     return query(cq; show_query=show_query)
   end
 
-  rows = _list_owned(cq, Val(:dict))   # #1589: `cq` is this call's own copy
+  rows = _list_owned(cq, Val(:dict))
   # A SQL aggregate over an empty set still returns one row (COUNT→0, others→NULL); guard anyway.
   row = isempty(rows) ? Dict{Symbol,Any}() : Base.first(rows)
   return NamedTuple{Tuple(aliases)}(Tuple(get(row, a, nothing) for a in aliases))
@@ -876,7 +895,7 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     # Resolve settings
     settings, connection, conn_key = get_settings(oq)
     
-    q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
+    q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
     # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
     keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
     _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
@@ -889,13 +908,13 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
 
     # Build WITH clause first — CTE params land in :cte bucket before main params.
     set_context!(parameters, :cte)
-    with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+    with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
     # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
     # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
     # still declares its joins.
     instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
-                        semi_join = q.object.offset <= 0,
+                        cte_state = cte_state, semi_join = q.object.offset <= 0,
                         declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
     _refuse_constant_terminal(instruction, keep_values, "exists()")
     # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
@@ -940,35 +959,39 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
   end
 end
 
-# #564 — the shared body of `query_list`, returning the BUILT handler alongside the result.
-#
-# `query()` writes its per-build artifacts — `parameters`, and now `projection_kinds` — onto the copy
-# it was handed, and that copy is local to this function. `query_list` therefore had no way to hand
-# the kind map to `_list_raw`, which holds the ORIGINAL handler: the map went out of scope the
-# moment the result came back. Splitting the body is what closes that, and it changes nothing about
-# `query_list` itself, whose signature and behaviour are untouched.
+# #564 — the shared body of `query_list`, returning the build's instruction alongside the result: the
+# read path needs the kind of each projection (`instruction.projection_kinds`) after the build to pick
+# its parsers (`_projection_parsers`). Until #1624 the build wrote that map back onto the handler,
+# and this function returned the copy it had built on; now the instruction carries it.
 #
 # #612: the docstring that used to sit above this comment belongs to `query_list`, not to
 # this helper — its example ends `query |> DataFrame`. The split left it stranded here, so
 # BOTH functions were undocumented: this one by accident, `query_list` by omission.
-function _execute_select(objct::SQLObjectHandler)
-  # #43: build on a copy so the read path never mutates the caller's handler.
-  # query() writes back q.object.parameters and materializes the per-build CTE
-  # "model" into q.object.ctes; doing that on `objct` would give .list()/.first()
-  # a hidden write side effect and make .copy() aliasing corrupt re-execution.
-  # deepcopy(SQLObjectQuery) now clones CTE state independently (see _copy_ctes),
-  # so the copy is fully isolated. Mirrors _count/_exists/get, which already copy.
-  return _execute_select_owned(deepcopy(objct))
+#
+# #1624: no copy. The read path never writes into the caller's handler (#43, #199) because the build
+# writes into nothing (`_render_select`): it used to write back `parameters`, the projection kinds and
+# the CTE state, and this function deep-copied the handler for that reason. It returns the build's
+# instruction, which carries what the read needs afterwards (`_projection_parsers`).
+function _execute_select(q::SQLObjectHandler)
+  settings, connection, conn_key = get_settings(q)
+  rendered = _render_select(q, connection=connection, show_query=:execute)
+  _refuse_lock_outside_transaction(q, rendered.instruction)
+  return fetch(settings, rendered.sql, rendered.instruction.parameters), rendered.instruction, connection
 end
 
-# #1589 — the same read on a handler the CALLER OWNS: a copy a terminal has already made (`_get`,
-# `_first`, `_typed_query`, …) and holds no one else. The build writes into it (see above), which is
-# why only a terminal that made the copy itself may hand it here: copying it a second time bought
-# nothing, and it was ~27 µs of a ~200 µs primary-key read on Postgres.jl (#41).
-function _execute_select_owned(q::SQLObjectHandler)
-  settings, connection, conn_key = get_settings(q)
-  sql = query(q, connection=connection, show_query=:execute)
-  return fetch(settings, sql, q.object.parameters), q, connection
+# #1624 — the copy a read terminal makes so its OWN changes (a limit, an ordering, inline filters, a
+# projection) never reach the caller's handler (#43, #199). Since the build writes nothing, it no longer
+# needs to be deep: a new handler and query struct, every slot shared with the caller's, and fresh
+# containers only where a terminal changes one in place — `filter` (`_get`'s inline filters are pushed
+# by `_filter!`) and `order` (`_last` inverts it with `map!`). Every other change a terminal makes
+# assigns a slot of the new struct (`limit`, `offset`, `distinct`, the vector `_values!` and
+# `_order_by!` replace). One `deepcopy(handler)` was ~27 µs of a primary-key read on Postgres.jl (#41).
+function _terminal_copy(h::SQLObjectHandler)::SQLObjectHandler
+  q = h.object
+  return ObjectHandler(object = SQLObjectQuery(model=q.model, connect_key=q.connect_key, values=q.values,
+    filter=copy(q.filter), insert=q.insert, limit=q.limit, offset=q.offset, order=copy(q.order), group=q.group,
+    having=q.having, list_joins=q.list_joins, distinct=q.distinct, for_update=q.for_update, ctes=q.ctes,
+    custom_join=q.custom_join, alias_join=q.alias_join, parameters=nothing, projection_kinds=q.projection_kinds))
 end
 
 """
@@ -987,12 +1010,12 @@ df = query |> DataFrame
 ```
 """
 function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
-  show_query !== :execute && return _query_list_owned(deepcopy(objct), show_query)
+  show_query !== :execute && return _show_select(objct, show_query)
   return first(_execute_select(objct))
 end
 
-# #1589 — the inspection render on a handler the caller owns (see `_execute_select_owned`).
-function _query_list_owned(q::SQLObjectHandler, show_query::Symbol)
+# The inspection render (`show_query = :sql`, `:dict`, …). No copy since #1624: the build writes nothing.
+function _show_select(q::SQLObjectHandler, show_query::Symbol)
   settings, connection, conn_key = get_settings(q)
   return query(q, connection=connection, show_query=show_query)
 end
@@ -1052,9 +1075,9 @@ end
 # PostgreSQL only INTERVAL (#581 pins that one type across drivers), an ARRAY (#28) and a computed
 # number that means a float (#1121) have a parser, so a query projecting none of those returns
 # `nothing` after one dispatch per projection.
-function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
+function _projection_parsers(built::SQLInstruction, connection)::Union{Nothing,Dict{Symbol,Function}}
   parsers = nothing
-  for (name, kind) in built.object.projection_kinds
+  for (name, kind) in built.projection_kinds   # #1624: the build's own record, not a write-back
     parser = value_parser(kind, connection, name)   # #1110: a parser that raises names the projection
     parser === nothing && continue
     parsers === nothing && (parsers = Dict{Symbol,Function}())
@@ -1063,11 +1086,8 @@ function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing
   return parsers
 end
 
-_list_raw(objct::SQLObjectHandler) = _list_raw_owned(deepcopy(objct))
-
-# #1589 — on a handler the caller owns (see `_execute_select_owned`).
-function _list_raw_owned(q::SQLObjectHandler)
-  result, built, connection = _execute_select_owned(q)
+function _list_raw(q::SQLObjectHandler)
+  result, built, connection = _execute_select(q)
   # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
   # plain column.
   #
@@ -1146,23 +1166,24 @@ end
 
 """Return model-aware `PormGRow` objects. Default format."""
 list(objct::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute) =
-  _list_owned(deepcopy(objct), Val(:row); show_query=show_query)
+  _list_owned(objct, Val(:row); show_query=show_query)
 
 """Return plain `Dict{Symbol,Any}` rows for framework integrations that need real dictionaries."""
 list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute) =
-  _list_owned(deepcopy(objct), Val(:dict); show_query=show_query)
+  _list_owned(objct, Val(:dict); show_query=show_query)
 
-# #1589 — every `list` format, on a handler the caller owns: the one copy is the public `list`'s, or the
-# terminal's that called this (`_get`, `_first`, `_count`, …). See `_execute_select_owned`.
+# Every `list` format's body. #1589 named it for the copy it was handed; since #1624 the build writes
+# nothing, so the public `list` hands it the caller's handler as is, and a terminal (`_get`, `_first`,
+# `_count`, …) hands it the copy it made for its own changes (limit, ordering, inline filters).
 function _list_owned(q::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute)
-  show_query !== :execute && return _query_list_owned(q, show_query)
+  show_query !== :execute && return _show_select(q, show_query)
   model = q.object.model
-  return [PormGRow(row, model) for row in _list_raw_owned(q)]
+  return [PormGRow(row, model) for row in _list_raw(q)]
 end
 
 function _list_owned(q::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute)
-  show_query !== :execute && return _query_list_owned(q, show_query)
-  return _list_raw_owned(q)
+  show_query !== :execute && return _show_select(q, show_query)
+  return _list_raw(q)
 end
 
 # #564 — a temporal value is serialized as the TEXT its own formatter writes, not by whatever
@@ -1299,11 +1320,11 @@ _json_row(data::Dict{Symbol, Any}) = Dict(String(k) => _json_value(v) for (k, v)
 
 """Return a JSON string without allocating `PormGRow` wrappers."""
 list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute) =
-  _list_owned(deepcopy(objct), Val(:json); show_query=show_query)
+  _list_owned(objct, Val(:json); show_query=show_query)
 
 function _list_owned(q::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
-  show_query !== :execute && return _query_list_owned(q, show_query)
-  return JSON.json([_json_row(row) for row in _list_raw_owned(q)])
+  show_query !== :execute && return _show_select(q, show_query)
+  return JSON.json([_json_row(row) for row in _list_raw(q)])
 end
 
 # #641 — a `PormGRow` handed to `JSON.json` used to serialize the SCHEMA, not the row.
@@ -1361,9 +1382,9 @@ first(objct::SQLObjectHandler; show_query::Symbol = :execute) = _first(objct, Va
 # so the slice rule (#1053) and the copy rule (#199) cannot drift between them.
 Base.@constprop :aggressive function _first(objct::SQLObjectHandler, format; show_query::Symbol)
   # #199: copy-first like count/exists/list — limit(1) must not leak into the caller's handler
-  q = deepcopy(objct)
+  q = _terminal_copy(objct)
   q.limit(_probe_limit(q.object.limit, 1))   # #1053: within the caller's slice, not instead of it
-  res = _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
+  res = _list_owned(q, format; show_query=show_query)
   if show_query !== :execute
     return res
   end
@@ -1407,7 +1428,7 @@ last(objct::SQLObjectHandler; show_query::Symbol = :execute) = _last(objct, Val(
 Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show_query::Symbol)
   _refuse_sliced(objct.object, "last()", "it reverses the ordering, which changes which rows the slice holds")
   # #199: copy-first like first/count/list — the ordering flip and limit(1) apply to the copy only.
-  q = deepcopy(objct)
+  q = _terminal_copy(objct)
   if isempty(q.object.order)
     # No ordering: fall back to primary-key DESC so last() is meaningful (Django parity).
     model = q.object.model
@@ -1429,7 +1450,7 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
     map!(_invert_order, q.object.order, q.object.order)
   end
   q.limit(1)
-  res = _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
+  res = _list_owned(q, format; show_query=show_query)
   if show_query !== :execute
     return res
   end
@@ -1441,17 +1462,14 @@ end
 # `format` is `Val(:row)` or a typed-read `T` (#1352).
 Base.@constprop :aggressive function _extreme(objct::SQLObjectHandler, order_fields, opname::String; show_query::Symbol, format = Val(:row))
   _refuse_sliced(objct.object, "$(opname)()", "it replaces the ordering, which changes which rows the slice holds")
-  q = deepcopy(objct)
+  q = _terminal_copy(objct)
   q.order_by(order_fields...)
   q.limit(1)
   show_query !== :execute && return _list_owned(q, format; show_query=show_query)
-  # #1589: `q` is the only copy, so the build below runs on it — and on a query with CTEs it rewrites
-  # a CTE-path filter's column into a `CTEReference` in place (`_resolve_cte_string_paths!`, a no-op
-  # without CTEs). The message names the filters as written, so on such a query it is rendered first;
-  # otherwise it stays on the error path, where it was.
-  early_repr = isempty(q.object.ctes) ? nothing : _filters_repr(q)
   rows = _list_owned(q, format)
-  isempty(rows) && throw(DoesNotExist(q.object.model.name, "$(opname): $(something(early_repr, _filters_repr(q)))"))
+  # The message is rendered only when it is thrown. The build left `q`'s filters as the caller wrote
+  # them (#1624: a CTE-path filter is resolved in the build's view, not rewritten in place).
+  isempty(rows) && throw(DoesNotExist(q.object.model.name, "$(opname): $(_filters_repr(q))"))
   return rows[1]
 end
 
@@ -1537,22 +1555,19 @@ get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute) = _get(o
 Base.@constprop :aggressive function _get(objct::SQLObjectHandler, format, filters; show_query::Symbol)
   # #199: copy-first — inline filters and the limit(2) probe apply to the copy only,
   # so they never leak into the caller's handler.
-  q = deepcopy(objct)
+  q = _terminal_copy(objct)
   !isempty(filters) && _filter!(q.object, filters)
   q = q.limit(_probe_limit(q.object.limit, 2))   # #1053: within the caller's slice, not instead of it
 
   if show_query !== :execute
-    return _list_owned(q, format; show_query=show_query)   # #1589: the one copy is this one
+    return _list_owned(q, format; show_query=show_query)
   end
 
-  # #1589: rendered BEFORE the build, which runs on this same copy and rewrites a CTE-path filter's
-  # column into a `CTEReference` in place; the messages name the filters as the caller wrote them.
-  model_name = q.object.model.name
-  filter_repr = _filters_repr(q)
   rows = _list_owned(q, format)
-
-  isempty(rows) && throw(DoesNotExist(model_name, filter_repr))
-  length(rows) > 1 && throw(MultipleObjectsReturned(model_name, length(rows), filter_repr))
-
-  return rows[1]
+  # #1624: the messages are rendered only when one is thrown. The build left `q`'s filters as the
+  # caller wrote them (a CTE-path filter is resolved in the build's view, not rewritten in place), so
+  # they name `agg__total`, not the `CTEReference` the build resolved it to.
+  length(rows) == 1 && return rows[1]
+  isempty(rows) && throw(DoesNotExist(q.object.model.name, _filters_repr(q)))
+  throw(MultipleObjectsReturned(q.object.model.name, length(rows), _filters_repr(q)))
 end

@@ -815,10 +815,9 @@ _recorded_read_kind(p::SubqueryObject, instruc::SQLInstruction) =
   instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing)
 function _recorded_read_kind(ref::CTEReference, instruc::SQLInstruction)
   occursin("__", ref.path) && return false
-  cte = get(instruc.object.ctes, ref.name, nothing)
-  body = cte === nothing ? nothing : get(cte, "query", nothing)
-  body isa SQLObjectHandler || return nothing
-  return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+  state = _cte_state(instruc, ref.name)   # #1624: the body build's kinds, kept on this build
+  state === nothing && return nothing
+  return get(state.body_kinds, Symbol(ref.path), nothing)
 end
 
 function _read_view(k, x, instruc::SQLInstruction)
@@ -883,9 +882,8 @@ _reads_unapplied_declaration(p::SubqueryObject, instruc::SQLInstruction) =
   instruc.subquery_unapplied !== nothing && haskey(instruc.subquery_unapplied, p)
 function _reads_unapplied_declaration(ref::CTEReference, instruc::SQLInstruction)
   occursin("__", ref.path) && return false
-  cte = get(instruc.object.ctes, ref.name, nothing)
-  unapplied = cte === nothing ? nothing : get(cte, "unapplied", nothing)
-  return unapplied isa Set{String} && ref.path in unapplied
+  state = _cte_state(instruc, ref.name)
+  return state !== nothing && ref.path in state.unapplied
 end
 
 # The numeric read view (#1121): the kinds the read path records for a computed number.
@@ -1003,19 +1001,14 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_E
   end
   meant = _numeric_meaning_record(ref, instruc, policy)
   meant === nothing || return meant
-  cte = get(instruc.object.ctes, ref.name, nothing)
-  cte === nothing && return nothing
-  kind = _cte_expression_kind(cte, ref.path, policy)
+  state = _cte_state(instruc, ref.name)
+  state === nothing && return nothing
+  kind = _cte_expression_kind(state, ref.path, policy)
   kind === nothing || return kind
-  body = get(cte, "query", nothing)
-  body isa SQLObjectHandler || return nothing
   _reads_unapplied_declaration(ref, instruc) && return nothing   # #1110: a numeric read kind
-  return _without_numeric_read(get(body.object.projection_kinds, Symbol(ref.path), nothing))
+  return _without_numeric_read(get(state.body_kinds, Symbol(ref.path), nothing))
 end
-function _cte_expression_kind(cte::AbstractDict, path::String, ::_EveryKind)
-  kinds = get(cte, "kinds", nothing)
-  return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing
-end
+_cte_expression_kind(state::CTEState, path::String, ::_EveryKind) = get(state.kinds, path, nothing)
 
 # #1153 — a `Subquery`'s one projected expression, typed by the walk over the INNER instruction while
 # `query()` still holds it (its `built` callback), as `_subquery_projection_textless` classifies it:

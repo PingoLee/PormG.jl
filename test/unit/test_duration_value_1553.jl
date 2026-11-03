@@ -131,8 +131,8 @@ const _DV_LAP_MS = "((CASE WHEN substr(\"Tb\".\"lap\", 1, 1) = '-' THEN -1 ELSE 
   # The value is an interval to the read path on every engine, so it reads back as a duration.
   for conn in (_DV_PG, _DV_SL, _DV_MY)
     q = _dv_proj(expr())
-    PormG.QueryBuilder.query(q; show_query = :sql, connection = conn)
-    @test get(q.object.projection_kinds, :x, nothing) == PormG.CInterval()
+    q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql, connection = conn).instruction.projection_kinds
+    @test get(q_kinds, :x, nothing) == PormG.CInterval()
   end
 end
 

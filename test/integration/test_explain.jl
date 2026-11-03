@@ -118,7 +118,8 @@ end
     settings = PormG.config[PORMG_DB_FOLDER]
     # Build the statement twice, each with its own parameter object, so neither fetch reuses the
     # other's bound state.
-    built() = (h = deepcopy(q); sql = PormG.QueryBuilder.query(h, show_query = :execute); (sql, h.object.parameters))
+    # #1624: the bound parameters are the build's (`_render_select`'s instruction), not written into `h`.
+    built() = (r = PormG.QueryBuilder._render_select(q, show_query = :execute); (r.sql, r.instruction.parameters))
     compact_sql, compact_params = built()
     _, pretty_params = built()
     pretty_sql = show_query(q, :pretty)

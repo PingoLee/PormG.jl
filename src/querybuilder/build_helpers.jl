@@ -69,10 +69,9 @@ end
 #
 # `over` is shared rather than copied, and the honest reason is that nothing here needs it copied,
 # not that copying would break anything: measured, `over = deepcopy(f.over)` leaves the whole unit
-# suite green and every CTE/window render byte-identical. The caller's `WindowSpec` is already safe
-# from the CTE-string pass by a different mechanism — every read path deepcopies the handler before
-# `build()`, and Julia's generic array deepcopy clones the spec along with it — so a copy here would
-# be a second layer over a hazard that does not reach this far. Sharing keeps the built node
+# suite green and every CTE/window render byte-identical. The caller's `WindowSpec` is safe from the
+# CTE-string pass because that pass constructs (#1624: its window arms build a new spec around fresh
+# `SQLField` wrappers), so a copy here would guard a hazard that does not reach this far. Sharing keeps the built node
 # byte-identical to what the mutating form produced, which is the rule the rest of this function
 # follows. #508 phase 2 settled the slot: `WindowFunction` is a `struct` now and the `_retag_*`
 # walkers construct, so no build step can write through a shared `over` any more. Sharing is a

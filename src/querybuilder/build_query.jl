@@ -183,13 +183,28 @@ function build(object::SQLObject;
   # #1557: the CTE whose body this build renders ("" for none), and whether the query declaring it is
   # correlated, for the `OuterRef` refusal.
   cte_body::String="",
-  cte_body_correlated::Bool=false)
+  cte_body_correlated::Bool=false,
+  # #1624: what each CTE body's build derived (`CTEState`), from the `build_cte_clause` call that
+  # rendered this statement's WITH. `nothing` when no WITH is rendered (`update()`, `bulk_update`).
+  cte_state::Union{Nothing,Dict{String,CTEState}}=nothing)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
   ensure_transaction_scope(object.model, connection)
 
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
+
+  # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is
+  # ambiguous. This runs before anything reads a projection or a predicate, because it is the first
+  # moment the CTE registry is final. Doing it at `.filter()` / `.values()` / `.on()` time instead makes
+  # the answer depend on whether `.with()` was called first, which is precisely the #434 defect whose
+  # call-time check `_on` records removing.
+  #
+  # #1624: it returns a VIEW of `object` (the resolved `values`, `filter` and `order`, every other slot
+  # shared) and writes nothing into `object` itself, so the build never mutates the handler it renders.
+  # It needs only the CTE registry and the model, so it runs before the instruction exists, and the
+  # instruction holds the view. A query with no CTE gets `object` back.
+  object = _resolve_cte_string_paths(object)
   @pormg_debug false
   instruct = InstructionObject(text="",
     object=object,
@@ -207,16 +222,10 @@ function build(object::SQLObject;
     cte_body_correlated=cte_body_correlated,
     mutation=mutation,
     defer_outer_join_check=defer_outer_join_check,
+    cte_state=cte_state,
   )
 
-  # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is
-  # ambiguous. This runs HERE — after the instruction exists, before anything reads a projection or
-  # a predicate — because it is the first moment the CTE registry is final. Doing it at `.filter()` /
-  # `.values()` / `.on()` time instead makes the answer depend on whether `.with()` was called first,
-  # which is precisely the #434 defect whose call-time check `_on` records removing. Read entry
-  # points deepcopy the handler before `build()`, so this mutates a per-call copy.
-  _resolve_cte_string_paths!(object)
-  # #977: same moment, same reason — every relation and `cjoin` link the join conditions could name
+  # #977: the moment the registry is final (above) — every relation and `cjoin` link the join conditions could name
   # is declared now, so this is where they are bound onto their paths and checked (#962, #974).
   _bind_join_conditions!(instruct)
 

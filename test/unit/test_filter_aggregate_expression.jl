@@ -729,10 +729,10 @@ _f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
       # (`value_parser(::CBool, ::PormGSQLite)`), as PostgreSQL's `BOOL_OR` does by the driver.
       q = Model_.objects
       q.values("lap", "a" => Max("finished"), "b" => Min(F("finished")), "p" => Max("points"))
-      PormG.QueryBuilder.query(q; show_query = :sql)
-      @test q.object.projection_kinds[:a] == PormG.CBool()
-      @test q.object.projection_kinds[:b] == PormG.CBool()
-      @test get(q.object.projection_kinds, :p, nothing) === nothing
+      q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds
+      @test q_kinds[:a] == PormG.CBool()
+      @test q_kinds[:b] == PormG.CBool()
+      @test get(q_kinds, :p, nothing) === nothing
       # Controls: an extremum over a non-boolean is untouched on both engines.
       s = sql(q -> q.values("lap", "m" => Max("points"), "n" => Min("points")))
       @test occursin("MAX(\"Tb\".\"points\")", s) && occursin("MIN(\"Tb\".\"points\")", s)
@@ -906,8 +906,7 @@ end
     ("Greatest of a boolean and an integer column", () -> Greatest("finished", "points")),
   )
   kind_of(Model_, value) = (q = Model_.objects; q.values("lap", "x" => value());
-                           PormG.QueryBuilder.query(q; show_query = :sql);
-                           get(q.object.projection_kinds, :x, nothing))
+                           get(PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds, :x, nothing))
   for (backend, Model_) in ((:postgres, FAggPgFn), (:sqlite, FAggSlFn))
     pg = backend === :postgres
     @testset "$backend: $label reads back as a Bool" for (label, value) in typed
@@ -926,23 +925,23 @@ end
     @testset "$backend: the column itself is typed a boolean on the read path" begin
       q = Model_.objects
       q.values("lap", "finished")
-      PormG.QueryBuilder.query(q; show_query = :sql)
-      @test q.object.projection_kinds[:finished] == PormG.CBool()
-      @test !haskey(q.object.projection_kinds, :lap)
+      q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds
+      @test q_kinds[:finished] == PormG.CBool()
+      @test !haskey(q_kinds, :lap)
       e = (pg ? FAggPgEntry : FAggSlEntry).objects
       e.values("grid", "fnid__finished")
-      PormG.QueryBuilder.query(e; show_query = :sql)
-      @test e.object.projection_kinds[:fnid__finished] == PormG.CBool()
+      e_kinds = PormG.QueryBuilder._render_select(e; show_query = :sql).instruction.projection_kinds
+      @test e_kinds[:fnid__finished] == PormG.CBool()
       star = Model_.objects
-      PormG.QueryBuilder.query(star; show_query = :sql)
-      @test star.object.projection_kinds[:finished] == PormG.CBool()
+      star_kinds = PormG.QueryBuilder._render_select(star; show_query = :sql).instruction.projection_kinds
+      @test star_kinds[:finished] == PormG.CBool()
       # A projected `Exists(...)` is a boolean too: SQLite evaluates it to 0/1.
       sub = Model_.objects
       sub.filter("lap" => PormG.QueryBuilder.OuterRef("points"))
       ex = Model_.objects
       ex.values("lap", "has" => PormG.QueryBuilder.Exists(sub))
-      PormG.QueryBuilder.query(ex; show_query = :sql)
-      @test ex.object.projection_kinds[:has] == PormG.CBool()
+      ex_kinds = PormG.QueryBuilder._render_select(ex; show_query = :sql).instruction.projection_kinds
+      @test ex_kinds[:has] == PormG.CBool()
       parser = PormG.QueryBuilder._field_value_parser(Model_.fields["finished"], PormG.config[Model_.connect_key].connections, "finished")
       pg ? (@test parser === nothing) : (@test parser(1) === true && parser(0) === false && parser(missing) === missing)
     end
@@ -970,8 +969,8 @@ end
                              ("Coalesce(flag, false) * interval", () -> Coalesce("finished", false) * F("dur")))
         q = Dur_.objects
         q.values("lap", "x" => value())
-        PormG.QueryBuilder.query(q; show_query = :sql)
-        @test q.object.projection_kinds[:x] == PormG.CInterval()
+        q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql).instruction.projection_kinds
+        @test q_kinds[:x] == PormG.CInterval()
       end
       # The #953 extremum keeps its kind beside an interval, as before #965: a boolean, which is no
       # number. Refused on SQLite, where it would multiply milliseconds by 0/1 (review of #965), and since

@@ -109,14 +109,17 @@ end
     @test q2.object.ctes["agg"] !== q.object.ctes["agg"]
     # The transient per-build "model" is not carried into the copy.
     @test !haskey(q2.object.ctes["agg"], "model")
-    # #1034 phase 3: nor the per-build column records, the kinds and the division answers. A direct
-    # `query` builds on its query itself, so that one holds them; a copy taken after it must not, or it
-    # would read a build it has not done. A query of its own: building `q` here would leave it unlike
-    # the original the rest checks.
+    # #1034 phase 3: nor the per-build column records, the kinds and the division answers. #1624: and a
+    # direct `query` no longer leaves them on the query it builds — the build writes nothing into its
+    # handler (the records live on the build's instruction, `CTEState`) — so neither the query nor a copy
+    # taken after it holds a build it did not do. This used to assert the opposite for the direct build
+    # (`haskey(built…, "kinds")`): that pinned the write-back #1624 removed. A query of its own: building
+    # `q` here would leave it unlike the original the rest checks.
     built = _cte_query()
     PormG.QueryBuilder.query(built; show_query = :sql)
-    for key in ("kinds", "divisions")
-      @test haskey(built.object.ctes["agg"], key)
+    @test built.object.parameters === nothing
+    for key in ("model", "kinds", "divisions", "unapplied")
+      @test !haskey(built.object.ctes["agg"], key)
       @test !haskey(built.copy().object.ctes["agg"], key)
     end
 

@@ -171,7 +171,7 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # Raised rather than emitted, because the row without its ON joins every target row.
     "src/querybuilder/execution_write.jl" => 2,  # GROUP BY / HAVING in a mutation predicate / cjoin_on row with no rendered ON — internal invariants
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
-    # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
+    # `cte_dict["model"]` (since #1624 the instruction's `CTEState`) is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a
     # QueryBuildError. The remaining keep is the missing-join-alias lookup, which is genuinely
     # internal (aliases are minted from the same row_join vector that is then searched).

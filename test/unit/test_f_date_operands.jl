@@ -1006,8 +1006,8 @@ end
 function _fd_kinds(build!::Function; conn = _FD_SL)
   q = FD.Fd_result.objects
   build!(q)
-  QB.query(q; connection = conn, show_query = :sql)
-  return q.object.projection_kinds
+  q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+  return q_kinds
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

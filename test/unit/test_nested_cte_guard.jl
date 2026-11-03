@@ -457,8 +457,10 @@ end
     q.values("note")
     q.filter("note" => v)
     q.filter(Exists(inner))
-    sql = PormG.QueryBuilder.query(q; connection = _NCG_SL, show_query = :sql)
-    (sql, PormG.QueryBuilder.get_final_parameters(q.object.parameters))
+    # `_render_select` is `query()`'s render, which returns the build's instruction: since #1624 the
+    # bound parameters are read there, not off `q.object.parameters`, which the build no longer writes.
+    rendered = PormG.QueryBuilder._render_select(q; connection = _NCG_SL, show_query = :sql)
+    (rendered.sql, PormG.QueryBuilder.get_final_parameters(rendered.instruction.parameters))
   end
   first_a = build("A")
   b = build("B")
@@ -556,7 +558,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # A statement kind that emits no WITH clause refuses a CTE reference (#433 audit)
 # Found by auditing the `internal error … please report it` sites, which #433 asks for. That message
-# claimed a broken invariant, but `cte_dict["model"]` is written in exactly one place —
+# claimed a broken invariant, but `cte_dict["model"]` (since #1624 the instruction's `CTEState`) is written in exactly one place —
 # `_build_cte_custom_model`, reached only from `build_cte_clause` — so its absence means only that
 # THIS statement never rendered a WITH. `update()` is such a statement, and the shape below reached
 # the internal error from ordinary user input.

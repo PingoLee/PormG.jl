@@ -169,7 +169,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     end
   end
   # A CTE a later term orders by is joined when that term renders: `order_by("br__surname")`, which
-  # `_resolve_cte_string_paths!` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or
+  # `_resolve_cte_string_paths` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or
   # one read inside a window, a `Case` condition or a function. What this walk misses is caught after
   # every join exists (`_refuse_late_shadowed_null_key`), so a gap is a refusal, never a wrong order.
   _order_cte_names!(tables, object.order)
@@ -216,7 +216,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
 end
 
 # The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it. A
-# path into a CTE is one by then, inside a window or a `When` condition too (`_resolve_cte_string_paths!`).
+# path into a CTE is one by then, inside a window or a `When` condition too (`_resolve_cte_string_paths`).
 _order_cte_names!(out::Set{String}, x::CTEReference) = (push!(out, x.name); out)
 _order_cte_names!(out::Set{String}, x::Union{SQLOrder,SQLField}) = _order_cte_names!(out, x.field)
 _order_cte_names!(out::Set{String}, x::FExpression) =

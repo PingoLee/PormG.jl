@@ -142,8 +142,8 @@ end
   # microseconds as an integer).
   for (conn, _) in _IB_ENGINES
     q = _ib_cte(F("grid") * CTE("c", "u"))
-    PormG.QueryBuilder.query(q; show_query = :sql, connection = conn)
-    @test get(q.object.projection_kinds, :v, nothing) isa PormG.CInterval
+    q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql, connection = conn).instruction.projection_kinds
+    @test get(q_kinds, :v, nothing) isa PormG.CInterval
   end
 end
 

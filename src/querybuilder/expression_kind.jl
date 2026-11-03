@@ -224,7 +224,7 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
   # #1576: a month or a year scaled by a factor that is not whole is refused there too.
   if op == "*" && p.operand isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
     _calendar_scale_refused(p.operand, op, p.field_name, instruc) && return nothing
-    return _is_number_side(p.field_name, left, instruc) ? CInterval() : nothing
+    return _is_number_side(p.field_name, left, instruc) ? CInterval(_has_calendar_part(p.operand)) : nothing
   end
   # #568: a bare integer beside a date is whole days.
   if left isa Union{CDate,CDateTime} && op in ("+", "-") && p.operand isa Integer && !(p.operand isa Bool)
@@ -239,7 +239,7 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
     right isa CInterval && return left isa CDate ? CDateTime(false) : left       # #881
     return nothing
   end
-  left isa CInterval && return _interval_left_kind(p, right, instruc)
+  left isa CInterval && return _interval_left_kind(p, left, right, instruc)
   # #1406: a time of day minus a time of day is an interval where the engine computes it.
   if left isa CTime
     return op == "-" && right isa CTime && _subtracts_times(instruc.connection) ? CInterval() : nothing
@@ -252,7 +252,7 @@ function _temporal_result_kind(p::FExpression, left, right, instruc::SQLInstruct
   # #881: an interval on the right of a value that is neither a date nor an interval.
   if _typed_right_operand(p.operand, instruc)
     right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) &&
-      !_calendar_scale_refused(p.operand, op, p.field_name, instruc) && return CInterval()   # #1576
+      !_calendar_scale_refused(p.operand, op, p.field_name, instruc) && return right   # #1576, #1583
   end
   return nothing
 end
@@ -262,19 +262,24 @@ end
 # (`_render_expr_typed`) and the walk above both ask it, so the two cannot type different right sides.
 # A window function was missing from both until #1465: `F("grid") * Lag(<duration>)` was untyped, so
 # SQLite multiplied the duration's `HH:MM:SS` text while `Lag(<duration>) * F("grid")` was refused.
+# A `CTE(...)` handle was missing until #1581: `F("points") + CTE("c", "u")` over a duration column built
+# on every engine (SQLite added the number to the text), and `F("grid") * CTE("c", "u")` multiplied the
+# text, where the same shapes over the model column are refused or scaled. A handle is typed as its
+# column (`_side_kind(::CTEReference)`, #1539) and renders through `_set_update_query_operand` as before.
 _typed_right_operand(x, instruc::SQLInstruction) =
-  x isa Union{FExpression,FObject,WindowFunction} || (x isa String && _is_field_path(x, instruc))
+  x isa Union{FExpression,FObject,WindowFunction,CTEReference} || (x isa String && _is_field_path(x, instruc))
 
 # #881: an interval on the left (`_render_interval_left`). A date on the right of `+` is the date
 # shifted, an interval beside it is an interval, and `*`/`/` by a number side scales it.
-function _interval_left_kind(p::FExpression, right, instruc::SQLInstruction)
+# #1583: the interval may hold a calendar part where a side it is computed from may.
+function _interval_left_kind(p::FExpression, left::CInterval, right, instruc::SQLInstruction)
   if p.operation in ("+", "-")
     right isa Union{CDate,CDateTime} && return p.operation == "+" ? (right isa CDate ? CDateTime(false) : right) : nothing
-    return right isa CInterval ? CInterval() : nothing
+    return right isa CInterval ? CInterval(left.calendar || right.calendar) : nothing
   end
   # #1576: a month the left carries, divided or scaled by a factor that is not whole.
   _calendar_scale_refused(p.field_name, p.operation, p.operand, instruc) && return nothing
-  return _is_number_side(p.operand, right, instruc) ? CInterval() : nothing
+  return _is_number_side(p.operand, right, instruc) ? left : nothing
 end
 
 # The kind a side of F arithmetic is to the render: the left as `_render_left_typed` types it, the right
@@ -295,7 +300,7 @@ function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Uni
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
     walked = _infer_kind(x, instruc, _AllKinds())
-    walked isa CInterval && return CInterval()
+    walked isa CInterval && return walked   # #1583: with the calendar part it may hold
     # #1307: so is a date or a timestamp, the side of the date-shift arms (`_temporal_result_kind`).
     walked isa Union{CDate,CDateTime} && return walked
     return _side_function_kind(x, instruc)
@@ -320,7 +325,7 @@ end
 # takes it. A NULL is never the value, so it is named (`_unnamed_side` skips it).
 _side_walk_kind(x::Bool, ::SQLInstruction) = CBool()
 _side_walk_kind(x::Union{Integer,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _literal_kind(x, _AllKinds())
-_side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval()
+_side_walk_kind(d::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval(_has_calendar_part(d))   # #1583
 _side_walk_kind(x::Union{_TemporalLiteral,Dates.Time}, ::SQLInstruction) = literal_canonical_kind(x)   # #1323: a Time too
 _side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
   x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
@@ -469,6 +474,9 @@ _literal_kind(::Integer, ::_EveryKind) = CInt64()
 _literal_kind(::AbstractFloat, ::_EveryKind) = CFloat64()
 _literal_kind(::Decimals.Decimal, ::_EveryKind) = CDecimal(nothing, nothing)   # a bound value has no declared width
 _literal_kind(::AbstractString, ::_EveryKind) = CText()
+# #1583: a duration literal with a month or a year may hold one (`Case(…, then = Month(1))`, a `Lag`
+# `default`), as the same duration in F arithmetic does (`_side_kind(::_DurationOperand)`).
+_literal_kind(d::_DurationOperand, ::_EveryKind) = CInterval(_has_calendar_part(d))
 _literal_kind(x, ::_EveryKind) = literal_canonical_kind(x)
 
 # ── Functions, by their `_result_rule` ───────────────────────────────────────────────────────────────
@@ -477,7 +485,8 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
     declared = _declared_cast(p)
-    declared isa AbstractString && !isempty(declared) && return _declared_kind(declared, instruc.connection)
+    declared isa AbstractString && !isempty(declared) &&
+      return _declared_calendar(_declared_kind(declared, instruc.connection), p, instruc, policy)
   end
   rule isa CanonicalType && return rule
   # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
@@ -495,6 +504,15 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return nothing
 end
 _infer_function_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
+
+# #1583 — a declared interval (`Cast(x, "interval")`, a `Case` with `output_field = "interval"`) is the
+# value it converts, so it may hold the calendar part that value may: `Cast(F("grid") * Month(1),
+# "interval")` is still that many months. The declaration names the type; the operand names the months.
+function _declared_calendar(kind, p::FObject, instruc::SQLInstruction, policy::_EveryKind)
+  kind isa CInterval || return kind
+  carried = p.function_name == "CASE" ? _case_kind(p, instruc, policy) : _infer_kind(_first_operand(p), instruc, policy)
+  return carried isa CInterval && carried.calendar ? carried : kind
+end
 
 # A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
 # float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
@@ -621,6 +639,8 @@ function _unify_kinds(a::CanonicalType, b::CanonicalType, ::_EveryKind)
     return r == 4 ? CFloat64() : r == 2 ? CInt64() : r == 1 ? CInt32() : CInt16()
   end
   a isa Union{CText,CVarChar} && b isa Union{CText,CVarChar} && return CText()
+  # #1583: a value that is one of two intervals may hold a calendar part where either may.
+  a isa CInterval && b isa CInterval && return CInterval(a.calendar || b.calendar)
   return nothing
 end
 # #1550: a `Case`/`Coalesce` over decimals that agree on their places keeps them, as each row is one of

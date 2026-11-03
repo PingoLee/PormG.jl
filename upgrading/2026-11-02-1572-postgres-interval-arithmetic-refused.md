@@ -35,9 +35,10 @@ What has a meaning is unchanged on every engine: an interval times or divided by
 (`F("raceid__date") + F("time")`). Comparing a number with an interval is not arithmetic, and keeps
 the SQL it had.
 
-Two shapes in the same class still build. One is a CTE interval column on the right of a float or
-text column (`F("points") + CTE("c", "u")`). The other is a bitwise operator on an interval. Both are
-tracked in #1581.
+A `CTE(...)` column holding a duration is refused in the same shapes as a `DurationField` column, on
+the right too (`F("points") + CTE("c", "u")`, #1581), and a number times one scales it as it scales the
+column. A bitwise operator on an interval raises `QueryBuildError` as well; that one built in the last
+release, and has its own entry (#1581).
 
 ### Who this affects
 

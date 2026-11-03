@@ -887,7 +887,7 @@ end
   # `QueryBuildError` on every engine. PostgreSQL used to send them, and the server rejected them with a
   # `StatementError`. A month times a float column (`Result.points`) raises `QueryBuildError` on
   # PostgreSQL, where it spread the fraction at 30 days a month, and `BackendCapabilityError` on SQLite
-  # and MySQL. Why it matters: the error type is the contract — a `QueryBuildError` is raised by the
+  # and MySQL; so does `Max` of a month product times 1.5, which PostgreSQL built until #1583. Why it matters: the error type is the contract — a `QueryBuildError` is raised by the
   # build, where the server's rejection arrived as a `StatementError` — and this checks it through a
   # real driver's connection, not a mock.
   @testset "meaningless interval arithmetic and a fraction of a month are refused at build (#1572, #1576)" begin
@@ -904,6 +904,46 @@ end
     err = try q |> DataFrame; nothing catch e; e end
     @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
                    PormG.QueryBuildError : PormG.BackendCapabilityError)
+    # #1583: the month is seen through a function too. `Max` of a month product scaled by a float built on
+    # PostgreSQL and spread the fraction at 30 days a month.
+    q = M.Result.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1)
+    q.values("x" => PormG.Functions.Max(F("grid") * Dates.Month(1)) * 1.5)
+    err = try q |> DataFrame; nothing catch e; e end
+    @test err isa (by_engine(sqlite = false, postgres = true, mysql = false) ?
+                   PormG.QueryBuildError : PormG.BackendCapabilityError)
+  end
+
+  # #1581 — a number times a CTE duration column is the interval scaled, as it is with the model column.
+  # For laps 1 to 3 of the 2009 Australian GP, each lap number times the driver's best lap of the race,
+  # the best lap held in a CTE keyed on the driver beside its `milliseconds`. The oracle is the lap number
+  # times that `milliseconds` minimum, in Julia; the product reads back as a `Dates.CompoundPeriod` on
+  # every engine. Before, SQLite multiplied the best lap's `HH:MM:SS` text (`'00:01:28.020' * 2` is `0`)
+  # and MySQL read the product's microseconds back as an integer. A float column plus the CTE duration
+  # column raises `QueryBuildError` on every engine, as `F("points") + F("time")` does; it built and
+  # answered on SQLite and MySQL. Why it matters: both were wrong values with no error.
+  @testset "a number times a CTE duration column is the interval scaled (#1581)" begin
+    best() = (b = M.Lap_times.objects;
+              b.filter("raceid__year" => 2009, "raceid__round" => 1);
+              b.values("driverid", "best" => PormG.Functions.Min("time"), "best_ms" => PormG.Functions.Min("milliseconds"));
+              b)
+    q = M.Lap_times.objects
+    q.with("c" => best(), join_field = "driverid" => "driverid", join_type = "INNER")
+    q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    q.values("driverid", "lap", "best_ms" => PormG.CTE("c", "best_ms"), "scaled" => F("lap") * PormG.CTE("c", "best"))
+    q.order_by("driverid", "lap")
+    df = q |> DataFrame
+    @test size(df, 1) > 3
+    @test all(x -> x isa Dates.CompoundPeriod, df.scaled)
+    @test [Dates.toms(x) for x in df.scaled] == df.lap .* df.best_ms
+
+    r = M.Result.objects
+    r.with("c" => best(), join_field = "driverid" => "driverid", join_type = "INNER")
+    r.filter("raceid__year" => 2009, "raceid__round" => 1)
+    r.values("driverid", "x" => F("points") + PormG.CTE("c", "best"))
+    err = try r |> DataFrame; nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("with an interval on the right of a value that is not one", sprint(showerror, err))
   end
 
   # #1568 — a negative interval with a fraction of a second reads back exact. The 2009 Australian GP's

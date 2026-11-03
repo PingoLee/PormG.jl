@@ -220,11 +220,19 @@ end
 #          BindComplete must close its socket (JuliaDatabases/Postgres.jl#17), or every later
 #          statement on the connection hits `EOFError` — but 2.2.2 changed `isvalid` (#20), the
 #          extension's liveness probe, and 2.2.2 is the version every probe and integration run used.
+#   MySQL  raised "2" -> "2.2" (#1502). The extension retries a statement that failed with error
+#          2006 ("MySQL server has gone away"), because MySQL.jl 2.2.0 is the first release where
+#          2006 means the command was never sent: its write failed, or the session was already
+#          known dead (JuliaDatabases/MySQL.jl#248). Under 2.0 and 2.1, 2006 also covered a command
+#          written before its reply was lost, which may have committed, so below 2.2.0 the same
+#          retry could apply an autocommit write twice. Measured before narrowing: this PormG
+#          resolves with LibPQ 1.18.0 and MySQL 2.2.0 or 2.2.1, and an add pinned to MySQL 2.1.0 no
+#          longer resolves.
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the
-# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`) or lowering Postgres below 2.2.2
-# fails the matching assertion here.
+# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.2.2
+# or MySQL below 2.2.0 fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Measured floors that PormG cannot go below (#574)" begin
   # Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
@@ -256,6 +264,7 @@ end
     ("Aqua", v"0.8.14"),
     ("PrecompileTools", v"1.2.0"),
     ("Postgres", v"2.2.2"),
+    ("MySQL", v"2.2.0"),
   )
     entry = _compat_entry(name)
     @test entry !== nothing

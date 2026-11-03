@@ -17,6 +17,7 @@ const _MY_CHILD = "pormg_my_phase1_result"
 # A model over a table this file drops first and never creates (#1365): the server refuses every statement
 # on it, whatever the database holds. The F1 `status` table a full `runtests.jl` builds is not one of those.
 const _MY_ABSENT = "pormg_my_phase1_absent"
+const _MY_RETRY = "pormg_my_phase1_retry"   # #1502
 module P1Models
 import PormG
 import PormG.Models
@@ -32,7 +33,7 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
     rows(sql; params = nothing) = DataFrame(run(sql; params = params))
     msg(e) = sprint(showerror, e)
 
-    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT)
+    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT, _MY_RETRY)
         run("DROP TABLE IF EXISTS $(t)")
     end
 
@@ -181,6 +182,72 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
             finally
                 CP.close_pool!(one)
             end
+        end
+    end
+
+    # What: a statement MySQL.jl never sent is re-run on a renewed connection, and one it sent is not
+    #   (#1502). A pool's one connection is killed from another session while idle, then a SELECT runs;
+    #   on another, an INSERT is in flight when its connection is killed.
+    # SQL: `KILL <id>` from the suite's pool; `SELECT 1 AS one`; `INSERT INTO pormg_my_phase1_retry (v)
+    #   SELECT SLEEP(2)`, then `COUNT(*)`.
+    # Why: since MySQL.jl 2.2.0 (the `[compat]` floor) the next command on a killed connection fails its
+    #   write and raises 2006, nothing sent, so `fetch` may run it again. A command killed after it was
+    #   written raises 2013, and it may have committed: running it again could apply an autocommit
+    #   INSERT twice, so it raises `OperationalError`. Over TLS (MySQL 8's default, and this suite's) the
+    #   killed idle connection is noticed at the write. Plaintext is not measured: its write may succeed,
+    #   and the failure is then a 2013, which is not retried, so that half asserts only under TLS.
+    @testset "a statement MySQL.jl never sent is retried, one it sent is not (#1502)" begin
+        CP = PormG.ConnectionPool
+        MySQLjl = Base.require(Base.PkgId(Base.UUID("39abe10b-433b-5dbd-92d4-e302a9df00cd"), "MySQL"))
+        errno_of(e) = (c = CP._driver_cause(e); hasproperty(c, :errno) ? Int(c.errno) : nothing)
+        single() = (p = CP.MySQLConnectionPool(pool.connection_string; pool_size = 1, pool_timeout = 5);
+                    CP.enable_idle_validation!(p; after = 0); p)   # no idle ping: the statement meets the loss
+        connid(p) = Int(DataFrame(PormG.fetch(p, "SELECT CONNECTION_ID() AS id")).id[1])
+        one = single()
+        try
+            id = connid(one)
+            before = one.connections[1]
+            tls = before.handle.session.transport isa MySQLjl.Reseau.TLS.Conn
+            run("KILL $(id)")          # an integer the server returned, not input
+            sleep(1)
+            @test isopen(before)      # the driver has not noticed: only the next write does
+            if tls
+                @test DataFrame(PormG.fetch(one, "SELECT 1 AS one")).one == [1]
+                @test one.connections[1] !== before
+                @test connid(one) != id
+            else
+                @test_skip "a killed idle connection is asserted as retried only over TLS"
+            end
+        finally
+            CP.close_pool!(one)
+        end
+        run("CREATE TABLE $(_MY_RETRY) (id BIGINT PRIMARY KEY AUTO_INCREMENT, v INT NOT NULL)")
+        one = single()
+        try
+            id = connid(one)
+            insert = Threads.@spawn try
+                PormG.fetch(one, "INSERT INTO $(_MY_RETRY) (v) SELECT SLEEP(2)"); nothing
+            catch e
+                e
+            end
+            # KILL only once the server is running the INSERT: killed earlier, the connection would be
+            # idle, the INSERT would raise 2006 and be retried, and this half would test nothing.
+            running() = only(rows("SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST " *
+                                  "WHERE ID = ? AND INFO LIKE 'INSERT%'"; params = Any[id]).n) == 1
+            deadline = time() + 10
+            while !running() && time() < deadline
+                sleep(0.05)
+            end
+            @test running()
+            run("KILL $(id)")
+            e = fetch(insert)
+            @test e isa PormG.OperationalError && errno_of(e) == 2013
+            sleep(2.5)                # long enough for a retried INSERT to have finished
+            # Measured on 8.4: KILL cuts the SLEEP short and the INSERT can still commit, so the client
+            # holds a 2013 for a statement that ran. One row at most: a retry would have made it two.
+            @test only(rows("SELECT COUNT(*) AS n FROM $(_MY_RETRY)").n) <= 1
+        finally
+            CP.close_pool!(one)
         end
     end
 
@@ -444,7 +511,7 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test rows("SELECT 1 AS one WHERE 1 IN ($(join(fill("?", limit), ", ")))"; params = collect(1:limit)).one == [1]
     end
 
-    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT)
+    for t in (_MY_CHILD, _MY_PARENT, _MY_T, _MY_ABSENT, _MY_RETRY)
         run("DROP TABLE IF EXISTS $(t)")
     end
 end

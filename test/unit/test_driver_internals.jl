@@ -6,7 +6,7 @@
 # CONTRACT being tested:
 #   A driver release that renames or removes something an extension in `ext/` reads fails THIS file,
 #   on CI's main job and on `floor-resolve`, rather than the first statement a user runs. `[compat]`
-#   takes each driver by caret (`Postgres = "2.2.2"`, `MySQL = "2"`, …), so Pkg resolves any later
+#   takes each driver by caret (`Postgres = "2.2.2"`, `MySQL = "2.2"`, …), so Pkg resolves any later
 #   minor release on its own, and the integration files that exercise these reads run on no CI job.
 #
 #   Two kinds of read, pinned two ways:

@@ -348,8 +348,9 @@ const _VRT_KINDS = [
   end
 
   # Every column a model field declares is typed on the engines that have it: the kind a field
-  # projects as (`_field_kind`) names a type on PostgreSQL, and on SQLite for every field SQLite can
-  # store (an array, a network address and a `tsvector` are PostgreSQL's). Expected: a `Type` for each;
+  # projects as (`_field_kind`) names a type on PostgreSQL, and on SQLite and MySQL for every field
+  # they can store (an array, a network address and a `tsvector` are PostgreSQL's). MySQL's uuid and
+  # JSON cells are the ones its read-back named (#1634). Expected: a `Type` for each;
   # the PostgreSQL array is the slot's one stated exception (above). It matters because a wildcard
   # `show_query = :struct` writes one field per model field: an untyped field kind is a TODO line in
   # the most common case there is.
@@ -372,6 +373,7 @@ const _VRT_KINDS = [
       n += 1
       kind isa PormG.CArray || @test isconcretetype(PormG.julia_type(kind, _VRT_PG))
       kind isa pg_only || @test isconcretetype(PormG.julia_type(kind, _VRT_SL))
+      kind isa pg_only || @test isconcretetype(PormG.julia_type(kind, _VRT_MY))
     end
     @test n >= 20   # the subtype walk reached the field structs
   end

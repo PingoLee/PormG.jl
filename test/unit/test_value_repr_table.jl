@@ -2,7 +2,8 @@
 The value-representation table (#564).
 
 `src/value_repr.jl` is the owner #564 asked for: one table keyed by `(CanonicalType, backend)` with
-three slots — the Julia formatter, the SQL canonicalizer, and the read parser. Before it, those three
+four slots — the Julia formatter, the SQL canonicalizer, the read parser and (#1632) the Julia type
+the read delivers. Before it, the first three
 lived in three files (`Models.format_*_sql`, `Dialect.SQLITE_CANONICAL_DATETIME_MASK`, the query
 builder's `_parse_sqlite_datetime`) and nothing made them agree. On PostgreSQL a disagreement fails at
 execution because the types are real; on SQLite everything temporal is TEXT with NUMERIC affinity, so
@@ -40,8 +41,10 @@ import InteractiveUtils: subtypes
 # unit file into one `Main`.
 struct VrtMockSQLite <: PormG.PormGSQLite end
 struct VrtMockPostgres <: PormG.PormGPostgres end
+struct VrtMockMySQL <: PormG.PormGMySQL end
 const _VRT_SL = VrtMockSQLite()
 const _VRT_PG = VrtMockPostgres()
+const _VRT_MY = VrtMockMySQL()
 
 # The kinds the table owns — the four temporal ones and, since #648, `CDecimal` — paired with a probe
 # value and the field struct that declares them. Written out rather than derived, so a row that
@@ -309,5 +312,80 @@ const _VRT_KINDS = [
     @test PormG.value_parser(notz, _VRT_SL) !== nothing
     @test occursin(PormG.Dialect.SQLITE_CANONICAL_DATETIME_MASK,
                    PormG.sql_canonicalize(notz, _VRT_SL, "\"c\""))
+  end
+  # ───────────────────────────────────────────────────────────────────────────
+  # Slot 4 (#1632): `julia_type(kind, backend)`, the type a read delivers, which `show_query = :struct`
+  # writes into a struct. Totality: every cell that has a parser (slot 3) also names the type the
+  # parser yields, on all three backends, or `:struct` would write a `# TODO` for a column the read
+  # path knows how to type. Expected: no `(kind, backend)` with a parser and no type, except the
+  # reviewed list below. It matters because `:struct` reads only this slot: a parser added without
+  # its type would silently turn its columns into TODO lines.
+  #
+  # The one exception, reviewed: a PostgreSQL array (`CArray`) has a parser and no single type, since
+  # `Models.normalize_pg_array` returns `Vector{T}`, or `Vector{Union{Missing,T}}` when an element is
+  # NULL, and no declared field takes both.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "julia_type names a type for every cell that has a parser (#1632)" begin
+    singletons = [T() for T in subtypes(PormG.CanonicalType) if isconcretetype(T) && fieldcount(T) == 0]
+    kinds = vcat(singletons, PormG.CanonicalType[
+      PormG.CVarChar(40), PormG.CVarChar(nothing), PormG.CDecimal(8, 3), PormG.CDecimal(30, 2),
+      PormG.CDecimal(nothing, nothing), PormG.CDecimal(nothing, 0), PormG.CDateTime(true),
+      PormG.CDateTime(false), PormG.CInterval(), PormG.CInterval(true), PormG.CArray(PormG.CInt32()),
+      PormG.CArray(PormG.CVarChar(10)), PormG.CUnsupported("money")])
+    exceptions = Set([(PormG.CArray(PormG.CInt32()), :pg), (PormG.CArray(PormG.CVarChar(10)), :pg)])
+    for k in kinds, (tag, b) in ((:pg, _VRT_PG), (:sqlite, _VRT_SL), (:mysql, _VRT_MY))
+      PormG.value_parser(k, b) === nothing && continue
+      if (k, tag) in exceptions
+        @test PormG.julia_type(k, b) === nothing
+      else
+        # Concrete, not merely a `Type`: an abstract one (`Any`, `Integer`) would be written into the
+        # struct as a field `list(T)` refuses.
+        @test isconcretetype(PormG.julia_type(k, b))
+      end
+    end
+    # Guard the guard: the walk over `subtypes` found the singleton kinds, so the loop is not vacuous.
+    @test PormG.CInt64() in singletons && PormG.CText() in singletons && PormG.CBool() in singletons
+  end
+
+  # Every column a model field declares is typed on the engines that have it: the kind a field
+  # projects as (`_field_kind`) names a type on PostgreSQL, and on SQLite for every field SQLite can
+  # store (an array, a network address and a `tsvector` are PostgreSQL's). Expected: a `Type` for each;
+  # the PostgreSQL array is the slot's one stated exception (above). It matters because a wildcard
+  # `show_query = :struct` writes one field per model field: an untyped field kind is a TODO line in
+  # the most common case there is.
+  @testset "julia_type types every field struct's column (#1632)" begin
+    pg_only = Union{PormG.CArray, PormG.CInet, PormG.CCidr, PormG.CTsVector}
+    concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models, subtypes(PormG.PormGField))
+    instance(T) =
+      T === Models.sForeignKey      ? Models.ForeignKey("Races") :
+      T === Models.sOneToOneField   ? Models.OneToOneField("Races") :
+      T === Models.sManyToManyField ? nothing :   # no column
+      T === Models.sDecimalField    ? Models.DecimalField(max_digits = 8, decimal_places = 3) :
+      T === Models.sArrayField      ? Models.ArrayField(Models.IntegerField()) :
+      getfield(Models, Symbol(String(nameof(T))[2:end]))()
+    n = 0
+    for T in concrete
+      f = instance(T)
+      f === nothing && continue
+      kind = PormG.QueryBuilder._field_kind(f)
+      kind === nothing && continue
+      n += 1
+      kind isa PormG.CArray || @test isconcretetype(PormG.julia_type(kind, _VRT_PG))
+      kind isa pg_only || @test isconcretetype(PormG.julia_type(kind, _VRT_SL))
+    end
+    @test n >= 20   # the subtype walk reached the field structs
+  end
+
+  # The engines `:struct` compares a type across (`_JULIA_TYPE_ENGINES`) are the capability table's
+  # (`_BACKENDS`), one each. Expected: the two name the same backends in the same order. It matters
+  # because a backend added to `_BACKENDS` and not here would never be asked, so a type that differs on
+  # it would go unmarked in every struct written against another engine.
+  @testset "julia_type's dispatch engines are the backends of the capability table (#1632)" begin
+    engines = PormG._JULIA_TYPE_ENGINES
+    @test length(engines) == length(PormG._BACKENDS)
+    for (e, (name, T)) in zip(engines, PormG._BACKENDS)
+      @test e isa T
+      @test PormG._backend_name(e) == name
+    end
   end
 end

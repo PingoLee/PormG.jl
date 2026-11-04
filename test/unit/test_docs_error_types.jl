@@ -3619,6 +3619,11 @@ const DOCERR_CASES = [
         InvalidConfigurationError,
         () -> PormG.Configuration.register_offline("docerr_offline_pg_version"; server_version = 160_000),
     ),
+    (
+        "read/index.md — `show_query = :struct` on a terminal that returns no rows (`count()`) raises QueryBuildError (#1632)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.count(show_query = :struct),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

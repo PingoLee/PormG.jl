@@ -57,6 +57,7 @@ whole fluent-API reference; `?query.filter` cannot, because the methods are synt
 | `.earliest("f")` / `.latest("f")` | `PormGRow`; raise `DoesNotExist` when empty |
 | `.get(pairs...)` | Exactly one `PormGRow`, or `DoesNotExist` / `MultipleObjectsReturned` |
 | `.list(T)` / `.first(T)` / `.get(T, pairs...)` | `Vector{T}` / `T` or `nothing` / `T` for a struct or `NamedTuple` type you declare — type-stable rows; no `values()` projects `fieldnames(T)`, with `values()` the aliases must equal `fieldnames(T)`; NULL needs `Union{Nothing,X}` or `Union{Missing,X}`; integer widths convert, float↔Decimal and float→Int are refused |
+| `.list(show_query = :struct)` | The struct `T` that query needs, as source text (`String`) to paste and review — the way to get `T`; never hand-derive the field types. Nullable columns are `Union{Nothing,X}`, an untypable column is a `# TODO` line; `list(T, show_query = :struct)` shows where a declared `T` differs |
 | `.count()` / `.exists()` | `Int` / `Bool` |
 | `.aggregate("alias" => Agg(...), ...)` | One `NamedTuple` of scalars, no `GROUP BY` |
 

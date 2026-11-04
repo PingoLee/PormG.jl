@@ -14,11 +14,12 @@
 # SQLite-only, why it is silent, and why it survives review: the engine that would catch it is not
 # the engine that has the bug.
 #
-# This file is the owner. Three generics keyed by `(CanonicalType, backend)`:
+# This file is the owner. Four generics keyed by `(CanonicalType, backend)`:
 #
 #   value_formatter(kind, backend)            Julia value -> the stored text     (slot 1)
 #   sql_canonicalize(kind, backend, e, mods)  a SQL expression -> the stored text (slot 2)
 #   value_parser(kind, backend)               the stored text -> a Julia value    (slot 3)
+#   julia_type(kind, backend)                 the Julia type slot 3 delivers      (slot 4, #1632)
 #
 # Slots 1 and 3 are inverses and both return a function or `nothing`, so `parser(formatter(x)) == x`
 # is a property a test can state (`test/unit/test_read_value_coercion.jl` does) — for the temporal
@@ -47,7 +48,7 @@
 # there is the #239/#507 failure verbatim — a name that does not exist yet when the file compiles.
 #
 # ── WHY NOT A SUBMODULE ──────────────────────────────────────────────────────────────────────────
-# Three generics do not earn a fourth namespace that `QueryBuilder` and `Migrations` would each have
+# Four generics do not earn a fourth namespace that `QueryBuilder` and `Migrations` would each have
 # to import. This is `Backend.jl`'s precedent, not `column_spec.jl`'s: `column_spec` is a compiler
 # living inside the submodule that owns its inputs, but this table's inputs live in THREE different
 # submodules, so the only module that can see all of them is `PormG` itself.
@@ -171,6 +172,7 @@ value_formatter(::CanonicalType, ::PormGBackend) = nothing
 # path records for a projected `Value(x)`, so the text parses back into a typed value — the type that
 # went in for a `Date`/`Time`, a UTC `ZonedDateTime` for a `DateTime` (as a SQLite `DateTimeField` reads).
 import TimeZones, UUIDs   # the literal types below; `Dates` is imported by `PormG.jl`
+import Decimals           # slot 4 names `Decimals.Decimal` (#1632)
 
 """
     literal_canonical_kind(x) -> Union{CanonicalType, Nothing}
@@ -426,3 +428,85 @@ function value_parser(k::CDecimal, ::PormGMySQL, label = nothing)
   return v -> Dialect._parse_mysql_declared_decimal(v, p, s, label)
 end
 value_parser(::CanonicalType, ::PormGBackend) = nothing
+
+
+# ── Slot 4: the Julia type a read delivers (#1632) ───────────────────────────────────────────────
+#
+# Slot 3 says HOW a stored value becomes a Julia value; none of the three slots said WHAT TYPE it then
+# is. `show_query = :struct` needs exactly that to write the struct a typed read (`list(T)`) accepts,
+# and writing the mapping a second time, at the call site, is the #474 defect. So the table states it:
+# the type `value_parser(kind, backend)` yields, or the driver's own type where the kind has no parser.
+#
+# `nothing` means the table cannot name ONE type, and `:struct` writes a `# TODO` line instead of a field
+# (never `Any`, which `list(T)` refuses anyway). That is the answer for a kind no column has (a JSON key's
+# value, `CUnsupported`) and for a cell whose type the DATA decides: a PostgreSQL array is `Vector{T}`,
+# or `Vector{Union{Missing,T}}` when an element is NULL (`Models.normalize_pg_array`), and no declared
+# field takes both; a SQLite decimal wider than the exact parser reads raw, an `Int64` or a `Float64` by
+# row. `test/unit/test_value_repr_table.jl` holds the totality (every kind with a parser has a type) and
+# lists those two exceptions with their reasons.
+#
+# The DRIVER's type, not the declaration: PostgreSQL's `integer` is an `Int32`. That a struct declares
+# `Int64` for it is the typed read's conversion rule (`_typed_declaration`, `typed_read.jl`), a
+# type → type rule, not a second kind → type map.
+"""
+    julia_type(kind, backend) -> Union{Type, Nothing}
+
+The Julia type a cell of `kind` has on `backend` after the read path: the type `value_parser(kind,
+backend)` yields, the driver's own type where there is no parser, or `nothing` when no single type is
+fixed. `show_query = :struct` reads it (#1632).
+"""
+function julia_type end
+
+# PostgreSQL. LibPQ.jl and Postgres.jl deliver the same types: the Postgres.jl extension registers
+# LibPQ's on every connection (`_register_types!`: `Decimal`, a UTC `ZonedDateTime`, `DateTime`, and
+# `String` for uuid, json, jsonb, inet, cidr and tsvector).
+julia_type(::CInt16,    ::PormGPostgres) = Int16
+julia_type(::CInt32,    ::PormGPostgres) = Int32
+julia_type(::CInt64,    ::PormGPostgres) = Int64
+julia_type(::CFloat64,  ::PormGPostgres) = Float64     # `_parse_computed_float`; a double column as is
+julia_type(::CBool,     ::PormGPostgres) = Bool
+julia_type(::Union{CText,CVarChar}, ::PormGPostgres) = String
+julia_type(::Union{CUUID,CJSON,CInet,CCidr,CTsVector}, ::PormGPostgres) = String
+julia_type(::CBytes,    ::PormGPostgres) = Vector{UInt8}
+julia_type(::CDate,     ::PormGPostgres) = Dates.Date
+julia_type(::CTime,     ::PormGPostgres) = Dates.Time
+julia_type(k::CDateTime, ::PormGPostgres) = k.with_timezone ? TimeZones.ZonedDateTime : Dates.DateTime
+julia_type(::CDecimal,  ::PormGPostgres) = Decimals.Decimal
+julia_type(::CInterval, ::PormGPostgres) = Dates.CompoundPeriod   # `_parse_postgres_interval`
+# SQLite. Every integer is an `Int64` and every REAL a `Float64` in SQLite.jl; text is a `String`.
+julia_type(::Union{CInt16,CInt32,CInt64}, ::PormGSQLite) = Int64
+julia_type(::CFloat64,  ::PormGSQLite) = Float64
+julia_type(::CBool,     ::PormGSQLite) = Bool                # `_parse_sqlite_bool`
+julia_type(::Union{CText,CVarChar,CUUID,CJSON}, ::PormGSQLite) = String
+julia_type(::CBytes,    ::PormGSQLite) = Vector{UInt8}
+julia_type(::CDate,     ::PormGSQLite) = Dates.Date          # `_parse_sqlite_date`
+julia_type(::CTime,     ::PormGSQLite) = Dates.Time          # `_parse_sqlite_time`
+# Both flavours: the formatter writes the canonical UTC text with its `+00:00` (slot 1), which the
+# parser reads back as a `ZonedDateTime`. A naive text written outside PormG reads as a `DateTime`.
+julia_type(::CDateTime, ::PormGSQLite) = TimeZones.ZonedDateTime
+julia_type(::CInterval, ::PormGSQLite) = Dates.CompoundPeriod   # `_parse_sqlite_interval`
+# A `Decimal` exactly when slot 3 has a parser for the width; otherwise the raw cell, whose type the row
+# decides.
+julia_type(k::CDecimal, b::PormGSQLite) = value_parser(k, b) === nothing ? nothing : Decimals.Decimal
+# MySQL (#1130). MySQL.jl's own integer widths; the extension reads DECIMAL as a `Decimal`, DATETIME as
+# a `DateTime`, text as a `String` and a binary column as bytes. A uuid and a JSON document are left
+# unnamed until a MySQL read-back records them.
+julia_type(::CInt16,    ::PormGMySQL) = Int16
+julia_type(::CInt32,    ::PormGMySQL) = Int32
+julia_type(::CInt64,    ::PormGMySQL) = Int64
+julia_type(::CFloat64,  ::PormGMySQL) = Float64
+julia_type(::CBool,     ::PormGMySQL) = Bool
+julia_type(::Union{CText,CVarChar}, ::PormGMySQL) = String
+julia_type(::CBytes,    ::PormGMySQL) = Vector{UInt8}
+julia_type(::CDate,     ::PormGMySQL) = Dates.Date
+julia_type(::CTime,     ::PormGMySQL) = Dates.Time
+julia_type(k::CDateTime, ::PormGMySQL) = k.with_timezone ? TimeZones.ZonedDateTime : Dates.DateTime
+julia_type(::CDecimal,  ::PormGMySQL) = Decimals.Decimal
+julia_type(::CInterval, ::PormGMySQL) = Dates.CompoundPeriod
+julia_type(::CanonicalType, ::PormGBackend) = nothing
+
+# Dispatch-only engines, to ask slot 4 about an engine other than the one at hand: `:struct` marks a
+# type another engine reads differently. `_SQLiteBindEngine` above is SQLite's.
+struct _PostgresTypeEngine <: PormGPostgres end
+struct _MySQLTypeEngine <: PormGMySQL end
+const _JULIA_TYPE_ENGINES = (_PostgresTypeEngine(), _SQLiteBindEngine(), _MySQLTypeEngine())

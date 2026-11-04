@@ -305,6 +305,18 @@ end
   return convert(X, v)
 end
 
+# #1632 — what a field should DECLARE for a column the read delivers as `S` (`julia_type`, slot 4 of
+# the value-representation table): the widest type the rules above convert `S` into, so one struct reads
+# the same on every engine. Any integer width is an `Int64` (PostgreSQL's `integer` is an `Int32`,
+# SQLite's an `Int64`), a `Float32` widens to `Float64`, any string is a `String`; a `Bool` stays a
+# `Bool` (no rule converts it). A type → type rule of the typed read, so `show_query = :struct` carries
+# no kind → type mapping of its own.
+_typed_declaration(::Nothing) = nothing
+_typed_declaration(::Type{T}) where T = T
+_typed_declaration(::Type{<:Union{Int8,Int16,Int32,Int64}}) = Int64
+_typed_declaration(::Type{Float32}) = Float64
+_typed_declaration(::Type{<:AbstractString}) = String
+
 # The refusals. Each names the terminal, the model, the row, the field, the field's declared type and
 # the column's Julia type — never the value (#971: a cell can be a secret, and an app may hand `e.msg`
 # to a client). `@noinline`: the `string(::Type)` rendering stays off the per-cell path (#1346).

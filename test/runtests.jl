@@ -214,6 +214,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Read terminals copy the handler once (#1589)" include("unit/test_read_path_one_copy_1589.jl")
     @testset "The build writes nothing into the handler (#1624, #1625)" include("unit/test_build_writes_nothing_1624.jl")
     @testset "Typed read decodes driver columns into T (#1544)" include("unit/test_typed_read_columns_1544.jl")
+    @testset "show_query = :struct: the struct a typed read needs (#1632)" include("unit/test_show_query_struct.jl")
     @testset "Query as a Tables.jl Source (#1344)" include("unit/test_tables_source.jl")
     @testset "No DataFrames or CSV in PormG; Internal Reads Use Rows (#1344)" include("unit/test_internal_rows_1344.jl")
     @testset "Bulk Writers Take Any Tables.jl Table (#1344)" include("unit/test_bulk_tables_input_1344.jl")

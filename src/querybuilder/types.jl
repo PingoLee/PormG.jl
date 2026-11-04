@@ -231,13 +231,26 @@ const ConnType = Union{_SQLEngine,Nothing}
 # it outside is refused as over the key itself (#1483); its kind can be an integer (`Coalesce(key, 0)`).
 const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing},
                                 json_key::Union{Tuple{String,String},Nothing}}
-# #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3 step
-# 2c: `"divisions"` the division answers of each computed column that has one; #1110: `"unapplied"`
-# the columns whose read kind is a declared decimal the engine left unapplied. All are per build
-# (`_build_cte_custom_model`).
-"""CTE configuration dictionary."""
-const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,
-                                  Dict{String,CanonicalType},Dict{String,CTEDivision},Set{String}}}
+"""CTE configuration dictionary: what `.with(...)` declared (`"query"`, `"join_field"`, `"join_type"`).
+Nothing a build derives is stored here; that is `CTEState`, on the build's instruction (#1624)."""
+const CTEDict = Dict{String,Union{SQLObjectHandler,Pair,String,Nothing}}
+
+# #1624 — what building one CTE's body derives about its columns, kept on the BUILD (the declaring
+# query's `InstructionObject.cte_state`) and never written into the handler. These four used to be keys
+# of the handler's `CTEDict` (`"model"`, `"kinds"`, `"divisions"`, `"unapplied"`), and the body's kinds
+# its `projection_kinds`: a write into the caller's query, which is why every read deep-copied it.
+#   * `model` — the synthetic model the outer query resolves `CTE(...)` paths against (#376, #544);
+#   * `kinds` — the type of each column's expression (`_expression_kind`, #1147);
+#   * `divisions` — the division answers of each computed column that has one (#1034 phase 3 step 2c);
+#   * `unapplied` — the columns whose read kind is a declared decimal the engine left unapplied (#1110);
+#   * `body_kinds` — the body build's read kind per column (`projection_kinds`, #564).
+struct CTEState
+  model::Models.Model_Type
+  kinds::Dict{String,CanonicalType}
+  divisions::Dict{String,CTEDivision}
+  unapplied::Set{String}
+  body_kinds::Dict{Symbol,CanonicalType}
+end
 
 # #487 — one materialized JOIN, typed by KIND.
 #
@@ -676,6 +689,11 @@ end
   # unapplied (`_reads_unapplied_declaration`): the projection applies its width on read, a value
   # composed over it is the computed number it means. Same keying and laziness as above.
   subquery_unapplied::Union{Nothing,IdDict{SubqueryObject,Bool}} = nothing
+  # #1624 — the state each CTE body's build derived (`CTEState`), by CTE name, handed in by the caller
+  # that rendered the WITH clause (`build_cte_clause` runs before this instruction exists). `nothing`
+  # when this statement renders no WITH: `update()`/`bulk_update` pass none, which is what the #433
+  # refusal reads ("the statement being built emits no WITH clause").
+  cte_state::Union{Nothing,Dict{String,CTEState}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
@@ -843,7 +861,7 @@ SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::AbstractStri
 #
 # The handle is NORMALIZED into the same `SQLField` the fluent `order_by(CTE(...))` builds, not
 # stored raw. That is what makes this cheap rather than invasive: all four readers of
-# `SQLOrder.field` — `get_order_query`, `_resolve_window_order`, the `_resolve_cte_string_paths!`
+# `SQLOrder.field` — `get_order_query`, `_resolve_window_order`, the `_resolve_cte_string_paths`
 # order loop and `deepcopy` — already require an `SQLField`. Normalizing here keeps their invariant
 # intact, so the widening costs zero consumer changes.
 #
@@ -961,12 +979,11 @@ mutable struct SQLObjectQuery <: SQLObject
   # `insert` above is ordered (#97).
   alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
   parameters::Union{Nothing,AbstractPormGParam}
-  # #564 — the build writes back the canonical kind of each projection here, the same way it writes
-  # back `parameters`, so the READ path can ask what each result column is without re-deriving it.
-  #
-  # Like `parameters`, it is a PER-BUILD artifact and `Base.deepcopy` deliberately does not carry it:
-  # it describes the projections of one build, and a stale map surviving into a copy that is then
-  # re-projected would describe columns that no longer exist.
+  # #564 — the canonical kind of each projection, which the build used to write back here beside
+  # `parameters`. #1624: the build writes neither any more — both are on its instruction
+  # (`instruction.parameters`, `instruction.projection_kinds`), returned by `_render_select` — so on a
+  # handler these two slots stay as constructed (`nothing`, an empty map). They are kept because the
+  # copy-rule tests assert exactly that (#43), and `Base.deepcopy` still does not carry them.
   projection_kinds::Dict{Symbol,CanonicalType}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
@@ -982,18 +999,15 @@ end
 
 # #43: CTE state must be copied deeply enough that a copy's execution can't mutate
 # the original. A shallow `copy(ctes)` aliases the inner CTEDict values, so
-# materializing the per-build "model" (see _build_cte_custom_model) on one copy
-# clobbers the other. Rebuild each CTEDict with a fresh dict: deep-copy the sub-query
-# handler (recursion covers nested CTEs), carry the scalar join config by reference
-# (Pair/String are immutable), and DROP the transient "model" — it is re-derived on
-# every build and holds a Model_Type → Module reference that deepcopy cannot traverse
-# (the very reason the original copy was shallow).
+# materializing the per-build "model" on one copy clobbered the other. Rebuild each CTEDict
+# with a fresh dict: deep-copy the sub-query handler (recursion covers nested CTEs) and carry
+# the scalar join config by reference (Pair/String are immutable). Since #1624 a build derives
+# nothing into this dict (`CTEState`, on the instruction), so there is no transient key to drop.
 function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::OrderedCollections.OrderedDict{String,CTEDict}
   out = OrderedCollections.OrderedDict{String,CTEDict}()
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "kinds", "divisions", "unapplied") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh
@@ -1051,7 +1065,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       list_joins=deepcopy(obj.list_joins),
       distinct=obj.distinct,
       for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
-      ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
+      ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (a deep copy of each sub-query)
       custom_join=_copy_path_joins(obj.custom_join),  # #112/#484: fresh map, fresh filters vectors
       alias_join=_copy_alias_joins(obj.alias_join)    # (`field` / `target` shared by ref — see above)
     )

@@ -206,19 +206,18 @@ end
 # WHY BUILD TIME. The registry is complete only once `build()` runs; `.filter()` / `.values()` /
 # `.on()` are call time, and a check there is order-dependent — `.with()` then `.filter()` refused
 # while the reverse sailed past. That is exactly the #434 defect whose removal is recorded in
-# `_on` (`join_conditions.jl`). Every read entry point `deepcopy`s the handler before `build()`, so
-# this mutates a per-call copy and never the user's query object.
+# `_on` (`join_conditions.jl`).
 #
-# THAT DEEPCOPY IS ALSO WHAT KEEPS THIS INSIDE THE #493/#508 CONTRACT (construct, never mutate —
-# `pormg-querybuilder-internals` → *Expression nodes*). The arms below assign into `.column` /
-# `.field` / a `WindowSpec` vector, which on a node that arrived through the public API would be the
-# #508 defect: `agg = Sum("ev__sku")` bound to a name and reused across two queries would carry the
-# first query's rewrite into the second. It does not, because by the time this runs every node is a
-# per-build copy — the same standing this skill grants `_retag_cte_column` / `_retag_joined_column`,
-# which rewrite a build product rather than a user node. Measured: after building a query that uses
-# it, a shared `Sum("ev__sku")` still holds a `String`, and re-using it in a query with no `ev` CTE
-# still fails as a field path rather than as a stale handle. Move this pass ahead of the deepcopy and
-# that stops being true.
+# IT CONSTRUCTS, NEVER MUTATES (#1624; the #493/#508 contract, `pormg-querybuilder-internals` →
+# *Expression nodes*). `_resolve_cte_string_paths` returns a VIEW of the query: every `SQLField` on
+# the way to a rewritten path is a fresh wrapper (`Base.deepcopy(::SQLTypeField)`, one level), every
+# container above one is rebuilt, and the caller's nodes are left as they were. Until #1624 the arms
+# assigned into the caller's `.field`, safe only because every read entry point deep-copied the
+# handler before `build()`; those copies are gone, so the wrapper copies here (and in `_bind_cte_filter`,
+# the window arms below and `_retag_cte_string(::SQLField)`) are what keep a node reused across two
+# queries — `agg = Sum("ev__sku")` bound to a name — from carrying the first query's rewrite into the
+# second. Pinned by `test_build_writes_nothing_1624.jl` (the caller's `SQLField`s are the same objects,
+# with the same `.field`, after every terminal).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Segment 1 of `path`, if this is a CTE COLUMN reference on this query; `nothing` otherwise.
@@ -328,10 +327,13 @@ function _retag_cte_string(x::FObject, q::SQLObject, rewrote::Set{String})
                  aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
 # `::SQLField`, not `::SQLTypeField` — see the twin note in `_retag_cte_column` (`build_helpers.jl`).
-# `SQLField` is a build product and stays mutable, so this arm still writes.
+# #1624: CONSTRUCTS too. The field may be the caller's own node (nested in a projection or a filter
+# column), and the build writes nothing into the handler it renders, so the rewrite lands on a fresh
+# wrapper (`Base.deepcopy(::SQLTypeField)` is the one-level copy that keeps `root` and `memo_as`).
 function _retag_cte_string(x::SQLField, q::SQLObject, rewrote::Set{String})
-  x.field = _retag_cte_string(x.field, q, rewrote)
-  return x
+  y = deepcopy(x)
+  y.field = _retag_cte_string(x.field, q, rewrote)
+  return y
 end
 # A window function hides column paths in TWO slots the arm above cannot see. `WindowFunction` is a
 # `SQLTypeFunction`, so without this method it takes that arm, its `column` is rewritten and its
@@ -442,15 +444,10 @@ function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::
     # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
     # window and the fluent `order_by` agree on what a CTE-rooted path means.
     #
-    # It WRITES into the `SQLField` it is handed, hence the copy — which is DEFENSIVE, not
-    # demonstrated, and saying so is the point of this comment. Measured: removing the `deepcopy`
-    # turns no test red and leaves the caller's node unmutated anyway, because every read path
-    # deepcopies the handler before `build()` and Julia's generic walk clones `q.values`/`q.order`
-    # wholesale rather than routing through the shallow `Base.deepcopy(::SQLTypeField)` method. So
-    # the caller's `SQLField` never actually reaches this walker today.
-    #
-    # It stays because that protection is a property of the CALL PATH, not of this function, and
-    # this function is the one that writes. It costs one shallow copy per window ORDER BY entry.
+    # It WRITES into the `SQLField` it is handed, hence the copy, which since #1624 is LOAD-BEARING:
+    # the read paths no longer deep-copy the handler before `build()`, so the `SQLField` reaching
+    # this walker is the caller's own, and without the copy the rewrite would land on it. It costs
+    # one shallow copy per window ORDER BY entry.
     # Its reach used to be partial: `deepcopy(::SQLTypeField)` rebuilds the wrapper while SHARING
     # whatever `.field` holds, so reassigning that slot on the copy protected a `String` terminal —
     # what every `SQLOrder(SQLField(f, f))` in the docs and the suite carries — but not a nested
@@ -578,20 +575,23 @@ function _refuse_cte_string_in_join(x, q::SQLObject, context::String, depth::Int
 end
 
 # The pass entry, called from `build()` once the registry is final.
-function _resolve_cte_string_paths!(q::SQLObject)
+#
+# #1624: returns a VIEW and writes nothing into `q`. The view is a new `SQLObjectQuery` whose `values`,
+# `filter` and `order` hold the resolved nodes — each `SQLField` on the way to a rewritten path is a
+# fresh wrapper, and each container above one (`OperObject`, `QObject`, `QorObject`, `SQLOrder`) is
+# rebuilt — while every other slot, and every node not on such a path, is shared with `q`. This pass
+# used to rewrite `q`'s own nodes in place, safe only because every read entry point deep-copied the
+# handler first; that copy is gone now that the build writes nothing.
+function _resolve_cte_string_paths(q::SQLObject)::SQLObject
   # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
   # That is most of the neutrality argument for this pass, for free.
   isempty(q.ctes) && return q
 
-  for v in q.values
-    v isa SQLField && _bind_cte_string!(v, q)
-  end
-  for f in q.filter
-    _bind_cte_filter!(f, q)
-  end
-  for o in q.order
-    o.field isa SQLField && _bind_cte_string!(o.field, q)
-  end
+  values = Union{SQLTypeText,SQLTypeField}[v isa SQLField ? _bind_cte_string!(deepcopy(v), q) : v for v in q.values]
+  filter = FilterType[_bind_cte_filter(f, q) for f in q.filter]
+  order = SQLTypeOrder[o.field isa SQLField ?
+             SQLOrder(_bind_cte_string!(deepcopy(o.field), q), o.order, o.orientation, o._as, o.nulls) : o
+           for o in q.order]
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
   # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored
@@ -601,26 +601,36 @@ function _resolve_cte_string_paths!(q::SQLObject)
       _refuse_cte_string_in_join(f, q, "a cjoin_on `on` expression")
     end
   end
-  return q
+  return SQLObjectQuery(model=q.model, connect_key=q.connect_key, values=values, filter=filter, insert=q.insert,
+    limit=q.limit, offset=q.offset, order=order, group=q.group, having=q.having, list_joins=q.list_joins,
+    distinct=q.distinct, for_update=q.for_update, ctes=q.ctes, custom_join=q.custom_join, alias_join=q.alias_join,
+    parameters=q.parameters, projection_kinds=q.projection_kinds)
 end
+
+# The pre-#1624 name, kept only because `test/unit/test_cte_reference.jl` (a copy-rule test kept
+# unchanged by #1624) calls it and reads the RETURNED object. Despite the `!`, it mutates nothing: it
+# is `_resolve_cte_string_paths`, which returns the view.
+_resolve_cte_string_paths!(q::SQLObject) = _resolve_cte_string_paths(q)
 
 # Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
 # fields that carry a column. A handle on the RHS (`filter("x" => CTE("ev","sku"))`) is already legal
-# and already typed, so only the LHS positions need testing.
-function _bind_cte_filter!(f, q::SQLObject, depth::Int = 0)
-  depth > 32 && return nothing
+# and already typed, so only the LHS positions need testing. #1624: it CONSTRUCTS — a resolved copy of
+# each container on the way to a column, the caller's node left as it was.
+function _bind_cte_filter(f, q::SQLObject, depth::Int = 0)
+  depth > 32 && return f
   if f isa Pair
-    _bind_cte_filter!(f.first, q, depth + 1)
+    return _bind_cte_filter(f.first, q, depth + 1) => f.second
   elseif f isa QObject
-    for x in f.filters; _bind_cte_filter!(x, q, depth + 1); end
+    return QObject(filters=FilterType[_bind_cte_filter(x, q, depth + 1) for x in f.filters])
   elseif f isa QorObject
-    for x in f.or; _bind_cte_filter!(x, q, depth + 1); end
+    return QorObject(or=FilterType[_bind_cte_filter(x, q, depth + 1) for x in f.or])
   elseif f isa OperObject
-    f.column isa SQLField && _bind_cte_string!(f.column, q)
+    f.column isa SQLField || return f
+    return OperObject(operator=f.operator, values=f.values, column=_bind_cte_string!(deepcopy(f.column), q))
   elseif f isa SQLField
-    _bind_cte_string!(f, q)
+    return _bind_cte_string!(deepcopy(f), q)
   end
-  return nothing
+  return f
 end
 
 
@@ -641,11 +651,14 @@ Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 - String containing the WITH clause SQL, or empty string if no CTEs
 """
 function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias};
-                          correlated::Bool = false)
-  isempty(ctes) && return ""
+                          correlated::Bool = false)::Tuple{String,Union{Nothing,Dict{String,CTEState}}}
+  # #1624: the second value is what each body's build derived (`CTEState`), for the caller to hand to
+  # the declaring query's `build(...; cte_state)`. It used to be written into each `CTEDict`.
+  isempty(ctes) && return ("", nothing)
 
   @pormg_debug false
   cte_parts = String[]
+  state = Dict{String,CTEState}()
   for (cte_name, cte_fields) in ctes
     # Extract the query from the fields dict
     @pormg_debug false
@@ -674,10 +687,16 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
     cte_sql = with_bucket(parameters, :cte) do
       nested_mark = nested_parameter_mark(parameters)
       # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
-      sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields,
-                  cte_body=cte_name, cte_body_correlated=correlated)
+      rendered = _render_select(cte_query, table_alias=table_alias, connection=connection, parameters=parameters,
+                                cte_body=cte_name, cte_body_correlated=correlated)
+      # #1624: the body's columns, read off its own build, kept for the declaring query's build.
+      state[cte_name] = _build_cte_custom_model(rendered.instruction)
+      # #26/#1237: a body that takes a row lock is refused outside a transaction, as it was when this
+      # rendered the body through `query()` (whose default mode runs the refusal) — on every mode of
+      # the declaring query, inspection included, and after the model above, in the same order.
+      _refuse_lock_outside_transaction(cte_query, rendered.instruction)
       reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
-      sql
+      rendered.sql
     end
 
     @pormg_debug false
@@ -689,7 +708,7 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
     push!(cte_parts, "$safe_cte_name AS (\n  $cte_sql\n)")
   end
 
-  return "WITH " * join(cte_parts, ",\n") * "\n"
+  return ("WITH " * join(cte_parts, ",\n") * "\n", state)
 end
 
 
@@ -1025,7 +1044,14 @@ _value_projection_field(::SQLText, ::Nothing, ::SQLInstruction) = throw(QueryBui
   "A Value(…) projected in a CTE body needs an alias — e.g. \e[32m\"flag\" => Value(1)\e[0m — so the " *
   "outer query can name the column (#823)."))
 
-function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
+# #1624 — the state the CTE `name`'s body build derived, as handed to this build, or `nothing` when this
+# statement renders no WITH (or names no such CTE). The one accessor every reader goes through.
+_cte_state(instruc::SQLInstruction, name::AbstractString)::Union{Nothing,CTEState} =
+  instruc.cte_state === nothing ? nothing : get(instruc.cte_state, name, nothing)
+
+# #1624: returns the body's `CTEState` (it wrote these into the handler's `CTEDict`), read off the body
+# build's instruction: its view of the projection, its records, its `projection_kinds`.
+function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
   values = instruct.object.values
   # Ordered to satisfy `Model_Type.fields` (#544), and meaningfully so: the loop below walks
   # `instruct.object.values` in the order the caller selected them, so the synthetic CTE model now
@@ -1097,17 +1123,14 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   end
   @pormg_debug false
 
-  cte["model"] = Models.Model_Type(
+  model = Models.Model_Type(
     name = "",
     fields = fields,
     field_names = selected_field_names,
     _module = instruct.object.model._module,
     connect_key = instruct.object.model.connect_key
   )
-  cte["kinds"] = kinds
-  cte["divisions"] = divisions
-  cte["unapplied"] = unapplied
-
+  return CTEState(model, kinds, divisions, unapplied, instruct.projection_kinds)
 end
 
 # #1111, #1127, #1034 phase 3 step 2c — the integer-division answers of the computed CTE column `key`,

@@ -823,7 +823,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # discovered by testing `haskey(instruct.object.ctes, vector[1])` on a plain field path.
   #
   # #492 restored the `"<cte>__<col>"` string spelling, and that does NOT re-open this test: the
-  # string is resolved into a `CTEReference` upstream, by `_resolve_cte_string_paths!` (`ctes.jl`),
+  # string is resolved into a `CTEReference` upstream, by `_resolve_cte_string_paths` (`ctes.jl`),
   # which runs once in `build()` when the registry is final. So both spellings arrive here as a
   # handle, and this branch keeps exactly one entry condition. What #444 removed and #492 kept
   # removed is the PRECEDENCE described below — not the string.
@@ -853,9 +853,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
     cte_dict = instruct.object.ctes[cte_name]
     # #433: this is NOT an internal invariant, which is what it claimed to be until the #433 audit.
-    # `cte_dict["model"]` is written in exactly one place — `_build_cte_custom_model`, reached only
-    # from `build_cte_clause`. So a missing "model" means precisely one thing: THIS statement never
-    # ran `build_cte_clause`, and therefore emits no `WITH` clause at all. Referencing the CTE would
+    # The CTE's state (`CTEState`, #1624) is built in exactly one place — `_build_cte_custom_model`,
+    # reached only from `build_cte_clause`, whose caller hands it to this build. So a missing state
+    # means precisely one thing: THIS statement never ran `build_cte_clause`, and therefore emits no
+    # `WITH` clause at all. Referencing the CTE would
     # name a relation the statement never declares. That is a property of the statement kind, not a
     # broken invariant, and it is reachable from ordinary user input:
     #
@@ -872,7 +873,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # subquery's `WITH` since #1523). The mutation renderers — `_update`, `bulk_update`
     # (`execution_bulk.jl`) — do not. A per-caller guard would have to be re-added for each future
     # one. This is the single point where the missing render step becomes observable.
-    if !haskey(cte_dict, "model")
+    cte_state = _cte_state(instruct, cte_name)
+    if cte_state === nothing
       throw(QueryBuildError(
         "The CTE \e[4m\e[31m$(cte_name)\e[0m is referenced here, but the statement being built " *
         "emits no \e[4m\e[32mWITH\e[0m clause — so the CTE would never be declared.\n  " *
@@ -882,7 +884,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         "Scope the statement with a plain \e[4m\e[32m.filter(...)\e[0m or a subquery instead of a " *
         "CTE (#433)."))
     end
-    cte_model = cte_dict["model"]::PormGModel
+    cte_model = cte_state.model
     
     # #444: unreachable from user input — `CTE(name, path)` refuses an empty path at construction,
     # with a message that names the call the user wrote. Kept as a fail-closed backstop so a future
@@ -1004,7 +1006,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   else
     @pormg_debug false
     # #492: a CTE-rooted string reaches this branch only when the resolution pass did not walk it.
-    # The gate does NOT live here, deliberately — `_resolve_cte_string_paths!` (`ctes.jl`) owns it,
+    # The gate does NOT live here, deliberately — `_resolve_cte_string_paths` (`ctes.jl`) owns it,
     # because a decision made here has only a `Vector{String}` to work with and cannot retag the
     # caller's `SQLField`; leaving `root` at `:base` while the join builder keys `:cte` is a silent
     # memo miss that costs the sargable date rewrite and the JSON branch. Do not "simplify" the gate

@@ -152,9 +152,10 @@ end
   # The projection builds, and records the kind its value is read back as.
   q = MOD.Mod_result.objects
   q.values("v" => diff())
-  sql = PormG.QueryBuilder.query(q; show_query = :sql, connection = _MOD_PG)
+  rendered = PormG.QueryBuilder._render_select(q; show_query = :sql, connection = _MOD_PG)   # #1624
+  sql = rendered.sql
   @test occursin("(\"Tb\".\"time\" - \"Tb\".\"time\")", sql)
-  @test get(q.object.projection_kinds, :v, nothing) isa PormG.CInterval
+  @test get(rendered.instruction.projection_kinds, :v, nothing) isa PormG.CInterval
   # A filter on the alias takes a duration, as over a `DurationField`.
   q = MOD.Mod_result.objects
   q.values("v" => diff())
@@ -180,8 +181,8 @@ end
   # Only `-` of two times: a time plus a time has no meaning, and stays untyped.
   q = MOD.Mod_result.objects
   q.values("v" => _MF("time") + _MF("time"))
-  PormG.QueryBuilder.query(q; show_query = :sql, connection = _MOD_PG)
-  @test get(q.object.projection_kinds, :v, nothing) === nothing
+  q_kinds = PormG.QueryBuilder._render_select(q; show_query = :sql, connection = _MOD_PG).instruction.projection_kinds
+  @test get(q_kinds, :v, nothing) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

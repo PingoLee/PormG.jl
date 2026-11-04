@@ -92,8 +92,8 @@ const RVC = RvcModels
 function _rvc_kinds(build!::Function; connection = _RVC_SL)
   q = RVC.Rvc_row.objects
   build!(q)
-  PormG.QueryBuilder.query(q; connection = connection, show_query = :sql)
-  return q.object.projection_kinds
+  q_kinds = PormG.QueryBuilder._render_select(q; connection = connection, show_query = :sql).instruction.projection_kinds
+  return q_kinds
 end
 
 @testset "Reading a temporal value back on SQLite (#564)" begin
@@ -866,8 +866,7 @@ end
     for (backend, connection) in ((:sqlite, _RVC_SL), (:postgres, _RVC_PG))
       @testset "$backend: $label" for (label, column, value, projection, name, kind) in shapes
         kinds_of(build!) = (q = RVC.Rvc_flag.objects; build!(q);
-                            PormG.QueryBuilder.query(q; connection = connection, show_query = :sql);
-                            q.object.projection_kinds)
+                            PormG.QueryBuilder._render_select(q; connection = connection, show_query = :sql).instruction.projection_kinds)
         cte = !(column isa String)
         reused = kinds_of(q -> (cte && with_g!(q); q.values(cond(column, value), projection)))
         alone = kinds_of(q -> (cte && with_g!(q); q.values(projection)))

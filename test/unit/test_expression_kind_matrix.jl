@@ -195,10 +195,11 @@ function _ekm_channels(instr, name::Symbol)
     formatter = _ekm_ask(() -> _EKM_QB._expression_formatter(node, instr)),
     textless  = _ekm_ask(() -> _EKM_QB._concat_textless_operand(node, instr)),
   )
-  cte = get(instr.object.ctes, "g", nothing)
+  # #1624: the CTE body's model is on the build's instruction (`CTEState`), not in the handler's dict.
+  cte = _EKM_QB._cte_state(instr, "g")
   if cte !== nothing
     ch = merge(ch, (
-      cte_field    = _ekm_ask(() -> nameof(typeof(cte["model"].fields["v"]))),
+      cte_field    = _ekm_ask(() -> nameof(typeof(cte.model.fields["v"]))),
     ))
   end
   # Last, so adding it moved no other channel's text in the fixture. It is no family claim: phase 3 of
@@ -222,12 +223,15 @@ function _ekm_observe(backend, mod, label, base, build, context)
   cell === nothing && return nothing
   q, name = cell
   probe = Ref{Any}(nothing)
+  # #1624: the build's own record of each projection's kind (the build no longer writes it into `q`).
+  kinds = Ref{Any}(nothing)
   try
-    _EKM_QB.query(q; show_query = :sql, built = instr -> (probe[] = _ekm_channels(instr, name)))
+    _EKM_QB.query(q; show_query = :sql,
+                  built = instr -> (probe[] = _ekm_channels(instr, name); kinds[] = instr.projection_kinds))
   catch e
     return (stage = :build, error = string(nameof(typeof(e))), message = _ekm_message(e))
   end
-  kind = get(q.object.projection_kinds, name, nothing)
+  kind = get(kinds[], name, nothing)
   # Whether the read path undoes the recorded kind: asked of the parser table, so a parser added for a
   # kind moves the cell rather than a list here going stale.
   read_parsed = kind === nothing ? nothing : PormG.value_parser(kind, first(_EKM_PARSER_ENGINE[backend])) !== nothing

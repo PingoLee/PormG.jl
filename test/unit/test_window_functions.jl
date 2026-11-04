@@ -1073,15 +1073,13 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 # The field the CTE model gives the `top` column: the body built on its own, then typed by the same
-# `_build_cte_custom_model` the outer build calls (whose per-build copy the caller never sees).
+# `_build_cte_custom_model` the outer build calls (#1624: it returns the body's `CTEState`).
 function _cte_case_field(Model_, expr)
   body = Model_.objects
   body.values("resultid", "top" => expr)
   instruction = PormG.QueryBuilder.build(body.object; connection = Model_.connect_key == "window_685_pg" ?
                                                                     WindowMockPostgres() : WindowMockSQLite())
-  cte = PormG.QueryBuilder.CTEDict()
-  PormG.QueryBuilder._build_cte_custom_model(cte, instruction)
-  return cte["model"].fields["top"]
+  return PormG.QueryBuilder._build_cte_custom_model(instruction).model.fields["top"]
 end
 
 # The outer filter's bound values for `c__top__@gt => 10` over a CTE whose `top` is `expr`.
@@ -1316,7 +1314,7 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
       body.values("resultid", Value(1))
       instruction = PormG.QueryBuilder.build(body.object;
         connection = backend == "PostgreSQL" ? WindowMockPostgres() : WindowMockSQLite())
-      err = try PormG.QueryBuilder._build_cte_custom_model(PormG.QueryBuilder.CTEDict(), instruction); nothing catch e; e end
+      err = try PormG.QueryBuilder._build_cte_custom_model(instruction); nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("needs an alias", _window_msg(err))
     end
@@ -1367,9 +1365,7 @@ function _cte_aggregate_field(mod, conn, expr; joined::Bool = false)
   joined && body.cjoin_on(mod.Race; alias = "rc", on = [PormG.QueryBuilder.Joined("rc", "raceid") == F("raceid")])
   body.values("resultid", "v" => expr)
   instruction = PormG.QueryBuilder.build(body.object; connection = conn)
-  cte = PormG.QueryBuilder.CTEDict()
-  PormG.QueryBuilder._build_cte_custom_model(cte, instruction)
-  return cte["model"].fields["v"]
+  return PormG.QueryBuilder._build_cte_custom_model(instruction).model.fields["v"]
 end
 
 @testset "#1116: Max/Min/Avg in a CTE body type through a path, a Joined handle or F arithmetic" begin
@@ -1430,9 +1426,7 @@ end
       # operand: `Coalesce("grid", 0)` is an integer under the FLOAT column's name `points`.
       body = mod.Result.objects
       body.values("resultid", "points" => Max(Coalesce("grid", 0)))
-      cte = PormG.QueryBuilder.CTEDict()
-      PormG.QueryBuilder._build_cte_custom_model(cte, PormG.QueryBuilder.build(body.object; connection = conn))
-      typed = cte["model"].fields["points"]
+      typed = PormG.QueryBuilder._build_cte_custom_model(PormG.QueryBuilder.build(body.object; connection = conn)).model.fields["points"]
       @test typed isa Union{PormG.Models.sIntegerField,PormG.Models.sBigIntegerField}
       # A declared `output_field` still names the type.
       @test _cte_aggregate_field(mod, conn, Max(Coalesce("points", 0.0, output_field = FloatField()))) isa

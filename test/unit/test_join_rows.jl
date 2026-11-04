@@ -105,15 +105,16 @@ import PormG.QueryBuilder: F, Q, Qor, Joined, CTE, FilterType,
 
 # The rows a query materializes, straight off the instruction object `build` returns. Mirrors the
 # preamble of `query()` (`execution_read.jl`): the WITH clause is built BEFORE `build`, on the same
-# parameter collector and alias generator, and it is the only writer of `cte_dict["model"]` —
-# skipping it makes every CTE reference (correctly, #433) refused as "emits no WITH clause".
+# parameter collector and alias generator, and it is the only source of each CTE's state (`CTEState`,
+# handed to `build`, #1624) — skipping it makes every CTE reference (correctly, #433) refused as
+# "emits no WITH clause".
 function _jr_rows(q; conn = _JR_SL)
   table_alias = PormG.QueryBuilder.SQLTbAlias()
   parameters = PormG.QueryBuilder.get_parameter(conn)
   PormG.QueryBuilder.set_context!(parameters, :cte)
-  PormG.QueryBuilder.build_cte_clause(q.object.ctes, conn, parameters, table_alias)
+  _, cte_state = PormG.QueryBuilder.build_cte_clause(q.object.ctes, conn, parameters, table_alias)
   instruc = PormG.QueryBuilder.build(q.object; table_alias = table_alias, connection = conn,
-                                     parameters = parameters)
+                                     parameters = parameters, cte_state = cte_state)
   return instruc.row_join
 end
 

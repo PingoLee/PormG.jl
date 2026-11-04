@@ -214,20 +214,23 @@ statement `.list()` would run, and refuses the same shapes.
 """
 function explain_query(q::SQLObjectHandler; analyze::Bool = false, buffers::Bool = false, verbose::Bool = false,
                        connection::Union{Nothing, _SQLEngine} = nothing)
-  # #43: never mutate the caller — `query()` writes the bound parameters back onto the handler.
-  q = deepcopy(q)
+  # #43: never mutate the caller — and since #1624 the build writes nothing, so no copy is needed: the
+  # bound parameters are the build's (`rendered.instruction.parameters`), not written back.
   _, conn, _ = get_settings(q, connection = connection)
   # Refuse an unsupported option before the build, so nothing is rendered or fetched for it.
   _explain_sql(conn, ""; analyze, buffers, verbose)
   # `:execute` so the SELECT FOR UPDATE outside-a-transaction guard applies, as it does to running it.
-  sql = query(q, connection = conn, show_query = :execute)
+  rendered = _render_select(q, connection = conn, show_query = :execute)
+  _refuse_lock_outside_transaction(q, rendered.instruction)
+  sql = rendered.sql
+  parameters = rendered.instruction.parameters
   explain_sql = _explain_sql(conn, sql; analyze, buffers, verbose)
   # On `conn`, the pool the statement was built for: a `connection =` override must be explained
   # where it points, not on the model's default pool. `fetch` still reuses an open transaction's
   # connection on that pool.
-  rows = fetch(conn, explain_sql, q.object.parameters) |> Tables.rowtable
+  rows = fetch(conn, explain_sql, parameters) |> Tables.rowtable
   facts = _explain_facts(conn, rows)
-  result = _show_query_result(:inspection, sql, conn, q.object.model.name, :select; parameters = q.object.parameters)
+  result = _show_query_result(:inspection, sql, conn, q.object.model.name, :select; parameters = parameters)
   merge!(result, facts)
   result[:explain_sql] = explain_sql
   result[:analyze] = analyze

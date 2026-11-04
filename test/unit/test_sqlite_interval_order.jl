@@ -396,9 +396,9 @@ end
   for conn in (_IO_SL, _IO_PG)
     q = _IOM.Io_race.objects
     q.values("circuit", "mx" => _IO_FN.Max(_io_gap()), "mn" => _IO_FN.Min(_io_gap()))
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:mx] == PormG.CInterval()
-    @test q.object.projection_kinds[:mn] == PormG.CInterval()
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:mx] == PormG.CInterval()
+    @test q_kinds[:mn] == PormG.CInterval()
   end
   # Typing it on PostgreSQL changes the read, never the SQL.
   q_pg = _IOM.Io_race.objects
@@ -537,14 +537,14 @@ _io_text(ms) = PormG.Dialect._sqlite_interval_text(ms)
   for conn in (_IO_SL, _IO_PG)
     q = _IOM.Io_lap.objects
     q.values("circuit", "t" => _IO_FN.Sum("lap"), "a" => _IO_FN.Avg("best"), "n" => _IO_FN.Sum("id"))
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:t] == PormG.CInterval()
-    @test q.object.projection_kinds[:a] == PormG.CInterval()
-    @test !haskey(q.object.projection_kinds, :n)
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:t] == PormG.CInterval()
+    @test q_kinds[:a] == PormG.CInterval()
+    @test !haskey(q_kinds, :n)
     q = _IOM.Io_race.objects
     q.values("circuit", "t" => _IO_FN.Sum(_io_gap()))
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:t] == PormG.CInterval()
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:t] == PormG.CInterval()
   end
   q = _IOM.Io_lap.objects
   q.values("circuit", "n" => _IO_FN.Sum("id"))
@@ -625,8 +625,8 @@ end
   for conn in (_IO_SL, _IO_PG)
     q = _IOM.Io_race.objects
     q.values("id", "g" => _IO_FN.Greatest(_io_gap(), _io_gap() * -1))
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:g] == PormG.CInterval()
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:g] == PormG.CInterval()
   end
 
   # No millisecond form for every operand: the SQL rendered before #900. An interval beside text does
@@ -833,16 +833,16 @@ end
   for conn in (_IO_SL, _IO_PG)
     q = _IOM.Io_race.objects
     q.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"))
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:p] == PormG.CInterval()
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:p] == PormG.CInterval()
   end
 
   # A sum of numbers inside arithmetic is untouched and untyped.
   q = _IOM.Io_lap.objects
   q.values("circuit", "x" => _IO_FN.Sum("id") / _IO_FN.Count("id"))
   @test occursin("(SUM(\"Tb\".\"id\") / COUNT(\"Tb\".\"id\")) as \"x\"", _io_sql(q))
-  QB.query(q; connection = _IO_SL, show_query = :sql)
-  @test !haskey(q.object.projection_kinds, :x)
+  q_kinds = QB._render_select(q; connection = _IO_SL, show_query = :sql).instruction.projection_kinds
+  @test !haskey(q_kinds, :x)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1119,8 +1119,8 @@ end
       # recorded the kind before the fix too, over the text's maximum.
       for conn in (_IO_SL, _IO_PG)
         q = agg(fn)
-        QB.query(q; connection = conn, show_query = :sql)
-        @test q.object.projection_kinds[:m] isa PormG.CInterval
+        q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+        @test q_kinds[:m] isa PormG.CInterval
       end
     end
   end
@@ -1157,8 +1157,8 @@ end
                  _io_sql(mean()))
   for conn in (_IO_SL, _IO_PG)
     q = mean()
-    QB.query(q; connection = conn, show_query = :sql)
-    @test q.object.projection_kinds[:d] isa PormG.CInterval
+    q_kinds = QB._render_select(q; connection = conn, show_query = :sql).instruction.projection_kinds
+    @test q_kinds[:d] isa PormG.CInterval
   end
 
   q = _IOM.Io_lap.objects

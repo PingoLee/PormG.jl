@@ -897,10 +897,9 @@ _cte_textless_record(::Any, ::SQLInstruction) = nothing
 # answer, a path past the column, or a CTE this query does not name.
 function _cte_division(p::CTEReference, instruc::SQLInstruction, question::Symbol)
   occursin("__", p.path) && return nothing
-  cte = get(instruc.object.ctes, p.name, nothing)
-  divisions = cte === nothing ? nothing : get(cte, "divisions", nothing)
-  divisions isa AbstractDict || return nothing
-  record = get(divisions, p.path, nothing)
+  state = _cte_state(instruc, p.name)   # #1624
+  state === nothing && return nothing
+  record = get(state.divisions, p.path, nothing)
   return record === nothing ? nothing : getfield(record, question)
 end
 
@@ -1740,8 +1739,8 @@ _subquery_textless(p::SubqueryObject, instruc::SQLInstruction)::Union{Tuple{Symb
 # The kind the inner build recorded. A subquery projects exactly one column (the render refuses any
 # other count), but a wildcard over a one-field model can record that column under two names — its
 # attribute and its `db_column` — so the answer is the kind they agree on, and none if they do not.
-function _record_subquery_kind!(instruc::SQLInstruction, p::SubqueryObject, inner::SQLObjectHandler)
-  kinds = unique(Base.values(inner.object.projection_kinds))
+function _record_subquery_kind!(instruc::SQLInstruction, p::SubqueryObject, inner_kinds::Dict{Symbol,CanonicalType})
+  kinds = unique(Base.values(inner_kinds))
   length(kinds) == 1 || return nothing
   instruc.subquery_kinds === nothing && (instruc.subquery_kinds = IdDict{SubqueryObject,CanonicalType}())
   instruc.subquery_kinds[p] = only(kinds)

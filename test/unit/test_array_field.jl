@@ -304,8 +304,8 @@ const ARR28_BASES = [
     read_kind(type) = begin
       q = _AS.objects
       q.values("v" => PormG.QueryBuilder.Cast("team", type))
-      res = PormG.QueryBuilder.query(q; show_query = :dict)
-      (get(q.object.projection_kinds, :v, nothing), res[:sql_text])
+      rendered = PormG.QueryBuilder._render_select(q; show_query = :sql)   # #1624: the build's record
+      (get(rendered.instruction.projection_kinds, :v, nothing), rendered.sql)
     end
     k, sql = read_kind("varchar[]")
     @test k == CArray(CVarChar(nothing)) && occursin("::varchar[]", sql)
@@ -323,13 +323,13 @@ const ARR28_BASES = [
     # An `output_field` naming an array declares it as a `Cast` does.
     q = _AS.objects
     q.values("v" => PormG.QueryBuilder.Coalesce("tyre_compounds", "tyre_compounds"; output_field = "varchar[]"))
-    PormG.QueryBuilder.query(q; show_query = :dict)
-    @test get(q.object.projection_kinds, :v, nothing) == CArray(CVarChar(nothing))
+    q_kinds = PormG.QueryBuilder._render_select(q; show_query = :dict).instruction.projection_kinds
+    @test get(q_kinds, :v, nothing) == CArray(CVarChar(nothing))
     # A function whose value is its operand's reads as the operand's array.
     q = _AS.objects
     q.values("v" => PormG.QueryBuilder.Max(PormG.QueryBuilder.Cast("team", "date[]")))
-    PormG.QueryBuilder.query(q; show_query = :dict)
-    @test get(q.object.projection_kinds, :v, nothing) == CArray(CDate())
+    q_kinds = PormG.QueryBuilder._render_select(q; show_query = :dict).instruction.projection_kinds
+    @test get(q_kinds, :v, nothing) == CArray(CDate())
     # `real[]` is no array an `ArrayField` declares, and its `Float32` elements would widen (#1258).
     @test first(read_kind("real[]")) === nothing
     # A field object renders its sized type (#1438) and records the ArrayField's own kind.

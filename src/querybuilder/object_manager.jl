@@ -76,7 +76,7 @@ end
 
 # #533 — the rest of the funnel. `SQLOrder.field` is `SQLTypeField` now, and its inner constructor
 # routes EVERY construction path through here, so a value the constructor accepts is a value the four
-# readers (`get_order_query`, `_resolve_window_order`, `_resolve_cte_string_paths!`, `deepcopy`) can
+# readers (`get_order_query`, `_resolve_window_order`, `_resolve_cte_string_paths`, `deepcopy`) can
 # handle. Before this the slot was `Union{SQLTypeField,String}`: a bare String type-checked at
 # construction and then died in `get_order_query` reading `._as` off a `String` — a raw `FieldError`
 # naming an internal slot rather than anything the caller wrote (#528).

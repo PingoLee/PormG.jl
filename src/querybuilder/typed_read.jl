@@ -98,10 +98,13 @@ function _typed_projection!(q::SQLObjectHandler, ::Type{T}) where T
   return q
 end
 
-# The copy a typed read runs on: the caller's handler is never written to (#43, #199).
+# The handler a typed read runs on: the caller's is never written to (#43, #199). With no `values()`
+# the projection is set to `fieldnames(T)`, on a shallow copy (#1624: the build writes nothing, so the
+# projection is the only change); with `values()` `_typed_projection!` only checks it, so the read runs
+# on the caller's handler itself.
 function _typed_query(objct::SQLObjectHandler, ::Type{T}) where T
   _check_typed_read_target(T)
-  q = deepcopy(objct)
+  q = isempty(objct.object.values) ? _terminal_copy(objct) : objct
   _typed_projection!(q, T)
   return q
 end
@@ -364,9 +367,10 @@ naming the field and both types. See *Typed rows* in the read guide.
 Base.@constprop :aggressive list(objct::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T =
   _typed_read_owned(_typed_query(objct, T), T; show_query=show_query)
 
-# #1589 — the typed read on a handler the caller owns: the copy a terminal (`_get`, `_first`, `_last`,
-# `_extreme`) has already made. The projection is applied to that copy, so `get(T)` copies the handler
-# once, where it copied it three times (`_get`, `_typed_query`, `_execute_select`).
+# #1589 — the typed read on the copy a terminal (`_get`, `_first`, `_last`, `_extreme`) has already
+# made: the projection is applied to that copy, so `get(T)` copies the handler once, where it copied it
+# three times (`_get`, `_typed_query`, `_execute_select`). Since #1624 that one copy is shallow
+# (`_terminal_copy`), as the build writes nothing.
 Base.@constprop :aggressive function _list_owned(q::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
   _check_typed_read_target(T)
   return _typed_read_owned(_typed_projection!(q, T), T; show_query=show_query)
@@ -374,9 +378,9 @@ end
 
 # The body both run, on a handler that is owned AND already carries `T`'s projection.
 Base.@constprop :aggressive function _typed_read_owned(q::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
-  show_query !== :execute && return _query_list_owned(q, show_query)
+  show_query !== :execute && return _show_select(q, show_query)
   # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
-  result, built, connection = _execute_select_owned(q)
+  result, built, connection = _execute_select(q)
   return _typed_rows(T, result, _projection_parsers(built, connection),
                      _TypedReadSite("a typed read into $(T)", q.object.model.name))
 end

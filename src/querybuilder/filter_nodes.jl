@@ -17,9 +17,9 @@ end
 # projected column, its values bound as one
 # clause-ordered run in the ambient bucket.
 function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::String
-  # query() mutates the handler's parameters, and SQLField deepcopy is shallow on `.field`, so the same
-  # SubqueryObject can be shared across list()/count() deepcopies — copy before rendering.
-  handler = deepcopy(v.query)
+  # #1624: rendered as it is, with no copy — the build writes nothing into the handler it renders. It
+  # used to copy here because `query()` wrote the parameters and the projection kinds back into it.
+  handler = v.query
 
   # Exactly one projected column (reuse the @in one-column rule).
   labels = _subquery_projection_labels(handler)
@@ -42,6 +42,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   inner_json_key = Base.RefValue{Union{Nothing,Tuple{String,String}}}(nothing)   # #1346: typed, unlike its older neighbours
   inner_kind = Ref{Any}(nothing)
   inner_unapplied = Ref(false)
+  inner_projection_kinds = Base.RefValue{Dict{Symbol,CanonicalType}}(Dict{Symbol,CanonicalType}())
   inner_sql = query(handler,
                     table_alias=instruc.table_alias,
                     connection=instruc.connection,
@@ -52,13 +53,14 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
                                       inner_whole_numeric[] = _subquery_projection_whole_numeric(handler, inner);
                                       inner_json_key[] = _subquery_projection_json_key(handler, inner);
                                       inner_kind[] = _subquery_projection_kind(handler, inner);
-                                      inner_unapplied[] = _subquery_projection_unapplied(handler, inner)))
+                                      inner_unapplied[] = _subquery_projection_unapplied(handler, inner);
+                                      inner_projection_kinds[] = inner.projection_kinds))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
-  # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
-  # `handler`, our copy), so the value this text returns has that kind. File it under the node the
+  # #888: the inner build typed its one column (its instruction's `projection_kinds`, read through the
+  # `built` window above), so the value this text returns has that kind. File it under the node the
   # caller holds, for `_read_kind` and `_subquery_read_record` to read once the enclosing projection
   # has rendered.
-  _record_subquery_kind!(instruc, v, handler)
+  _record_subquery_kind!(instruc, v, inner_projection_kinds[])
   # #929: and the formatter a value compared with it must satisfy, for `_expression_formatter`.
   _record_subquery_formatter!(instruc, v, inner_formatter[])
   # #1124: and what `Concat` and the declared casts make of it, for `_concat_textless_operand`.
@@ -110,14 +112,15 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # `q.object.ctes`), and `build()` resolves `<cte>__col` through that. Its values bind under a scoped
   # `:cte` bucket, so the run detached below lifts them first — where the `WITH` text sits (#432).
   # Until #1523 this renderer emitted no `WITH`, and `Exists` refused such a subquery (#433).
-  with_clause = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias;
-                                correlated = true)
+  with_clause, cte_state = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias;
+                                           correlated = true)
   instruction = build(
     q.object,
     table_alias=instruc.table_alias,
     connection=instruc.connection,
     parameters=instruc.parameters,
     outer=instruc,
+    cte_state=cte_state,
     # #1002: EXISTS asks whether a row matches, which repeats cannot change — unless an OFFSET counts
     # them. A projection cleared above still declares its joins.
     semi_join = offset == 0,

@@ -422,7 +422,7 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   # other symptom. That is why the fix belongs at construction.
   column_sql = _get_select_query(raw_field, instruc)
   # #474: a String path reaching HERE is base-model. #492 restored `"<cte>__<col>"`, so that is no
-  # longer true by construction — it is true because `_resolve_cte_string_paths!` (`ctes.jl`) has
+  # longer true by construction — it is true because `_resolve_cte_string_paths` (`ctes.jl`) has
   # already rewritten every CTE-rooted string into a `CTEReference` by the time `build()` renders
   # anything. Rewriting rather than gating is exactly what keeps this line correct: had the string
   # stayed a string and been resolved here, it would read `:base` while the join builder wrote

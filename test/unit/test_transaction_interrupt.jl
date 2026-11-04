@@ -21,6 +21,9 @@
 #        synchronously and closes a SQLite handle the worker is still inside — but it belongs to the
 #        #71 renewal path, and is tracked separately. These tests cover NEITHER; the "interrupt in
 #        the body" testsets below pin the between-statements case only.
+#        Postgres.jl changes the in-flight case (#1588): an interrupt in its read closes the socket,
+#        so the ROLLBACK fails at once on a lost connection. The #1588 testsets pin that the
+#        statement is then cancelled before the renewal, and that nothing else sends that cancel.
 #     2. `with_transaction`. `rollback_failed` is `false` for any sql that is not a plain
 #        ROLLBACK, so both of its release points released a dirty handle.
 #     3. `AdvisoryLock`. Worse consequence: the `finally` releases unconditionally AND its UNLOCK
@@ -97,6 +100,7 @@ mutable struct MockPGPool322 <: PormG.PormGPostgres
   lock::ReentrantLock
   interrupt_sql::Union{Nothing, String}   # sql prefix whose task raises InterruptException
   fail_sql::Union{Nothing, String}        # sql prefix whose task raises an ordinary error
+  lost_sql::Union{Nothing, String}        # sql prefix whose task raises a LOST-CONNECTION error (#1588)
   begins::Threads.Atomic{Int}
   rollbacks::Threads.Atomic{Int}
   commits::Threads.Atomic{Int}
@@ -106,15 +110,20 @@ mutable struct MockPGPool322 <: PormG.PormGPostgres
   renewals::Threads.Atomic{Int}
   renew_gate::Union{Nothing, Channel{Nothing}}
   renewed::Base.RefValue{Any}             # the handle the last renewal produced (#327)
+  cancels_at_renew::Threads.Atomic{Int}   # `cancels` as the first renewal saw it; -1 = no renewal (#1588)
   next_id::Threads.Atomic{Int}
 end
-MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, renew_gate = nothing) =
+MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, lost_sql = nothing, renew_gate = nothing) =
   MockPGPool322(Any[FakeConn322(1)], [true], "mock://pg", 1, ReentrantLock(),
-                interrupt_sql, fail_sql,
+                interrupt_sql, fail_sql, lost_sql,
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
                 Threads.Atomic{Int}(0), renew_gate, Base.RefValue{Any}(nothing),
-                Threads.Atomic{Int}(1))
+                Threads.Atomic{Int}(-1), Threads.Atomic{Int}(1))
+
+# The mock driver's "connection lost" (#1588): what a ROLLBACK on Postgres.jl's closed socket raises.
+const _LOST_MSG_322 = "mock: connection lost"
+PormG.backend_is_connection_error(::MockPGPool322, e) = e isa ErrorException && e.msg == _LOST_MSG_322
 
 _matches_322(prefix, sql) = prefix !== nothing && startswith(sql, prefix)
 
@@ -123,6 +132,7 @@ PormG.backend_connect(pool::MockPGPool322; kwargs...) =
   FakeConn322(Threads.atomic_add!(pool.next_id, 1) + 1)
 function PormG.backend_renew_connection(pool::MockPGPool322, conn; kwargs...)
   Threads.atomic_add!(pool.renewals, 1)
+  Threads.atomic_cas!(pool.cancels_at_renew, -1, pool.cancels[])   # the order, for #1588
   pool.renew_gate === nothing || take!(pool.renew_gate)   # park the recovery here on demand
   # Recorded so a test can assert what happened to the handle when `reconnect_db` returns `nothing`
   # and therefore hands it back to nobody (#327).
@@ -143,6 +153,7 @@ function PormG.backend_execute_async(pool::MockPGPool322, conn, sql::String, par
   return @async begin
     _matches_322(pool.interrupt_sql, sql) && throw(InterruptException())
     _matches_322(pool.fail_sql, sql) && error("mock: statement refused")
+    _matches_322(pool.lost_sql, sql) && error(_LOST_MSG_322)
     # Advisory-lock queries are read for a boolean; everything else discards the result.
     startswith(sql, "SELECT pg_") ? Any[(true,)] : NamedTuple[]
   end
@@ -353,6 +364,109 @@ end
   @test pool.available[1] === true                     # released synchronously, as before
   @test pool.connections[1] === old                    # the same, clean handle
   @test pool.cancels[] == 0 && pool.renewals[] == 0    # recovery never involved
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1588: an abandoned await in the body, then a ROLLBACK that finds the connection lost
+# What: a body statement's await is abandoned by an interrupt, and the cleanup ROLLBACK fails with a
+#   lost-connection error, Postgres.jl's shape (its read closed the socket). The statement must be
+#   cancelled, and BEFORE the renewal replaces the slot's handle.
+# SQL: BEGIN; SELECT pg_sleep(20) (interrupted); ROLLBACK (lost) → renew.
+# Why: an in-transaction await skips the abandoned-await recovery, so without this nothing sends a
+#   cancel and the server runs the statement to its end, holding its locks.
+# Reverted-fix signature: `cancels == 0`. Moving the cancel after the renewal: `cancels_at_renew == 0`.
+# The precision testsets pin that a clean ROLLBACK, or a lost connection with no interrupt, sends none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PG: a lost ROLLBACK after an abandoned await cancels before renewing (#1588)" begin
+  pool = MockPGPool322(interrupt_sql = "SELECT pg_sleep", lost_sql = "ROLLBACK")
+  old = pool.connections[1]
+
+  err = try
+    CP.run_in_transaction(() -> CP.fetch(pool, "SELECT pg_sleep(20)"), pool)
+    nothing
+  catch e
+    e
+  end
+
+  @test CP._await_abandoned(err)                       # the body's interrupt still propagates
+  @test pool.rollbacks[] == 1
+  @test pool.cancels[] == 1                            # ← the cancel #1588 adds
+  @test pool.renewals[] == 1
+  @test pool.cancels_at_renew[] == 1                   # sent before the renewal ran
+  @test pool.connections[1] !== old                    # renewed, not released as-is
+  @test pool.available[1] === true
+end
+
+@testset "PG: the cancel is sent when the body turned the interrupt into its own error (#1588)" begin
+  # What: the body catches the interrupted query's error and raises its own, so the error leaving the
+  #   block is not an abandoned await. The await_result mark on the block still sends the cancel.
+  # Why: the interrupt arrives as a `StatementError`, so a `catch DatabaseError` in the body catches it
+  #   (async.md documents that); keying the gate on the propagated error alone missed this.
+  # Reverted signature: dropping the mark in `await_result` gives `cancels == 0`.
+  pool = MockPGPool322(interrupt_sql = "SELECT pg_sleep", lost_sql = "ROLLBACK")
+  err = try
+    CP.run_in_transaction(pool) do
+      try
+        CP.fetch(pool, "SELECT pg_sleep(20)")
+      catch
+        error("lap times query failed")
+      end
+    end
+    nothing
+  catch e
+    e
+  end
+  @test err isa ErrorException && !CP._await_abandoned(err)
+  @test pool.cancels[] == 1
+  @test pool.cancels_at_renew[] == 1
+  @test pool.renewals[] == 1
+end
+
+@testset "PG: an abandoned await whose ROLLBACK fails without losing the connection sends no cancel (#1588 precision)" begin
+  # The other half of the gate: a ROLLBACK error that is not a lost connection (a second interrupt on
+  # LibPQ's blocked ROLLBACK is the real case) is left to the renewal, as before (#71).
+  pool = MockPGPool322(interrupt_sql = "SELECT pg_sleep", fail_sql = "ROLLBACK")
+  err = try
+    CP.run_in_transaction(() -> CP.fetch(pool, "SELECT pg_sleep(20)"), pool)
+    nothing
+  catch e
+    e
+  end
+  @test CP._await_abandoned(err)
+  @test pool.rollbacks[] == 1
+  @test pool.cancels[] == 0
+  @test pool.renewals[] == 1
+end
+
+@testset "PG: an abandoned await whose ROLLBACK succeeds sends no cancel (#1588 precision)" begin
+  # LibPQ's shape: the ROLLBACK waits behind the statement and runs, so the connection is clean.
+  pool = MockPGPool322(interrupt_sql = "SELECT pg_sleep")
+  old = pool.connections[1]
+  err = try
+    CP.run_in_transaction(() -> CP.fetch(pool, "SELECT pg_sleep(20)"), pool)
+    nothing
+  catch e
+    e
+  end
+  @test CP._await_abandoned(err)
+  @test pool.rollbacks[] == 1
+  @test pool.cancels[] == 0 && pool.renewals[] == 0
+  @test pool.connections[1] === old && pool.available[1] === true
+end
+
+@testset "PG: a lost ROLLBACK after an ordinary body error sends no cancel (#1588 precision)" begin
+  # A connection the server dropped by itself: renewed as before (#71), with no cancel attempt.
+  pool = MockPGPool322(fail_sql = "SELECT pg_sleep", lost_sql = "ROLLBACK")
+  err = try
+    CP.run_in_transaction(() -> CP.fetch(pool, "SELECT pg_sleep(20)"), pool)
+    nothing
+  catch e
+    e
+  end
+  @test !CP._await_abandoned(err)
+  @test pool.rollbacks[] == 1
+  @test pool.cancels[] == 0
+  @test pool.renewals[] == 1
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

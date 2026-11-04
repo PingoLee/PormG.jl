@@ -889,6 +889,10 @@ end
 # and the connection never takes a new key, because PormG refuses Postgres.jl's `reconnect` (see
 # `_checked_params`), which would reassign `socket`, `pid` and `skey` in place. Relaxing that refusal
 # makes reading the key here unsafe.
+#
+# Two callers reach it: the detached abandoned-await recovery, and a transaction's cleanup when its
+# `ROLLBACK` after an interrupt found the socket closed (#1588, `_cancel_after_lost_rollback!`), which
+# sends it before the slot is renewed.
 function PormG.backend_cancel_query!(pool::_Pool, conn::Postgres.Connection)
   try
     Postgres.cancel_query!(conn)
@@ -906,7 +910,8 @@ end
 # `Postgres.cancel_query!` without its open-socket check. The TLS and GSSAPI policy is the driver's own
 # (`cancel_sslmode`, `cancel_gssencmode`): the cancel key is a credential, so the cancel connection is
 # encrypted as the connection it cancels was. Every name and field here is pinned in
-# `test/unit/test_driver_internals.jl`. Never throws: its caller is a detached recovery task.
+# `test/unit/test_driver_internals.jl`. Never throws: its callers are a detached recovery task and a
+# transaction's cleanup while the transaction's error propagates.
 function _cancel_by_key(conn::Postgres.Connection)
   try
     transport = conn.socket.transport

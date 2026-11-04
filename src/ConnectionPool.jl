@@ -54,7 +54,8 @@ export pool_stats
 # ambiguous and therefore undefined (#35). Callers in this package use `CP.close_pool!`.
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, in_transaction_on, current_transaction_depth, redact_secret
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, in_transaction_on, current_transaction_depth, redact_secret,
+                                   _mark_abandoned_await!
 import PormG.Configuration: _is_offline_key, _offline_server_version  # #1452: an offline SQLite key's stated version
 
 # #218: a raw-SQL manual-params array/tuple the caller binds with backend-native placeholders
@@ -2379,6 +2380,47 @@ end
 finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing, renew::Bool = false) =
   finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error, renew = renew)
 
+# Is `e` (already crossed a seam, so possibly a `DatabaseError` around an async envelope) a lost
+# connection? The same probe `fetch`'s retry makes inline. Never throws: a pool without a driver hits Backend.jl's
+# throwing fallback, and the caller is a transaction's cleanup.
+function _lost_connection_error(pool::_SQLEngine, e)::Bool
+  try
+    return backend_is_connection_error(pool, _driver_cause(_unwrap_async_exception(e))) === true
+  catch
+    return false
+  end
+end
+
+"""
+    _cancel_after_lost_rollback!(pool, conn) -> Nothing
+
+Stop the statement an interrupt abandoned inside a transaction, when the cleanup `ROLLBACK` then
+found the connection lost (#1588). Called before the connection is renewed.
+
+The case is Postgres.jl's. An interrupt that lands in its read closes the socket, and since an
+in-transaction await skips the abandoned-await recovery, nothing else would send a cancel: the
+`ROLLBACK` fails at once, the slot is renewed, and the server runs the statement to its end with its
+locks held. The Postgres.jl method of [`backend_cancel_query!`](@ref) finds the socket closed and
+sends the cancel by the backend's key (#1587), which reaches only that statement: the backend's
+client is gone, so it runs nothing new.
+
+**Before** the renewal, synchronously, so the cancel has been sent by the time the slot holds a new
+connection (PostgreSQL does not acknowledge a cancel request; the backend acts on it on its own). The
+key would still be right afterwards, since a Postgres.jl renewal opens a new `Connection` and leaves
+the old one's key alone, but the order keeps that from mattering. On the other drivers it is the
+ordinary best-effort cancel: LibPQ's has no cancel handle once libpq dropped the socket, and MySQL's
+`KILL QUERY` stops a statement the server is still running for a client that left. Never throws: the
+transaction's original error is propagating.
+"""
+function _cancel_after_lost_rollback!(pool::_SQLEngine, conn)
+  try
+    backend_cancel_query!(pool, conn)
+  catch cancel_failure
+    @debug "Cancel of a statement abandoned inside a transaction failed" exception=cancel_failure
+  end
+  return nothing
+end
+
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
 # trigger connection renewal.
@@ -2849,6 +2891,9 @@ function await_result(ft::FetchTask)
     # only it must keep the connection out of the pool (#315). Deliberately does not change what
     # this throws — see below.
     ft.abandoned = _await_abandoned(e)
+    # Inside a transaction the block owns the connection, so the abandonment is recorded on it: its
+    # cleanup reads the mark even if the body catches this error or raises its own (#1588).
+    ft.abandoned && ft.in_transaction && _mark_abandoned_await!(ft.pool)
     # `rethrow()` when nothing changed: PormG's own errors (DoesNotExist, QueryBuildError,
     # PoolTimeoutError…) pass through `_as_database_error` untouched, and re-`throw`ing the same
     # object would discard the backtrace saying where it came from.
@@ -3656,6 +3701,12 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
   # to settle on, so that case must fall through to the ordinary finalize rather than recover.
   local begin_task = nothing
   abandoned_begin = false
+  # Was a statement's await in `f()` abandoned by an interrupt (#1588)? Marked by `await_result`
+  # through the block's context, so it holds even when `f()` caught that error or raised its own.
+  abandoned_in_body = Threads.Atomic{Bool}(false)
+  # Did the ROLLBACK after such an await find the connection lost (#1588)? Set in the `catch`, acted
+  # on in the `finally`, before the renewal.
+  cancel_lost = false
   try
     # Begin transaction. `_await_tx_statement`, not a bare `Base.fetch`: these statements bypass
     # `fetch`, so they are the only driver contact in this function that no seam covers. The
@@ -3680,7 +3731,7 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
     end
 
     # Execute the function within transaction context
-    result = with_tx_context(pool, conn) do
+    result = with_tx_context(pool, conn; abandoned_await = abandoned_in_body) do
       f()
     end
 
@@ -3714,6 +3765,12 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
     # alone: routing it here would trade a slow Ctrl-C for a reconnect on a connection that was going
     # to be fine.
     #
+    # Postgres.jl is the exception (#1588). An interrupt that lands in its read closes the socket, so
+    # the ROLLBACK fails at once on a lost connection and the slot is renewed, while the server goes on
+    # running the abandoned statement, holding its locks, until it ends. So when the ROLLBACK after an
+    # abandoned await finds the connection lost, the statement is cancelled before the renewal: see
+    # `_cancel_after_lost_rollback!`.
+    #
     # A SECOND interrupt landing on that blocked ROLLBACK is a different matter, and a genuine
     # pre-existing bug rather than a scope decision: it becomes `rollback_error`, which is not benign,
     # so the terminal `finalize_transaction_connection!` renews — and `_renew_or_discard_connection!`
@@ -3744,10 +3801,19 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
         if !_is_benign_rollback_error(pool, rb)
           @error "Failed to rollback transaction; connection will be renewed before returning to the pool" exception=_unwrap_async_exception(rb)
         end
+        # #1588: an abandoned await in `f()`, then a ROLLBACK that found the connection lost. Only
+        # an interrupt can make the first true, so a server that dropped the connection by itself
+        # never costs a cancel attempt here. The mark covers a body that caught the interrupt or
+        # raised its own error; `e` covers an abandoned await no `FetchTask` saw. A ROLLBACK that
+        # failed without losing the connection sends none: the renewal handles that connection
+        # (LibPQ's `reset!` cancels first).
+        cancel_lost = (abandoned_in_body[] || _await_abandoned(e)) && _lost_connection_error(pool, rb)
       end
     end
     root === e ? rethrow() : throw(root)
   finally
+    # Before the renewal below, which replaces the slot's handle (#1588).
+    cancel_lost && _cancel_after_lost_rollback!(pool, conn)
     if abandoned_begin
       # The driver may still be inside BEGIN on this connection, so nothing here may touch it: the
       # recovery cancels, waits for the driver to let go, and only then renews — all on a DETACHED

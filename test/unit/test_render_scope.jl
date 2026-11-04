@@ -316,3 +316,60 @@ end
                              object = RScopeLap.objects.object)
     @test with_bucket(() -> :ran, bare, :where) === :ran
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RenderScope: `_with_scope` derives the next scope statically (#1596)
+# Every clause of a build enters a scope, and `_with_scope` used to build it through a run-time keyword
+# splat over `fieldnames(RenderScope)` — 40 allocations per scope change, against none for the struct
+# written out. Expected: deriving a scope costs no more than constructing it with the same eleven values
+# (relative, so it holds across Julia versions), every field is one of its keywords, and the values not
+# named carry over.
+# ─────────────────────────────────────────────────────────────────────────────
+function _rscope_allocs(f::F) where {F}
+    f(); f()
+    return minimum(Base.gc_alloc_count(@timed(f()).gcstats) for _ in 1:3)
+end
+
+@testset "RenderScope: _with_scope is as cheap as the constructor (#1596)" begin
+    s = RenderScope()
+    derive() = PormG.QueryBuilder._with_scope(s; phase = :row, label = "a filter", introducer = :filter)
+    construct() = RenderScope(:row, "a filter", s.group_key, s.join_hop, s.join_side, s.join_left, s.join_right,
+                              :filter, s.outer, s.having, s.set_reads)
+    @test derive() == construct()
+    @test _rscope_allocs(derive) <= _rscope_allocs(construct)
+end
+
+@testset "RenderScope: every field is a keyword of _with_scope (#1596)" begin
+    kws = Set(Base.kwarg_decl(only(methods(PormG.QueryBuilder._with_scope))))
+    fields = Set(fieldnames(RenderScope))
+    missing_kws = setdiff(fields, kws)
+    isempty(missing_kws) || @info "#1596: add these RenderScope fields to _with_scope's keywords" missing_kws
+    @test kws == fields
+end
+
+@testset "RenderScope: _with_scope carries every field it is not given (#1596)" begin
+    reads = Set(["R1"])
+    s = RenderScope(:row, "the order", true, "driverid", :left, ("a", "b"), ("c",), :order_by, true, true, reads)
+    same = PormG.QueryBuilder._with_scope(s)
+    @test same == s
+    @test same.set_reads === reads          # a shared set, by reference (nested scopes collect into it)
+    moved = PormG.QueryBuilder._with_scope(s; label = "the filter")
+    @test moved.label == "the filter"
+    @test all(getfield(moved, f) === getfield(s, f) for f in fieldnames(RenderScope) if f !== :label)
+end
+
+@testset "RenderScope: _with_scope routes each keyword to its own field (#1596)" begin
+    # One field at a time, set to a value no other field holds by default: only that field changes. A
+    # swapped pair in the positional call — two `Bool`s (`group_key`, `outer`, `having`) included,
+    # which a single scope cannot tell apart — moves a different field and fails here.
+    nondefault = (phase = :row, label = "a label", group_key = true, join_hop = "a hop", join_side = :left,
+                  join_left = ("l",), join_right = ("r",), introducer = :order_by, outer = true, having = true,
+                  set_reads = Set(["R9"]))
+    @test Set(keys(nondefault)) == Set(fieldnames(RenderScope))
+    base = RenderScope()
+    for f in fieldnames(RenderScope)
+        moved = PormG.QueryBuilder._with_scope(base; NamedTuple{(f,)}((nondefault[f],))...)
+        @test getfield(moved, f) == nondefault[f]
+        @test all(getfield(moved, g) === getfield(base, g) for g in fieldnames(RenderScope) if g !== f)
+    end
+end

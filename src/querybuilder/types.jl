@@ -530,8 +530,17 @@ hand it the inner query's.
   set_reads::Union{Nothing,Set{String}} = nothing
 end
 
-_with_scope(s::RenderScope; kw...) =
-  RenderScope(; (k => getfield(s, k) for k in fieldnames(RenderScope))..., kw...)
+# #1596: every field written out, each defaulting to the previous scope's, and the positional
+# constructor — static, one small immutable struct per scope change. It used to splat
+# `fieldnames(RenderScope)` into the keyword constructor at run time: 40 allocations and a dynamic
+# call on every clause of every build. A field added to `RenderScope` is added here too; the
+# positional call breaks loudly until it is, and `test_render_scope.jl` names the missing keyword.
+_with_scope(s::RenderScope; phase = s.phase, label = s.label, group_key = s.group_key,
+            join_hop = s.join_hop, join_side = s.join_side, join_left = s.join_left,
+            join_right = s.join_right, introducer = s.introducer, outer = s.outer,
+            having = s.having, set_reads = s.set_reads) =
+  RenderScope(phase, label, group_key, join_hop, join_side, join_left, join_right,
+              introducer, outer, having, set_reads)
 
 """
     with_scope(f, instruc; kw...)

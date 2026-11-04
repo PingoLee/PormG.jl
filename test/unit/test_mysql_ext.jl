@@ -9,8 +9,8 @@
 #   keys into a conninfo that `redact_secret` masks and the extension reads back exactly, and the
 #   PostgreSQL-only keys are refused rather than dropped. Errors classify by MySQL's error number
 #   (SQLSTATE `HY000` covers both statements and connections), the server's text survives only for
-#   numbers whose text names objects, no failure is retry-safe (2006 is raised whether or not the
-#   statement ran), a cancelled statement (1317, 3024) is not re-run by `with_read_retry` (#1277), and
+#   numbers whose text names objects, only a failure that proves the statement never ran (2006, 4031)
+#   is retry-safe, a cancelled statement (1317, 3024) is not re-run by `with_read_retry` (#1277), and
 #   an interrupt a wrapper carries in `.cause` is rethrown bare. The capability
 #   table refuses a server older than 8.4 (#1264) in its own words. A DATETIME(6) value with digits
 #   below the millisecond is refused, never truncated to a `DateTime` (#1270: a `DateTimeField` declares
@@ -203,24 +203,28 @@ end
   @test !permanent(_my_err(2006)) && !permanent(_my_err(1062, "23000"))
 end
 
-# What: only error 2006, the one MySQL.jl raises before the command left, is retry-safe; 2013 and every
-#   other lost connection are not (#1502).
+# What: only errors 2006 (#1502) and 4031 (#1629), the two that mean the command never ran, are
+#   retry-safe; 2013, 1927 and every other lost connection are not.
 # Why: `fetch` re-runs a statement on a renewed connection when `backend_is_retry_safe` says it never
 #   ran (#1042). Since MySQL.jl 2.2.0 (the `[compat]` floor), 2006 means the write failed or the session
-#   was already dead, while 2013 means the command was written and may have committed, so retrying it
-#   could apply an autocommit INSERT twice. 4031 (the server's farewell to an idle connection) is left
-#   out by choice, 1927 is a server ERR, and an EOF, a socket error, a timeout or MySQL.jl's "closed"
-#   refusal carry no phase. The exceptions are built as MySQL.jl builds them (`MySQL.Error`, SQLSTATE
-#   HY000). MySQL.jl never raises a `StmtError` for these numbers; the two `StmtError` rows only pin
-#   that the answer follows the number, not the subtype.
-@testset "only a MySQL statement that was never sent is retry-safe (#1502)" begin
+#   was already dead. 4031 is the server's farewell to a connection idle past its `wait_timeout`, which
+#   MySQL.jl reads where the next command's first reply was expected, after the server stopped reading:
+#   that command never ran. 2013 means the command was written and may have committed, so retrying it
+#   could apply an autocommit INSERT twice. 1927 is a server ERR, and an EOF, a socket error, a timeout
+#   or MySQL.jl's "closed" refusal carry no phase. The exceptions are built as MySQL.jl builds them
+#   (`MySQL.Error`, SQLSTATE HY000). MySQL.jl never raises a `StmtError` for these numbers; the two
+#   `StmtError` rows only pin that the answer follows the number, not the subtype.
+@testset "only a MySQL statement that never ran is retry-safe (#1502, #1629)" begin
   pool = _my_pool()
   safe(e) = PormG.backend_is_retry_safe(pool, e)
   @test safe(MySQL.Error(2006, "MySQL server has gone away", "HY000")) === true
   @test safe(MySQL.StmtError(2006, "MySQL server has gone away", "HY000")) === true
+  @test safe(MySQL.Error(4031, "The client was disconnected by the server because of inactivity. " *
+                               "See wait_timeout and interactive_timeout for configuring this behavior.", "HY000")) === true
   @test safe(MySQL.Error(2013, "Lost connection to MySQL server during query", "HY000")) === false
   @test safe(MySQL.StmtError(2013, "Lost connection to MySQL server during query", "HY000")) === false
-  for e in (_my_err(4031), _my_err(1927), _my_err(1205), _my_err(1317, "70100"), _my_err(1062, "23000"),
+  @test safe(MySQL.Error(1927, "Connection was killed", "70100")) === false
+  for e in (_my_err(1927), _my_err(1205), _my_err(1317, "70100"), _my_err(1062, "23000"),
             ErrorException("mysql connection has been closed or disconnected"), EOFError(),
             Base.IOError("reset", -104), _MyP.ProtocolError("TLS transport failure (read)"),
             _MyP.TimeoutError("read timed out"))
@@ -232,6 +236,7 @@ end
   # Both are a lost connection, so both renew the slot; only the bar for a re-run differs.
   @test PormG.backend_is_connection_error(pool, MySQL.Error(2006, "gone", "HY000"))
   @test PormG.backend_is_connection_error(pool, MySQL.Error(2013, "lost", "HY000"))
+  @test PormG.backend_is_connection_error(pool, MySQL.Error(4031, "disconnected", "HY000"))
   # A cancelled statement is never re-run, whatever its number (#1277): 1317 is not 2006.
   @test PormG.backend_is_cancellation(MySQL.Error(1317, "Query execution was interrupted", "70100"))
 end

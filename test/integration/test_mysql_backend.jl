@@ -155,14 +155,18 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         end
     end
 
-    # What: a connection the server closed while it sat idle past its `wait_timeout` is renewed before
-    # the next statement is sent, so the statement returns rows (#1548). With the ping off, the same
-    # sequence raises `OperationalError`, which is what every release before #1548 did.
+    # What: a connection the server closed while it sat idle past its `wait_timeout` never fails the next
+    # statement. With the ping on, it is renewed before the statement is sent (#1548). With the ping
+    # off, the statement meets the server's farewell, error 4031, and is retried once on a renewed
+    # connection, with the retry warning (#1629): it returns rows either way.
     # SQL: `SET SESSION wait_timeout = 2` on a pool's one connection, 4 s idle, then `SELECT 1 AS one`.
     # Why: MySQL's checkout probe is `isopen`, which answers `true` for a connection the server closed,
     # so only a round trip sees it. `validate_after_idle` (1 s here, 60 by default) pings a slot idle past
     # it at checkout; a failed ping means nothing was sent, so the slot is renewed and the statement runs.
-    @testset "a connection the server closed while idle is renewed before the statement (#1548)" begin
+    # Without the ping, MySQL.jl reads the farewell where the statement's first reply was expected, after
+    # the server stopped reading, so the statement never ran and running it again is safe. Before #1629
+    # that arm raised `OperationalError` with "it may already have run".
+    @testset "a connection the server closed while idle never fails the statement (#1548, #1629)" begin
         CP = PormG.ConnectionPool
         for after in (0, 1)
             one = CP.MySQLConnectionPool(pool.connection_string; pool_size = 1, pool_timeout = 5)
@@ -174,7 +178,11 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
                 sleep(4)
                 @test isopen(before)            # the driver has not noticed: the gap the ping closes
                 if after == 0
-                    @test_throws PormG.OperationalError PormG.fetch(one, "SELECT 1 AS one")
+                    # Not `rows`: the enclosing testset's helper of that name would be rebound.
+                    got = @test_logs (:warn, r"Retrying the statement on a renewed") match_mode = :any begin
+                        DataFrame(PormG.fetch(one, "SELECT 1 AS one"))
+                    end
+                    @test got.one == [1]
                 else
                     @test DataFrame(PormG.fetch(one, "SELECT 1 AS one")).one[1] == 1
                 end

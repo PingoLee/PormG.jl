@@ -16,8 +16,10 @@
 #   * a lost connection's error number says whether the statement was sent. Since MySQL.jl 2.2.0
 #     (JuliaDatabases/MySQL.jl#248, the `[compat]` floor) 2006 "MySQL server has gone away" means the
 #     command never left: its write failed, or the session was already known dead. 2013 "Lost
-#     connection to MySQL server during query" means it was written and may have committed. So 2006
-#     alone is retry-safe (#1502). Under MySQL.jl 2.0 and 2.1, 2006 also covered a command written
+#     connection to MySQL server during query" means it was written and may have committed. 4031 is the
+#     server's farewell to a connection idle past its `wait_timeout`, read where the next command's first
+#     reply was expected: that command never ran either. So 2006 (#1502) and 4031 (#1629) are
+#     retry-safe, and 2013 is not. Under MySQL.jl 2.0 and 2.1, 2006 also covered a command written
 #     before its reply was lost, which is why the floor is load-bearing;
 #   * closing a socket does not stop a statement on the server, so cancellation is `KILL QUERY` from a
 #     second connection;
@@ -471,7 +473,8 @@ PormG.backend_is_duplicate_key(pool::_Pool, e) = _is_duplicate_key(e)
 # cannot classify.
 
 # The connection is gone: 2006 server gone away, 2013 lost during query, 4031 dropped by the server for
-# inactivity, 1927 killed. Renewed and swept; only 2006 is retried (`backend_is_retry_safe`, the header).
+# inactivity, 1927 killed. Renewed and swept; only 2006 and 4031 are retried (`backend_is_retry_safe`,
+# the header).
 const _LOST_CONNECTION_ERRNOS = (2006, 2013, 4031, 1927)
 
 # MySQL.jl's own message for a connection it already closed (`checkconn`), raised with `error()`.
@@ -503,20 +506,25 @@ end
 
 PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 
-# Did the statement provably never run (#1042)? Only for 2006, which MySQL.jl 2.2 raises from two places,
-# both before the server could have the whole command: `fault!` when the command's write failed (the
-# session still in `READY`), and `ensure_live!` when the session was already known dead before the
-# send. 2013 is the same loss after the write, so the statement may have committed: not retried. 4031
-# is the farewell the server sends before it closes an idle connection, which the client reads only
-# after writing its next command; that command never ran either, but it is not retried here (#1502
-# kept the rule to 2006; the idle ping, `validate_after_idle`, avoids it). 1927 is a server ERR, and a
-# socket error, an EOF or a timeout carries no phase: none is retried. Typed on the driver's error type,
-# so a mock pool keeps core's default. CR_SERVER_GONE_ERROR's "never sent" meaning starts at MySQL.jl 2.2.0, the `[compat]`
-# floor (`test/unit/test_compat_guards.jl`).
-const _NEVER_SENT_ERRNO = 2006
+# Did the statement provably never run (#1042)? Only for two numbers.
+#   * 2006 (#1502), which MySQL.jl 2.2 raises from two places, both before the server could have the
+#     whole command: `fault!` when the command's write failed (the session still in `READY`), and
+#     `ensure_live!` when the session was already known dead before the send.
+#   * 4031 (#1629), `ER_CLIENT_INTERACTION_TIMEOUT`: the farewell ERR MySQL 8.0.24 and newer sends
+#     before it closes a connection idle past its `wait_timeout`. The client reads it only after writing
+#     its next command, but the server had stopped reading: MySQL.jl 2.2's `readpacket!` recognises it as
+#     a packet numbered 0 where the command's first reply (numbered 1, no reply bytes read yet) was
+#     expected. So the command never ran. The idle ping, `validate_after_idle`, usually renews such a
+#     connection before a statement meets it; this covers the ping turned off, or a `wait_timeout`
+#     shorter than it.
+# 2013 is the loss after the write, so the statement may have committed: not retried. 1927 is a server
+# ERR, and a socket error, an EOF or a timeout carries no phase: none is retried. Typed on the driver's
+# error type, so a mock pool keeps core's default. CR_SERVER_GONE_ERROR's "never sent" meaning starts
+# at MySQL.jl 2.2.0, the `[compat]` floor (`test/unit/test_compat_guards.jl`).
+const _NEVER_SENT_ERRNOS = (2006, 4031)
 
 PormG.backend_is_retry_safe(pool::_Pool, e::MySQL.Protocol.ServerError) =
-  Int(e.errno) == _NEVER_SENT_ERRNO
+  Int(e.errno) in _NEVER_SENT_ERRNOS
 
 # Permanent: the same configuration fails the same way on every retry. 1045 access denied, 1044 access
 # denied to the database, 1049 unknown database, 1130 host not allowed, 3159 an insecure transport the

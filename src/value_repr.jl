@@ -489,14 +489,15 @@ julia_type(::CInterval, ::PormGSQLite) = Dates.CompoundPeriod   # `_parse_sqlite
 # decides.
 julia_type(k::CDecimal, b::PormGSQLite) = value_parser(k, b) === nothing ? nothing : Decimals.Decimal
 # MySQL (#1130). MySQL.jl's own integer widths; the extension reads DECIMAL as a `Decimal`, DATETIME as
-# a `DateTime`, text as a `String` and a binary column as bytes. A uuid and a JSON document are left
-# unnamed until a MySQL read-back records them.
+# a `DateTime`, text as a `String` and a binary column as bytes. A uuid (`CHAR(36)`) and a JSON document
+# arrive as a `String` too, as MySQL.jl delivers them: `test/integration/test_show_query_struct_readback.jl`
+# reads both back on `db_my` (#1634).
 julia_type(::CInt16,    ::PormGMySQL) = Int16
 julia_type(::CInt32,    ::PormGMySQL) = Int32
 julia_type(::CInt64,    ::PormGMySQL) = Int64
 julia_type(::CFloat64,  ::PormGMySQL) = Float64
 julia_type(::CBool,     ::PormGMySQL) = Bool
-julia_type(::Union{CText,CVarChar}, ::PormGMySQL) = String
+julia_type(::Union{CText,CVarChar,CUUID,CJSON}, ::PormGMySQL) = String
 julia_type(::CBytes,    ::PormGMySQL) = Vector{UInt8}
 julia_type(::CDate,     ::PormGMySQL) = Dates.Date
 julia_type(::CTime,     ::PormGMySQL) = Dates.Time

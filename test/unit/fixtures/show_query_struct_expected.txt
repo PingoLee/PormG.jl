@@ -14,7 +14,7 @@ struct DriverRow
     salary::Union{Nothing, Decimal}            # DecimalField; null = true
     signed_at::Union{Nothing, ZonedDateTime}   # DateTimeField; null = true
     retired_at::Union{Nothing, ZonedDateTime}  # DateTimeField; null = true; this is SQLite's type: another engine reads it as another, or as one PormG does not name
-    profile::Union{Nothing, String}            # JSONField; null = true; this is SQLite's type: another engine reads it as another, or as one PormG does not name
+    profile::Union{Nothing, String}            # JSONField; null = true
 end
 ### plain columns
 using Dates

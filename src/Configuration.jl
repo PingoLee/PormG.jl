@@ -378,9 +378,15 @@ mutable struct TransactionContext
   depth::Int  # Track nested transaction contexts
   sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
   parent::Union{Nothing, TransactionContext}  # the enclosing block's context, or `nothing` at the outermost
+  # A statement's await inside the block was abandoned by an interrupt (#1588). Shared along the chain
+  # on the same pool, like the reservations: it is a fact about the one pinned connection, which the
+  # outermost block's cleanup acts on (`ConnectionPool._run_in_transaction_impl`).
+  abandoned_await::Threads.Atomic{Bool}
   @atomic closed::Bool  # the block that created it has ended (#839)
 
-  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}(), nothing, false)
+  TransactionContext(abandoned_await::Threads.Atomic{Bool}) =
+    new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}(), nothing, abandoned_await, false)
+  TransactionContext() = TransactionContext(Threads.Atomic{Bool}(false))
 end
 
 # Task-local storage for transaction context; TODO i need study this more
@@ -527,11 +533,16 @@ starts a fresh table, because the reservations are keyed by table name only (#83
 including on a throw. A spawned task that is still running after the block ends no longer sees it
 as open: its statements run in autocommit on a connection of their own (#839).
 """
-function with_tx_context(f::Function, pool::_SQLEngine, conn)
+function with_tx_context(f::Function, pool::_SQLEngine, conn;
+                         abandoned_await::Union{Nothing, Threads.Atomic{Bool}} = nothing)
   # The enclosing block still running, not merely the one in scope (#839): a task that outlived
   # its block and opens one of its own starts a fresh chain at depth 1.
   old_ctx = _open_tx_context()
-  new_ctx = TransactionContext()
+  same_pool = _tx_context_for(pool)
+  # The caller's flag when it passes one (the outermost `run_in_transaction` reads it after the block,
+  # #1588); otherwise the enclosing same-pool block's, so a savepoint marks the transaction it is in.
+  new_ctx = TransactionContext(abandoned_await !== nothing ? abandoned_await :
+                               same_pool !== nothing ? same_pool.abandoned_await : Threads.Atomic{Bool}(false))
   new_ctx.conn = conn
   new_ctx.pool = pool
   new_ctx.depth = old_ctx.depth + 1
@@ -540,11 +551,10 @@ function with_tx_context(f::Function, pool::_SQLEngine, conn)
   # an intervening block on another database does not break it. The table is keyed by (table, pk)
   # with no database in the key, so sharing it with ANOTHER database's transaction would let each
   # read the other's reservations and write into one Dict that outlives the inner block.
-  same_pool = _tx_context_for(pool)
   new_ctx.sqlite_reserved_primary_keys = same_pool !== nothing ?
     same_pool.sqlite_reserved_primary_keys :
     Dict{Tuple{String, String}, Int64}()
-  
+
   try
     return with(_tx_context => new_ctx) do
       f()
@@ -554,6 +564,15 @@ function with_tx_context(f::Function, pool::_SQLEngine, conn)
     # back and hand the connection back, so a task still holding this context must not use it.
     @atomic :release new_ctx.closed = true
   end
+end
+
+# Record that a statement's await inside the open block on `pool` was abandoned by an interrupt
+# (#1588). Called by `await_result` for an in-transaction `FetchTask`; a no-op outside a block. The
+# block's cleanup reads it even when the body caught the interrupt or raised its own error instead.
+function _mark_abandoned_await!(pool::_SQLEngine)
+  ctx = _tx_context_for(pool)
+  ctx === nothing || (ctx.abandoned_await[] = true)
+  return nothing
 end
 
 function connection_key_for_pool(pool::_SQLEngine)::Union{String, Nothing}

@@ -57,6 +57,8 @@ import PormG: backend_postgres_parameter_limit   # PostgreSQL: the driver's bind
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
 import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind
+# #1632 — slot 4: the Julia type a read delivers, which `show_query = :struct` writes into a struct.
+import PormG: julia_type, _JULIA_TYPE_ENGINES
 # #721 — the SQLite collector binds through the same table, so a literal never reaches SQLite.jl's
 # serializing `bind!(::Any)` fallback; `literal_canonical_kind` types a projected `Value(x)`.
 import PormG: sqlite_bind_value, literal_canonical_kind

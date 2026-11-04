@@ -1,0 +1,75 @@
+### wildcard
+using Dates
+using Decimals
+using TimeZones
+
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct DriverRow
+    driverid::Int64                            # IDField
+    surname::String                            # CharField
+    code::Union{Nothing, String}               # CharField; null = true
+    number::Union{Nothing, Int64}              # IntegerField; null = true
+    dob::Date                                  # DateField
+    active::Bool                               # BooleanField
+    salary::Union{Nothing, Decimal}            # DecimalField; null = true
+    signed_at::Union{Nothing, ZonedDateTime}   # DateTimeField; null = true
+    retired_at::Union{Nothing, ZonedDateTime}  # DateTimeField; null = true; this is SQLite's type: another engine reads it as another, or as one PormG does not name
+    profile::Union{Nothing, String}            # JSONField; null = true; this is SQLite's type: another engine reads it as another, or as one PormG does not name
+end
+### plain columns
+using Dates
+using Decimals
+using TimeZones
+
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct DriverRow
+    driverid::Int64                            # IDField
+    surname::String                            # CharField
+    code::Union{Nothing, String}               # CharField; null = true
+    number::Union{Nothing, Int64}              # IntegerField; null = true
+    dob::Date                                  # DateField
+    active::Bool                               # BooleanField
+    salary::Union{Nothing, Decimal}            # DecimalField; null = true
+    signed_at::Union{Nothing, ZonedDateTime}   # DateTimeField; null = true
+    retired_at::Union{Nothing, ZonedDateTime}  # DateTimeField; null = true; this is SQLite's type: another engine reads it as another, or as one PormG does not name
+end
+### joined through a nullable ForeignKey
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    resultid::Int64               # IDField
+    surname::String               # driverid__surname: CharField on Driver
+    team::Union{Nothing, String}  # constructorid__name: CharField on Constructor; LEFT JOIN: NULL when there is no Constructor row
+end
+### explicit LEFT join
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    resultid::Int64                  # IDField
+    surname::Union{Nothing, String}  # driverid__surname: CharField on Driver; LEFT JOIN: NULL when there is no Driver row
+end
+### computed
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    driverid::Int64               # ForeignKey
+    pts::Union{Nothing, Float64}  # SUM over points: NULL when no row matches
+    n::Int64                      # COUNT over resultid
+    pos::Union{Nothing, String}   # CAST over position: NULL when an operand is NULL
+    pos0::Int64                   # COALESCE: an operand is never NULL
+end
+### aggregate over no rows
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    pts::Union{Nothing, Float64}  # SUM over points: NULL when no row matches
+    n::Int64                      # COUNT over resultid
+end
+### CTE column
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    resultid::Int64               # IDField
+    races::Union{Nothing, Int64}  # CTE tot, column n: PormG does not track NULL through a CTE
+end
+### typed read's own projection
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    resultid::Int64  # IDField
+    points::Float64  # FloatField
+end

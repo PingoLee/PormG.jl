@@ -137,6 +137,7 @@ An integrated switch available on all terminal methods to toggle between executi
 | `:dict` | Returns the metadata dictionary — the eight keys below. |
 | `:inspection` | Alias of `:dict`. Useful when you want the same rich metadata shape used by `inspect_query()`. |
 | `:params` | Returns the parameters array only. |
+| `:struct` | Returns, as a `String`, the struct a typed read (`list(T)`) accepts for the query: `using` lines, a header naming the engine, one field per projected column. Read terminals only (`list`, `first`, `last`, `get`, `earliest`, `latest`, `query_list`); see [Typed rows](read/index.md#Writing-T:-show_query-:struct). |
 | `:none` | Returns `nothing`, or a `Vector` of `nothing`s for a call that runs several statements (a cascading `delete()`). Zero-overhead mode for benchmarking the builder itself. |
 
 ```julia

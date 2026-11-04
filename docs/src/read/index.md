@@ -259,6 +259,87 @@ refusal names the field, the field's type and the column's type, never the value
 A typed row is a read-only projection, like jOOQ's `fetchInto` or sqlx's `query_as!`: it has no lazy
 relations, no many-to-many accessors and no `save()`. Use `.list()` for those.
 
+#### Writing `T`: `show_query = :struct`
+
+You do not have to work out each field's type by hand. Every read terminal takes
+`show_query = :struct`, which renders the query **without running it** and returns, as a `String`,
+the struct `list(T)` accepts for that query: one field per projected column, in projection order,
+named by the column's output name:
+
+```julia
+M.Result.objects.filter("driverid__nationality" => "Brazilian", "raceid__year" => 2008).
+    values("surname" => "driverid__surname", "team" => "constructorid__name", "points" => Sum("points")).
+    order_by("surname").
+    list(show_query = :struct) |> print
+```
+
+```julia
+# show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+struct ResultRow
+    surname::String                  # driverid__surname: CharField on Driver
+    team::String                     # constructorid__name: CharField on Constructor
+    points::Union{Nothing, Float64}  # SUM over points: NULL when no row matches
+end
+```
+
+Paste it into your code, review it, rename what you like, and call `list(ResultRow)` on the same
+query. PormG returns text and never evaluates it: no type is created in your module for you, and once
+pasted, the struct is yours like any other code. The workflow is the same for a person and for a
+coding agent: render, paste, review the comments, run.
+
+What the text says:
+
+- **The `using` lines its types need, and only those**: `Dates` (`Date`, `Time`, `DateTime`),
+  `Decimals` (`Decimal`) and `TimeZones` (`ZonedDateTime`). PormG does not re-export these types, so
+  `Decimals` and `TimeZones` must be in your project (`Pkg.add`) for the pasted struct to compile.
+- **A header naming the engine it was rendered for.** An integer column is `Int64` on every engine,
+  since a typed read widens PostgreSQL's and MySQL's `Int32`. A type that does differ between engines
+  is marked in its comment (a `DateTimeField(type = "TIMESTAMP")` reads as a `ZonedDateTime` on
+  SQLite and a `DateTime` on PostgreSQL), so a struct written against SQLite does not surprise anyone
+  on PostgreSQL.
+- **A comment per field naming its source**: the field type, the joined path, or the function.
+- **`Union{Nothing, T}` wherever the column can be NULL**: a `null = true` column, any column on the
+  outer side of a LEFT join (a path through a `ForeignKey(null = true)`, or an explicit
+  `on(path, join_type = "LEFT")`), an aggregate over no rows, and every computed value PormG cannot
+  prove non-NULL. The comment says why. The choice is conservative on purpose: a `Union{Nothing, T}`
+  field takes every non-NULL value too, so an unneeded one costs you an edit, while a missing one
+  would fail the read on the first NULL. If you read rows into a `DataFrame` and prefer `missing`,
+  edit the field to `Union{Missing, T}`: the typed read accepts both.
+- **A `# TODO` line, never `Any`,** for a column whose type PormG cannot name on that engine: a JSON
+  key's value (`"profile__titles"`, whose type is the data's; `Cast` it to the type you mean), or a
+  PostgreSQL `ArrayField`, which reads as `Vector{T}`, or `Vector{Union{Missing, T}}` when an element is
+  NULL. `list(T)` refuses an abstract field, so an `Any` would only fail later; until you declare the
+  field, the read refuses that column by name.
+- **`var"…"`** for a projection name that is not a valid Julia identifier on its own (a keyword such
+  as `values("end" => "position")`).
+
+With no `values(...)`, the struct is the model's fields, which is what `list(T)` would project.
+With a typed terminal, `list(T, show_query = :struct)` returns the struct the query needs for
+`fieldnames(T)`, so it shows where your declarations differ from what the read accepts:
+
+```julia
+struct DriverRow
+    driverid::Int32
+    surname::String
+    dob::String
+end
+
+M.Driver.objects.list(DriverRow, show_query = :struct) |> print
+# using Dates
+#
+# # show_query = :struct, rendered for SQLite: the row type list(T) accepts. Review it before pasting.
+# struct DriverRow
+#     driverid::Int64  # IDField
+#     surname::String  # CharField
+#     dob::Date        # DateField
+# end
+```
+
+`count()` (its column form included), `aggregate()`, `exists()` and the writes return no rows to
+declare, so they raise `QueryBuildError` under `show_query = :struct`. So does `values("*")`, alone or
+beside other columns: a typed read cannot project it, so drop it for the model's fields, or name every
+column in `values(...)`.
+
 ### Serializing rows to JSON
 
 `JSON.json` on a `PormGRow` — or on the `Vector{PormGRow}` that `.list()` returns — emits the row's
@@ -763,6 +844,7 @@ println(inspection[:operation])  # => :select
 | `:dict` | Metadata dictionary (`Dict`) with the same eight keys for every operation: `:sql_text`, `:parameters`, `:parameter_count`, `:parameter_buckets`, `:dialect`, `:bucketing`, `:model` and `:operation`. The [API reference](../api.md#show_query) describes each. |
 | `:inspection` | Alias of `:dict`, provided for inspection-focused workflows that want the same metadata shape as `inspect_query()`. |
 | `:params` | Parameters array only. |
+| `:struct` | The struct a typed read (`list(T)`) accepts for the query, as source text to paste (`String`). Read terminals only; see [Writing `T`](#Writing-T:-show_query-:struct). |
 | `:none` | `nothing` (zero-overhead benchmarking). |
 
 `show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `count()`, `exists()`, `create()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.

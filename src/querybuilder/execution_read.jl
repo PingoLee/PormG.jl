@@ -4,15 +4,22 @@
 # `execution_write.jl`, bulk writes in `execution_bulk.jl`, and rendering an `F(...)` expression in
 # `expression_render.jl`.
 
+# `instruction` is the SELECT build's (#1624), which only `query()` hands over: it is what `:struct`
+# reads (#1632). Every other caller — `count()`, `exists()`, the writes, a `delete()` step — has rows of
+# no shape to declare, and `:struct` refuses there.
 function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, _SQLEngine}, model::Union{PormGModel, String}, operation::Symbol;
-                          parameters::Union{Nothing, AbstractPormGParam} = nothing)
-  
+                          parameters::Union{Nothing, AbstractPormGParam} = nothing,
+                          instruction::Union{Nothing, SQLInstruction} = nothing)
+
   if mode === :none
     return nothing # Zero-allocation mode for benchmarking the builder
   elseif mode === :sql
     return sql # Simplicity: just the SQL string (fast benchmarking)
   elseif mode === :pretty
     return _format_sql(sql) # #48: one clause per line, for logs and the REPL; whitespace only
+  elseif mode === :struct
+    instruction === nothing && throw(_struct_mode_refusal())
+    return _row_struct_text(instruction)
   elseif mode === :execute
     # Safety check: this function shouldn't be called with :execute,
     # but we return SQL just in case to avoid a crash.
@@ -58,8 +65,284 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
         :parameter_buckets => bucket_breakdown
     )
   else
-    throw(QueryBuildError("Invalid show_query mode: $mode. Must be one of: :sql, :pretty, :dict, :inspection, :params, :none"))
+    throw(QueryBuildError("Invalid show_query mode: $mode. Must be one of: :sql, :pretty, :dict, :inspection, :params, :struct, :none"))
   end
+end
+
+# ── #1632: `show_query = :struct` — the struct a typed read needs, as source text ─────────────────────
+
+# The terminals that return no rows to declare: `count()` (its column form and `aggregate()` build a
+# SELECT through `query()`, so they ask for this before it), `exists()`, the writes, a `delete()` step.
+_struct_mode_refusal() = QueryBuildError(
+  "show_query = :struct writes the struct a read's rows need, so it applies to the terminals that " *
+  "return rows: list(), first(), last(), get(), earliest(), latest() and query_list(). This call " *
+  "returns no rows to declare.")
+
+#
+# The build already knows what each projected column is: the walk names its kind (`_expression_kind`,
+# or the read view the build recorded, `projection_kinds`, where a parser changes the value), the
+# value-representation table names the Julia type the read delivers for that kind (`julia_type`, slot
+# 4), and the typed read's conversion rules say what a field should declare for it
+# (`_typed_declaration`). This writes those three answers down as a struct to paste. It returns TEXT:
+# a library function cannot create a struct in the caller's module without `eval` (#1599 I3), and a
+# struct the caller pastes is reviewed, renamed and owned like any other code.
+#
+# `projection_kinds` is not enough on its own: it is the READ view, and records no kind for an integer,
+# a float column, text or a uuid, which a driver delivers as they are (#1034 step 3). The walk does.
+#
+# NULL is CONSERVATIVE: a column is `Union{Nothing, T}` unless the build proves it never NULL — a column
+# whose field is not `null = true`, read from the base table or through an INNER join, a `COUNT`, a
+# literal, a `Coalesce` with an operand that is never NULL. A field that admits `nothing` takes every
+# non-NULL value too, so a wrong `Union` costs an edit; a missing one fails the read.
+#
+# Off the warm path: the read terminals render through `_render_select` and never reach
+# `_show_query_result`, so nothing here runs when a query executes.
+
+# One field of the struct: its name, its declaration (`""` when the table names no type, which writes a
+# `# TODO` line instead of a field) and the comment that says where the column comes from.
+struct _StructField
+  name::String
+  decl::String
+  nullable::Bool
+  note::String
+end
+
+function _row_struct_text(instruction::SQLInstruction)::String
+  obj = instruction.object
+  conn = instruction.connection
+  usings = Set{Symbol}()
+  fields = _StructField[]
+  # A RIGHT or FULL join puts the tables before it on the nullable side, the base table included, and
+  # which tables those are depends on emission order (`_refuse_lock_targets_beside_right_joins`), so
+  # every column is nullable when one is present.
+  outer = any(r -> hasproperty(r, :how) && uppercase(getproperty(r, :how)) in ("RIGHT", "FULL"), instruction.row_join)
+  if isempty(obj.values)
+    _push_model_struct_fields!(fields, obj.model, conn, outer, usings)
+  else
+    # A typed read refuses `values("*")` (`_typed_projection!`), so a struct for it is one `list(T)`
+    # could never read: refused here too, with the same way out.
+    any(_is_wildcard_projection, obj.values) && throw(QueryBuildError(
+      "show_query = :struct writes the struct list(T) reads, and a typed read cannot project values(\"*\"). " *
+      "Drop values(\"*\") for the struct of the model's fields, or name every column in values(...)."))
+    for (i, v) in enumerate(obj.values)
+      rendered = isassigned(instruction.select, i) ? instruction.select[i] : nothing
+      push!(fields, _projection_struct_field(v, rendered, instruction, conn, outer, usings))
+    end
+  end
+  return _render_struct_text(_struct_identifier(uppercasefirst(String(obj.model.name)) * "Row"), fields,
+                             _backend_name(conn), usings)
+end
+
+# A wildcard: the model's own columns, in declaration order, under the field names `list(T)` projects
+# (a `db_column` field is keyed by its field name there). A many-to-many field has no column.
+function _push_model_struct_fields!(fields::Vector{_StructField}, model::PormGModel, conn, outer::Bool,
+                                    usings::Set{Symbol})
+  for (fname, f) in model.fields
+    Models.is_many_to_many_field(f) && continue
+    kind = something(_field_read_kind(f), _field_kind(f), Some(nothing))
+    null = _struct_field_null(f)
+    note = _struct_field_type_name(f) * (null ? "; null = true" : "")
+    outer && (note *= "; a RIGHT or FULL join can make it NULL")
+    push!(fields, _struct_field(String(fname), kind, conn, null || outer, note, usings))
+  end
+  return fields
+end
+
+function _projection_struct_field(v::Union{SQLTypeText,SQLTypeField}, rendered, instruction::SQLInstruction,
+                                  conn, outer::Bool, usings::Set{Symbol})::_StructField
+  name = String(something(_projection_output_name(v), ""))
+  node = v isa SQLTypeText ? v : v.field
+  # The read view first: where a parser changes the value (a SQLite date, a computed float) it is the
+  # kind the cell arrives as. Otherwise the walk's, which is the engine's own type.
+  kind = get(instruction.projection_kinds, Symbol(name), nothing)
+  kind === nothing && (kind = _struct_walk_kind(node, instruction))
+  never_null, note = _struct_source(node, rendered isa SQLTypeField ? rendered.field : nothing, instruction)
+  outer && (never_null = false; note *= "; a RIGHT or FULL join can make it NULL")
+  return _struct_field(name, kind, conn, !never_null, note, usings)
+end
+
+# The walk can refuse a shape the render accepted only through another door; a display never raises
+# for that, and the column becomes a `# TODO` line.
+function _struct_walk_kind(node, instruction::SQLInstruction)
+  try
+    return _expression_kind(node, instruction)
+  catch e
+    e isa PormGError || rethrow()
+    return nothing
+  end
+end
+
+function _struct_field(name::String, kind, conn, nullable::Bool, note::String, usings::Set{Symbol})::_StructField
+  # No kind (the walk names none), or a kind with no single type on this engine (a JSON key's value,
+  # whose type is the data's; a PostgreSQL array; a SQLite decimal too wide to parse exactly).
+  T = kind === nothing ? nothing : _typed_declaration(julia_type(kind, conn))
+  T === nothing && return _StructField(name, "", nullable,
+    "PormG cannot name one type for this column on $(_backend_name(conn)). Cast it to the type you mean " *
+    "(`Cast(path, \"integer\")`), or declare the field by hand")
+  decl = _struct_type_text(T, usings)
+  _struct_engine_specific(kind, conn, T) &&
+    (note *= "; this is $(_backend_name(conn))'s type: another engine reads it as another, or as one PormG does not name")
+  return _StructField(name, nullable ? "Union{Nothing, " * decl * "}" : decl, nullable, note)
+end
+
+# Whether another engine declares this kind differently: a struct written against one engine must say
+# so before it surprises a reader on another. Names only the engine at hand.
+function _struct_engine_specific(kind, conn, T)::Bool
+  here = _backend_name(conn)
+  for e in _JULIA_TYPE_ENGINES
+    _backend_name(e) == here && continue
+    _typed_declaration(julia_type(kind, e)) === T || return true
+  end
+  return false
+end
+
+# The type as source text, adding the `using` its module needs. `Base`/`Core` types need none; a name
+# its module does not export is written qualified (`Dates.CompoundPeriod`).
+function _struct_type_text(T::Type, usings::Set{Symbol})::String
+  T <: AbstractVector && return "Vector{" * _struct_type_text(eltype(T), usings) * "}"
+  root = Base.moduleroot(parentmodule(T))
+  (root === Core || root === Base) && return String(nameof(T))
+  push!(usings, nameof(root))
+  return Base.isexported(root, nameof(T)) ? String(nameof(T)) : String(nameof(root)) * "." * String(nameof(T))
+end
+
+_struct_field_null(f::PormGField)::Bool = hasproperty(f, :null) && getproperty(f, :null) === true
+_struct_field_type_name(f::PormGField)::String = begin
+  s = String(nameof(typeof(f)))   # `sCharField` -> `CharField`
+  length(s) > 1 && s[1] == 's' && isuppercase(s[2]) ? s[2:end] : s
+end
+
+# A field name or the struct name as Julia source: `var"…"` when it does not parse as that name on its
+# own, which still names the field `list(T)` matches by. A projection alias is a plain SQL identifier,
+# so the case that reaches this is a Julia keyword (`end`, `begin`): `Base.isidentifier` accepts those,
+# and only the parse refuses them.
+_struct_identifier(name::String)::String =
+  Base.isidentifier(name) && Meta.parse(name; raise = false) === Symbol(name) ? name :
+    "var\"" * Base.escape_raw_string(name) * "\""
+
+# ── Where a column comes from, and whether it can be NULL: `(never_null, comment)` ────────────────
+#
+# One method per node a projection holds. `rendered` is the column's rendered SQL, which names the
+# table alias it reads from: the join row with that alias says whether the column is on the outer side
+# of a LEFT join.
+function _struct_source(node::String, rendered, instruction::SQLInstruction)::Tuple{Bool,String}
+  obj = instruction.object
+  occursin("__@", node) && return (false, "$(node): a transform; PormG does not track NULL through it")
+  field = _alias_column_field(node, instruction)
+  field === nothing && return (false, node)
+  type_name = _struct_field_type_name(field)
+  null = _struct_field_null(field)
+  # A base-table column: only a key of the model's own fields. Anything else that names no relation is
+  # a value INSIDE a column — an array element (`tags__0`), a JSON key — which is NULL when it is absent,
+  # whatever the column's own `null`.
+  haskey(obj.model.fields, node) && return (!null, type_name * (null ? "; null = true" : ""))
+  # A joined column likewise: exactly ONE segment after the relations, a field of the model they reach.
+  # More (`constructorid__tags__0`) is a value inside that column, NULL when absent, through any join.
+  prefix = _relation_prefix(obj, node)
+  inside = (false, "$(node): a value inside a column; NULL when it is absent")
+  isempty(prefix) && return inside
+  rest = split(node, "__")[length(split(prefix, "__")) + 1:end]
+  model = _struct_path_model(obj, node)
+  (length(rest) == 1 && model !== nothing && haskey(model.fields, String(only(rest)))) || return inside
+  target = uppercasefirst(String(model.name))
+  how = _struct_join_how(rendered, instruction)
+  # RIGHT and FULL are not explained here: they put the EARLIER tables on the nullable side, which the
+  # caller's "a RIGHT or FULL join can make it NULL" covers for every column.
+  note = "$(node): $(type_name) on $(target)" * (null ? "; null = true" : "") *
+         (how == "LEFT" ? "; LEFT JOIN: NULL when there is no $(target) row" :
+          how == ""     ? "; read through a join PormG cannot place, so NULL is assumed" : "")
+  return (!null && how == "INNER", note)
+end
+
+function _struct_source(node::FObject, ::Any, instruction::SQLInstruction)::Tuple{Bool,String}
+  fname = node.function_name
+  col = node.column   # a local, so the `isa` narrows it: no `string` of an uninferred value (#1346)
+  what = col isa String ? "$(fname) over $(col)" : fname
+  fname == "COUNT" && return (true, what)
+  if fname == "COALESCE" && col isa AbstractVector
+    any(x -> _struct_never_null_operand(x, instruction), col) && return (true, what * ": an operand is never NULL")
+    return (false, what * ": NULL when every operand is")
+  end
+  node.aggregate && return (false, what * ": NULL when no row matches")
+  return (false, what * ": NULL when an operand is NULL")
+end
+_struct_source(node::WindowFunction, ::Any, ::SQLInstruction) =
+  (false, "$(node.function_name) window: NULL on a row the window gives no value")
+_struct_source(::FExpression, ::Any, ::SQLInstruction) = (false, "an F expression: NULL when an operand is NULL")
+_struct_source(::SubqueryObject, ::Any, ::SQLInstruction) = (false, "Subquery: NULL when it matches no row")
+_struct_source(::ExistsObject, ::Any, ::SQLInstruction) = (true, "Exists")
+_struct_source(node::CTEReference, ::Any, ::SQLInstruction) =
+  (false, "CTE $(node.name), column $(node.path): PormG does not track NULL through a CTE")
+function _struct_source(node::JoinedReference, ::Any, instruction::SQLInstruction)::Tuple{Bool,String}
+  i = findfirst(r -> r.alias_b == node.alias, instruction.row_join)
+  inner = i !== nothing && hasproperty(instruction.row_join[i], :how) &&
+          uppercase(getproperty(instruction.row_join[i], :how)) == "INNER"
+  field = _alias_column_field(node, instruction)
+  null = field === nothing || _struct_field_null(field)
+  note = "Joined $(node.alias), column $(node.path)" * (field === nothing ? "" : ": " * _struct_field_type_name(field)) *
+         (inner ? "" : "; an outer join: NULL when there is no joined row")
+  return (inner && !null, note)
+end
+_struct_source(node::SQLTypeText, ::Any, ::SQLInstruction) =
+  _is_null_literal(node.field) ? (false, "Value(nothing)") : (true, "Value literal")
+_struct_source(::Any, ::Any, ::SQLInstruction) = (false, "computed: PormG does not track NULL through it")
+
+# A `Coalesce` operand that is never NULL: a literal, or a base-table column whose field is not nullable.
+function _struct_never_null_operand(x, instruction::SQLInstruction)::Bool
+  x isa Number && return true
+  x isa SQLTypeText && return !_is_null_literal(x.field)
+  if x isa String
+    fields = instruction.object.model.fields
+    return haskey(fields, x) && !_struct_field_null(fields[x])
+  end
+  return false
+end
+
+# The type of the join a joined column is read through — the row whose alias its rendered SQL names
+# (`"Tb_2"."name"`) — or `""` when no row matches, which the caller treats as nullable: a path the
+# build joined but this cannot place must not be declared non-NULL by default.
+function _struct_join_how(rendered, instruction::SQLInstruction)::String
+  rendered isa AbstractString || return ""
+  for r in instruction.row_join
+    startswith(rendered, quote_identifier(r.alias_b, instruction.connection) * ".") || continue
+    return hasproperty(r, :how) ? uppercase(String(getproperty(r, :how))) : ""
+  end
+  return ""
+end
+
+# The model at the end of a column path's relations (`constructorid__name` -> Constructor).
+function _struct_path_model(obj::SQLObject, path::String)
+  segments = split(path, "__")
+  model = obj.model
+  for (i, seg) in enumerate(segments[1:end-1])
+    step = _relation_step(obj, model, seg, i == 1)
+    step === nothing && return nothing
+    model = step[2]
+  end
+  return model
+end
+
+function _render_struct_text(struct_name::String, fields::Vector{_StructField}, engine::String,
+                             usings::Set{Symbol})::String
+  io = IOBuffer()
+  for m in sort!(collect(usings))
+    print(io, "using ", m, "\n")
+  end
+  isempty(usings) || print(io, "\n")
+  print(io, "# show_query = :struct, rendered for ", engine, ": the row type list(T) accepts. Review it before pasting.\n")
+  print(io, "struct ", struct_name, "\n")
+  width = maximum((length(_struct_identifier(f.name)) + 2 + length(f.decl) for f in fields if !isempty(f.decl)); init = 0)
+  for f in fields
+    note = replace(f.note, r"[\r\n]+" => " ")
+    if isempty(f.decl)
+      print(io, "    # TODO ", _struct_identifier(f.name), ": ", note, "\n")
+    else
+      decl = _struct_identifier(f.name) * "::" * f.decl
+      print(io, "    ", rpad(decl, width), "  # ", note, "\n")
+    end
+  end
+  print(io, "end\n")
+  return String(take!(io))
 end
 
 """
@@ -339,7 +622,7 @@ function query(q::SQLObjectHandler;
   instruction = rendered.instruction
   if show_query !== :execute
     return _show_query_result(show_query, rendered.sql, instruction.connection, q.object.model.name, :select;
-                            parameters=instruction.parameters)
+                            parameters=instruction.parameters, instruction=instruction)
   end
   _refuse_lock_outside_transaction(q, instruction)
   return rendered.sql
@@ -539,6 +822,7 @@ which makes it the quickest way to see what a chain builds.
 | `:pretty` | `String` — the same SQL reflowed one clause per line; only whitespace changes |
 | `:params` | `Vector` — the parameterized values, in bucket order |
 | `:dict` / `:inspection` | `Dict` — the full metadata shape of [`inspect_query`](@ref) |
+| `:struct` | `String` — the struct a typed read (`list(T)`) accepts for this query, as source text to paste (#1632) |
 | `:none` | `nothing` — builds and discards, for benchmarking the builder |
 
 ```julia
@@ -751,6 +1035,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     cq.object.offset = 0
     # No `__` in the alias: `_values!` refuses one (#757). The result is read positionally below.
     _values!(cq.object, Any["pormg_count" => Count(String(column); distinct = distinct)])
+    show_query === :struct && throw(_struct_mode_refusal())   # #1632: a count is no row
     show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
     rows = _list_owned(cq, Val(:dict))
     return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))
@@ -881,6 +1166,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
   _values!(cq.object, collect(Any, pairs))
 
   if show_query !== :execute
+    show_query === :struct && throw(_struct_mode_refusal())   # #1632: one NamedTuple, not rows to declare
     return query(cq; show_query=show_query)
   end
 

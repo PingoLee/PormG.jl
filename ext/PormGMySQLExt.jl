@@ -429,7 +429,16 @@ PormG.backend_execute(pool::_Pool, conn::MySQL.Connection, sql::String, params) 
 # threadpool (`PormG._statement_task`, #1577), as LibPQ's statement runs on the caller's thread.
 function PormG.backend_execute_async(pool::_Pool, conn::MySQL.Connection, sql::String, params)
   bound = _bind(pool, params)
-  return PormG._statement_task(() -> _run(conn, sql, bound))
+  # The leak scan's stamp (#1637): set before the task starts, cleared when the statement ends, so a
+  # lease whose statement is still running is not reported as one nobody returned.
+  mark = PormG.ConnectionPool._note_statement_start!(pool, conn)
+  return PormG._statement_task() do
+    try
+      _run(conn, sql, bound)
+    finally
+      PormG.ConnectionPool._note_statement_end!(pool, mark)
+    end
+  end
 end
 
 PormG.backend_num_rows(pool::_Pool, result::MySQLResult) = result.nrows

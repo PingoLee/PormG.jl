@@ -251,3 +251,55 @@ if only_on(:postgres, "DSN quoting is libpq's connection string (SQLite connects
         end
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# What: with `leak_detection_threshold` on, a lease whose statement is still running past the
+#   threshold is reported as "…while its statement is still running: a slow statement or an
+#   unresponsive server, not a leak", and once that statement has ended, a lease nobody returned is
+#   reported as "…likely acquired without release". Both through this run's real driver: the stamp
+#   is set and cleared on every statement path (both PostgreSQL drivers, MySQL, SQLite's worker).
+# SQL: `SELECT pg_sleep(2) AS slow_1637` (PostgreSQL) or `SELECT SLEEP(2) AS slow_1637` (MySQL), then
+#   `SELECT 1 AS done_1637`, each through `fetch_async`.
+# Why (#1637): both cases used to print "likely acquired without release", so a paused server read as
+#   a leak. SQLite has no sleep function, so its run checks only the second case, which is the one that
+#   proves its worker clears the stamp.
+# ─────────────────────────────────────────────────────────────────────────────
+using Logging
+
+@testset "the leak warning says when the statement is still running (#1637) on $(PORMG_DB_FOLDER)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    CP1637 = PormG.ConnectionPool
+    prefix = "Pool connection held past leak_detection_threshold"
+    prior = something(CP1637._monitor_state(pool), (; leak_threshold = 0.0)).leak_threshold
+    CP1637.enable_leak_detection!(pool; threshold = 0.5)
+    st = CP1637._monitor_state(pool)
+    scan() = [l.message for l in first(Test.collect_test_logs(() -> CP1637._leak_check!(pool); min_level = Logging.Warn))]
+    try
+        slow_sql = by_engine(pool; postgres = "SELECT pg_sleep(2) AS slow_1637",
+                             mysql = "SELECT SLEEP(2) AS slow_1637", sqlite = nothing)
+        if slow_sql === nothing
+            @test_skip "SQLite has no sleep function to hold a statement past the threshold"
+        else
+            ft = PormG.fetch_async(pool, slow_sql)
+            sleep(1.0)
+            msgs = scan()
+            @test any(m -> startswith(m, "$(prefix) while its statement is still running"), msgs)
+            @test !any(m -> occursin("likely acquired without release", m), msgs)
+            PormG.await_result(ft)
+        end
+        ft2 = PormG.fetch_async(pool, "SELECT 1 AS done_1637")
+        try
+            i = findfirst(c -> c === ft2.conn, pool.connections)
+            wait(ft2.async_result)
+            # LibPQ clears from a task that waits on its handle; give it a moment to run.
+            @test timedwait(() -> st.statement_started[i] == 0.0, 5.0) === :ok
+            sleep(0.6)
+            msgs = scan()
+            @test any(m -> m == "$(prefix) — likely acquired without release; await the FetchTask or release the connection", msgs)
+        finally
+            PormG.await_result(ft2)
+        end
+    finally
+        st.leak_threshold = prior
+    end
+end

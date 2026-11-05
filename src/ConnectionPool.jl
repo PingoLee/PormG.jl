@@ -823,7 +823,8 @@ end
 
 # Per-pool MONITOR state, index-aligned (append-only) with pool.connections. Lives OUTSIDE the pool
 # structs (in `_POOL_MONITOR`) so mock pools without these fields are unaffected — same rationale as
-# #124's `_POOL_WAITERS`. Mutated only inside the pool's own lock (keeps it aligned with connections).
+# #124's `_POOL_WAITERS`. Mutated only inside the pool's own lock (keeps it aligned with connections),
+# except `statement_started`, which has its own leaf lock (see the field).
 # Shared by reaping (#125) and leak detection (#127): `last_used[i]` is written on checkout and again on
 # return, so for a LEASED slot it is that slot's checkout instant — exactly what leak detection needs, so
 # leak detection reuses it (no separate timestamp store, no parallel checkout hooks).
@@ -834,6 +835,13 @@ mutable struct PoolMonitorState
   created_at::Vector{Float64}   # when the connection now in slot i was opened (#125)
   last_used::Vector{Float64}    # when slot i was last checked out / returned (== checkout time while leased)
   leak_warned::Vector{Bool}     # already warned for slot i's current lease (#127)
+  # When slot i's current statement started, 0.0 = none (#1637): lets the leak scan tell a lease whose
+  # statement is still running from one nobody returns. Written by the statement's own task when it
+  # ends, which may be the SQLite worker, so it is guarded by `stamp_lock`, a leaf lock (taken last,
+  # never held while taking another), rather than by `pool.lock`. Written only while the pool has
+  # leak detection on (`_note_statement_start!`).
+  statement_started::Vector{Float64}
+  stamp_lock::ReentrantLock
 end
 
 const _POOL_MONITOR = WeakKeyDict{Any, PoolMonitorState}()   # populated ONLY by the enable_*! functions
@@ -841,6 +849,10 @@ const _POOL_MONITOR_LOCK = ReentrantLock()
 # Fast path: false (no pool opted in) → every hook returns immediately. Monotonic: set true by the first
 # enable_reaping!/enable_leak_detection!/enable_idle_validation! above 0, never cleared. Lock order: pool.lock → _POOL_MONITOR_LOCK.
 const _MONITOR_ANY = Threads.Atomic{Bool}(false)
+# The same, for leak detection alone (#1637): set by the first `enable_leak_detection!` above 0, never
+# cleared. The statement path checks it first, so a process whose pools only reap or validate idle
+# connections (MySQL's default) pays one atomic load per statement, not a registry lookup.
+const _LEAK_ANY = Threads.Atomic{Bool}(false)
 const _REAP_INTERVAL = 15.0   # seconds between background sweeps (fixed)
 
 # The pool's PoolMonitorState, or nothing when monitoring is globally off / this pool never opted in.
@@ -862,7 +874,8 @@ function _monitor_state_for!(pool)::PoolMonitorState
       st === nothing || return st
       n = length(pool.connections)
       t = time()
-      st = PoolMonitorState(ReapConfig(0.0, 0.0), 0.0, 0.0, fill(t, n), fill(t, n), fill(false, n))
+      st = PoolMonitorState(ReapConfig(0.0, 0.0), 0.0, 0.0, fill(t, n), fill(t, n), fill(false, n),
+                            fill(0.0, n), ReentrantLock())
       _POOL_MONITOR[pool] = st
       return st
     end
@@ -880,6 +893,12 @@ function _monitor_note_create!(pool, i::Int)
     push!(st.last_used, t); push!(st.created_at, t); push!(st.leak_warned, false)
   end
   st.created_at[i] = t; st.last_used[i] = t; st.leak_warned[i] = false
+  Base.@lock st.stamp_lock begin
+    while length(st.statement_started) < i
+      push!(st.statement_started, 0.0)
+    end
+    st.statement_started[i] = 0.0
+  end
   return nothing
 end
 
@@ -891,6 +910,100 @@ function _monitor_note_touch!(st::Union{PoolMonitorState, Nothing}, i::Int)
   if i <= length(st.last_used)
     st.last_used[i] = time()
     st.leak_warned[i] = false
+  end
+  # A new lease, or a returned one, has no statement running on the pool's behalf (#1637). Nothing to
+  # reset while leak detection is off: no statement stamps then.
+  st.leak_threshold > 0 && _monitor_clear_stamp!(st, i)
+  return nothing
+end
+
+# Empty slot i's statement stamp (#1637). Takes only the leaf `stamp_lock`.
+function _monitor_clear_stamp!(pool, i::Int)
+  _LEAK_ANY[] || return nothing
+  st = _monitor_state(pool)
+  st === nothing || _monitor_clear_stamp!(st, i)
+  return nothing
+end
+function _monitor_clear_stamp!(st::PoolMonitorState, i::Int)
+  Base.@lock st.stamp_lock begin
+    i <= length(st.statement_started) && (st.statement_started[i] = 0.0)
+  end
+  return nothing
+end
+
+# ── The statement a leased slot is running (#1637) ──────────────────────────
+#
+# Which slot a statement runs on, and the stamp it wrote there. A statement ends by clearing the slot
+# only while the slot still holds that stamp, so a lease that ended and a new one that began, or a later
+# statement on the same slot, are never cleared by an older statement's end. `slot == 0` is no stamp.
+struct _StatementMark
+  slot::Int
+  started::Float64
+end
+const _NO_STATEMENT_MARK = _StatementMark(0, 0.0)
+
+"""
+    _note_statement_start!(pool, conn) -> _StatementMark
+
+Stamp the slot holding `conn` with the time its statement starts, for the leak scan (#1637). Called on
+the caller's side, before the driver gets the statement, by every path that runs one: the PostgreSQL and
+MySQL extensions' `backend_execute_async`, SQLite's worker queue (`sqlite_execute_async`) and COPY
+(`fetch_copy`). The statement's own end hands the mark to [`_note_statement_end!`](@ref).
+
+Only while the pool has leak detection on. While no pool in the process has it, it returns at the first
+check (one atomic load per statement). A pool that has it pays a registry lookup, a `pool.lock` to find
+the slot, and the leaf `stamp_lock` once at the start and once at the end.
+"""
+function _note_statement_start!(pool, conn)::_StatementMark
+  _LEAK_ANY[] || return _NO_STATEMENT_MARK
+  st = _monitor_state(pool)
+  (st === nothing || st.leak_threshold <= 0) && return _NO_STATEMENT_MARK
+  t = time()
+  i = _slot_index_of(pool, conn)
+  i === nothing && return _NO_STATEMENT_MARK
+  Base.@lock st.stamp_lock begin
+    i <= length(st.statement_started) || return _NO_STATEMENT_MARK
+    st.statement_started[i] = t
+  end
+  return _StatementMark(i, t)
+end
+
+"""
+    _note_statement_end!(pool, mark) -> Nothing
+
+Clear the stamp `mark` wrote, unless the slot has since been stamped again or its lease ended (#1637).
+Called from the statement's own `finally`, on whatever task runs it (a driver task, the SQLite worker),
+so it takes only the leaf `stamp_lock`. Never throws.
+"""
+function _note_statement_end!(pool, mark::_StatementMark)
+  mark.slot == 0 && return nothing
+  st = _monitor_state(pool)
+  st === nothing && return nothing
+  Base.@lock st.stamp_lock begin
+    i = mark.slot
+    i <= length(st.statement_started) && st.statement_started[i] == mark.started &&
+      (st.statement_started[i] = 0.0)
+  end
+  return nothing
+end
+
+"""
+    _note_statement_end_when_settled!(pool, mark, handle) -> Nothing
+
+[`_note_statement_end!`](@ref) for a driver whose statement runs in a task the driver owns, so PormG has
+no `finally` inside it: LibPQ, whose `async_execute` starts its own task. A task waits for `handle` to
+settle and then clears the stamp. Spawned only for a real mark, so only while leak detection is on.
+Here, not in the extension, because no file in `ext/` spawns a task (#1577).
+"""
+function _note_statement_end_when_settled!(pool, mark::_StatementMark, handle)
+  mark.slot == 0 && return nothing
+  Threads.@spawn begin
+    try
+      Base.wait(handle)
+    catch
+      # Failed, cancelled, interrupted: the statement has ended either way.
+    end
+    _note_statement_end!(pool, mark)
   end
   return nothing
 end
@@ -936,12 +1049,19 @@ no-op. When enabled, `acquire_connection` scans the leased slots and emits a sin
 whose lease has exceeded `threshold` — pointing at a connection that was acquired but never released
 (e.g. a `fetch_async` that was never awaited). Reuses the shared per-slot checkout timestamps
 (`PoolMonitorState.last_used`); no background task (the scan runs on the next acquire).
+
+The warning is worded by what the slot is doing (#1637): leased with no statement running (the leak),
+leased with its statement still running (`running_s`; a slow statement or an unresponsive server, not a
+leak), or reserved for a connect. All three start `Pool connection held past leak_detection_threshold`.
+While it is on, every statement stamps its slot when it starts and clears the stamp when it ends
+(`_note_statement_start!`).
 """
 function enable_leak_detection!(pool::_SQLEngine; threshold::Real = 0)
   threshold <= 0 && return pool
   st = _monitor_state_for!(pool)
   st.leak_threshold = Float64(threshold)   # merge: reaping config (if any) preserved
   _MONITOR_ANY[] = true
+  _LEAK_ANY[] = true
   return pool
 end
 
@@ -996,21 +1116,41 @@ function _leak_check!(pool, st::Union{PoolMonitorState, Nothing})
   st === nothing && return
   st.leak_threshold <= 0 && return
   now = time()
-  leaked = Tuple{Int, Float64}[]
+  # (slot, held, state, running): `state` is what the slot is doing at the scan (#1637), and `running`
+  # is how long its statement has run (0.0 unless `state === :running`).
+  leaked = Tuple{Int, Float64, Symbol, Float64}[]
   Base.lock(pool.lock) do
-    for i in 1:length(pool.connections)
-      pool.available[i] && continue            # only LEASED (in-use) slots can leak
-      i <= length(st.leak_warned) || continue
-      st.leak_warned[i] && continue            # already warned for this lease
-      held = now - st.last_used[i]
-      if held > st.leak_threshold
-        push!(leaked, (i, held)); st.leak_warned[i] = true
+    Base.@lock st.stamp_lock begin             # leaf lock, after pool.lock
+      for i in 1:length(pool.connections)
+        pool.available[i] && continue            # only LEASED (in-use) slots can leak
+        i <= length(st.leak_warned) || continue
+        st.leak_warned[i] && continue            # already warned for this lease
+        held = now - st.last_used[i]
+        held > st.leak_threshold || continue
+        started = i <= length(st.statement_started) ? st.statement_started[i] : 0.0
+        # Leased and empty is a slot reserved for a connect (#1540): the caller connects into it
+        # without the pool's lock. The idle ping (#1548) and a slot a discard handed to a waiter look
+        # the same: the handle is out of the slot, and a connect follows if the ping fails or the
+        # waiter takes it. Otherwise a stamp means a statement is still running.
+        state = pool.connections[i] === nothing ? :connecting : started > 0 ? :running : :leased
+        push!(leaked, (i, held, state, state === :running ? now - started : 0.0))
+        st.leak_warned[i] = true
       end
     end
   end
   # @warn OUTSIDE the pool lock. One actionable line per culprit; connection string redacted per house rules.
-  for (i, held) in leaked
-    @warn "Pool connection held past leak_detection_threshold — likely acquired without release; await the FetchTask or release the connection" slot=i held_s=round(held; digits=1) threshold_s=st.leak_threshold connection_string=redact_secret(pool.connection_string)
+  # Every wording starts "Pool connection held past leak_detection_threshold", so a log search for it
+  # finds all three (#1637).
+  for (i, held, state, running) in leaked
+    held_s = round(held; digits = 1)
+    connection_string = redact_secret(pool.connection_string)
+    if state === :running
+      @warn "Pool connection held past leak_detection_threshold while its statement is still running: a slow statement or an unresponsive server, not a leak" slot=i held_s running_s=round(running; digits=1) threshold_s=st.leak_threshold connection_string
+    elseif state === :connecting
+      @warn "Pool connection held past leak_detection_threshold while connecting to the server" slot=i held_s threshold_s=st.leak_threshold connection_string
+    else
+      @warn "Pool connection held past leak_detection_threshold — likely acquired without release; await the FetchTask or release the connection" slot=i held_s threshold_s=st.leak_threshold connection_string
+    end
   end
   return nothing
 end
@@ -1970,6 +2110,9 @@ would clobber a slot that is no longer ours and strand whatever now occupies it.
 _swap_slot!(pool, i::Int, conn, new_conn)::Bool = Base.lock(pool.lock) do
   pool.connections[i] === conn || return false
   pool.connections[i] = new_conn
+  # The renewed handle runs nothing yet. A statement still stuck on the old handle no longer stands
+  # for this slot, so its stamp goes, and its late end then finds no match (#1637).
+  new_conn === conn || _monitor_clear_stamp!(pool, i)
   return true
 end
 
@@ -2442,6 +2585,7 @@ mutable struct SQLiteAsyncWorkItem
   sql::String
   params::Any
   response::Channel{Any}
+  mark::_StatementMark   # the leak scan's stamp for this statement (#1637); cleared when it ends
 end
 
 struct SQLiteAsyncResponse
@@ -2528,6 +2672,7 @@ function _ensure_sqlite_async_worker!()
           # any more (the awaiting task may have been killed by the very Ctrl-C this exists for)
           # cannot leak a count and defer that connection's close forever.
           _sqlite_pending_dec!(item.conn)
+          _note_statement_end!(item.pool, item.mark)   # the statement has ended (#1637)
         end
         put!(item.response, response)
       end
@@ -2548,7 +2693,10 @@ function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params)
   _ensure_sqlite_async_worker!()
 
   response = Channel{Any}(1)
-  work_item = SQLiteAsyncWorkItem(pool, conn, sql, params, response)
+  # Stamped when queued, not when the worker takes it: a statement queued behind others is running on
+  # the pool's behalf, not a lease nobody returns (#1637).
+  mark = _note_statement_start!(pool, conn)
+  work_item = SQLiteAsyncWorkItem(pool, conn, sql, params, response, mark)
 
   # Count this statement as outstanding BEFORE it can reach the worker (#327), and synchronously —
   # on the caller's task, not inside the `@async` below. Doing it in the task would leave a window
@@ -2566,6 +2714,7 @@ function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params)
       # worker owns the decrement unconditionally, so there is no in-between state to get wrong and
       # no way for both halves to count the same statement down.
       _sqlite_pending_dec!(conn)
+      _note_statement_end!(pool, mark)
       rethrow()
     end
     result = take!(response)
@@ -3138,21 +3287,26 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   # `finally` still releases the lease.
   if tx_conn !== nothing
     # Reuse the transaction connection — COPY is part of the open transaction.
+    mark = _note_statement_start!(connection, tx_conn)   # the leak scan's stamp (#1637)
     err = try
       return backend_copy_in!(connection, tx_conn, sql, data_itr)
     catch e
       _as_database_error(connection, e)
+    finally
+      _note_statement_end!(connection, mark)
     end
     throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   else
     # Acquire a pool connection for the duration of the COPY stream. CopyIn owns the
     # connection until the stream is fully consumed, so we hold it until done.
     conn = acquire_connection(connection)
+    mark = _note_statement_start!(connection, conn)   # the leak scan's stamp (#1637)
     err = try
       return backend_copy_in!(connection, conn, sql, data_itr)
     catch e
       _as_database_error(connection, e)
     finally
+      _note_statement_end!(connection, mark)
       release_connection(connection, conn)
     end
     throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.

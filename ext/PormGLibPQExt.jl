@@ -444,11 +444,22 @@ function PormG.backend_execute(pool::PormGPostgres, conn::LibPQ.Connection, sql:
   return _raise_if_failed(pool, result)
 end
 
+# The leak scan's stamp (#1637) is set before the statement starts. LibPQ runs it in a task of its own,
+# so there is no `finally` of PormG's inside it: core clears the stamp once the handle settles, with a
+# waiting task spawned only while leak detection is on.
 function PormG.backend_execute_async(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
-  inner = resolved === nothing ? LibPQ.async_execute(conn, sql; throw_error = false) :
-                                 LibPQ.async_execute(conn, sql, resolved; throw_error = false)
-  return _CheckedAsyncResult(pool, inner)
+  mark = PormG.ConnectionPool._note_statement_start!(pool, conn)
+  inner = try
+    resolved === nothing ? LibPQ.async_execute(conn, sql; throw_error = false) :
+                           LibPQ.async_execute(conn, sql, resolved; throw_error = false)
+  catch
+    PormG.ConnectionPool._note_statement_end!(pool, mark)
+    rethrow()
+  end
+  handle = _CheckedAsyncResult(pool, inner)
+  PormG.ConnectionPool._note_statement_end_when_settled!(pool, mark, handle)
+  return handle
 end
 
 # SQLSTATEs that mean THE BACKEND IS GONE AND THE STATEMENT NEVER RAN. That second half is the bar,

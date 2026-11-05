@@ -154,9 +154,11 @@ end
   definition = r"^\s*(function\s+)?(Base\.)?(fetch|wait)\([^)]*::"
   reviewed = Dict(
     # `_fetch_interruptible` itself (2); `_settle_probe`'s `Base.wait`, on a detached task, which
-    # SIGINT never targets (1); prose in docstrings (3): `_as_database_error`'s example, its
-    # `fetch(Threads.@spawn …)`, and `_settle_probe`'s `wait(result_task)`.
-    "src/ConnectionPool.jl" => 6,
+    # SIGINT never targets (1); `_note_statement_end_when_settled!`'s `Base.wait`, on a detached task
+    # for the same reason, which clears the leak scan's stamp once a LibPQ statement ends (#1637) (1);
+    # prose in docstrings (3): `_as_database_error`'s example, its `fetch(Threads.@spawn …)`, and
+    # `_settle_probe`'s `wait(result_task)`.
+    "src/ConnectionPool.jl" => 7,
     # The LibPQ handle's `Base.fetch` forwarding to LibPQ's `AsyncResult`: the driver side of the
     # await, which `_fetch_interruptible` calls.
     "ext/PormGLibPQExt.jl" => 1,

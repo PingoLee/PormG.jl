@@ -24,6 +24,9 @@
 #        Postgres.jl changes the in-flight case (#1588): an interrupt in its read closes the socket,
 #        so the ROLLBACK fails at once on a lost connection. The #1588 testsets pin that the
 #        statement is then cancelled before the renewal, and that nothing else sends that cancel.
+#        #1638 moved that gate into `finalize_transaction_connection!`, so `delete()`'s cascade and
+#        the migration pre-check and apply, which drive their own BEGIN/ROLLBACK, send it too; their
+#        testsets drive each real lifecycle against the same mock.
 #     2. `with_transaction`. `rollback_failed` is `false` for any sql that is not a plain
 #        ROLLBACK, so both of its release points released a dirty handle.
 #     3. `AdvisoryLock`. Worse consequence: the `finally` releases unconditionally AND its UNLOCK
@@ -98,9 +101,10 @@ mutable struct MockPGPool322 <: PormG.PormGPostgres
   connection_string::String
   pool_size::Int
   lock::ReentrantLock
-  interrupt_sql::Union{Nothing, String}   # sql prefix whose task raises InterruptException
-  fail_sql::Union{Nothing, String}        # sql prefix whose task raises an ordinary error
-  lost_sql::Union{Nothing, String}        # sql prefix whose task raises a LOST-CONNECTION error (#1588)
+  interrupt_sql::Union{Nothing, String, Regex}   # sql prefix (or pattern) whose task raises InterruptException
+  fail_sql::Union{Nothing, String, Regex}        # sql prefix (or pattern) whose task raises an ordinary error
+  lost_sql::Union{Nothing, String, Regex}        # sql prefix whose task raises a LOST-CONNECTION error (#1588)
+  row_sql::Union{Nothing, Regex}                 # sql answered with one row (#1638: `delete()`'s exists probe)
   begins::Threads.Atomic{Int}
   rollbacks::Threads.Atomic{Int}
   commits::Threads.Atomic{Int}
@@ -113,9 +117,10 @@ mutable struct MockPGPool322 <: PormG.PormGPostgres
   cancels_at_renew::Threads.Atomic{Int}   # `cancels` as the first renewal saw it; -1 = no renewal (#1588)
   next_id::Threads.Atomic{Int}
 end
-MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, lost_sql = nothing, renew_gate = nothing) =
+MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, lost_sql = nothing, row_sql = nothing,
+              renew_gate = nothing) =
   MockPGPool322(Any[FakeConn322(1)], [true], "mock://pg", 1, ReentrantLock(),
-                interrupt_sql, fail_sql, lost_sql,
+                interrupt_sql, fail_sql, lost_sql, row_sql,
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
                 Threads.Atomic{Int}(0), renew_gate, Base.RefValue{Any}(nothing),
@@ -126,6 +131,7 @@ const _LOST_MSG_322 = "mock: connection lost"
 PormG.backend_is_connection_error(::MockPGPool322, e) = e isa ErrorException && e.msg == _LOST_MSG_322
 
 _matches_322(prefix, sql) = prefix !== nothing && startswith(sql, prefix)
+_matches_322(pattern::Regex, sql) = occursin(pattern, sql)
 
 PormG.backend_is_alive(::MockPGPool322, conn) = conn isa FakeConn322 && !conn.closed
 PormG.backend_connect(pool::MockPGPool322; kwargs...) =
@@ -155,7 +161,8 @@ function PormG.backend_execute_async(pool::MockPGPool322, conn, sql::String, par
     _matches_322(pool.fail_sql, sql) && error("mock: statement refused")
     _matches_322(pool.lost_sql, sql) && error(_LOST_MSG_322)
     # Advisory-lock queries are read for a boolean; everything else discards the result.
-    startswith(sql, "SELECT pg_") ? Any[(true,)] : NamedTuple[]
+    startswith(sql, "SELECT pg_") && return Any[(true,)]
+    _matches_322(pool.row_sql, sql) ? [(one = 1,)] : NamedTuple[]
   end
 end
 
@@ -468,6 +475,140 @@ end
   @test pool.cancels[] == 0
   @test pool.renewals[] == 1
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1638: the same cancel for the lifecycles that drive their own BEGIN/ROLLBACK
+# `delete()`'s cascade, the migration lossy pre-check and the PostgreSQL migration apply each run
+# their statements on a leased connection and end in `finalize_transaction_connection!`. The #1588
+# gate now lives there, once: the body's error is an abandoned await (or the block's mark says so),
+# and the ROLLBACK found the connection lost. Each site passes its body's error through.
+# Reverted-fix signature, per site: `cancels == 0` (that site's `body_error` pass-through removed, or
+# the gate removed, which fails every site at once). Cancel moved after the renewal:
+# `cancels_at_renew == 0`. The precision testsets pin that a clean ROLLBACK, or a lost connection
+# after an ordinary error, sends none.
+# ─────────────────────────────────────────────────────────────────────────────
+const KEY_1638 = "t1638_pg"
+PormG.config[KEY_1638] = PormG.Configuration.Settings(
+  connections = MockPGPool322(), db_def_folder = KEY_1638, change_data = true)
+
+# The F1 shape in miniature: a status has results through a CASCADE key, so a filtered delete of a
+# status resolves its keys first (`SELECT … FOR UPDATE`, the cascade's first statement in the transaction).
+module Models1638
+import PormG
+import PormG.Models
+Status = Models.Model("t1638_status", statusid = Models.IDField(), status = Models.CharField())
+Result = Models.Model("t1638_result",
+  resultid = Models.IDField(),
+  statusid = Models.ForeignKey(Status, pk_field = "statusid", on_delete = "CASCADE", related_name = "results"),
+  points   = Models.IntegerField(),
+)
+PormG.Models.set_models(@__MODULE__, "t1638_pg")
+end
+
+_quiet_1638(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Error))
+
+# Run `f()` against a fresh mock with the given knobs, return (error or nothing, pool).
+function _run_1638(f; kwargs...)
+  # `SELECT 1 … LIMIT 1` is `delete()`'s exists probe, before its BEGIN: one row, so the delete runs.
+  pool = MockPGPool322(; row_sql = r"^SELECT 1\s", kwargs...)
+  PormG.config[KEY_1638] = PormG.Configuration.Settings(connections = pool, db_def_folder = KEY_1638, change_data = true)
+  err = try
+    _quiet_1638(() -> f(pool))
+    nothing
+  catch e
+    e
+  end
+  return err, pool
+end
+
+_delete_1638(pool) = Models1638.Status.objects.filter("statusid" => 1).delete()
+_precheck_1638(pool) = PormG.Migrations._precheck_lossy_alters(pool,
+  [PormG.Migrations.LossyAlter(:add_not_null, "t1638_result", "grid", "", "INTEGER")];
+  timeouts = PormG.Migrations._MigrationTimeouts(1000, nothing, nothing))
+_apply_1638(pool) = PormG.Migrations._execute_migration_lifecycle(pool, PormG.config[KEY_1638],
+  String["CREATE TABLE t1638_lap (id integer);"], "CREATE TABLE t1638_lap (id integer);",
+  "v1638", "lap_table", "chk1638", false)
+
+# (site, run, the statement the interrupt lands in)
+const SITES_1638 = (
+  ("delete()'s cascade",           _delete_1638,   r"FOR UPDATE"),   # the key step's row lock
+  ("the migration lossy pre-check", _precheck_1638, "SELECT"),       # the pre-check's first read
+  ("the migration apply",           _apply_1638,    "CREATE TABLE"), # the plan's DDL statement
+)
+
+for (site, run, stmt) in SITES_1638
+  @testset "PG: $(site) cancels an interrupted statement before renewing when the ROLLBACK is lost (#1638)" begin
+    # What: an interrupt lands in the site's statement, then its cleanup ROLLBACK fails on a lost
+    #   connection (Postgres.jl's closed socket). Expected: one cancel, sent before the one renewal.
+    # SQL: delete() — `BEGIN;`, the key step's `SELECT "Tb"."statusid" … FOR UPDATE` (interrupted),
+    #   `ROLLBACK;`; pre-check — `BEGIN READ ONLY …`, `SET LOCAL lock_timeout …`, `SAVEPOINT
+    #   pormg_precheck;`, its first `SELECT` (interrupted), `ROLLBACK TO SAVEPOINT …`, `ROLLBACK;`;
+    #   apply — `BEGIN;`, `CREATE TABLE t1638_lap (id integer);` (interrupted), `ROLLBACK;`.
+    # Why: before #1638 these lifecycles renewed the slot with no cancel, so the server ran the
+    #   statement to its end with its locks held.
+    err, pool = _run_1638(run; interrupt_sql = stmt, lost_sql = "ROLLBACK")
+    @test err !== nothing && CP._await_abandoned(err)   # the interrupt still propagates
+    @test pool.rollbacks[] >= 1
+    @test pool.cancels[] == 1
+    @test pool.cancels_at_renew[] == 1
+    @test pool.renewals[] == 1
+    @test pool.available[1] === true
+  end
+
+  @testset "PG: $(site) sends no cancel when the ROLLBACK succeeds (#1638 precision)" begin
+    # What: the same interrupt, with a ROLLBACK that succeeds. SQL: as above.
+    # Why: LibPQ's shape: the ROLLBACK waits behind the statement and runs, so the connection is
+    #   clean and goes back as it was; a cancel there would be noise.
+    err, pool = _run_1638(run; interrupt_sql = stmt)
+    @test err !== nothing && CP._await_abandoned(err)
+    @test pool.rollbacks[] >= 1                         # the interrupt landed inside the transaction
+    @test pool.cancels[] == 0 && pool.renewals[] == 0
+    @test pool.available[1] === true
+  end
+
+  @testset "PG: $(site) sends no cancel for a lost ROLLBACK after an ordinary error (#1638 precision)" begin
+    # What: the statement fails with an ordinary error, then the ROLLBACK is lost. SQL: as above.
+    # Why: a connection the server dropped by itself is renewed as before (#71), with no cancel attempt.
+    err, pool = _run_1638(run; fail_sql = stmt, lost_sql = "ROLLBACK")
+    @test err !== nothing && !CP._await_abandoned(err)
+    @test pool.rollbacks[] >= 1
+    @test pool.cancels[] == 0
+    @test pool.renewals[] == 1
+  end
+end
+
+@testset "finalize_transaction_connection! holds the one cancel gate (#1638)" begin
+  # What: the gate on its own, through both overloads. Why: every lifecycle reaches it, so its
+  #   halves are pinned here once, beside the per-site testsets above.
+  lost = ErrorException(_LOST_MSG_322)
+  @testset "the mark alone opens it, with a body error that is not an interrupt" begin
+    pool = MockPGPool322(); conn = CP.acquire_connection(pool)
+    CP.finalize_transaction_connection!(pool, conn; rollback_error = lost,
+                                        body_error = ErrorException("lap times query failed"), abandoned_await = true)
+    @test pool.cancels[] == 1 && pool.cancels_at_renew[] == 1 && pool.renewals[] == 1
+  end
+  @testset "an interrupted body with no ROLLBACK error sends none" begin
+    pool = MockPGPool322(); conn = CP.acquire_connection(pool)
+    CP.finalize_transaction_connection!(pool, conn; body_error = InterruptException())
+    @test pool.cancels[] == 0 && pool.renewals[] == 0 && pool.available[1] === true
+  end
+  @testset "no body error and no mark sends none, even for a lost ROLLBACK" begin
+    pool = MockPGPool322(); conn = CP.acquire_connection(pool)
+    CP.finalize_transaction_connection!(pool, conn; rollback_error = lost)
+    @test pool.cancels[] == 0 && pool.renewals[] == 1
+  end
+  @testset "the PormGSettings overload forwards both keywords" begin
+    pool = MockPGPool322(); conn = CP.acquire_connection(pool)
+    settings = PormG.Configuration.Settings(connections = pool, db_def_folder = KEY_1638, change_data = true)
+    CP.finalize_transaction_connection!(settings, conn; rollback_error = lost, body_error = InterruptException())
+    @test pool.cancels[] == 1 && pool.renewals[] == 1
+    pool = MockPGPool322(); conn = CP.acquire_connection(pool)
+    settings = PormG.Configuration.Settings(connections = pool, db_def_folder = KEY_1638, change_data = true)
+    CP.finalize_transaction_connection!(settings, conn; rollback_error = lost, abandoned_await = true)
+    @test pool.cancels[] == 1 && pool.renewals[] == 1
+  end
+end
+delete!(PormG.config, KEY_1638)   # the mock key never outlives this file's #1638 testsets
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRECISION (#322): a BEGIN the database genuinely refused is unchanged

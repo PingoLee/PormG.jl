@@ -1146,6 +1146,8 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
   # committed, which a session default of REPEATABLE READ would hide behind this transaction's snapshot.
   _, leased = with_transaction(conn, "BEGIN READ ONLY ISOLATION LEVEL READ COMMITTED;")
   local rollback_error = nothing
+  # The body's error, for the cancel gate in `finalize_transaction_connection!` (#1638).
+  local body_error = nothing
   try
     # Values are `Int`s PormG formatted (`_migration_timeouts`), never caller text.
     with_transaction(conn, "SET LOCAL lock_timeout = '$(timeouts.lock_wait_ms)ms';", conn = leased)
@@ -1181,6 +1183,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     end
     with_transaction(conn, "COMMIT;", conn = leased, release_conn = false)
   catch e
+    body_error = e
     try
       with_transaction(conn, "ROLLBACK;", conn = leased, release_conn = false)
     catch rollback_err
@@ -1188,7 +1191,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     end
     rethrow(e)
   finally
-    finalize_transaction_connection!(conn, leased; rollback_error = rollback_error)
+    finalize_transaction_connection!(conn, leased; rollback_error = rollback_error, body_error = body_error)
   end
   return checked
 end
@@ -3823,6 +3826,9 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
   # Release/renew the transaction connection exactly once, in a single terminal finally, so a
   # failed COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
   local rollback_error = nothing
+  # The body's error, for the cancel gate in `finalize_transaction_connection!` (#1638): on
+  # Postgres.jl an interrupted plan statement is cancelled before the slot is renewed.
+  local body_error = nothing
 
   try
     # Opt-in timeouts first, inside the transaction, so they bound every plan statement (#737).
@@ -3838,6 +3844,7 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
     with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
     @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
   catch e
+    body_error = e
     # Roll back on the still-leased connection. A rollback failure must not mask the body's
     # error — capture it so the finally renews/discards the (now-dirty) connection instead of
     # releasing it (#71), then rethrow the original.
@@ -3863,7 +3870,7 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
     @error "Error applying migrations" exception=e
     rethrow(e)
   finally
-    finalize_transaction_connection!(connection, conn; rollback_error=rollback_error)
+    finalize_transaction_connection!(connection, conn; rollback_error=rollback_error, body_error=body_error)
   end
 
   # Archive files (post-commit, best-effort)

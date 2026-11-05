@@ -15,6 +15,9 @@ import OrderedCollections: OrderedDict, OrderedSet
 import Random: randstring
 import SHA
 import PormG.ConnectionPool: fetch, with_transaction, with_sqlite_write_lock, finalize_transaction_connection!
+# #1642: MySQL's apply and `ensure_table!` cancel an interrupted statement themselves (they run no
+# ROLLBACK for `finalize_transaction_connection!`'s gate to read).
+import PormG.ConnectionPool: _await_abandoned, _cancel_abandoned_statement!
 # #276: the SQLite lifecycle acquires its connection explicitly so it can suspend FK enforcement
 # before BEGIN, and asserts the suspension took. Both must be on this list — an export from
 # ConnectionPool alone is an UndefVarError here, and only the migration path would hit it.

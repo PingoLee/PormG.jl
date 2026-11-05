@@ -611,6 +611,184 @@ end
 delete!(PormG.config, KEY_1638)   # the mock key never outlives this file's #1638 testsets
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1642: MySQL's `migrate()` apply and `ensure_table!` cancel an interrupted statement themselves
+# Both run their statements through `with_transaction(…; conn = conn)` on a leased connection, so the
+# abandoned-await recovery never runs, and neither issues a ROLLBACK (MySQL's DDL commits on its own),
+# so #1638's gate in `finalize_transaction_connection!` has nothing to read. Each loop's `catch` sends
+# the cancel BEFORE its cleanup statement on the same connection (the apply's `failed` history row,
+# `ensure_table!`'s DROP of the table it began): when the interrupt lands on the awaiting task, MySQL.jl
+# still holds the connection's lock for the running statement, so that cleanup would wait for the DDL
+# to end, and a cancel sent after it (or from the `finally`) would arrive too late.
+# Reverted-fix signature: `cancels == 0`. Cancel moved after the cleanup or into the `finally`:
+# `cancels_at_cleanup == 0`. Gate dropped (cancel on any error): the precision testsets fail. The
+# driver's cancel called without the never-throws wrapper, at either site: its throwing-cancel testset fails.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct MockMySQL1642 <: PormG.PormGMySQL
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  interrupt_sql::Union{Nothing, String}   # sql prefix whose task raises InterruptException
+  fail_sql::Union{Nothing, String}        # sql prefix whose task raises an ordinary error
+  cancel_throws::Bool                     # the driver's cancel raises (a refused side connection)
+  statements::Vector{String}              # every statement run, in order
+  interrupted_on::Base.RefValue{Any}      # the handle the interrupted statement ran on
+  cancelled_on::Base.RefValue{Any}        # the handle the cancel was sent for
+  cancels::Threads.Atomic{Int}
+  renewals::Threads.Atomic{Int}
+  cleanups::Threads.Atomic{Int}           # `failed` history INSERTs and `DROP TABLE`s
+  cancels_at_renew::Threads.Atomic{Int}   # `cancels` as the first renewal saw it; -1 = none
+  cancels_at_cleanup::Threads.Atomic{Int} # `cancels` when the first cleanup statement ran; -1 = none
+  next_id::Threads.Atomic{Int}
+end
+# Two slots: `ensure_table!` holds its `GET_LOCK` on one while its DDL runs on the other.
+MockMySQL1642(; interrupt_sql = nothing, fail_sql = nothing, cancel_throws = false) =
+  MockMySQL1642(Any[FakeConn322(1), FakeConn322(2)], [true, true], "mock://mysql", 2, ReentrantLock(),
+                interrupt_sql, fail_sql, cancel_throws, String[], Base.RefValue{Any}(nothing),
+                Base.RefValue{Any}(nothing), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+                Threads.Atomic{Int}(0), Threads.Atomic{Int}(-1), Threads.Atomic{Int}(-1), Threads.Atomic{Int}(2))
+
+PormG.backend_is_alive(::MockMySQL1642, conn) = conn isa FakeConn322 && !conn.closed
+PormG.backend_connect(pool::MockMySQL1642; kwargs...) = FakeConn322(Threads.atomic_add!(pool.next_id, 1) + 1)
+function PormG.backend_renew_connection(pool::MockMySQL1642, conn; kwargs...)
+  Threads.atomic_add!(pool.renewals, 1)
+  Threads.atomic_cas!(pool.cancels_at_renew, -1, pool.cancels[])
+  return FakeConn322(Threads.atomic_add!(pool.next_id, 1) + 1)
+end
+function PormG.backend_cancel_query!(pool::MockMySQL1642, conn)
+  pool.cancelled_on[] = conn
+  Threads.atomic_add!(pool.cancels, 1)
+  pool.cancel_throws && error("mock: Too many connections (1040)")
+  return nothing
+end
+
+_is_cleanup_1642(sql, params) = startswith(sql, "DROP TABLE") ||
+  (startswith(sql, "INSERT INTO") && params !== nothing && any(p -> p == "failed", params))
+
+function PormG.backend_execute_async(pool::MockMySQL1642, conn, sql::String, params)
+  push!(pool.statements, sql)
+  if _is_cleanup_1642(sql, params)
+    Threads.atomic_add!(pool.cleanups, 1)
+    Threads.atomic_cas!(pool.cancels_at_cleanup, -1, pool.cancels[])
+  end
+  _matches_322(pool.interrupt_sql, sql) && (pool.interrupted_on[] = conn)
+  return @async begin
+    _matches_322(pool.interrupt_sql, sql) && throw(InterruptException())
+    _matches_322(pool.fail_sql, sql) && error("mock: statement refused")
+    # `GET_LOCK`/`RELEASE_LOCK` answer 1; every other read (the history-table and table-exists probes)
+    # answers nothing, so no checksum guard applies and the table does not exist yet.
+    startswith(sql, "SELECT GET_LOCK") || startswith(sql, "SELECT RELEASE_LOCK") ? Any[(1,)] : NamedTuple[]
+  end
+end
+
+const KEY_1642 = "t1642_mysql"
+const PLAN_1642 = String["CREATE TABLE t1642_lap (lap int)", "CREATE INDEX t1642_lap_idx ON t1642_lap (lap)"]
+
+# Run one MySQL lifecycle against a fresh mock; return (error or nothing, pool, result).
+function _run_1642(lifecycle::Symbol; kwargs...)
+  pool = MockMySQL1642(; kwargs...)
+  folder = mktempdir()   # no pending plan in it, so a successful apply archives nothing
+  settings = PormG.Configuration.Settings(connections = pool, db_def_folder = folder, change_data = true)
+  PormG.config[KEY_1642] = settings
+  result = nothing
+  err = try
+    result = _quiet_1638() do
+      lifecycle === :apply ?
+        PormG.Migrations._execute_migration_lifecycle(pool, settings, PLAN_1642, join(PLAN_1642, ";\n"),
+                                                      "v1642", "lap_table", "chk1642", false) :
+        PormG.Migrations._ensure_table_locked(pool, settings, "t1642_lap", PLAN_1642)
+    end
+    nothing
+  catch e
+    e
+  finally
+    delete!(PormG.config, KEY_1642)
+  end
+  return err, pool, result
+end
+
+_ran_1642(pool, prefix) = count(s -> startswith(s, prefix), pool.statements)
+
+# (site, lifecycle, the statement interrupted, does a cleanup statement follow, its SQL)
+const SITES_1642 = (
+  ("migrate()'s apply, first plan statement", :apply,  "CREATE TABLE", true,
+   "INSERT INTO pormg_migrations … ('failed')"),
+  ("migrate()'s apply, a later plan statement", :apply, "CREATE INDEX", true,
+   "INSERT INTO pormg_migrations … ('failed')"),
+  ("ensure_table!, its CREATE TABLE", :ensure, "CREATE TABLE", false, "none (nothing was created)"),
+  ("ensure_table!, a statement after its CREATE TABLE", :ensure, "CREATE INDEX", true, "DROP TABLE t1642_lap"),
+)
+
+for (site, lifecycle, stmt, cleans_up, cleanup_sql) in SITES_1642
+  @testset "MySQL: an interrupt in $(site) sends KILL QUERY for that connection before its cleanup and the renewal (#1642)" begin
+    # What: the interrupt lands in the statement's await. Expected: one cancel, for the connection the
+    #   statement ran on, sent before the cleanup statement and before the one renewal; the interrupt
+    #   still propagates.
+    # SQL: `CREATE TABLE t1642_lap (lap int)`, `CREATE INDEX t1642_lap_idx ON t1642_lap (lap)` (the one
+    #   named interrupted), then the cleanup (see SITES_1642); `KILL QUERY <id>` is the cancel, on a
+    #   side connection.
+    # Why: before #1642 the connection was renewed with no cancel, so the server ran the DDL to its end.
+    err, pool, _ = _run_1642(lifecycle; interrupt_sql = stmt)
+    @test err !== nothing && CP._await_abandoned(err)
+    @test _ran_1642(pool, stmt) == 1                  # the interrupt landed in the statement named
+    stmt == "CREATE INDEX" && @test _ran_1642(pool, "CREATE TABLE") == 1   # the one before it ran
+    @test pool.cancels[] == 1
+    @test pool.cancelled_on[] isa FakeConn322 && pool.cancelled_on[] === pool.interrupted_on[]
+    @test pool.cleanups[] == (cleans_up ? 1 : 0)
+    cleans_up && @test pool.cancels_at_cleanup[] == 1 # ← sent before the cleanup on the same connection
+    @test pool.cancels_at_renew[] == 1                # and before the renewal
+    @test pool.renewals[] == 1
+    @test all(pool.available)
+  end
+end
+
+for (site, lifecycle) in (("migrate()'s apply", :apply), ("ensure_table!", :ensure))
+  @testset "MySQL: an interrupt in $(site) still propagates, and its cleanup still runs, when the KILL QUERY fails (#1642)" begin
+    # What: the side connection the cancel needs is refused. Expected: the interrupt, not the cancel's
+    #   error, reaches the caller; the cleanup (the `failed` row, or `ensure_table!`'s DROP) runs and
+    #   the connection is renewed.
+    # SQL: `CREATE TABLE t1642_lap (lap int)`, `CREATE INDEX …` (interrupted), the cleanup.
+    # Why: the cancel is best effort and runs while the interrupt propagates; it must never replace it.
+    err, pool, _ = _run_1642(lifecycle; interrupt_sql = "CREATE INDEX", cancel_throws = true)
+    @test err !== nothing && CP._await_abandoned(err)
+    @test pool.cancels[] == 1
+    @test pool.cleanups[] == 1
+    @test pool.renewals[] == 1
+    @test all(pool.available)
+  end
+end
+
+for (site, lifecycle) in (("migrate()'s apply", :apply), ("ensure_table!", :ensure))
+  @testset "MySQL: an ordinary error in $(site) sends no KILL QUERY (#1642 precision)" begin
+    # What: a statement after the CREATE TABLE is refused. Expected: no cancel; the cleanup (the
+    #   `failed` history row, or `ensure_table!`'s DROP) runs; renewed.
+    # SQL: `CREATE TABLE t1642_lap (lap int)`, `CREATE INDEX …` (refused), the cleanup.
+    # Why: a refused statement has ended on the server; a cancel there would be noise.
+    err, pool, _ = _run_1642(lifecycle; fail_sql = "CREATE INDEX")
+    @test err !== nothing && !CP._await_abandoned(err)
+    @test pool.cancels[] == 0
+    @test pool.cleanups[] == 1
+    @test pool.renewals[] == 1
+    @test all(pool.available)
+  end
+end
+
+for (site, lifecycle, expected) in (("migrate()'s apply", :apply, :applied), ("ensure_table!", :ensure, :created))
+  @testset "MySQL: a clean $(site) sends no KILL QUERY (#1642 precision)" begin
+    # What: every statement succeeds. Expected: the success outcome, no cancel, the one renewal as before.
+    # SQL: both statements (then, for the apply, `INSERT INTO pormg_migrations … ('applied')`).
+    # Why: the cancel belongs to the interrupt only.
+    err, pool, result = _run_1642(lifecycle)
+    @test err === nothing
+    @test (result isa Symbol ? result : result.outcome) === expected
+    @test pool.cancels[] == 0 && pool.cleanups[] == 0
+    @test pool.renewals[] == 1
+    @test all(pool.available)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PRECISION (#322): a BEGIN the database genuinely refused is unchanged
 # The other half of the over-firing guard. A refused statement leaves the connection clean, so it
 # must take the plain release it always did — no cancel, no renewal, same handle back in the slot.

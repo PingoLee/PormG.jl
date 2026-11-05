@@ -900,7 +900,7 @@ end
 # makes reading the key here unsafe.
 #
 # Two callers reach it: the detached abandoned-await recovery, and a transaction's cleanup when its
-# `ROLLBACK` after an interrupt found the socket closed (#1588, `_cancel_after_lost_rollback!`), which
+# `ROLLBACK` after an interrupt found the socket closed (#1588, `_cancel_abandoned_statement!`), which
 # sends it before the slot is renewed.
 function PormG.backend_cancel_query!(pool::_Pool, conn::Postgres.Connection)
   try

@@ -3688,7 +3688,8 @@ end
 # statements run in order, and the history row is written once all of them have, `failed` when one
 # raised — the statements before it stay applied. Reached only with `atomic = false`, or for a plan of
 # one statement (`_require_atomic_plan`). A re-run finishes the plan through a new one: `makemigrations`
-# reads the part-applied schema and plans the steps still missing.
+# reads the part-applied schema and plans the steps still missing. An interrupted statement is
+# cancelled (`KILL QUERY`) before the `failed` row is written and the connection renewed (#1642).
 function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSettings,
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
@@ -3726,6 +3727,14 @@ function _execute_migration_lifecycle(connection::PormGMySQL, settings::PormGSet
         applied += 1
       end
     catch e
+      # An interrupted await leaves the statement running on the server (#1642): this connection is
+      # borrowed, so `with_transaction` skipped the abandoned-await recovery, and the plan runs no
+      # ROLLBACK for `finalize_transaction_connection!`'s gate to read. Cancel it here, first. On an
+      # interrupt that lands on the awaiting task, MySQL.jl still holds the connection's lock for the
+      # statement, so the `failed` write below would wait for the DDL to end and a cancel in the
+      # `finally` would come too late. `KILL QUERY` goes out on a side connection, by this one's id,
+      # which MySQL.jl keeps when an interrupt in its read closed the socket.
+      _await_abandoned(e) && _cancel_abandoned_statement!(connection, conn)
       try
         _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn = conn)
       catch record_err
@@ -4465,7 +4474,11 @@ function _ensure_table_locked(connection::PormGMySQL, settings::PormGSettings, t
         with_transaction(connection, part; conn = conn)
         created = true
       end
-    catch
+    catch e
+      # An interrupted statement is cancelled first, as in `migrate`'s apply (#1642): the connection is
+      # borrowed and no ROLLBACK runs, so nothing else would, and the cleanup DROP below would wait
+      # behind the running DDL for MySQL.jl's connection lock.
+      _await_abandoned(e) && _cancel_abandoned_statement!(connection, conn)
       created || rethrow()
       try
         with_transaction(connection, Dialect.drop_table_only(connection, table); conn = conn)

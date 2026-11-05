@@ -405,7 +405,7 @@ of a folder fail to match another spelling of the same folder.
 """
 function _canonical_folder_path(path::AbstractString)::String
     parts = splitpath(abspath(String(path)))
-    return isempty(parts) ? abspath(String(path)) : joinpath(parts...)
+    return isempty(parts) ? abspath(String(path)) : joinpath(parts)
 end
 
 """

@@ -79,7 +79,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_connect(pool; read_only=false)            -> open a physical connection
 #   backend_renew_connection(pool, conn; read_only)   -> reset or recreate a dead connection
 #   backend_is_alive(pool, conn)                       -> Bool liveness probe
-#   backend_ping(pool, conn)                           -> nothing, or raises: a server round trip (#1548; below, not in the loop)
+#   backend_ping(pool, conn, timeout_seconds)          -> nothing, or raises: a server round trip, bounded (#1548, #1618; below)
 #   backend_execute(pool, conn, sql, params)           -> SYNC execute (SQLite worker; PG parity)
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
@@ -135,7 +135,10 @@ Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
 # rather than an argument on `backend_is_alive`, so the probe every checkout runs stays local and free.
 # Not in the loop above, and no fallback: only a backend with the `idle_validation` capability (MySQL)
 # takes a threshold, so core never asks another backend, and one that gains the row must say how it
-# pings instead of inheriting a guess.
+# pings instead of inheriting a guess. `timeout_seconds` is what is left of the checkout's deadline
+# (#1618): a ping that has no answer by then raises, and core renews the slot as for any failed ping. A
+# network path that drops packets without a reset would otherwise hold the checkout for the kernel's
+# TCP retransmissions, minutes on Linux.
 function backend_ping end
 
 # The most parameters one MySQL prepared statement binds (#84, #1130). The protocol counts them in two

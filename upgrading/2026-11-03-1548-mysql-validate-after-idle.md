@@ -1,7 +1,7 @@
 ## MySQL pings a connection idle past `validate_after_idle` before using it; the key above 0 raises on PostgreSQL and SQLite (#1548)
 
 - **Version**: Unreleased
-- **PormG ref**: #1548 ; `src/ConnectionPool.jl`, `src/Configuration.jl`, `ext/PormGMySQLExt.jl`
+- **PormG ref**: #1548, #1618 ; `src/ConnectionPool.jl`, `src/Configuration.jl`, `ext/PormGMySQLExt.jl`
 - **Recorded**: 2026-11-03
 - **Severity**: behavior. On MySQL a statement that raised now runs, and an unreachable server after an idle period raises `PoolConnectError` instead of `OperationalError`. A `connection.yml` that sets `validate_after_idle` above 0 on PostgreSQL or SQLite, which loaded with an "unrecognised key" warning, now raises at `load`.
 
@@ -24,7 +24,7 @@ key takes only `0`. A value above `0` raises `BackendCapabilityError` (`idle_val
 | MySQL: the first query after the pool sat idle past the server's `wait_timeout` | `OperationalError`, then the slot is renewed | the slot is renewed, the query returns its rows |
 | MySQL: a checkout of a connection returned more than 60 s ago | no round trip | one COM_PING round trip first |
 | MySQL: the first query after an idle period, with the server unreachable | `OperationalError` at once | `PoolConnectError` (a `PoolError`, not a `DatabaseError`) at the checkout's deadline (`pool_timeout`), after retrying the connect |
-| MySQL: the first query after an idle period, over a network path that drops packets silently | `acquire_connection` returns at once, the statement waits until the kernel gives up | the checkout's ping waits until the kernel gives up, past `timeout_seconds`, then the slot is renewed |
+| MySQL: the first query after an idle period, over a network path that drops packets silently | `acquire_connection` returns at once, the statement waits until the kernel gives up | the checkout's ping gives up at the checkout's deadline (`timeout_seconds`, or `pool_timeout`; at least one second, #1618), then the slot is renewed; the new connection is bounded by `connect_timeout`, unset by default |
 | PostgreSQL / SQLite: `load` of a `connection.yml` with `validate_after_idle: 30` | loads, warns "unrecognised connection key; ignored" | `BackendCapabilityError` |
 | PostgreSQL / SQLite: `validate_after_idle: 0` | loads, warns | loads, no warning |
 

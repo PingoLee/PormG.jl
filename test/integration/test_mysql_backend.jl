@@ -18,6 +18,67 @@ const _MY_CHILD = "pormg_my_phase1_result"
 # on it, whatever the database holds. The F1 `status` table a full `runtests.jl` builds is not one of those.
 const _MY_ABSENT = "pormg_my_phase1_absent"
 const _MY_RETRY = "pormg_my_phase1_retry"   # #1502
+
+# #1618: a TCP relay between a pool and the server whose tunnels can go SILENT — both sockets stay open
+# and nothing is forwarded either way, with no reset and no FIN: what a client sees on a network path
+# whose firewall or NAT forgot an idle flow. A tunnel opened after the stall forwards normally. Simulating
+# the path in the process keeps the test free of root (an `iptables DROP` rule would need it).
+using Sockets
+
+mutable struct _Relay1618
+  server::Sockets.TCPServer
+  port::Int
+  tunnels::Vector{Tuple{TCPSocket, TCPSocket, Base.RefValue{Bool}}}
+  lock::ReentrantLock
+end
+
+function _relay_pump_1618(from::TCPSocket, to::TCPSocket, stalled::Base.RefValue{Bool})
+  try
+    while !eof(from)
+      data = readavailable(from)
+      while stalled[]                      # hold the bytes: nothing reaches the other side
+        isopen(from) || return
+        sleep(0.05)
+      end
+      write(to, data)
+    end
+  catch
+  end
+  stalled[] || try close(to) catch end    # pass a FIN on, unless the tunnel is silent
+  return nothing
+end
+
+function _relay_start_1618(host::AbstractString, port::Int)::_Relay1618
+  lport, server = listenany(ip"127.0.0.1", 20000)
+  relay = _Relay1618(server, Int(lport), Tuple{TCPSocket, TCPSocket, Base.RefValue{Bool}}[], ReentrantLock())
+  @async while isopen(server)
+    client = try accept(server) catch; break end
+    upstream = try connect(host, port) catch; close(client); continue end
+    stalled = Base.RefValue{Bool}(false)
+    lock(() -> push!(relay.tunnels, (client, upstream, stalled)), relay.lock)
+    @async _relay_pump_1618(client, upstream, stalled)
+    @async _relay_pump_1618(upstream, client, stalled)
+  end
+  return relay
+end
+
+_relay_stall_1618!(relay::_Relay1618) =
+  lock(() -> foreach(t -> (t[3][] = true), relay.tunnels), relay.lock)
+
+function _relay_close_1618!(relay::_Relay1618)
+  try close(relay.server) catch end
+  lock(relay.lock) do
+    for (client, upstream, _) in relay.tunnels
+      try close(client) catch end
+      try close(upstream) catch end
+    end
+  end
+  return nothing
+end
+
+# The conninfo `Configuration._mysql_conninfo` writes, each value quoted by its own helper.
+_conninfo_1618(info::AbstractDict) =
+  join((string(k, "=", PormG.Configuration._conninfo_value(k, v)) for (k, v) in info), " ")
 module P1Models
 import PormG
 import PormG.Models
@@ -190,6 +251,78 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
             finally
                 CP.close_pool!(one)
             end
+        end
+    end
+
+    # What: the idle ping's bound (#1618) is MySQL.jl's per-operation read and write timeout, set on the
+    #   session for the ping alone: after `backend_ping(pool, conn, 1.0)` the session holds the timeouts
+    #   it held before, and a statement run on the connection after the bound has passed answers. A
+    #   bound of `Inf` (a checkout that waits forever) pings with no timeout.
+    # SQL: COM_PING, then, 1.5 s later, `SELECT 1 AS one`, then COM_PING again.
+    # Why: the timeouts are the connection's for every statement after the ping. Restoring them is not
+    #   enough: the deadline the ping's read armed on the transport stays in force until cleared, and it
+    #   cut the next statement off with a `TimeoutError` (found by this suite's first run).
+    @testset "the idle ping's bound is restored on the session after the ping (#1618)" begin
+        CP = PormG.ConnectionPool
+        c = CP.acquire_connection(pool; timeout_seconds = 5)
+        try
+            session = MySQL.session(c)
+            before = (session.io.read_timeout_ns, session.io.write_timeout_ns)
+            @test PormG.backend_ping(pool, c, 1.0) === nothing
+            @test (session.io.read_timeout_ns, session.io.write_timeout_ns) == before
+            sleep(1.5)                          # past the ping's bound
+            @test DataFrame(PormG.fetch(pool, "SELECT 1 AS one"; conn = c)).one == [1]
+            # A checkout that waits forever gives the ping no bound, rather than failing to convert it.
+            @test PormG.backend_ping(pool, c, Inf) === nothing
+            @test (session.io.read_timeout_ns, session.io.write_timeout_ns) == before
+        finally
+            CP.release_connection(pool, c)
+        end
+    end
+
+    # What: a pooled connection whose network path went silent while it sat idle (a firewall or NAT
+    #   that forgot the flow: no reset, no reply) no longer holds `acquire_connection` past its
+    #   `timeout_seconds` (#1618). The path is a relay in this process between the pool and the server;
+    #   stalling a tunnel keeps both of its sockets open and forwards nothing, which is what the client
+    #   sees on such a path. New tunnels still forward, as a NAT that forgot only the old flow does.
+    # SQL: `SELECT 1 AS one` to open the connection; after the stall, COM_PING (unanswered), then a new
+    #   connection and `SELECT 1 AS one` on it.
+    # Why: before #1618 the ping waited for the kernel's TCP retransmissions, minutes on Linux, and the
+    #   checkout with it. Now the ping gives up at the checkout's deadline and the slot is renewed. The
+    #   elapsed-time check is a correctness bound (20 s for a 3 s budget), not a measurement; a watchdog
+    #   ends a red run instead of letting it hang.
+    @testset "an idle connection on a path that went silent does not hold the checkout past its timeout (#1618)" begin
+        CP = PormG.ConnectionPool
+        ext = Base.get_extension(PormG, :PormGMySQLExt)
+        info = ext._parse_conninfo(pool.connection_string)
+        relay = _relay_start_1618(get(info, "host", "localhost"), parse(Int, get(info, "port", "3306")))
+        info["host"] = "127.0.0.1"
+        info["port"] = string(relay.port)
+        one = CP.MySQLConnectionPool(_conninfo_1618(info); pool_size = 1, pool_timeout = 3)
+        try
+            CP.enable_idle_validation!(one; after = 1)
+            @test DataFrame(PormG.fetch(one, "SELECT 1 AS one")).one == [1]
+            stale = one.connections[1]
+            @test stale !== nothing
+            _relay_stall_1618!(relay)          # every tunnel open now goes silent
+            sleep(1.5)                          # past `validate_after_idle`
+            started = time()
+            t = @async CP.acquire_connection(one; timeout_seconds = 3)
+            finished = timedwait(() -> istaskdone(t), 60.0) === :ok
+            finished || _relay_close_1618!(relay)   # unblocks a ping that has no bound
+            @test finished
+            c = fetch(t)
+            elapsed = time() - started
+            try
+                @test elapsed < 20
+                @test c !== stale                      # renewed: the silent connection was not handed out
+                @test DataFrame(PormG.fetch(one, "SELECT 1 AS one"; conn = c)).one == [1]
+            finally
+                CP.release_connection(one, c)
+            end
+        finally
+            CP.close_pool!(one)
+            _relay_close_1618!(relay)
         end
     end
 

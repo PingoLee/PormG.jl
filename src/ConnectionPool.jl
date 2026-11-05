@@ -1473,8 +1473,21 @@ end
 
 const _IDLE_RENEW = :__pormg_idle_renew__              # the idle ping failed: handle closed, slot reserved to connect into
 
+# The least time an idle ping is given (#1618), in seconds. A ping cut off spuriously costs the slot a
+# full reconnect, and validation runs on a checkout's first scan with nearly its whole budget left, so
+# the floor only matters at the very end of a long wait.
+const _MIN_PING_TIMEOUT = 1.0
+
 """
-    _validate_idle!(pool, owned, i, conn) -> handle, `_CONNECT_LOST` or `_IDLE_RENEW`
+    _ping_timeout(deadline, now) -> Float64
+
+How long an idle ping may wait (#1618): what is left of the checkout's `deadline` (seconds since the
+epoch, as `time()` reads), never less than `_MIN_PING_TIMEOUT`.
+"""
+_ping_timeout(deadline::Float64, now::Float64)::Float64 = max(deadline - now, _MIN_PING_TIMEOUT)
+
+"""
+    _validate_idle!(pool, owned, i, conn, timeout_seconds) -> handle, `_CONNECT_LOST` or `_IDLE_RENEW`
 
 Ping `conn`, the handle of slot `i`, before its caller has it, because it sat idle past
 `validate_after_idle` (#1548). The scan took the handle out of the slot and left the slot leased and
@@ -1494,17 +1507,19 @@ Called **without** `pool.lock`: a ping is a round trip.
 ping that answers reinstalls the handle; the `_CONNECT_LOST` arm is the identity check
 `_connect_reserved!` also makes, kept should that change.
 
-Not bounded by the acquire's `timeout_seconds`: MySQL.jl's `close` waits for the connection lock the
-ping holds, so nothing short of the driver's own read can end it (#1618). On a network path that drops packets
-without a reset, the ping waits for the kernel's retransmissions, as the statement did before #1548.
+Bounded by `timeout_seconds`, what is left of the acquire's deadline ([`_ping_timeout`](@ref), #1618):
+on a network path that drops packets without a reset, a ping with no answer by then raises, and the
+slot is renewed as for any failed ping. The bound is the driver's own read deadline
+(`backend_ping`), because a close from another task cannot cut the ping: MySQL.jl's `close` waits for
+the connection lock the ping holds.
 """
-function _validate_idle!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, conn)
+function _validate_idle!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, conn, timeout_seconds::Float64)
   # Set in the same locked step that puts the handle back, so no interrupt can fall between the two
   # and have the `finally` close a handle the slot already holds.
   installed = Base.RefValue{Bool}(false)
   try
     try
-      backend_ping(pool, conn)
+      backend_ping(pool, conn, timeout_seconds)
     catch e
       _await_abandoned(e) && rethrow()
       @debug "An idle $(_backend_name(pool)) connection failed its ping; renewing it before use" slot=i cause=_redacted_cause(e)
@@ -1771,7 +1786,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       # The ping, off the lock (#1548). A live answer is the caller's connection; a failed ping leaves
       # the slot reserved, leased and empty, and the connect below renews it before any statement.
       vi, vconn = outcome[2]::Tuple{Int, Any}
-      validated = _validate_idle!(pool, owned, vi, vconn)
+      validated = _validate_idle!(pool, owned, vi, vconn, _ping_timeout(deadline, time()))
       validated === _CONNECT_LOST && continue
       validated === _IDLE_RENEW || return validated
       kind = :connect

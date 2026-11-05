@@ -37,10 +37,12 @@ mutable struct MockMySQL1548 <: PormG.PormGMySQL
   ping_delay::Float64
   ping_interrupt::Bool      # the next ping raises InterruptException (a Ctrl-C during the round trip)
   refuse_connects::Bool     # every connect fails, as against a server that is down
+  ping_timeouts::Vector{Float64}   # the bound each ping was given (#1618)
+  alive_delay::Float64      # each checkout probe takes this long, so a scan spends time before its ping (#1618)
 end
 function MockMySQL1548(n::Int)
   p = MockMySQL1548(Any[nothing for _ in 1:n], fill(true, n), "mock://mysql", n, ReentrantLock(),
-                    0, 0, Int[], 0.0, false, false)
+                    0, 0, Int[], 0.0, false, false, Float64[], 0.0)
   for i in 1:n
     p.connections[i] = FakeConn1548(p.nid += 1)
   end
@@ -52,10 +54,14 @@ function PormG.backend_connect(p::MockMySQL1548; kwargs...)
   p.refuse_connects && error("mock: Can't connect to MySQL server (2003)")
   return FakeConn1548(p.nid += 1)
 end
-PormG.backend_is_alive(::MockMySQL1548, c) = c isa FakeConn1548 && !c.closed   # local, like `isopen`
+function PormG.backend_is_alive(p::MockMySQL1548, c)   # local, like `isopen`
+  p.alive_delay > 0 && sleep(p.alive_delay)
+  return c isa FakeConn1548 && !c.closed
+end
 PormG.backend_is_permanent_connect_error(::MockMySQL1548, e) = false
-function PormG.backend_ping(p::MockMySQL1548, c::FakeConn1548)::Nothing
+function PormG.backend_ping(p::MockMySQL1548, c::FakeConn1548, timeout_seconds::Float64)::Nothing
   push!(p.pings, c.id)
+  push!(p.ping_timeouts, timeout_seconds)
   p.ping_delay > 0 && sleep(p.ping_delay)
   if p.ping_interrupt
     p.ping_interrupt = false
@@ -240,4 +246,56 @@ end
     @test_throws PormG.BackendCapabilityError PormG.Configuration.load(dir; env = "test")
     haskey(PormG.config, dir) && PormG.Configuration.unregister_connection(dir)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1618: the idle ping is bounded by what is left of the checkout's deadline
+# On a network path that drops packets without a reset, an unbounded ping waits for the kernel's TCP
+# retransmissions (minutes on Linux), and `acquire_connection(timeout_seconds = …)` waited with it. Core
+# now hands the ping the checkout's remaining time (`_ping_timeout`, at least `_MIN_PING_TIMEOUT`); the
+# MySQL extension applies it as MySQL.jl's own read deadline, which raises when it expires, and core
+# renews the slot as for any failed ping. Reverted-fix signature: the hook is called without a bound
+# (a `MethodError` on the 3-argument mock), or with the pool's whole timeout instead of what is left.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# What: the bound a checkout hands the ping is what is left of its deadline. SQL: none (COM_PING).
+# Why: the ping is the one step of a checkout that waits on the network after the deadline was set.
+@testset "#1618: the idle ping is given the checkout's remaining time" begin
+  p = _idle_pool_1548(1; after = 60, idle = 120)
+  c = CP.acquire_connection(p; timeout_seconds = 7)
+  @test length(p.ping_timeouts) == 1
+  @test CP._MIN_PING_TIMEOUT <= p.ping_timeouts[1] <= 7.0
+  CP.release_connection(p, c)
+
+  # The pool's own `pool_timeout` when the call names none (#126). The mock pool carries no
+  # `pool_timeout`, so `DEFAULT_POOL_TIMEOUT` applies.
+  st = CP._monitor_state(p)
+  fill!(st.last_used, time() - 120)
+  c = CP.acquire_connection(p)
+  @test length(p.ping_timeouts) == 2
+  @test CP._MIN_PING_TIMEOUT <= p.ping_timeouts[2] <= CP.DEFAULT_POOL_TIMEOUT
+  CP.release_connection(p, c)
+end
+
+# What: time the checkout spent before its ping is not given to the ping again: with a probe that takes
+# 1.5 s, a 4 s checkout hands the ping what is left (about 2.5 s), not 4 s. SQL: none.
+# Why: the bound is the checkout's deadline, not a fresh timeout per step; the whole timeout here would
+# let the checkout overrun its `timeout_seconds` by the time already spent.
+@testset "#1618: the time a checkout already spent is not given to the ping again" begin
+  p = _idle_pool_1548(1; after = 60, idle = 120)
+  p.alive_delay = 1.5
+  c = CP.acquire_connection(p; timeout_seconds = 4)
+  @test length(p.ping_timeouts) == 1
+  @test CP._MIN_PING_TIMEOUT <= p.ping_timeouts[1] <= 3.0
+  CP.release_connection(p, c)
+end
+
+# What: `_ping_timeout` is the time left before the deadline, with a floor once the deadline is near or
+# past. SQL: none. Why: a ping cut off spuriously costs the slot a full reconnect, so the last moment of
+# a long wait still gives the ping a second; the floor bounds how far past the deadline a checkout runs.
+@testset "#1618: _ping_timeout is the remaining time, never under the floor" begin
+  @test CP._ping_timeout(110.0, 100.0) == 10.0
+  @test CP._ping_timeout(100.5, 100.0) == CP._MIN_PING_TIMEOUT
+  @test CP._ping_timeout(90.0, 100.0) == CP._MIN_PING_TIMEOUT
+  @test CP._MIN_PING_TIMEOUT == 1.0
 end

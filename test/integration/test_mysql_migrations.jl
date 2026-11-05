@@ -1,6 +1,7 @@
 # MySQL backend, phase 4a (#1130, #1268): migrations of a schema created from nothing, against a live
 # MySQL 8.4 — `makemigrations`, `migrate`, `status` and `check`, the refusal of a multi-statement plan
-# without `atomic = false`, and a plan stopped part-way and finished by a re-plan.
+# without `atomic = false`, a plan stopped part-way and finished by a re-plan, and an interrupt that
+# lands while a statement of `migrate()`'s apply or of `ensure_table!` runs (#1642).
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_migrations.jl
 #
@@ -21,7 +22,7 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
     Mig = PormG.Migrations
     suite = PormG.config[PORMG_DB_FOLDER].connections
     raw(sql) = DataFrame(PormG.ConnectionPool.fetch(suite, sql))
-    scratch = ("m4a_planted", "m4a_season", "m4a_result", "m4a_driver", "m4a_circuit", "pormg_migrations")
+    scratch = ("m4a_planted", "m4a_lap", "m4a_season", "m4a_result", "m4a_driver", "m4a_circuit", "pormg_migrations")
     drop_scratch!() = foreach(t -> PormG.ConnectionPool.fetch(suite, "DROP TABLE IF EXISTS `$t`"), scratch)
     drop_scratch!()
     others = String[String(r.t) for r in eachrow(raw(
@@ -201,6 +202,111 @@ if only_on(:mysql, "migrations through the MySQL DDL (phase 4a)")
             @test sort!([shape(t) for t in live()]; by = first) == clean
             Mig.makemigrations(folder; interactive = false)
             @test !isfile(pending)
+        end
+
+        # A side transaction that read `m4a_circuit` holds a shared metadata lock on it until it ends, so
+        # a DDL statement on that table (or a foreign key to it) waits on the server for as long as the
+        # test likes: a statement that is running, not finished, when the interrupt lands. While the lock
+        # is still held, only a `KILL QUERY` can take that statement off `PROCESSLIST`.
+        function with_circuit_locked(f)
+            held, release = Channel{Nothing}(1), Channel{Nothing}(1)
+            holder = @async PormG.run_in_transaction(suite) do
+                PormG.ConnectionPool.fetch(suite, "SELECT COUNT(*) AS n FROM `m4a_circuit`")
+                put!(held, nothing)
+                take!(release)
+            end
+            bind(held, holder)
+            take!(held)
+            try
+                f()
+            finally
+                put!(release, nothing)
+                wait(holder)
+            end
+        end
+        processlist(pattern; waiting = false) = DataFrame(PormG.ConnectionPool.fetch(suite,
+            "SELECT INFO AS info FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() AND INFO LIKE ?" *
+            (waiting ? " AND STATE = 'Waiting for table metadata lock'" : ""); params = Any[pattern]))
+        # Runs `call` in a task and interrupts it once a statement matching `pattern` waits on the lock.
+        # Then, with the lock still held, whether the statement leaves `PROCESSLIST` within 10 s: checked
+        # before the task is awaited, because without the cancel the task's cleanup write queues behind
+        # the statement until `lock_wait_timeout` ends it, and by then it would be gone anyway. Returns
+        # the statement's text, whether it left, and the error the call raised.
+        function interrupt_while_waiting(call, pattern)
+            task = @async call()
+            deadline = time() + 30
+            while size(processlist(pattern; waiting = true), 1) == 0 && !istaskdone(task) && time() < deadline
+                sleep(0.25)
+            end
+            waited = processlist(pattern; waiting = true)
+            size(waited, 1) == 1 || return (nothing, false, nothing)
+            schedule(task, InterruptException(); error = true)
+            deadline = time() + 10
+            while size(processlist(pattern), 1) > 0 && time() < deadline
+                sleep(0.25)
+            end
+            gone = size(processlist(pattern), 1) == 0
+            return (String(waited[1, :info]), gone, task)
+        end
+        settle(task) = task === nothing ? nothing :
+            (e = try; fetch(task); nothing; catch err; err; end; e isa TaskFailedException ? e.task.exception : e)
+
+        # What: an interrupt that lands while a plan statement runs on the server stops that statement, and
+        # the run is recorded `failed`.
+        # SQL: `ALTER TABLE `m4a_circuit` ADD COLUMN `laps` …`, waiting on a metadata lock another session
+        #      holds, so it is still running when the task awaiting it is interrupted; then `KILL QUERY <id>`
+        #      on a side connection and the `failed` row in `pormg_migrations`.
+        # Why: #1642. The apply's connection is borrowed, so `with_transaction` skips the abandoned-await
+        # recovery, and MySQL's DDL runs no ROLLBACK for the finalize gate to read; the cancel in the plan
+        # loop's `catch` is the only thing that reaches the statement. Without it the ALTER would wait out
+        # `lock_timeout` (120 s here) and the `failed` write would queue behind it on the same connection.
+        @testset "an interrupt in migrate()'s apply kills the running statement and records failed (#1642)" begin
+            drop_scratch!()
+            write_models()
+            Mig.makemigrations(folder; interactive = false)
+            Mig.migrate(folder; interactive = false, atomic = false)
+            write(models_path, "module models\nimport PormG.Models\n" *
+                  replace(base_models, "db_index = true))" => "db_index = true), laps = Models.IntegerField(null = true))") *
+                  "\nend\n")
+            Mig.makemigrations(folder; interactive = false)
+            @test occursin("ALTER TABLE `m4a_circuit` ADD COLUMN `laps`", read(pending, String))
+            pattern = "ALTER TABLE `m4a\\_circuit` ADD COLUMN `laps`%"
+            waited, gone, task = with_circuit_locked() do
+                interrupt_while_waiting(pattern) do
+                    Mig.migrate(folder; interactive = false, atomic = false, lock_timeout = 120)
+                end
+            end
+            @test waited !== nothing
+            @test gone
+            @test PormG.ConnectionPool._await_abandoned(settle(task))
+            st = Mig.status(folder)
+            @test length(st.failed) == 1 && length(st.applied) == 1
+            circuit = Mig.read_live_schema(pool; ignore_table = ignore(), include_table = ["m4a_circuit"])[1]
+            @test !haskey(circuit.columns, "laps")
+            write_models()
+            rm(pending; force = true)
+        end
+
+        # What: an interrupt that lands while `ensure_table!`'s foreign-key statement runs stops it, and the
+        # table it had begun to create is dropped again.
+        # SQL: `CREATE TABLE `m4a_lap` …`, then the key's `ALTER TABLE `m4a_lap` ADD CONSTRAINT … REFERENCES
+        #      `m4a_circuit``, waiting on the lock on `m4a_circuit`; then `KILL QUERY <id>` and `DROP TABLE`.
+        # Why: #1642's sibling site. Without the cancel, the cleanup DROP would wait behind the running
+        # ALTER for MySQL.jl's connection lock until the server's `lock_wait_timeout` ended it.
+        @testset "an interrupt in ensure_table! kills the running statement and drops the table (#1642)" begin
+            @test Int(raw("SELECT @@GLOBAL.lock_wait_timeout AS t")[1, :t]) > 30
+            target = PormG.Models.Model("m4a_circuit", circuitid = PormG.Models.IDField())
+            lap = PormG.Models.Model("m4a_lap", lapid = PormG.Models.IDField(), lap = PormG.Models.IntegerField(),
+                                     circuitid = PormG.Models.ForeignKey(target, pk_field = "circuitid", null = true))
+            pattern = "%m4a\\_lap%"
+            waited, gone, task = with_circuit_locked() do
+                interrupt_while_waiting(() -> Mig.ensure_table!(lap, folder), pattern)
+            end
+            # The key's statement, not the CREATE TABLE, so the DROP path ran.
+            @test waited !== nothing && startswith(waited, "ALTER TABLE `m4a_lap`")
+            @test gone
+            @test PormG.ConnectionPool._await_abandoned(settle(task))
+            @test !Mig._live_table_exists(pool, "m4a_lap")
         end
     finally
         drop_scratch!()

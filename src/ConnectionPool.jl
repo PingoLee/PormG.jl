@@ -2500,12 +2500,23 @@ function _lost_connection_error(pool::_SQLEngine, e)::Bool
 end
 
 """
-    _cancel_after_lost_rollback!(pool, conn) -> Nothing
+    _cancel_abandoned_statement!(pool, conn) -> Nothing
 
-Stop the statement an interrupt abandoned inside a transaction, when the cleanup `ROLLBACK` then
-found the connection lost (#1588). Called before the connection is renewed.
+Stop the statement an interrupt abandoned on a connection a lifecycle leased itself, where the
+abandoned-await recovery does not run (`with_transaction` on a borrowed `conn` leaves the
+connection to its caller). Called before the connection is renewed. Two triggers reach it:
 
-The case is Postgres.jl's. An interrupt that lands in its read closes the socket, and since an
+  * a transaction's cleanup `ROLLBACK` that found the connection lost after an interrupted await,
+    the gate in [`finalize_transaction_connection!`](@ref) (#1588, #1638);
+  * MySQL's `migrate()` apply and `ensure_table!` (#1642), which run no `ROLLBACK` (MySQL's DDL
+    commits on its own), so each cancels from its statement loop's `catch` as soon as a statement's
+    await was interrupted, before its cleanup statement on the same connection (the `failed`
+    history row, the half-made table's `DROP`). When the interrupt landed on the awaiting task,
+    MySQL.jl still holds the connection's lock for the running statement, so that cleanup would
+    otherwise wait for the statement to end; when it landed in MySQL.jl's read, the socket is
+    closed and the cleanup fails at once, and only the cancel reaches the statement.
+
+The first case is Postgres.jl's. An interrupt that lands in its read closes the socket, and since an
 in-transaction await skips the abandoned-await recovery, nothing else would send a cancel: the
 `ROLLBACK` fails at once, the slot is renewed, and the server runs the statement to its end with its
 locks held. The Postgres.jl method of [`backend_cancel_query!`](@ref) finds the socket closed and
@@ -2517,14 +2528,15 @@ connection (PostgreSQL does not acknowledge a cancel request; the backend acts o
 key would still be right afterwards, since a Postgres.jl renewal opens a new `Connection` and leaves
 the old one's key alone, but the order keeps that from mattering. On the other drivers it is the
 ordinary best-effort cancel: LibPQ's has no cancel handle once libpq dropped the socket, and MySQL's
-`KILL QUERY` stops a statement the server is still running for a client that left. Never throws: the
-transaction's original error is propagating.
+`KILL QUERY` (sent by the connection's id, which MySQL.jl keeps after an interrupt closed its
+socket) stops a statement the server is still running for a client that left. Never throws: the
+lifecycle's original error is propagating.
 """
-function _cancel_after_lost_rollback!(pool::_SQLEngine, conn)
+function _cancel_abandoned_statement!(pool::_SQLEngine, conn)
   try
     backend_cancel_query!(pool, conn)
   catch cancel_failure
-    @debug "Cancel of a statement abandoned inside a transaction failed" exception=cancel_failure
+    @debug "Cancel of an abandoned statement failed" exception=cancel_failure
   end
   return nothing
 end
@@ -2575,7 +2587,7 @@ function finalize_transaction_connection!(pool::_SQLEngine, conn;
   # shut. Before the renewal, which replaces the slot's handle.
   if rollback_error !== nothing && (abandoned_await || _await_abandoned(body_error)) &&
      _lost_connection_error(pool, rollback_error)
-    _cancel_after_lost_rollback!(pool, conn)
+    _cancel_abandoned_statement!(pool, conn)
   end
   if renew || (rollback_error !== nothing && !_is_benign_rollback_error(pool, rollback_error))
     _renew_or_discard_connection!(pool, conn)

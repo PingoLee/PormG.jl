@@ -577,33 +577,48 @@ end
 # end
 
 
-# Build the SELECT part of the string final query
-function _query_select(array::Vector{SQLTypeField}, connection)
-  if !isassigned(array, 1, 1)
-    return "*"
-  else
-    colect = []
-    for i in 1:size(array, 1)
-      if !isassigned(array, i, 1)
-        return join(colect, ", \n  ")
-      else
-        field = array[i, 1]
-        field_str = string(field.field)
-        
-        # Exclude wildcard projections from receiving an `AS alias` suffix (e.g., `Tb.* AS *` is invalid SQL)
-        if field._as == "*" || endswith(field_str, ".*") || field_str == "*"
-          push!(colect, field_str)
-        elseif isa(field, SQLField) && field.custom_as !== nothing
-          push!(colect, "$(field_str) as $(quote_identifier(field.custom_as, connection))")
-        elseif field._as !== nothing && field._as != ""
-          push!(colect, "$(field_str) as $(quote_identifier(field._as, connection))")
-        else
-          push!(colect, field_str)
-        end
-      end
-    end
-    return join(colect, ", \n  ")
+# Print the projection list of a SELECT into `io`: `*` when nothing is projected, otherwise each
+# projection, with its `AS` alias, separated by `", \n  "`. A slot left unassigned ends the list.
+#
+# #1594: it prints into the caller's buffer, one `print` per piece. It used to push an interpolated
+# `String` per projection into a `Vector{Any}`, `join` them, and hand the result to `query()`, which
+# printed it into its own buffer — the list was built twice. A projection's rendered text is a `String`
+# on every common path, and that branch no longer calls `string` on it: only the other parts (a
+# `CTEReference`, a function node) are converted. The reads of `field.field` / `_as` / `custom_as`
+# stay dynamic, since `select` holds the abstract `SQLTypeField`.
+# A field that throws partway through leaves what was printed before it in `io`; every caller lets
+# the error propagate and drops the buffer.
+function _query_select(io::IO, array::Vector{SQLTypeField}, connection)::Nothing
+  if isempty(array) || !isassigned(array, 1)
+    print(io, "*")
+    return nothing
   end
+  for i in eachindex(array)
+    isassigned(array, i) || return nothing
+    i > 1 && print(io, ", \n  ")
+    field = array[i]
+    part = field.field
+    field_str = part isa String ? part : string(part)
+    # Exclude wildcard projections from receiving an `AS alias` suffix (e.g., `Tb.* AS *` is invalid SQL)
+    if field._as == "*" || endswith(field_str, ".*") || field_str == "*"
+      print(io, field_str)
+    elseif isa(field, SQLField) && field.custom_as !== nothing
+      print(io, field_str, " as ", quote_identifier(field.custom_as, connection))
+    elseif field._as !== nothing && field._as != ""
+      print(io, field_str, " as ", quote_identifier(field._as, connection))
+    else
+      print(io, field_str)
+    end
+  end
+  return nothing
+end
+
+# The projection list as a `String`, for the two callers that splice it into a statement of their own
+# (`_exists_projection`, the `count()` projection).
+function _query_select(array::Vector{SQLTypeField}, connection)::String
+  io = IOBuffer()
+  _query_select(io, array, connection)
+  return String(take!(io))
 end
 
 

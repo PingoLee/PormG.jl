@@ -209,8 +209,38 @@ end
 # #1548: COM_PING, one round trip. It raises when the server closed the connection while it sat idle
 # (`wait_timeout`); core then renews the slot before the caller's statement is sent. It takes the
 # connection's lock, which is free at checkout: no statement runs on a slot the pool is handing out.
-function PormG.backend_ping(pool::_Pool, conn::MySQL.Connection)::Nothing
-  MySQL.ping(conn)
+#
+# #1618: bounded by `timeout_seconds`, what is left of the checkout's deadline. On a path that drops
+# packets without a reset, the ping's write lands in the kernel's buffer and its read never gets a byte,
+# so without a bound it waits for the kernel's TCP retransmissions. A close from another task cannot cut
+# it (MySQL.jl's `close` waits for the lock the ping holds), so the bound is MySQL.jl's own
+# per-operation read and write timeouts, the `read_timeout`/`write_timeout` connect options, set on the
+# session for this one command and restored after it. On expiry MySQL.jl closes the transport and raises
+# `Protocol.TimeoutError`, and core renews the slot, as it does for any ping that raises. Each
+# partial read re-arms the timeout; a silent path sends no byte at all, so the first read is the one that
+# expires. The session is this call's alone: core took the handle out of its slot for the ping (#1540).
+# The internals read here are pinned in `test/unit/test_driver_internals.jl` (#1494).
+function PormG.backend_ping(pool::_Pool, conn::MySQL.Connection, timeout_seconds::Float64)::Nothing
+  session = MySQL.session(conn)
+  old_read, old_write = session.io.read_timeout_ns, session.io.write_timeout_ns
+  # A checkout that waits forever (`timeout_seconds = Inf`, `pool_timeout: .inf`) gives the ping no bound
+  # either, as before #1618: 0 is MySQL.jl's "no timeout", and `Inf` does not convert to nanoseconds.
+  bound_ns = timeout_seconds < 9.0e9 ? round(Int64, timeout_seconds * 1e9) : Int64(0)
+  MySQL.Protocol.set_timeouts!(session, bound_ns, bound_ns)
+  try
+    MySQL.ping(conn)
+  finally
+    # A ping that timed out broke the session, and core closes it; restoring there is harmless.
+    MySQL.Protocol.set_timeouts!(session, old_read, old_write)
+    # `set_timeouts!` only stops the re-arming: the deadline the ping's last read and write armed on the
+    # transport stays in force, and with no per-operation timeout to replace it (PormG sets none) it
+    # would cut off a statement run on this connection `timeout_seconds` after the ping. Cleared while
+    # the session is open; with a timeout set, the next read and write re-arm their own.
+    if isopen(conn)   # MySQL.jl's documented check: transport open, session neither closed nor broken
+      MySQL.Protocol.set_read_deadline!(session.transport, 0)
+      MySQL.Protocol.set_write_deadline!(session.transport, 0)
+    end
+  end
   return nothing
 end
 

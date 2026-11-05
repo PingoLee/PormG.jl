@@ -119,7 +119,11 @@ const PINNED_NAMES = _NamePin[
   # MySQL.jl
   (name = "MySQL.Connection",                   status = :documented, reader = "PormG.backend_execute, _open_connection, _run, …"),
   (name = "MySQL.connection_id",                status = :documented, reader = "PormG.backend_cancel_query!"),
-  (name = "MySQL.ping",                         status = :documented, reader = "PormG.backend_drain_connection!"),
+  (name = "MySQL.ping",                         status = :documented, reader = "PormG.backend_drain_connection!, backend_ping"),
+  (name = "MySQL.session",                      status = :internal,   reader = "PormG.backend_ping (#1618)"),
+  (name = "MySQL.Protocol.set_timeouts!",       status = :internal,   reader = "PormG.backend_ping (#1618)"),
+  (name = "MySQL.Protocol.set_read_deadline!",  status = :internal,   reader = "PormG.backend_ping (#1618)"),
+  (name = "MySQL.Protocol.set_write_deadline!", status = :internal,   reader = "PormG.backend_ping (#1618)"),
   (name = "MySQL.server_kind",                  status = :documented, reader = "_check_server"),
   (name = "MySQL.server_version",               status = :documented, reader = "_check_server"),
   (name = "MySQL.DataBytes",                    status = :documented, reader = "_read_value"),
@@ -182,6 +186,11 @@ const PINNED_FIELDS = _FieldPin[
   (type = MySQL.Protocol.ColumnDef, fields = [:charset, :type], status = :internal, reader = "_is_binary_column"),
   (type = MySQL.Protocol.Limits, fields = [:max_columns], status = :documented,
    reader = "PormG.backend_mysql_parameter_limit"),
+  # #1618: the idle ping's bound reads the session's per-operation timeouts to restore them after it,
+  # and its transport to clear the deadline the ping armed.
+  (type = MySQL.Protocol.Session, fields = [:io, :transport], status = :internal, reader = "PormG.backend_ping"),
+  (type = MySQL.Protocol.PacketIO, fields = [:read_timeout_ns, :write_timeout_ns], status = :internal,
+   reader = "PormG.backend_ping"),
 ]
 
 # ── Methods — where the name alone proves nothing ──────────────────────────────────────────────────

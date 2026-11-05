@@ -94,7 +94,7 @@ A backend whose operator computes something else gets a different rendering, not
 
 ## MySQL
 
-MySQL 8.4 or newer is supported through MySQL.jl 2.2 or newer. The tables above have its column. What it means for a query, a write and a migration, from its collation to its non-transactional DDL, is on the [MySQL Guide](mysql.md).
+MySQL 8.4 or newer is supported through MySQL.jl 2.2.2 or newer. The tables above have its column. What it means for a query, a write and a migration, from its collation to its non-transactional DDL, is on the [MySQL Guide](mysql.md).
 
 ## What the capability table leaves out
 

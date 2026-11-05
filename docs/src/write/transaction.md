@@ -760,7 +760,7 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
 - **`with_tx_context(f, pool, conn)`**: Run `f()` with `conn` installed as the ambient transaction connection for `pool`, so ORM calls and child tasks inside `f` use it. It is a scoped value, not thread-local storage, and it does not start a transaction: you issue `BEGIN`/`COMMIT`/`ROLLBACK` yourself.
 - **`with_transaction(settings, sql, conn=nothing, release_conn=false, params=nothing)`**: Execute raw SQL inside a transaction context. Bind values with `params`, a vector or tuple in the backend's own placeholder style (`$1, $2` on PostgreSQL, `?` on SQLite and MySQL), as with [raw `fetch`](@ref "Binding values — a manual-params array"). Never interpolate them into `sql`.
 - **`get_tx_connection()`**: Check whether a transaction context is active, on any database, and return its connection. It does not say which database that is, so never hand it to a query for a different one.
-- **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
+- **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released. Pass the error your body raised as `body_error`: on Postgres.jl a `Ctrl+C` that lands in the driver's read closes the connection, and with it PormG cancels the interrupted statement on the server before renewing the connection, instead of leaving it to run on with its locks held (#1638).
 - **`acquire_connection(pool; timeout_seconds=nothing)`** / **`release_connection(pool, conn)`**: Lease a connection and give it back. Every acquire must be paired with a release, from a `finally`. `with_transaction` does this for you when you pass `conn=nothing`. Neither is exported — call them qualified, as below.
 
 !!! warning "SQLite: acquire writes with `mode = :write`"
@@ -840,6 +840,7 @@ result, conn = with_transaction(settings, "BEGIN;")
 # Return the connection to the pool exactly once, in a single terminal `finally`, so a failed
 # COMMIT never hands it back before your cleanup ROLLBACK runs on it (#139).
 rollback_error = nothing
+body_error = nothing
 try
   with_tx_context(settings.connections, conn) do
     # Insert first batch
@@ -864,6 +865,7 @@ try
   # Commit — release_conn=false: the finally owns the single release.
   with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
 catch e
+  body_error = e   # lets the finally cancel an interrupted statement on Postgres.jl (#1638)
   # Roll back on the still-leased connection; capture a rollback failure so the finally
   # renews/discards the connection instead of releasing it, then rethrow the original error.
   try
@@ -873,7 +875,7 @@ catch e
   end
   rethrow(e)
 finally
-  finalize_transaction_connection!(settings, conn; rollback_error=rollback_error)
+  finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
 end
 ```
 

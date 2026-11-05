@@ -423,6 +423,9 @@ function delete(objct::SQLObjectHandler;
       # Release/renew the connection exactly once in a single terminal finally, so a failed
       # COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
       local rollback_error = nothing
+      # The body's error, for the cancel gate in `finalize_transaction_connection!` (#1638): on
+      # Postgres.jl an interrupted statement is cancelled before the slot is renewed.
+      local body_error = nothing
       try
         # #276: same deferral as run_in_transaction — PormG's PG foreign keys are DEFERRABLE
         # INITIALLY DEFERRED, so the collector's intermediate states (a child DELETEd before its
@@ -445,6 +448,7 @@ function delete(objct::SQLObjectHandler;
         # Commit — release_conn=false: the finally owns the single release.
         with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
       catch e
+        body_error = e
         # Roll back on the still-leased connection. A rollback failure must not mask the body's
         # error — capture it so the finally renews/discards the dirty connection instead of
         # releasing it (#71), then rethrow the original.
@@ -456,7 +460,7 @@ function delete(objct::SQLObjectHandler;
         end
         rethrow(e)
       finally
-        finalize_transaction_connection!(settings, conn; rollback_error=rollback_error)
+        finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
       end
     end
   end

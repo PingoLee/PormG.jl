@@ -234,7 +234,8 @@ function with_transaction(::MigrateOutcomeProbePg737, sql::String; conn = nothin
     push!(_MO737_LOG, (_MO737_INSIDE[], sql))
     return DataFrame(), :probe_conn
 end
-finalize_transaction_connection!(::MigrateOutcomeProbePg737, conn; rollback_error = nothing, renew::Bool = false) = nothing
+finalize_transaction_connection!(::MigrateOutcomeProbePg737, conn; rollback_error = nothing, renew::Bool = false,
+                                 body_error = nothing, abandoned_await::Bool = false) = nothing
 
 # Settings for the probe: folder-backed, change_db on, and unaccent configured so the extension
 # install has DDL to issue.

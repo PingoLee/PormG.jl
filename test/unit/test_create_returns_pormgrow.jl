@@ -39,8 +39,82 @@ PormG.config["create_pormgrow"] =
   @test row[:name] == "Senna"
   @test row.name == "Senna"             # PormGRow dot-access
   @test haskey(row, :id)
-  # A freshly-created row starts clean (empty dirty set) — .save() is a no-op until mutated.
-  @test isempty(getfield(row, :_dirty))
+  # A freshly-created row starts clean — .save() is a no-op until mutated. Since #1591 the dirty set
+  # is not allocated until the first assignment, so the slot is `nothing`.
+  @test getfield(row, :_dirty) === nothing
+end
+
+# #1591: a terminal hands its row `Dict` over to the `PormGRow` it returns instead of having it copied,
+# and the dirty set `save` reads is allocated on the first assignment rather than for every row. No SQL
+# is involved beyond the mocked INSERT ... RETURNING above. It matters because `list()` builds one row
+# per result row, and the copy plus an empty `Set` were two of its three containers per row (#41). The
+# behaviour a caller sees must not move: the public constructor still copies the caller's `Dict`,
+# `row._dirty` is still a live `Set`, and a clean row's `.save()` still issues nothing.
+@testset "a terminal's row owns its Dict and allocates its dirty set lazily (#1591)" begin
+  QB = PormG.QueryBuilder
+
+  # The public constructor copies: the caller's Dict and the row's are independent.
+  source = Dict{Symbol,Any}(:id => 7, :name => "Senna")
+  row = PormG.PormGRow(source, CreateRowModel)
+  @test getfield(row, :_data) !== source
+  source[:name] = "Prost"
+  @test row.name == "Senna"
+  # A narrower value type is widened by the same copy.
+  narrow = PormG.PormGRow(Dict(:id => 7, :name => "Senna"), CreateRowModel)
+  @test getfield(narrow, :_data) isa Dict{Symbol,Any}
+
+  # The terminals' constructor takes ownership: no copy.
+  owned_data = Dict{Symbol,Any}(:id => 7, :name => "Senna")
+  owned = QB._owned_row(owned_data, CreateRowModel)
+  @test getfield(owned, :_data) === owned_data
+  @test getfield(owned, :_dirty) === nothing
+
+  # A clean row saves nothing and stays unallocated.
+  @test owned.save() === owned
+  @test getfield(owned, :_dirty) === nothing
+
+  # `row._dirty` is a live Set: reading it allocates the slot, and what is pushed into it is kept.
+  live = owned._dirty
+  @test live isa Set{Symbol} && isempty(live)
+  @test getfield(owned, :_dirty) === live
+  push!(owned._dirty, :name)
+  @test :name in getfield(owned, :_dirty)
+
+  # The first assignment allocates the set and records the field.
+  fresh = QB._owned_row(Dict{Symbol,Any}(:id => 7, :name => "Senna"), CreateRowModel)
+  fresh.name = "Prost"
+  @test getfield(fresh, :_dirty) == Set([:name])
+  @test fresh[:name] == "Prost"
+
+  # A created row's dirty slot is unset.
+  created = CreateRowModel.objects.create("name" => "Senna")
+  @test getfield(created, :_dirty) === nothing
+end
+
+# #1591: which constructor a terminal calls cannot be observed through the row it returns — an owned
+# `Dict` and a copied one read the same — so the ownership is pinned at the source. Every `src/` and
+# `ext/` call that builds a `PormGRow` goes through `_owned_row`; the copying public constructor is
+# called only from `types.jl`, where both are defined. A terminal written later with `PormGRow(dict,
+# model)` would copy every row again, and nothing else would notice. No SQL is involved.
+@testset "every src/ terminal builds its row with _owned_row (#1591)" begin
+  root = pkgdir(PormG)
+  copying_calls = String[]
+  owned_calls = 0
+  for dir in ("src", "ext"), (path, _, files) in walkdir(joinpath(root, dir)), file in files
+    endswith(file, ".jl") || continue
+    full = joinpath(path, file)
+    rel = relpath(full, root)
+    for (n, line) in enumerate(eachline(full))
+      startswith(strip(line), "#") && continue             # a whole-line comment
+      code = strip(first(split(line, '#'; limit = 2)))     # a trailing comment cut off
+      owned_calls += count(r"\b_owned_row\(", code)
+      rel == joinpath("src", "querybuilder", "types.jl") && continue
+      occursin(r"\bPormGRow\(", code) && push!(copying_calls, "$rel:$n")
+    end
+  end
+  @test isempty(copying_calls)
+  # `list()` and the seven write-terminal sites (#1591), plus the definition itself.
+  @test owned_calls >= 9
 end
 
 @testset "create(show_query=:dict) still returns the inspection Dict (dual contract)" begin

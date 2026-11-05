@@ -178,12 +178,12 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
   # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
   # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. The RETURNING list and the
-  # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
+  # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts unset (#1591).
   if _insert_returns_rows(connection)
     result = fetch(settings, exec_sql, parameters)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
     # write supplied an explicit primary key.
-    return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
+    return _owned_row(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
   end
   # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
   # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids
@@ -219,7 +219,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 
   # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
   # write supplied an explicit primary key.
-  return PormGRow(result_dict, model)
+  return _owned_row(result_dict, model)
 
 end
 
@@ -388,7 +388,7 @@ function _run_update_or_create(connection::PormGPostgres, settings, real_obj, mo
   created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
   # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
   # write supplied an explicit primary key.
-  return (PormGRow(dict, model), created)
+  return (_owned_row(dict, model), created)
 end
 
 function _run_update_or_create(connection::PormGSQLite, settings, real_obj, model, sql, parameters,
@@ -432,7 +432,7 @@ function _run_update_or_create(connection::PormGSQLite, settings, real_obj, mode
 
   # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
   # write supplied an explicit primary key.
-  return (PormGRow(dict, model), created)
+  return (_owned_row(dict, model), created)
 end
 
 # MySQL (#1267): `INSERT … AS __pormg_new ON DUPLICATE KEY UPDATE`, whose target
@@ -486,7 +486,7 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
   # The statement and its read-back share one connection, so the report and the row are this call's.
   dict, created = transaction_connection_for(settings) !== nothing ?
     do_upsert() : run_in_transaction(do_upsert, settings)
-  return (PormGRow(dict, model), created)
+  return (_owned_row(dict, model), created)
 end
 
 # Whether one row's `ON DUPLICATE KEY UPDATE` inserted, from its report (the table above): with an
@@ -614,7 +614,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     head = readback ? "SELECT $(_returned_columns(model, connection, table))" : _FOUND_ROW_HEAD
     rows = fetch(settings, _select_by_target(head, real_obj, model, target_fields, table, connection;
                                              lock = lock)...) |> Tables.rowtable
-    isempty(rows) ? nothing : PormGRow(_row_to_field_keyed_dict(rows[1], model, connection), model)
+    isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
   end
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
@@ -684,7 +684,7 @@ function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql,
     dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
     # this write supplied an explicit primary key.
-    return (PormGRow(dict, model), true)
+    return (_owned_row(dict, model), true)
   end
   # Lost the insert race → the row exists now; return the winner, created == false.
   raced = fetch_by_target()
@@ -1758,8 +1758,8 @@ Direct fields update the row's own table. Projected fields like
 foreign key value already present on the row.
 """
 function save(row::PormGRow; show_query::Symbol = :execute)
-  dirty = getfield(row, :_dirty)
-  isempty(dirty) && return row
+  dirty = getfield(row, :_dirty)   # `nothing` until a field was assigned (#1591)
+  (dirty === nothing || isempty(dirty)) && return row
 
   data = getfield(row, :_data)
   model = getfield(row, :_model)

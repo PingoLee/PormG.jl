@@ -181,7 +181,7 @@ end
     row = PormGRow(row_data, synthetic_model)
 
     # Mark the projected field as dirty (simulate a setproperty! call)
-    push!(getfield(row, :_dirty), :parentid__label)
+    push!(row._dirty, :parentid__label)
 
     # save() must detect pk_field === nothing and throw ArgumentError
     # instead of building a filter on the literal string "nothing".

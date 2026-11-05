@@ -1464,7 +1464,7 @@ list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute) =
 function _list_owned(q::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute)
   show_query !== :execute && return _show_select(q, show_query)
   model = q.object.model
-  return [PormGRow(row, model) for row in _list_raw(q)]
+  return [_owned_row(row, model) for row in _list_raw(q)]
 end
 
 function _list_owned(q::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute)

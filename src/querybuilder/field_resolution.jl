@@ -43,11 +43,11 @@ _declared_join_aliases(object::SQLObject)::Vector{String} = collect(keys(object.
 function _insert_join(
   row_join::Vector{JoinRow},
   row::JoinRow,
-  row_path::Vector{String}, join_path::String; track_path::Bool=true)
+  instruct::InstructionObject, join_path::String; track_path::Bool=true)
   @pormg_debug false
   if size(row_join, 1) == 0
     push!(row_join, row)
-    track_path && push!(row_path, join_path)
+    track_path && push!(_row_path!(instruct), join_path)
     return row.alias_b
   else
     # The tuple has no CTE-vs-physical discriminator on purpose (#479): a CTE row and a model row
@@ -62,7 +62,7 @@ function _insert_join(
     if size(check, 1) == 0
       @pormg_debug false
       push!(row_join, row)
-      track_path && push!(row_path, join_path)
+      track_path && push!(_row_path!(instruct), join_path)
       return row.alias_b
     else
       if size(check, 1) > 1

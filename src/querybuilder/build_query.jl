@@ -27,10 +27,10 @@
 # A missed duplicate is legal and merely noisy; a wrong one would drop a grouping.
 function _group_window_terms!(instruc::SQLInstruction)
   instruc.aggregate || return nothing
-  isempty(instruc.window_group_terms) && return nothing
+  _lazy_isempty(instruc.window_group_terms) && return nothing
   grouped_text = Set(_grouped_expressions(instruc))
   seen = Set{Tuple{String,Vector{Any}}}()
-  for term in instruc.window_group_terms
+  for term in instruc.window_group_terms::Vector{Tuple{String,Vector{Any}}}
     sql, params = term
     term in seen && continue
     push!(seen, term)
@@ -87,7 +87,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # one cannot, and `_cjoin_on` refuses an empty `on` at the call.
         on_clause = join(conditions, " AND ")
         # #174: kept, markers and all, for a correlated UPDATE … FROM to carry into its WHERE.
-        instruc.cjoin_on_rendered[value.alias_b] = conditions
+        _cjoin_on_rendered!(instruc)[value.alias_b] = conditions
       else
         alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
         # #394: escape-only, because on every model-join branch these are PHYSICAL columns
@@ -298,7 +298,7 @@ function build(object::SQLObject;
         # `on("status", …)` must recognise a join `values("status_id__name")` built.
         key = _join_key(instruct, path)
         # #1002: `on(path, …)` / `cjoin` declares the join whether this loop builds it or traversal did.
-        if any(p -> _join_key(instruct, p) == key, instruct.row_path)
+        if any(p -> _join_key(instruct, p) == key, something(instruct.row_path, ()))
           _declare_join_key!(instruct, key)
           continue
         end
@@ -322,10 +322,10 @@ function build(object::SQLObject;
       # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
       # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
       # none.
-      for segments in instruct.cjoin_on_paths
+      for segments in something(instruct.cjoin_on_paths, ())
         with_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
       end
-      for user_alias in instruct.cjoin_on_order
+      for user_alias in something(instruct.cjoin_on_order, ())
         _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
       end
     end
@@ -501,7 +501,7 @@ end
 function _cjoin_on_cardinality_msg(instruct::SQLInstruction, r::JoinReach)::String
   q = instruct.object
   alias, written = "?", "\"$(r.path)__…\""
-  for (alias_i, written_i) in instruct.cjoin_on_written
+  for (alias_i, written_i) in something(instruct.cjoin_on_written, ())
     # `"<path>"` or `F("<path>")`, as `_each_condition_column` spells it.
     m = match(r"\"([^\"]*)\"", written_i)
     m === nothing && continue
@@ -527,7 +527,7 @@ end
 # return a confidently-wrong number. The legitimate case — aggregating the to-many table's OWN column
 # (the sole many-side) — is preserved. MAX/MIN are immune; `distinct=true` is an explicit opt-in.
 function _check_aggregate_fanout(instruct::SQLInstruction)
-  isempty(instruct.agg_sources) && return nothing
+  _lazy_isempty(instruct.agg_sources) && return nothing
   # Derive the many-side aliases from the *deduped* row_join. A join can be built more than once
   # (e.g. _cache_join pre-builds a filter join, then it is built again for real); _insert_join keeps
   # only one entry, so deriving here counts each actual to-many join exactly once.
@@ -540,7 +540,7 @@ function _check_aggregate_fanout(instruct::SQLInstruction)
   end
   isempty(many) && return nothing
   n = length(many)
-  for a in instruct.agg_sources
+  for a in instruct.agg_sources::Vector{AggSource}
     a.distinct && continue
     ambiguous = a.alias == "\0AMBIGUOUS"
     # Safe only when the aggregate targets the sole to-many table's own column.
@@ -607,9 +607,9 @@ end
 # and each disagreement had become a patch (#194's projected arms, #926's split, its HAVING fix).
 function _check_grouped_correlation(instruct::SQLInstruction)
   instruct.aggregate || return nothing        # no aggregate ⇒ one output row per input row ⇒ safe
-  isempty(instruct.outer_refs) && return nothing
+  _lazy_isempty(instruct.outer_refs) && return nothing
   grouped = _grouped_expressions(instruct)
-  for c in instruct.outer_refs
+  for c in instruct.outer_refs::Vector{CorrelatedRef}
     c.phase === :row && continue              # WHERE, ON, an aggregate's argument: before GROUP BY
     c.group_key && continue                   # inside an expression grouped whole: evaluated per row
     c.expr in grouped && continue             # the correlated column is grouped
@@ -755,7 +755,7 @@ function _check_mixed_grouping(instruct::SQLInstruction)
   # recorded exactly the terms it left out, so this does not restate its test — and a term that
   # resolved to a projection alias is not among them, because its expression never reaches the
   # statement. A pure aggregate reads nothing outside it and passes.
-  for term in instruct.ungrouped_order_terms
+  for term in something(instruct.ungrouped_order_terms, ())
     _each_bare_column(term.field, instruct, ""; covered) do clause, leaf
       grouped_text === nothing && (grouped_text = Set(_grouped_expressions(instruct)))
       _mixed_leaf_grouped(leaf, grouped_keys, grouped_text, instruct) && return nothing

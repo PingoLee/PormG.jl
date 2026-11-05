@@ -325,7 +325,7 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   # unconditional so no spelling can slip past by reaching a different render entry point; whether
   # the ref needs a grouped column is decided once, in the guard, from `phase` and `group_key`.
   scope = outer.scope
-  push!(outer.outer_refs, (label = something(scope.label, "a correlated subquery"), ref = v.field_name,
+  push!(_outer_refs!(outer), (label = something(scope.label, "a correlated subquery"), ref = v.field_name,
                            column = column, expr = sql, phase = scope.phase, group_key = scope.group_key))
   return sql
 end
@@ -1352,7 +1352,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.
     # #1130: the queryset's one column, typed by its own build, for the interval check below.
     inner_kind = Ref{Any}(nothing)
-    correlated_before = length(instruc.outer_refs)
+    correlated_before = _lazy_length(instruc.outer_refs)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
                          semi_join = !_is_sliced(getfield(v.values, :object)),
                          built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
@@ -1370,7 +1370,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # read the outer row: a correlated one (an `OuterRef` into this statement) cannot be a derived
     # table, and is left to MySQL's own error.
     if instruc.mutation && _materializes_target_key_set(instruc.connection) &&
-       length(instruc.outer_refs) == correlated_before
+       _lazy_length(instruc.outer_refs) == correlated_before
       placeholders = string("SELECT * FROM (", placeholders, ") AS ",
                             quote_identifier("__pormg_members", instruc.connection))
     end

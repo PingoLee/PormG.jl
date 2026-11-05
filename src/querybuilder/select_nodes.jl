@@ -132,7 +132,7 @@ function _projection_null_key(name::AbstractString, instruc::SQLInstruction)::St
     _projection_output_name(value) == name || continue
     sql = value.field
     sql isa AbstractString || break
-    copy_parameters_to!(instruc, :order, get(instruc.projection_params, name, Any[]))
+    copy_parameters_to!(instruc, :order, _lazy_get(instruc.projection_params, name, Any[]))
     return String(sql)
   end
   throw(QueryBuildError("PormG internal error: order_by(\"$(name)\") names a projection whose SQL was not " *
@@ -158,7 +158,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   hops = Iterators.flatten((
     (split(p, "__") for p in keys(object.custom_join)),
     (column_hops(p) for p in _projected_paths(object.order)),
-    (segs[1:end-1] for segs in instruc.cjoin_on_paths)))
+    (segs[1:end-1] for segs in something(instruc.cjoin_on_paths, ()))))
   for segs in hops
     model = object.model
     for (i, seg) in enumerate(segs)
@@ -240,9 +240,9 @@ _order_cte_names!(out::Set{String}, ::Any) = out
 # so it is refused rather than run: a join the look-ahead did not foresee is a loud error, never a
 # silent order.
 function _refuse_late_shadowed_null_key(object::SQLObject, instruc::SQLInstruction)
-  isempty(instruc.alias_null_keys) && return nothing
+  _lazy_isempty(instruc.alias_null_keys) && return nothing
   columns = _from_column_names(object, instruc)
-  for name in instruc.alias_null_keys
+  for name in instruc.alias_null_keys::Vector{String}
     name in columns || continue
     throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
       "query reads has a column with that name. $(_backend_name(instruc.connection)) places NULLs with an " *
@@ -299,7 +299,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
     for field in over.partition_by
       mark = parameter_mark(instruc)
       expr = string(_resolve_window_expression(field, instruc))
-      _resolved_contains_agg(field, instruc) || push!(instruc.window_group_terms, (expr, bound_since(mark)))
+      _resolved_contains_agg(field, instruc) || push!(_window_group_terms!(instruc), (expr, bound_since(mark)))
       push!(partition_sql, expr)
     end
     push!(parts, "PARTITION BY " * join(partition_sql, ", "))
@@ -311,7 +311,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
       mark = parameter_mark(instruc)
       expr, term = _resolve_window_order(order_field, instruc)
       order_node = order_field isa SQLTypeOrder ? order_field.field : order_field
-      _resolved_contains_agg(order_node, instruc) || push!(instruc.window_group_terms, (expr, bound_since(mark)))
+      _resolved_contains_agg(order_node, instruc) || push!(_window_group_terms!(instruc), (expr, bound_since(mark)))
       push!(order_sql, term)
     end
     push!(parts, "ORDER BY " * join(order_sql, ", "))
@@ -1072,7 +1072,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   if v.function_name in ("COUNT", "SUM", "AVG")
     guard_column = fanout_column === nothing ? resolved_column : fanout_column
     src = _extract_leading_alias(guard_column)
-    push!(instruc.agg_sources, (
+    push!(_agg_sources!(instruc), (
       alias = src === nothing ? "\0AMBIGUOUS" : src,
       func = v.function_name,
       label = _as === nothing ? string(v.function_name, "(", guard_column, ")") : _as,

@@ -1116,6 +1116,11 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
   return conditions
 end
 
+# The ON conditions the build rendered for each `cjoin_on` alias, or an empty table when it rendered
+# none (#1593: the field is `nothing` until the first). Allocated only on that miss.
+_rendered_on(instruction::InstructionObject)::Dict{String,Vector{String}} =
+  (v = instruction.cjoin_on_rendered; v === nothing ? Dict{String,Vector{String}}() : v)
+
 function _build_join_conditions(row_join::Vector{JoinRow}, connection::_SQLEngine;
                                 rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
   return _get_join_condition_list(row_join, connection; rendered_on = rendered_on)
@@ -1687,7 +1692,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         # old SQLite must hear too; a RIGHT one updates exactly the rows INNER does.
         from_clause = _build_from_tables(instruction.row_join, connection)
         join_conditions = _build_join_conditions(instruction.row_join, connection;
-                                                 rendered_on = instruction.cjoin_on_rendered)
+                                                 rendered_on = _rendered_on(instruction))
 
         # Structural joins, then the filters: SET → ON → WHERE is the bucket order (#174). Not
         # deduplicated: two anchors can never coincide (`_insert_join` dedups the rows, each with its

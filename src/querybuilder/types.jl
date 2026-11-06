@@ -2118,6 +2118,7 @@ function pk(row::PormGRow, default)
   field = try
     Models.get_model_pk_field(model)     # throws on a composite (multi-column) pk
   catch
+    # swallows any error, meant for the composite-pk refusal: `pk(row, default)` answers `default`.
     return default
   end
   field === nothing && return default

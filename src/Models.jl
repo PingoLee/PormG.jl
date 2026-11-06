@@ -585,6 +585,7 @@ function _binding_owner_or_nothing(modules::Module, name::Symbol)::Union{Module,
   try
     Base.binding_module(modules, name)
   catch
+    # swallows an unresolvable (ambiguous) binding: it cannot be a model, so it is skipped (above).
     nothing
   end
 end
@@ -610,6 +611,7 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
     attr = try
         Base.invokelatest(getfield, modules, name)
     catch
+        # swallows a name whose read fails (declared but unassigned, for one): it is not a model.
         nothing
     end
     if isa(attr, PormGModel)
@@ -626,6 +628,7 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
     attr = try
         Base.invokelatest(getfield, modules, name)
     catch
+        # swallows a name whose read fails (above): it is not a model.
         nothing
     end
     if isa(attr, PormGModel)
@@ -666,6 +669,7 @@ function _collect_models_and_bindings(modules::Module)
     attr = try
         Base.invokelatest(getfield, modules, name)
     catch
+        # swallows a name whose read fails (see `get_all_models`): it is not a model.
         nothing
     end
     isa(attr, PormGModel) || continue
@@ -685,6 +689,7 @@ function _collect_models_and_bindings(modules::Module)
     attr = try
         Base.invokelatest(getfield, modules, name)
     catch
+        # swallows a name whose read fails (see `get_all_models`): it is not a model.
         nothing
     end
     isa(attr, PormGModel) || continue
@@ -1268,7 +1273,13 @@ function _register_models!(_module::Module, path::String, connect_key::String)::
         Base.invokelatest(Core.eval, _module, :(const __pormg_binding__ = $binding))
     end
   catch e
-    # Ignore errors if the module is closed or already has it
+    # #1668: only `Core.eval`'s own refusals into a user module are swallowed, and all are
+    # `ErrorException`s: a module closed for incremental compilation (`set_models` while another
+    # package precompiles), or a name the module already declared a global. The two constants are a
+    # restored image's fallback, so the load goes on without them. Anything else propagates: a
+    # `MethodError` is a bug, or a trimmed build's call with no compiled target (#1599), and a trimmed
+    # image's `UndefVarError` here is `Core.eval` missing, not refusing (#1607 removes the write).
+    e isa ErrorException || rethrow()
   end
 
   # set the original module in models and clear related objects for idempotency
@@ -1656,6 +1667,8 @@ function ensure_model_initialized(model::PormGModel)
                     end
                 end
             catch
+                # swallows any error: the inferred key is a best-effort fallback; when it
+                # fails, the cases below bind the module or raise their own refusal.
             end
         end
     end
@@ -4623,6 +4636,7 @@ function _find_model_binding_name(_module::Module, model::PormGModel)::String
     attr = try
       Base.invokelatest(getfield, _module, name)
     catch
+      # swallows a name whose read fails (see `get_all_models`): it is not this model.
       nothing
     end
     attr === model && return String(name)
@@ -4632,6 +4646,7 @@ function _find_model_binding_name(_module::Module, model::PormGModel)::String
     attr = try
       Base.invokelatest(getfield, _module, name)
     catch
+      # swallows a name whose read fails (see `get_all_models`): it is not this model.
       nothing
     end
     attr === model && return String(name)
@@ -5450,6 +5465,7 @@ function validate_timezone(value::AbstractString, format::AbstractString)
       zdt = ZonedDateTime(normalize_sqlite_datetime_string(s), _DATETIME_DATEFORMAT)
       return _canonicalize_datetime_utc(zdt)
     catch
+      # swallows the parse error into InvalidValueError, which names the expected format.
       throw(InvalidValueError("Invalid timezone format. Expected format: $format", :format))
     end
   else
@@ -5457,6 +5473,7 @@ function validate_timezone(value::AbstractString, format::AbstractString)
     try
       return _canonicalize_datetime_utc(ZonedDateTime(DateTime(s), _DATETIME_UTC_TZ))
     catch
+      # swallows the parse error into InvalidValueError, which names the expected format.
       throw(InvalidValueError("Invalid timezone format. Expected format: $format", :format))
     end
   end

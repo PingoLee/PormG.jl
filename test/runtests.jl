@@ -315,6 +315,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "What an Offline Key Can Reach (#1466)" include("unit/test_offline_key_reach.jl")
     @testset "Host-Library Primitives (#1230)" include("unit/test_host_primitives.jl")
     @testset "Bootstrap Ergonomics (#1232)" include("unit/test_bootstrap_ergonomics.jl")
+    @testset "Swallowed Errors (#1668)" include("unit/test_swallowed_errors.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     @testset "Network Address Fields (#28)" include("unit/test_network_address_fields.jl")

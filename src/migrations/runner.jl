@@ -406,6 +406,7 @@ function _plan_schema_tables(plan_path::AbstractString)::Union{OrderedDict{Strin
       occursin(SCHEMA_TABLE_HEADER_LOOSE_RE, line) || continue
       m = match(SCHEMA_TABLE_HEADER_RE, line)
       m === nothing && bad("is not `$(SCHEMA_TABLE_HEADER)<16 hex digits or absent><TAB><table>`")
+      # swallows the unescape error into bad()'s refusal, which names the plan line
       name = try unescape_string(m.captures[2]) catch; bad("has a table name that does not unescape") end
       haskey(found, name) && bad("names table $(repr(name)) twice")
       found[name] = String(m.captures[1])
@@ -578,6 +579,7 @@ function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::
   for part in split(body, '\t')
     k, sep, v = _partition_first(part, '=')
     sep || bad("has a field without `=`")
+    # swallows the unescape error into bad()'s refusal, which names the plan line
     value = try unescape_string(v) catch; bad("has a value that does not unescape") end
     # #897: `handled` is the one field a person types, so a near-miss is refused rather than read
     # as an unknown key — or, typed after spaces instead of a tab, swallowed into the field before it.
@@ -1165,6 +1167,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
         counted = try
           _precheck_one(conn, f; server_version = version)
         catch
+          # swallows the count's error only when the column vanished meanwhile (`gone`), else rethrows.
           # Did the column vanish while the count waited (another instance's plan renamed it)?
           # If this recovery itself fails the transaction is unusable, and the count's own error
           # is the one worth reporting.
@@ -1172,6 +1175,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
             with_transaction(conn, "ROLLBACK TO SAVEPOINT pormg_precheck;", conn = leased)
             !_finding_applies(conn, f)
           catch
+            # swallows a failed recovery: the count's own error, rethrown below, is the one to report.
             false
           end
           gone || rethrow()
@@ -4198,7 +4202,7 @@ function discard_pending_migration(settings::PormGSettings; backup::Bool = true)
     tables = length(plan)
     statements = sum(length(d) for d in plan; init = 0)
   catch
-    # leave counts at 0; the file is still discarded below
+    # swallows any error reading the plan: counts stay at 0, and the file is still discarded below.
   end
 
   backup_path = nothing

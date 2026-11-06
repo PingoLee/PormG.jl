@@ -183,6 +183,7 @@ function _validate_integer_value(model::PormGModel, field::String, value::Any, o
             Int64(value)
             return true
         catch
+            # swallows the conversion error (InexactError: a fractional Decimal) into the refusal below.
             _type_mismatch_error(operation, model, field, value, "Int64, an integer-valued Decimal, or an integer string"; suggestion="round or convert the Decimal to Int64 before calling $operation")
         end
     elseif value isa AbstractString

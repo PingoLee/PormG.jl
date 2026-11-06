@@ -703,19 +703,36 @@ function _effective_env(env::Union{Nothing, String}, file_default::Union{Nothing
   return selected
 end
 
-# Read only the top-level `default_env:` from a connection.yml, for env precedence (#205).
-# Returns it as a String, or `nothing` when the key is absent/blank. Parsed independently of
-# `read_db_connection_data` (a tiny yaml — negligible) so that function keeps its signature; a parse
-# error here is swallowed (returns `nothing`) and surfaces properly when `read_db_connection_data`
-# re-parses.
-function _peek_default_env(db_settings_file::String)::Union{Nothing, String}
-  raw = try
-    open(db_settings_file) do io
-      YAML.load(io)
-    end
-  catch
+# #1668: what a pre-check's read of a connection.yml expects to fail with — the file is missing or
+# unreadable (`SystemError`, `Base.IOError`), or it is not valid YAML (the four YAML.jl errors, all
+# present from the `YAML = "0.4"` floor). `read_db_connection_data` parses the same file right after,
+# with no `try`, and raises these with their own message, so a peek answers `nothing` and lets it.
+# Nothing else is expected: a `MethodError` is a bug under the JIT and, under `juliac --trim`, how a
+# call with no compiled target appears (#1599). Swallowing it skipped `_require_driver_extension`
+# without a word, so it propagates, and so does an `InterruptException`.
+_peek_yaml_expected(e)::Bool =
+  e isa SystemError || e isa Base.IOError || e isa YAML.ScannerError || e isa YAML.ParserError ||
+  e isa YAML.ComposerError || e isa YAML.ConstructorError
+
+# The one read behind `_peek_default_env` and `_peek_driver`: the parsed file, or `nothing` when it
+# fails as `_peek_yaml_expected` allows. `loader` (here and on both peeks) is the tests' stub point;
+# `F` keeps the call static.
+function _peek_yaml(db_settings_file::String, loader::F = YAML.load) where {F}
+  try
+    return open(loader, db_settings_file)
+  catch e
+    _peek_yaml_expected(e) || rethrow()
     return nothing
   end
+end
+
+# Read only the top-level `default_env:` from a connection.yml, for env precedence (#205).
+# Returns it as a String, or `nothing` when the key is absent/blank. Parsed independently of
+# `read_db_connection_data` (a tiny yaml — negligible) so that function keeps its signature; a file
+# that is missing, unreadable or not valid YAML answers `nothing` here and surfaces properly when
+# `read_db_connection_data` re-parses (`_peek_yaml`, #1668).
+function _peek_default_env(db_settings_file::String, loader::F = YAML.load)::Union{Nothing, String} where {F}
+  raw = _peek_yaml(db_settings_file, loader)
   raw isa AbstractDict || return nothing
   val = get(raw, "default_env", nothing)
   (val === nothing || (val isa AbstractString && isempty(strip(val)))) && return nothing
@@ -990,6 +1007,7 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   try
     CP.enable_idle_validation!(settings.connections; after = validate_after_idle)
   catch
+    # swallows nothing: drops the refused pool, then rethrows.
     settings.connections = nothing
     rethrow()
   end
@@ -1535,7 +1553,7 @@ function _warn_pool_takeover(msg::String, path::String, existing::String,
     pool = config[existing].connections
     pool === nothing || (in_use = pool_stats(pool).in_use)
   catch
-    # Never let a diagnostic break the load it is describing.
+    # swallows any error from the in-use count: a diagnostic must never break the load it describes.
   end
   if in_use > 0
     @error(msg * " Connections are currently checked out of that pool and will be closed; " *
@@ -1838,12 +1856,8 @@ end
 # PostgreSQL driver `_resolve_postgres_driver` picks — or `nothing` when the file does not say (an
 # unknown adapter or a malformed block is refused later, by the reader that owns the message).
 # Read from the file rather than the built pool so `load` can ask before it touches the registry.
-function _peek_driver(db_settings_file::String, env::String)::Union{Nothing, Symbol}
-  raw = try
-    open(YAML.load, db_settings_file)
-  catch
-    return nothing
-  end
+function _peek_driver(db_settings_file::String, env::String, loader::F = YAML.load)::Union{Nothing, Symbol} where {F}
+  raw = _peek_yaml(db_settings_file, loader)
   raw isa AbstractDict || return nothing
   block = get(raw, env, nothing)
   block isa AbstractDict || return nothing
@@ -2282,7 +2296,7 @@ function ping(path_or_key::String)::Bool
       try
         CP.release_connection(pool, conn)
       catch
-        # Releasing a failed health-check connection should not mask the original probe result.
+        # swallows a failed release: it must not mask the health check's own result.
       end
     end
   end

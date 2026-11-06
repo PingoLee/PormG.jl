@@ -57,6 +57,8 @@ using PrecompileTools
           Configuration.load(; env="dev")
           Configuration.load("db_sch"; env="dev")
         catch
+          # swallows any error: a precompile workload must never fail the package build, and a
+          # miss here only costs compile time later.
         end
 
         # 1. Precompile Model Construction
@@ -164,18 +166,22 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     Base.precompile(Tuple{typeof(QB.F), String})                                  # 0.01 s
     Base.precompile(Tuple{typeof(*), QB.FExpression, Float64})                    # 0.02 s
     # add_parameter! bodyfunction forms (snoop run 2 — 0.05s combined)
+    # swallows `which` finding no method: the signature moved, so this precompile is skipped
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.InstructionObject, Int64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.InstructionObject, Int64,))
     end
+    # swallows `which` finding no method: the signature moved, so this precompile is skipped
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.SQLiteParameterizedQuery, Float64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.SQLiteParameterizedQuery, Float64,))
     end
+    # swallows `which` finding no method: the signature moved, so this precompile is skipped
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.SQLiteParameterizedQuery, Int64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.SQLiteParameterizedQuery, Int64,))
     end
     # _determine_join_type bodyfunction forms (0.018s combined). The body function takes the keywords
     # in declaration order — `previus_how`, `second_fild_name`, `column_name` (#28) — then the function
     # and the field; the forward-FK hop passes all three.
+    # swallows `which` finding no method: the signature moved, so this precompile is skipped
     let fbody = try Base.bodyfunction(which(QB._determine_join_type, (QB.sForeignKey,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Nothing, String, String, typeof(QB._determine_join_type), QB.sForeignKey,))
       ismissing(fbody) || precompile(fbody, (String,  String, String, typeof(QB._determine_join_type), QB.sForeignKey,))

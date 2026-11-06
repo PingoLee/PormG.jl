@@ -117,6 +117,8 @@ function _lock_holder_text(pool::PormGMySQL, conn, key::AbstractString, state::_
   rows = try
     collect(_await_lock_handle(pool, state, backend_execute_async(pool, conn, MYSQL_HOLDER_SQL, Any[key])))
   catch
+    # swallows a failed holder read, except a cancellation: the text only decorates an error the
+    # caller is already raising (#737); an abandoned await rethrows (#322).
     state.abandoned && rethrow()
     return ""
   end
@@ -128,6 +130,7 @@ function _lock_holder_text(pool::PormGPostgres, conn, key::AbstractString, state
   rows = try
     collect(_await_lock_handle(pool, state, backend_execute_async(pool, conn, HOLDER_SQL, Any[key])))
   catch
+    # swallows a failed holder read, except a cancellation: see the MySQL method above.
     state.abandoned && rethrow()
     return ""
   end
@@ -171,9 +174,9 @@ function _block_lock!(pool::PormGPostgres, conn, key::AbstractString, timeout_ms
     rows = collect(prev)
     !isempty(rows) && (saved[] = rows[1][1])
   catch
-    # Best-effort probe: a failure here only costs us the restore value. An ABANDONED await is
-    # NOT that — the connection is poisoned from here on and the `SET` below would be issued on
-    # it, so let the cancellation out to the finally instead of swallowing it (#322).
+    # swallows a failed probe, best effort: a failure here only costs us the restore value. An
+    # ABANDONED await is NOT that — the connection is poisoned from here on and the `SET` below would
+    # be issued on it, so let the cancellation out to the finally instead of swallowing it (#322).
     state.abandoned && rethrow()
     saved[] = nothing
   end
@@ -233,11 +236,13 @@ function _restore_block_timeout!(pool::PormGPostgres, conn, old_timeout, strateg
     try
       _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SET lock_timeout = '$(old_timeout)'", nothing))
     catch
+      # swallows a failed restore, best effort (above): the seam has already recorded a cancellation.
     end
   elseif strategy == :block
     try
       _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SET lock_timeout TO DEFAULT", nothing))
     catch
+      # swallows a failed restore, best effort (above): the seam has already recorded a cancellation.
     end
   end
   return nothing

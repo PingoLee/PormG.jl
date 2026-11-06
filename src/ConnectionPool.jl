@@ -1026,7 +1026,7 @@ function _note_statement_end_when_settled!(pool, mark::_StatementMark, handle)
     try
       Base.wait(handle)
     catch
-      # Failed, cancelled, interrupted: the statement has ended either way.
+      # swallows the statement's own error: failed, cancelled or interrupted, it has ended either way.
     end
     _note_statement_end!(pool, mark)
   end
@@ -1649,6 +1649,7 @@ function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seco
   try
     return _acquire_connection!(pool, owned, _timeout_arg(timeout_seconds), max_retries)
   catch
+    # swallows nothing: gives the owned slot back, then rethrows (#1535).
     _drop_owned!(pool, owned)
     rethrow()
   end
@@ -1880,6 +1881,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       handed = try
         take!(w.chan)
       catch
+        # swallows nothing: abandons the wait, then rethrows.
         _abandon_wait!(pool, w, owned)                   # dequeue, or keep what was handed (#1535)
         rethrow()
       finally
@@ -1905,6 +1907,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   try
     return _acquire_connection!(pool, owned, _timeout_arg(timeout_seconds), max_retries, mode)
   catch
+    # swallows nothing: gives the owned slot back, then rethrows (#1535).
     _drop_owned!(pool, owned)
     rethrow()
   end
@@ -2060,6 +2063,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       handed = try
         take!(w.chan)
       catch
+        # swallows nothing: abandons the wait, then rethrows.
         _abandon_wait!(pool, w, owned)                   # see the PormGPostgres twin (#1535)
         rethrow()
       finally
@@ -2574,6 +2578,7 @@ function _lost_connection_error(pool::_SQLEngine, e)::Bool
   try
     return backend_is_connection_error(pool, _driver_cause(_unwrap_async_exception(e))) === true
   catch
+    # swallows any error: this probe never throws, since its caller is a transaction's cleanup.
     return false
   end
 end
@@ -2827,6 +2832,7 @@ function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params)
     try
       put!(_sqlite_async_work_queue, work_item)
     catch
+      # swallows nothing: balances the pending count, then rethrows.
       # Balance the increment on the ONE path the worker never sees: `put!` threw, so no work item
       # was ever dequeued and the worker's own `finally` will not run for it. Scoped to the `put!`
       # itself rather than tracked with a flag across the whole body — the moment `put!` returns the
@@ -2926,7 +2932,7 @@ function _settle_probe(handle)
     try
       Base.wait(handle)
     catch
-      # Failed, cancelled, interrupted — every one of those means the driver is done with it.
+      # swallows the statement's own error: failed, cancelled or interrupted, the driver is done.
     finally
       settled[] = true
     end
@@ -3106,6 +3112,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
       still_ours = try
         Base.lock(() -> any(c -> c === conn, pool.connections), pool.lock)
       catch
+        # swallows a failed membership check: `false` takes the `@debug` path below.
         false
       end
       if still_ours
@@ -4125,7 +4132,7 @@ atomic("db_2") do
       error("validation failed")
     end
   catch
-    # …outer transaction still usable here
+    # swallows the validation error; the outer transaction is still usable here
   end
 end
 ```

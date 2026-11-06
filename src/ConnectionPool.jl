@@ -4163,7 +4163,9 @@ atomic(f::Function, settings::PormGSettings; durable::Bool=false) = atomic(f, se
 
 Run `f()` and, when it raises [`OperationalError`](@ref), run it again — at most `attempts` more
 times, sleeping `backoff` seconds before each retry. With the default `attempts = 1`, `f` runs at
-most twice. Each retry is logged as a `@warn` carrying the error, the retry number and `attempts`.
+most twice. Each retry is logged as a `@warn` carrying the error's type (`error`), its SQLSTATE and
+its message (`msg`, [`error_message`](@ref), which never quotes a value), the retry number and
+`attempts`. The exception itself is not logged: its driver cause can quote the statement's values.
 
 ```julia
 rows = with_read_retry() do
@@ -4234,7 +4236,11 @@ function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,
       (e isa OperationalError && !backend_is_cancellation(_driver_cause(e)) && retries < attempts) ||
         rethrow()
       retries += 1
-      @warn "with_read_retry: the read raised OperationalError; running it again" exception = e retry = retries attempts = attempts
+      # The error's type, SQLSTATE and value-free message, never the error itself (#1675): `exception = e`
+      # hands every log sink the live object, and its `.cause` is the driver's exception, whose text can
+      # quote the statement's values (#984). `with_transaction`'s failure line logs the same fields.
+      err = e::OperationalError
+      @warn "with_read_retry: the read raised OperationalError; running it again" error = nameof(typeof(err)) sqlstate = err.sqlstate msg = error_message(err) retry = retries attempts = attempts
       backoff > 0 && sleep(backoff)
     end
   end

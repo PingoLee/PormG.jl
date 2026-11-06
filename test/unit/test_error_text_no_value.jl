@@ -254,6 +254,40 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# The retry paths log no exception object (#1675)
+# The scan above lets `exception = e` through: a `DatabaseError` renders from its safe fields (#987).
+# A retry warning is stricter, because a host library wraps its reads in `with_read_retry` and logs
+# only a value-free view of an error; `exception = e` hands every sink the live object, and its
+# `.cause` is the driver's exception, whose text can quote the statement's values. The reviewed list
+# below is every warning on a statement-retry path. Each must still be found (a reworded message
+# drops out of the list loudly, not silently) and must carry neither an `exception` keyword nor the
+# driver's exception (`.cause`, `_driver_cause(err)`): log the type, the SQLSTATE and
+# `msg = error_message(err)` instead, as `with_read_retry` and `with_transaction` do.
+# ─────────────────────────────────────────────────────────────────────────────
+const RETRY_LOG_SITES1675 = (
+  ("src/ConnectionPool.jl", "with_read_retry: the read raised OperationalError; running it again"),
+  ("src/ConnectionPool.jl", "Lost connection to database. The pool was recovered, but the statement is not retried"),
+  ("src/ConnectionPool.jl", "Lost connection to database. Retrying the statement"),
+)
+
+_retry_log_leaks1675(span) = occursin(r"\bexception\s*=", span) || occursin(".cause", span) ||
+                             occursin("_driver_cause", span)
+
+@testset "#1675: no retry-path warning logs the exception object" begin
+  root = pkgdir(PormG)
+  for (file, message) in RETRY_LOG_SITES1675
+    spans = [span for (_, span) in _log_sites987(joinpath(root, file)) if occursin(message, span)]
+    @test length(spans) == 1                    # the reviewed site is still there, once
+    @test !any(_retry_log_leaks1675, spans)
+  end
+  # The check's own mutation: the shape #1675 removed is caught, the shape it put in passes.
+  @test _retry_log_leaks1675("@warn \"with_read_retry: …\" exception = e retry = retries")
+  @test _retry_log_leaks1675("@warn \"x\" cause = err.cause")
+  @test _retry_log_leaks1675("@warn \"x\" cause = _driver_cause(err)")
+  @test !_retry_log_leaks1675("@warn \"with_read_retry: …\" error = nameof(typeof(err)) msg = error_message(err)")
+end
+
 # ═════════════════════════════════════════════════════════════════════════════
 # #987: a DatabaseError carries the reason as data and renders from it alone
 # ═════════════════════════════════════════════════════════════════════════════

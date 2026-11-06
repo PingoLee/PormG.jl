@@ -363,3 +363,263 @@ end
   src = read(joinpath(ext_dir, "PormGLibPQExt.jl"), String)
   @test occursin("PormG.ConnectionPool._note_statement_end_when_settled!(pool, mark, handle)", src)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1643: a lease the leak scan reported logs an `@info` when it is returned to the pool.
+# What: `release_connection` (both methods: the PostgreSQL/MySQL one on `MockPGLeak`, SQLite's on
+#   `MockSQLiteLeak`) reads `leak_warned[i]` and the hold before `_monitor_note_touch!` clears them, and
+#   logs "Pool connection reported past leak_detection_threshold was returned to the pool" once, outside
+#   the pool's lock, with `slot`, `held_s` and `threshold_s`. Nothing for a lease returned before the
+#   threshold, a reported lease never returned, or a pool without leak detection.
+# SQL: none; `_leak_check!` is driven directly on the mock pools.
+# Why: without the follow-up, a slow statement or a late return reads in the log exactly like a leak.
+#   With it, a warning with no "returned" line after it is the leak (HikariCP's "unleaked" line).
+# ─────────────────────────────────────────────────────────────────────────────
+
+const _RETURNED_1643 = "Pool connection reported past leak_detection_threshold was returned to the pool"
+
+# The `returned` Info records `f` emits (any other record is ignored).
+function _returned_logs_1643(f)
+  logs, _ = Test.collect_test_logs(f; min_level = Logging.Info)
+  return filter(r -> r.message == _RETURNED_1643, logs)
+end
+_kw(r, k::Symbol) = Dict(r.kwargs)[k]
+
+@testset "leak (#1643): a reported lease, once returned, logs exactly one Info" begin
+  # PostgreSQL/MySQL `release_connection`.
+  p = MockPGLeak(2)
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  c, i = _lease_one(p)
+  st = CP._POOL_MONITOR[p]
+  st.last_used[i] -= 100.0
+  @test length(_leak_logs_1637(p)) == 1                 # the scan reports it
+  logs = _returned_logs_1643(() -> CP.release_connection(p, c))
+  @test length(logs) == 1
+  @test logs[1].level == Logging.Info
+  @test _kw(logs[1], :slot) == i
+  @test 99.0 <= _kw(logs[1], :held_s) < 110.0           # the hold since checkout, not the threshold
+  @test _kw(logs[1], :threshold_s) == 1.0
+  @test _kw(logs[1], :connection_string) == "mock://pg"
+  @test isempty(_returned_logs_1643(() -> CP._leak_check!(p)))   # a later scan: no second record
+  @test isempty(_leak_logs_1637(p))                              # nor a new warning: the slot is free
+
+  # SQLite's `release_connection`: its one slot is leased from the start.
+  q = MockSQLiteLeak()
+  CP.enable_leak_detection!(q; threshold = 1.0)
+  CP._POOL_MONITOR[q].last_used[1] -= 100.0
+  @test length(_leak_logs_1637(q)) == 1
+  logs = _returned_logs_1643(() -> CP.release_connection(q, q.connections[1]))
+  @test length(logs) == 1
+  @test _kw(logs[1], :slot) == 1
+  @test 99.0 <= _kw(logs[1], :held_s) < 110.0
+  @test isempty(_returned_logs_1643(() -> CP._leak_check!(q)))
+end
+
+@testset "leak (#1643): a lease returned before the threshold logs nothing" begin
+  p = MockPGLeak(1)
+  CP.enable_leak_detection!(p; threshold = 60.0)
+  c, _ = _lease_one(p)
+  @test isempty(_leak_logs_1637(p))
+  @test isempty(_returned_logs_1643(() -> CP.release_connection(p, c)))
+end
+
+@testset "leak (#1643): a reported lease that is never returned logs nothing, however many scans" begin
+  p = MockPGLeak(1)
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  c, i = _lease_one(p)
+  CP._POOL_MONITOR[p].last_used[i] -= 100.0
+  logs = _returned_logs_1643() do
+    for _ in 1:5
+      CP._leak_check!(p)
+    end
+  end
+  @test isempty(logs)
+  @test CP._POOL_MONITOR[p].leak_warned[i]             # still reported, still leased
+  CP.release_connection(p, c)
+end
+
+@testset "leak (#1643): a pool without leak detection logs nothing on any return" begin
+  p = MockPGLeak(2)                                     # never opted in
+  logs = _returned_logs_1643() do
+    for _ in 1:3
+      c, _ = _lease_one(p)
+      CP.release_connection(p, c)
+    end
+  end
+  @test isempty(logs)
+  q = MockPGLeak(1)                                     # opted into reaping only: threshold 0
+  CP._monitor_state_for!(q).config = CP.ReapConfig(60.0, 0.0)
+  c, i = _lease_one(q)
+  CP._POOL_MONITOR[q].leak_warned[i] = true             # even a stray flag is not read with detection off
+  @test isempty(_returned_logs_1643(() -> CP.release_connection(q, c)))
+end
+
+@testset "leak (#1643): a reported overflow lease retired on return still logs its return" begin
+  # Two slots over a base `pool_size` of 1, so slot 2 is overflow and `max_lifetime` retires it on
+  # return. The caller did return it, so the lease was not leaked: without the line, its warning would
+  # read as a leak. `config` is set directly so no background sweeper starts.
+  p = MockPGLeak(Any[nothing, nothing], [true, true], "mock://pg", 1, ReentrantLock(), 0)
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  st = CP._POOL_MONITOR[p]
+  c1 = CP.acquire_connection(p)
+  c2 = CP.acquire_connection(p)
+  i2 = findfirst(x -> x === c2, p.connections)        # `_lease_one` would report slot 1 again
+  @test i2 == 2
+  st.config = CP.ReapConfig(0.0, 1.0)
+  st.created_at[i2] -= 100.0                            # past max_lifetime
+  st.last_used[i2] -= 100.0                             # past the leak threshold
+  @test length(_leak_logs_1637(p)) == 1
+  logs = _returned_logs_1643(() -> CP.release_connection(p, c2))
+  @test length(logs) == 1
+  @test _kw(logs[1], :slot) == 2
+  @test p.connections[2] === nothing                    # retired, not reused
+  @test c2.closed
+  CP.release_connection(p, c1)
+end
+
+# Records, for each `returned` Info, whether the pool's lock was held while it was emitted.
+struct _LockProbeLogger1643 <: Logging.AbstractLogger
+  lock::ReentrantLock
+  held::Vector{Bool}
+end
+Logging.min_enabled_level(::_LockProbeLogger1643) = Logging.Info
+Logging.shouldlog(::_LockProbeLogger1643, args...) = true
+Logging.catch_exceptions(::_LockProbeLogger1643) = false
+function Logging.handle_message(l::_LockProbeLogger1643, level, message, args...; kwargs...)
+  message == _RETURNED_1643 && push!(l.held, islocked(l.lock))
+  return nothing
+end
+
+@testset "leak (#1643): the returned line is emitted outside the pool's lock" begin
+  # As the scan's own `@warn` is: a logger that blocks (a file, a network sink) must never stall
+  # every acquire and release behind it.
+  p = MockPGLeak(1)
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  c, i = _lease_one(p)
+  CP._POOL_MONITOR[p].last_used[i] -= 100.0
+  @test length(_leak_logs_1637(p)) == 1
+  probe = _LockProbeLogger1643(p.lock, Bool[])
+  Logging.with_logger(() -> CP.release_connection(p, c), probe)
+  @test probe.held == [false]
+end
+
+# A pool whose connect waits on a gate, so a reservation stays "connecting" while the test scans it.
+# `true` lets the connect succeed; `false` makes it fail, classified permanent so the acquire fails fast.
+mutable struct MockPGGated <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  nid::Int
+  gate::Channel{Bool}
+end
+MockPGGated() = MockPGGated(Any[nothing], [true], "mock://pg", 1, ReentrantLock(), 0, Channel{Bool}(1))
+PormG.backend_connect(p::MockPGGated; kwargs...) =
+  take!(p.gate) ? FakeLeakConn(p.nid += 1) : error("mock: connect failed")
+PormG.backend_is_alive(::MockPGGated, c) = c isa FakeLeakConn && !c.closed
+PormG.backend_is_permanent_connect_error(::MockPGGated, e) = true
+
+# Start an acquire whose connect parks on the gate, and wait until its slot is reserved (leased, empty).
+function _reserve_connecting(p::MockPGGated)
+  t = Threads.@spawn CP.acquire_connection(p)
+  deadline = time() + 10.0
+  while !(!p.available[1] && p.connections[1] === nothing) && time() < deadline
+    yield(); sleep(0.01)
+  end
+  return t
+end
+
+@testset "leak (#1643): a slot reported while connecting logs its return once the caller returns it" begin
+  # The connect installs a fresh connection into the reserved slot, but the lease is the same one,
+  # begun at the reservation: the install keeps the report and the reservation's clock, so the
+  # caller's return logs the returned line with the whole hold. Driven through `acquire_connection`,
+  # so `_connect_reserved!`'s install is the code under test.
+  p = MockPGGated()
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  st = CP._POOL_MONITOR[p]
+  t = _reserve_connecting(p)
+  @test !p.available[1] && p.connections[1] === nothing
+  st.last_used[1] -= 100.0
+  logs = _leak_logs_1637(p)
+  @test length(logs) == 1 && occursin("while connecting to the server", logs[1].message)
+  put!(p.gate, true)
+  c = fetch(t)
+  @test p.connections[1] === c
+  @test st.leak_warned[1]                               # still reported after the install
+  @test isempty(_leak_logs_1637(p))                     # so no second warning for the same lease
+  logs = _returned_logs_1643(() -> CP.release_connection(p, c))
+  @test length(logs) == 1
+  @test _kw(logs[1], :slot) == 1
+  @test 99.0 <= _kw(logs[1], :held_s) < 110.0           # counted from the reservation
+end
+
+@testset "leak (#1643): a reported reservation whose connect fails logs that its slot came back" begin
+  # The failed connect gives the slot back to the pool (`_drop_owned!`) and the acquire raises. The
+  # slot came back, so the warning gets its returned line, logged by the acquiring task.
+  p = MockPGGated()
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  st = CP._POOL_MONITOR[p]
+  raised = Ref{Any}(nothing)
+  warned = Ref(0)
+  logs = _returned_logs_1643() do
+    t = _reserve_connecting(p)
+    st.last_used[1] -= 100.0
+    warned[] = length(_leak_logs_1637(p))
+    put!(p.gate, false)
+    raised[] = try
+      fetch(t); nothing
+    catch e
+      e
+    end
+  end
+  @test warned[] == 1
+  @test raised[] !== nothing                            # the acquire failed, as a failed connect does
+  @test length(logs) == 1
+  @test _kw(logs[1], :slot) == 1
+  @test p.available[1]                                  # the slot is back in the pool
+end
+
+@testset "leak (#1643): an install into an unreported slot is recorded as a fresh connection" begin
+  # Only a slot the scan reported keeps its clock through the install; any other is recorded exactly
+  # as before #1643 (flag clear, clock at the install).
+  q = MockPGLeak(1)
+  CP.enable_leak_detection!(q; threshold = 1.0)
+  sq = CP._POOL_MONITOR[q]
+  d0, j = _lease_one(q)
+  sq.last_used[j] -= 0.5                                # under the threshold: never reported
+  d = FakeLeakConn(98)
+  Base.lock(q.lock) do
+    q.connections[j] = d
+    CP._monitor_note_install!(q, j)
+  end
+  @test !sq.leak_warned[j]
+  @test time() - sq.last_used[j] < 0.5
+  @test isempty(_returned_logs_1643(() -> CP.release_connection(q, d)))
+end
+
+@testset "leak (#1643): a waiter handed an empty slot starts a new lease, not the reported one" begin
+  # A discard hands its now-empty slot to a parked waiter, who connects into it. That is a new lease:
+  # it must not inherit the reported flag of the lease that was discarded, or the install would carry
+  # it and the waiter's own return would log a "returned" line for a lease it never held.
+  p = MockPGLeak(1)
+  CP.enable_leak_detection!(p; threshold = 1.0)
+  st = CP._POOL_MONITOR[p]
+  leased = [CP.acquire_connection(p) for _ in 1:CP._pool_ceiling(p)]
+  victim = leased[1]
+  i = findfirst(x -> x === victim, p.connections)
+  st.last_used[i] -= 100.0
+  @test length(_leak_logs_1637(p)) == 1                 # the victim's lease is reported
+  waiter = Threads.@spawn CP.acquire_connection(p)
+  deadline = time() + 10.0
+  while CP.pool_stats(p).waiting < 1 && time() < deadline
+    yield(); sleep(0.01)
+  end
+  @test CP.pool_stats(p).waiting == 1
+  CP._discard_connection!(p, victim)                    # the empty slot goes to the waiter
+  got = fetch(waiter)
+  @test findfirst(x -> x === got, p.connections) == i   # the same slot, a fresh connection
+  @test !st.leak_warned[i]                              # a new lease
+  @test isempty(_returned_logs_1643(() -> CP.release_connection(p, got)))
+  foreach(c -> CP.release_connection(p, c), leased[2:end])
+end

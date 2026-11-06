@@ -3483,11 +3483,10 @@ derives `<app label>_<class>` instead of two that had to agree.
 
 # Examples
 ```julia
-const users = Models.Model("users", 
-  name = Models.CharField(), 
-  email = Models.CharField(), 
-  age = Models.IntegerField()
-)
+Driver::Models.ModelType = Models.Model("driver",
+  driverid = Models.IDField(),
+  forename = Models.CharField(),
+  surname = Models.CharField())
 ```
 """
 function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
@@ -3771,9 +3770,11 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
   # without a special case for either. Never for a leading underscore: a PormG model name never
   # carries one (#306), and the no-name form would load what that positional gate refuses — so an
   # unpinned `_Internal` keeps the spelling it had, rather than changing what the file loads.
-  # The binding is `const` (#1650): a plain global has no type the compiler can rely on, so every
-  # `M.<Model>` an application writes would start with an untyped read (a dynamic call under the JIT,
-  # a verifier row under `juliac --trim`). A file without `const` still loads; this is what PormG writes.
+  # The binding is a typed global, `Race::Models.ModelType = …` (#1650, #1663): a plain global has no
+  # type the compiler can rely on, so every `M.<Model>` an application writes would start with an
+  # untyped read (a dynamic call under the JIT, a verifier row under `juliac --trim`). The typed global
+  # reads like a `const` and reloads as an ordinary assignment, which reaches a running task too. A
+  # plain or `const` file still loads; this is what PormG writes.
   omit_name = omit_derived_name && !startswith(model_name_abs, "_") &&
               model_name_abs == format_model_name(model_var_name)
   if fields == ""
@@ -3788,14 +3789,14 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
     # reading: it is a stub to fix by hand, not a definition to restore. It keeps the explicit name
     # even under `omit_derived_name` (#1043): hand-edited is the case that option leaves explicit.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
-    result = """$(marker)$(note)\n# const $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
+    result = """$(marker)$(note)\n# $(model_var_name)::Models.ModelType = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
   elseif omit_name
     # Every part after the name opens with its own separator (`", db_table = …"`, `",\n  id = …"`);
     # with no name before it, the first one has nothing to separate.
     args = chopprefix(chopprefix("$db_table_part$managed_part$fields", ","), " ")
-    result = """$(marker)const $(model_var_name) = Models.Model($(args))"""
+    result = """$(marker)$(model_var_name)::Models.ModelType = Models.Model($(args))"""
   else
-    result = """$(marker)const $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
+    result = """$(marker)$(model_var_name)::Models.ModelType = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
   end
   @info(result)
 

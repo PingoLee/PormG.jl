@@ -460,7 +460,7 @@ DbtPlain.connect_key = "db_table_mock"
     gen = Model_to_str(klass)
     @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", gen)
     @test !occursin("Models.Model(\"dash_dim_uf\"", gen)     # prefix never in the positional slot
-    @test occursin("Dim_uf = Models.Model(", gen)            # binding is the class name, untouched
+    @test occursin("Dim_uf::Models.ModelType = Models.Model(", gen)            # binding is the class name, untouched
     reloaded = Base.eval(rmod, Meta.parse(gen))
     @test model_table_name(reloaded) == "dash_dim_uf"
     @test reloaded.name == "dim_uf"

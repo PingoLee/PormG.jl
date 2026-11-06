@@ -2227,7 +2227,7 @@ end
       # SUM over a double precision column a nullable float — on PostgreSQL every view column reads as nullable.
       # MySQL's catalog keeps the source column's NOT NULL on a view column, so its key reads as required.
       key_field = by_engine(postgres = "BigIntegerField(null=true)", mysql = "BigIntegerField()")
-      @test occursin("Pormg_it_767_points_v = Models.Model(\"pormg_it_767_points_v\", managed = false,\n" *
+      @test occursin("Pormg_it_767_points_v::Models.ModelType = Models.Model(\"pormg_it_767_points_v\", managed = false,\n" *
                      "  driverid = Models.$(key_field),\n" *
                      "  points = Models.FloatField(null=true))", content)
     end

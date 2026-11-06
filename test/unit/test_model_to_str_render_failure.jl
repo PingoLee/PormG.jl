@@ -95,7 +95,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
 
     @test !occursin("# PormG:", s_ok)
     @test occursin("surname = Models.CharField", s_ok)
-    @test startswith(s_ok, "const Drivers_render_scratch = Models.Model(")   # #1650
+    @test startswith(s_ok, "Drivers_render_scratch::Models.ModelType = Models.Model(")   # #1650, #1672
   end
 
 end
@@ -136,9 +136,9 @@ end
     @test occursin("# PormG: model 'drivers_render_scratch' had no renderable fields", s)
     # CRUCIAL (#134): no bare, top-level `Var = Models.Model(...)` call — that line would throw at
     # include time. The (?m) anchors ^ to line starts so the commented `# Drivers... ` doesn't match.
-    @test !occursin(r"(?m)^(const )?Drivers_render_scratch = Models\.Model\("m, s)   # either form (#1650)
+    @test !occursin(r"(?m)^(const )?Drivers_render_scratch(::Models\.ModelType)? = Models\.Model\("m, s)   # any form (#1650, #1672)
     # The definition survives, commented out, for the user to fix by hand.
-    @test occursin("# const Drivers_render_scratch = Models.Model(\"drivers_render_scratch\")", s)
+    @test occursin("# Drivers_render_scratch::Models.ModelType = Models.Model(\"drivers_render_scratch\")", s)
 
     # End-to-end load gate: the real #134 failure is at include time. Evaluate the generated string
     # in a fresh module exactly as @import_models `include`s the generated file, and assert it does

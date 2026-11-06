@@ -134,8 +134,8 @@ end
         content = read(outfile, String)
 
         # Both bindings present and DISTINCT in the source text — the whole point of the fix.
-        @test occursin("Driver_profile = Models.Model(", content)
-        @test occursin("Driver_profile2 = Models.Model(", content)
+        @test occursin("Driver_profile::Models.ModelType = Models.Model(", content)
+        @test occursin("Driver_profile2::Models.ModelType = Models.Model(", content)
 
         # And the file actually loads, with BOTH models independently addressable — neither
         # shadowed the other — each still pointing at its own real physical table.

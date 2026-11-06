@@ -61,7 +61,7 @@ function _iv_with_db(f)
 end
 
 # The text of one generated model, from its binding line to the next blank line.
-_iv_block(content, binding) = match(Regex("(?ms)^const $(binding) = Models\\.Model\\(.*?(?=\\n\\n|\\nend)"), content)   # #1650: generated bindings are `const`
+_iv_block(content, binding) = match(Regex("(?ms)^$(binding)::Models\\.ModelType = Models\\.Model\\(.*?(?=\\n\\n|\\nend)"), content)   # #1672: generated bindings are typed globals
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite importer: views are written only on request, as managed = false keyless models (#767)
@@ -76,14 +76,14 @@ _iv_block(content, binding) = match(Regex("(?ms)^const $(binding) = Models\\.Mod
     # The default is unchanged: tables only.
     PormG.Migrations.import_models_from_sqlite(key; force_replace = true)
     content = read(outfile, String)
-    @test occursin("Driver = Models.Model(\"driver\"", content)
+    @test occursin("Driver::Models.ModelType = Models.Model(\"driver\"", content)
     @test !occursin("driver_points", content)
     @test !occursin("senna_results", content)
 
     # Opted in: both views, after both tables.
     PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_views = true)
     content = read(outfile, String)
-    @test findfirst("Result = Models.Model(", content).start < findfirst("Driver_points = Models.Model(", content).start
+    @test findfirst("Result::Models.ModelType = Models.Model(", content).start < findfirst("Driver_points::Models.ModelType = Models.Model(", content).start
     marker = "# PormG: generated from the view 'driver_points' — managed = false, so migrations never " *
              "create, alter or drop it. A view has no primary key, so none is declared: reads work, but " *
              "writes that address rows by key (a filtered delete, bulk_update without match_on) need one — " *
@@ -92,7 +92,7 @@ _iv_block(content, binding) = match(Regex("(?ms)^const $(binding) = Models\\.Mod
              "# PormG: the database reports no type for 'points' of the view 'driver_points' — SQLite " *
              "gives none to a computed column — so it is emitted as TextField. Declare the real field " *
              "type by hand: as a TextField, a filter compares the column as text.\n" *
-             "const Driver_points = Models.Model(\"driver_points\""
+             "Driver_points::Models.ModelType = Models.Model(\"driver_points\""
     @test occursin(marker, content)
     # `senna_results` only selects columns, which keep their table's types: no second marker.
     @test count("# PormG: the database reports no type", content) == 1
@@ -113,14 +113,14 @@ _iv_block(content, binding) = match(Regex("(?ms)^const $(binding) = Models\\.Mod
     PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_views = true,
                                                include_table = ["driver", "driver_points"])
     content = read(outfile, String)
-    @test occursin("Driver_points = Models.Model(", content)
+    @test occursin("Driver_points::Models.ModelType = Models.Model(", content)
     @test !occursin("senna_results", content)
-    @test !occursin("Result = Models.Model(", content)
+    @test !occursin("Result::Models.ModelType = Models.Model(", content)
 
     PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_views = true,
                                                ignore_schema = ["senna_"])
     content = read(outfile, String)
-    @test occursin("Driver_points = Models.Model(", content)
+    @test occursin("Driver_points::Models.ModelType = Models.Model(", content)
     @test !occursin("senna_results", content)
   end
 end
@@ -187,10 +187,10 @@ end
       PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_views = true)
       read(joinpath(modeldir, "automatic_models.jl"), String)
     end
-    @test occursin("Driver = Models.Model(\"driver\"", content)
-    @test occursin("Driver_points = Models.Model(\"driver_points\"", content)
+    @test occursin("Driver::Models.ModelType = Models.Model(\"driver\"", content)
+    @test occursin("Driver_points::Models.ModelType = Models.Model(\"driver_points\"", content)
     @test occursin("# PormG: a view could not be read, so it is not imported — stale_stops: ", content)
-    @test !occursin("Stale_stops = Models.Model(", content)
+    @test !occursin("Stale_stops::Models.ModelType = Models.Model(", content)
 
     # The reader reports it through `unreadable`, and warns.
     unreadable = String[]

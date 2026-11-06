@@ -214,6 +214,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Value Representation Property (#564)" include("unit/test_value_repr_property.jl")
     @testset "Column-wise Row Read (#1073)" include("unit/test_list_raw_columnwise_1073.jl")
     @testset "Typed read: list(T) / first(T) / get(T) (#1352)" include("unit/test_typed_read_1352.jl")
+    @testset "getproperty overloads infer for a literal name (#1615)" include("unit/test_getproperty_inference_1615.jl")
     @testset "Read terminals copy the handler once (#1589)" include("unit/test_read_path_one_copy_1589.jl")
     @testset "The build writes nothing into the handler (#1624, #1625)" include("unit/test_build_writes_nothing_1624.jl")
     @testset "Typed read decodes driver columns into T (#1544)" include("unit/test_typed_read_columns_1544.jl")

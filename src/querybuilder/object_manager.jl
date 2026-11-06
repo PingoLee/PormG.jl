@@ -954,7 +954,11 @@ function _check_slice_value(what::String, v::Integer)
       "$(what) must not be negative, got $(v) — a LIMIT is a count of rows. For no limit, use " *
       "limit(nothing) or leave limit() out."))
   end
-  return v
+  # #1615: the query state holds the count as an `Int`, so one past it is refused here rather than by
+  # the slot's conversion (an `InexactError`, outside the error taxonomy). No engine takes a larger count.
+  v > typemax(Int) && throw(QueryBuildError(
+    "$(what) takes a row count no larger than typemax(Int) ($(typemax(Int)))."))
+  return Int(v)
 end
 
 # ---

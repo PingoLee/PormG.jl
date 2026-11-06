@@ -1007,13 +1007,16 @@ struct AliasJoin
 end
 
 mutable struct SQLObjectQuery <: SQLObject
-  model::PormGModel
+  # #1615 / #1599 I4: the concrete model type, the only `PormGModel` there is. An abstract slot made
+  # every `q.model.…` read a dynamic dispatch, and `juliac --trim` refused the write path on it (round 3
+  # of #1600, W15). Typed as `ModelType` and no deeper: what a model holds is the model graph's (#1604).
+  model::Models.ModelType
   connect_key::OptionalString # Override for multi-tenant scenarios
   values::Vector{Union{SQLTypeText,SQLTypeField}}
   filter::Vector{FilterType} # filters to be used in the query
   insert::OrderedCollections.OrderedDict{String,Any} # values to be used to create or insert (ordered so INSERT/UPDATE column lists follow call order — #97)
-  limit::Union{Nothing,Integer} # `nothing` = no LIMIT; `0` is LIMIT 0, zero rows (#1049)
-  offset::Integer               # `0` = no OFFSET, which is what OFFSET 0 means anyway
+  limit::Union{Nothing,Int} # `nothing` = no LIMIT; `0` is LIMIT 0, zero rows (#1049)
+  offset::Int               # `0` = no OFFSET, which is what OFFSET 0 means anyway
   order::Vector{SQLTypeOrder}
   group::Vector{String}
   having::Vector{String}
@@ -1049,7 +1052,7 @@ mutable struct SQLObjectQuery <: SQLObject
   # copy-rule tests assert exactly that (#43), and `Base.deepcopy` still does not carry them.
   projection_kinds::Dict{Symbol,CanonicalType}
 
-  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
+  SQLObjectQuery(; model::Models.ModelType, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
     order=[], group=[], having=[], list_joins=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
     custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
     projection_kinds=Dict{Symbol,CanonicalType}()) =
@@ -1954,9 +1957,12 @@ Chainable methods mutate the handler and return it; terminal methods execute and
 Use `.copy()` when you need to branch a chain without disturbing the original.
 """
 mutable struct ObjectHandler <: SQLObjectHandler
-  object::SQLObject
+  # #1615 / #1599 I4: `SQLObjectQuery`, the only query state a handler ever holds. The abstract
+  # `SQLObject` slot put a dynamic dispatch behind every fluent call (`_filter!(q.object, …)`), and a
+  # trimmed build had no compiled target for it (round 3 of #1600, W13).
+  object::SQLObjectQuery
 end
-ObjectHandler(; object::SQLObject) = ObjectHandler(object)
+ObjectHandler(; object::SQLObjectQuery) = ObjectHandler(object)
 
 """
 A model-aware row returned by `list()`, `first()`, and `get()`.
@@ -1966,7 +1972,7 @@ dot-access to fields and many-to-many relationship accessors.
 """
 mutable struct PormGRow
   _data::Dict{Symbol,Any}
-  _model::PormGModel
+  _model::Models.ModelType   # #1615: the concrete model type, as `SQLObjectQuery.model`
   # #1591: the fields assigned since the row was read, which `save` writes. `nothing` until the first
   # assignment (`_dirty!`): most rows are only read, and `list()` builds one per result row (#41).
   _dirty::Union{Nothing,Set{Symbol}}

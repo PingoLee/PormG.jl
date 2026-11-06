@@ -97,9 +97,9 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/migrations/column_spec.jl" => 1,
   "src/migrations/importers.jl" => 2,
   "src/models/fields.jl" => 68,
-  "src/querybuilder/many_to_many.jl" => 4,
+  "src/querybuilder/many_to_many.jl" => 2,   # #1615: ManyToManyManager.owner_model/related_model
   "src/querybuilder/parameters.jl" => 1,
-  "src/querybuilder/types.jl" => 35,    # #1593: SQLTbAlias.count::Int
+  "src/querybuilder/types.jl" => 30,    # #1593: SQLTbAlias.count::Int; #1615: ObjectHandler.object, SQLObjectQuery.model/limit/offset, PormGRow._model
 )
 
 # :ok, :any or :abstract for one declared field type.

@@ -1204,10 +1204,11 @@ end
 const _REPORTED_PLAIN_BINDINGS = Set{Tuple{Module, Symbol}}()
 const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
 
-# #1664: warn when a model binding has no type the compiler can know — neither `const` nor a typed
-# global (`Race::Models.ModelType = …`, #1663). Such a binding works, but every `M.Race` read is
-# untyped: a dynamic call under the JIT, an error under `juliac --trim`. The check runs here, at
-# registration, never on the query path.
+# #1664: warn when a model binding has no type the compiler can know. Such a binding works, but every
+# `M.Race` read is untyped: a dynamic call under the JIT, an error under `juliac --trim`. The warning
+# suggests the form PormG writes and documents, the typed global `Race::Models.ModelType = …`
+# (#1663, #1672), and says a `const` binding is accepted too: both are typed, so neither is warned
+# about. The check runs here, at registration, never on the query path.
 #
 # Cadence: one `@warn` per registration that finds bindings not reported before, naming the first
 # (in `names` order) and counting the rest, with `maxlog = 1`, so the console shows it once per
@@ -1242,7 +1243,8 @@ function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
          " $(more) more model bindings registered here are plain too."
   @warn("PormG: `$(owner).$(binding)` is a plain global, so every `$(owner).$(binding)` read is " *
         "untyped (a dynamic call under the JIT, an error under `juliac --trim`); bind it with " *
-        "`const $(binding) = Models.Model(…)`.$(rest) This warning is shown once per session. See " *
+        "`$(binding)::Models.ModelType = Models.Model(…)` (a `const` binding is accepted too).$(rest) " *
+        "This warning is shown once per session. See " *
         "`upgrade_guide(from = v\"0.9\")` → \"The generated models file binds each model with " *
         "`const`; a file without `const` still loads (#1650)\".", maxlog = 1)
   return nothing

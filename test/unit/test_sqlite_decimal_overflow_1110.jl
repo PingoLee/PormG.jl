@@ -37,6 +37,7 @@ for (modname, key) in ((:M1110SL, "mock1110_sl"), (:M1110PG, "mock1110_pg"))
   @eval module $modname
   import PormG
   import PormG.Models
+  Models.@models Driver Constructor_results
   Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField())
   Constructor_results = Models.Model(
     constructorresultsid = Models.IDField(),

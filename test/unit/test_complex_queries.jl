@@ -678,6 +678,7 @@ module FkShortFormModels
 import PormG
 import PormG.Models
 
+Models.@models Fkscircuit Race Lap
 Fkscircuit = Models.Model("fkscircuit", id = Models.IDField(), name = Models.CharField())
 
 # Race carries a forward FK spelled `circuit_id`...
@@ -764,6 +765,7 @@ module FkShortFormPrefixedModels
 import PormG
 import PormG.Models
 
+Models.@models Fkspcircuit Race Lap
 Fkspcircuit = Models.Model("fkspcircuit", id = Models.IDField(), name = Models.CharField())
 
 Race = Models.Model("fksp_race",
@@ -839,6 +841,7 @@ module EmptyPrefixReverseModels
 import PormG
 import PormG.Models
 
+Models.@models Epteam Epdriver
 Epteam = Models.Model("epteam", id = Models.IDField(), name = Models.CharField())
 Epdriver = Models.Model("epdriver",
   id = Models.IDField(),

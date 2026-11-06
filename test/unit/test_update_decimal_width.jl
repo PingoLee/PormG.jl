@@ -48,6 +48,7 @@ module UdwModels
 import PormG
 import PormG.Models
 
+Models.@models Udw_constructor Udw_result
 Udw_constructor = Models.Model("udw_constructor",
   constructorid = Models.IDField(),
   wins          = Models.IntegerField(null = true),

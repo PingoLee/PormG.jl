@@ -61,6 +61,7 @@ module OpfModels
 import PormG
 import PormG.Models
 
+Models.@models Opf_row
 Opf_row = Models.Model("opf_row",
   id   = Models.IDField(),
   qty  = Models.IntegerField(null = true),

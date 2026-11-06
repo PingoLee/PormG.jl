@@ -34,6 +34,7 @@ PormG.config["cjoinon_sl"] = PormG.Configuration.Settings(
 module CJoinOnPGModels
 import PormG
 import PormG.Models
+Models.@models Lap Circuit
 Lap = Models.Model("laps",
   id = Models.IDField(),
   raceid = Models.IntegerField(),
@@ -53,6 +54,7 @@ end
 module CJoinOnSLModels
 import PormG
 import PormG.Models
+Models.@models Lap Circuit
 Lap = Models.Model("laps",
   id = Models.IDField(),
   raceid = Models.IntegerField(),
@@ -341,6 +343,7 @@ end
 module CJoinOnRelModels
 import PormG
 import PormG.Models
+Models.@models Sponsor Driver Result
 Sponsor = Models.Model("sponsor",
   sponsorid = Models.IDField(),
   name = Models.CharField(),

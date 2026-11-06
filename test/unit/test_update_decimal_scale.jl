@@ -45,6 +45,7 @@ module UdsModels
 import PormG
 import PormG.Models
 
+Models.@models Uds_team Uds_driver
 Uds_team = Models.Model("uds_team",
   id     = Models.IDField(),
   budget = Models.DecimalField(max_digits = 12, decimal_places = 3, null = true),

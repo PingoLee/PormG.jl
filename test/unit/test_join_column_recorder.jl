@@ -113,6 +113,7 @@ PormG.config["jcr_sl"] = PormG.Configuration.Settings(
 module JcrModels
 import PormG
 import PormG.Models
+Models.@models Constructor Driver Result
 Constructor = Models.Model("jcr_constructor", constructorid = Models.IDField(), name = Models.CharField())
 Driver = Models.Model("jcr_driver",
   driverid = Models.IDField(),
@@ -393,6 +394,7 @@ PormG.config["jcr_pg"] = PormG.Configuration.Settings(
 module JcrNetModels
 import PormG
 import PormG.Models
+Models.@models Session Badge
 Session = Models.Model("jcr_session", sessionid = Models.IDField(), client_ip = Models.GenericIPAddressField())
 Badge = Models.Model("jcr_badge",
   badgeid = Models.IDField(),

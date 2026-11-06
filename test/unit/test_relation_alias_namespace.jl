@@ -56,6 +56,7 @@ module RanModels
 import PormG
 import PormG.Models
 
+Models.@models Ran_grand Ran_parent Ran_child
 Ran_grand = Models.Model("ran_grand",
   id   = Models.IDField(),
   code = Models.CharField(),

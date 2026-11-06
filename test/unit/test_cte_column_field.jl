@@ -38,6 +38,7 @@ module CcfModels
 import PormG
 import PormG.Models
 
+Models.@models Ccf_driver Ccf_result Ccf_constructor_result
 Ccf_driver = Models.Model("ccf_driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(),

@@ -48,6 +48,7 @@ module CrlModels
 import PormG
 import PormG.Models
 
+Models.@models Crl_driver Crl_result
 Crl_driver = Models.Model("crl_driver",
   id       = Models.IDField(),
   surname  = Models.CharField(),

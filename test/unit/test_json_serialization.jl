@@ -67,6 +67,7 @@ module Json641Models
 import PormG
 import PormG.Models
 
+Models.@models J_team J_sponsor J_driver
 J_team = Models.Model("j_team",
   id   = Models.IDField(),
   name = Models.CharField(max_length = 80),

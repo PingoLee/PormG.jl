@@ -76,6 +76,7 @@ module FdModels
 import PormG
 import PormG.Models
 
+Models.@models Fd_race Fd_result
 Fd_race = Models.Model("fd_race",
   id        = Models.IDField(),
   name      = Models.CharField(),

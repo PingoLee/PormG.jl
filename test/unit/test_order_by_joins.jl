@@ -98,6 +98,7 @@ module ObjJoinModels
 import PormG
 import PormG.Models
 
+Models.@models Par Chi Cj_great Cj_grand Cj_parent Cj_child
 Par = Models.Model("obj_parent",
   id   = Models.IDField(),
   sku  = Models.CharField(),

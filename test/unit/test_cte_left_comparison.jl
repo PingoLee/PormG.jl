@@ -48,6 +48,7 @@ module CteLeftModels
 import PormG
 import PormG.Models
 # F1-shaped: a result row with points and a JSON document of per-race extras.
+Models.@models Clc_result
 Clc_result = Models.Model("clc_result",
   id      = Models.IDField(),
   points  = Models.IntegerField(null = true),

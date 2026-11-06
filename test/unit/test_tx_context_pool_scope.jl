@@ -130,6 +130,7 @@ SFU_CIRCUITS_831.connect_key = POOL_B_KEY_831
 module ScopeM2M831
   import PormG
   import PormG.Models
+  Models.@models Driver Championship
   Driver = Models.Model("pormg831_m2m_drivers", id = Models.IDField(), surname = Models.CharField())
   Championship = Models.Model("pormg831_m2m_championships",
     id = Models.IDField(),

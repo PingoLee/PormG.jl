@@ -707,6 +707,7 @@ if !isdefined(Main, :Net904Models)
   @eval module Net904Models
   import PormG
   import PormG.Models
+  Models.@models Pit_wall_session Pit_pass
   Pit_wall_session = Models.Model("pit_wall_session",
     id         = Models.IDField(),
     team       = Models.CharField(max_length = 100),

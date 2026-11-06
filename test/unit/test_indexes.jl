@@ -46,6 +46,7 @@ import PormG.Models
 
 # Two plain columns, auto-derived index name (<table>_<cols>_idx). Many rows share a
 # (raceid, lap) pair — one per driver — so this is an index, not a uniqueness rule.
+Models.@models Lap_time Grid_slot
 Lap_time = Models.Model("lap_times",
   id       = Models.IDField(),
   raceid   = Models.IntegerField(),
@@ -275,6 +276,7 @@ module IndexAdvancedModels
 import PormG
 import PormG.Models
 
+Models.@models Result_ix Driver_ix
 Result_ix = Models.Model("result_ix",
   id       = Models.IDField(),
   raceid   = Models.IntegerField(),

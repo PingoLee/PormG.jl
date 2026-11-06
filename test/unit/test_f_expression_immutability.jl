@@ -59,6 +59,7 @@ module FImmutModels
 import PormG
 import PormG.Models
 
+Models.@models Fi_parent Fi_child
 Fi_parent = Models.Model("fi_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),

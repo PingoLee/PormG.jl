@@ -69,6 +69,7 @@ module PanModels
 import PormG
 import PormG.Models
 
+Models.@models Pan_grand Pan_parent Pan_child
 Pan_grand = Models.Model("pan_grand",
   id   = Models.IDField(),
   code = Models.CharField(),

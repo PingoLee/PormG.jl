@@ -42,6 +42,7 @@ module IfcModels
 import PormG
 import PormG.Models
 
+Models.@models Ifc_result
 Ifc_result = Models.Model("ifc_result",
   resultid = Models.IDField(),
   grid     = Models.IntegerField(null = true),

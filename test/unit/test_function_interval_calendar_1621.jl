@@ -42,6 +42,7 @@ PormG.config["fi1621_sl"] = PormG.Configuration.Settings(
 module Fi1621PgModels
 import PormG
 import PormG.Models
+Models.@models Result
 Result = Models.Model("result",
   resultid       = Models.IDField(),
   grid           = Models.IntegerField(null = true),
@@ -53,6 +54,7 @@ end
 module Fi1621SlModels
 import PormG
 import PormG.Models
+Models.@models Result
 Result = Models.Model("result",
   resultid       = Models.IDField(),
   grid           = Models.IntegerField(null = true),

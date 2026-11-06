@@ -57,6 +57,7 @@ module ModModels
 import PormG
 import PormG.Models
 
+Models.@models Mod_result
 Mod_result = Models.Model("mod_result",
   resultid       = Models.IDField(),
   grid           = Models.IntegerField(null = true),

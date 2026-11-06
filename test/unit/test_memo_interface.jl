@@ -321,6 +321,7 @@ module MemoIfaceModels
 import PormG
 import PormG.Models
 
+Models.@models Mi_race Mi_result
 Mi_race = Models.Model("mi_race",
   id   = Models.IDField(),
   name = Models.CharField(),

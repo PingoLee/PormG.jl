@@ -42,7 +42,11 @@ function _pmb_module(name::Symbol, decls::Expr)
   mod = Module(name)
   Core.eval(mod, :(import PormG; import PormG.Models))
   # `:toplevel`, not the `quote` block as is: a nested `module` must sit at top level (testset 5).
-  Core.eval(mod, Expr(:toplevel, decls.args...))
+  # #1602: the model set — the block's own when it writes one (an imported model is registered only
+  # when declared), else its top-level `X = Models.Model(…)` assignments.
+  set = Models._declares_model_set(decls) ? () :
+        (Models._model_set_declaration(Models._declared_model_bindings(decls)),)
+  Core.eval(mod, Expr(:toplevel, decls.args..., set...))
   return mod
 end
 
@@ -156,8 +160,10 @@ end
     module PmbOwnerModels
       import PormG.Models
       Circuit = Models.Model("pmbo_circuit", circuitid = Models.IDField(), name = Models.CharField())
+      Models.@models Circuit
     end
     import .PmbOwnerModels: Circuit
+    Models.@models Circuit
   end)
   owner = mod.PmbOwnerModels
   warnings = _pmb_warnings(mod)
@@ -179,8 +185,10 @@ end
     module PmbRenConstOwner
       import PormG.Models
       const Circuit = Models.Model("pmbrc_circuit", circuitid = Models.IDField(), name = Models.CharField())
+      Models.@models Circuit
     end
     import .PmbRenConstOwner: Circuit as Track
+    Models.@models Track
   end)
   @test isconst(mod, :Track)
   @test !isdefined(mod.PmbRenConstOwner, :Track)
@@ -200,8 +208,10 @@ end
     module PmbRenPlainOwner
       import PormG.Models
       Circuit = Models.Model("pmbrp_circuit", circuitid = Models.IDField(), name = Models.CharField())
+      Models.@models Circuit
     end
     import .PmbRenPlainOwner: Circuit as Track
+    Models.@models Track
   end)
   owner = mod.PmbRenPlainOwner
   warnings = _pmb_warnings(mod)

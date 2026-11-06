@@ -65,6 +65,7 @@ module PnModels
 import PormG
 import PormG.Models
 
+Models.@models Pn_parent Pn_child Pn_dbc
 Pn_parent = Models.Model("pn_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),

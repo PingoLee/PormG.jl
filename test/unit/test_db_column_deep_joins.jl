@@ -55,6 +55,7 @@ import PormG.Models
 # and both foreign keys carry a `db_column` that differs from the field name. A forward path from
 # Leaf (`mid__top__label`) and a reverse path from Top (`mids__leaves__tag`) each cross two hops,
 # so hop 2 is resolved by the loop copy of `_build_row_join` and hop 1 by the first-hop copy.
+Models.@models Dc2_top Dc2_mid Dc2_leaf
 Dc2_top = Models.Model("dc2_top",
   code  = Models.IDField(db_column = "top_pk"),
   label = Models.CharField(null = true),

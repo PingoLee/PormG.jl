@@ -44,6 +44,8 @@ function _ran_module(name::Symbol, decls::Expr; register::Bool = true)
   mod = Module(name)
   Core.eval(mod, :(import PormG; import PormG.Models))
   Core.eval(mod, decls)
+  # #1602: the model set, from the block's own `X = Models.Model(…)` assignments.
+  Core.eval(mod, Models._model_set_declaration(Models._declared_model_bindings(decls)))
   register && Base.invokelatest(Models.set_models, mod, "ran_mock")
   return mod
 end

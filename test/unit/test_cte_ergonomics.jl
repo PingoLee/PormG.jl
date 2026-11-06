@@ -48,6 +48,7 @@ module CteErgoModels
 import PormG
 import PormG.Models
 
+Models.@models Cte_race Cte_result
 Cte_race = Models.Model("cte_race",
   raceid = Models.IDField(),
   year = Models.IntegerField(),

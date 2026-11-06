@@ -3553,8 +3553,9 @@ end
 decisions = Pair{Symbol, Union{Symbol, Nothing}}[]
 # #735: asked in a FIXED order — the declared models by table name, then the auto join tables, which
 # can follow a rename decided for one of their ends. It used to be `current_schema`'s `Dict` order, so
-# adding an unrelated model could reorder the questions under a script's answers. Declaration order
-# is not recoverable here: `get_all_models` reads the bindings through `names`, which sorts them.
+# adding an unrelated model could reorder the questions under a script's answers. `get_all_models`
+# reads the declared set in declaration order (#1602), but `current_schema` is a `Dict` keyed by
+# table, so that order does not survive to here; table-name order is the stable one.
 unmatched = sort!([name for (name, entry) in current_schema if entry[:exist] == false],
                   by = name -> (_is_auto_join_table(current_schema[name][:model]), String(name)))
 # #734: the table hints, resolved against both sides. A hinted rename source is reserved for its model
@@ -3965,25 +3966,20 @@ makemigrations(settings.connections, settings, path=path, interactive=interactiv
 end
 
 function get_all_models(mod::Module)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}
-# Get all models from a module
+# The models `mod` declares (`Models.@models`, #1602) — not a scan of its names. `_load_current_models`
+# includes the file with `Models._with_model_set`, so a file that writes no declaration still has the
+# one `@import_models` would give it.
 models = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}()
-for name in names(mod, all = true)
-  if isdefined(mod, name)
-    obj = getfield(mod, name)
-    if isa(obj, PormGModel)
-      if obj.name == ""
-        obj.name = name |> string |> format_model_name
-      end
-      # Key by the RESOLVED PHYSICAL table name (#59): `db_table` when the model sets one, else the
-      # (now-filled) `obj.name`. The old key was the lowercased Julia BINDING name, which only ever
-      # agreed with the physical name by convention — a `db_table` model would key as `:driver_races`
-      # (binding) while its live table is `Driver_Races`, so the diff below would find no match and
-      # drop+recreate a live table that had not structurally changed. Keying both sides on
-      # `model_table_name` also retires the long-standing "lowercase model.name everywhere" TODO that
-      # sat on this line: the identity is now the resolved name, not an ad hoc fold of the binding.
-      models[Symbol(model_table_name(obj))] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false)
-    end
-  end
+for obj in Models.get_all_models(mod)
+  obj isa PormGModel || continue
+  # Key by the RESOLVED PHYSICAL table name (#59): `db_table` when the model sets one, else the
+  # (now-filled) `obj.name`. The old key was the lowercased Julia BINDING name, which only ever
+  # agreed with the physical name by convention — a `db_table` model would key as `:driver_races`
+  # (binding) while its live table is `Driver_Races`, so the diff below would find no match and
+  # drop+recreate a live table that had not structurally changed. Keying both sides on
+  # `model_table_name` also retires the long-standing "lowercase model.name everywhere" TODO that
+  # sat on this line: the identity is now the resolved name, not an ad hoc fold of the binding.
+  models[Symbol(model_table_name(obj))] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false)
 end
 return models
 end
@@ -4000,7 +3996,7 @@ end
 # #762: many-to-many targets are resolved here as well — see `_resolve_fk_targets_and_pk!`.
 function _load_current_models(path::String)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}
   temp_module = Module(:TemporaryModels)
-  Base.include(temp_module, path)
+  Base.include(Models._with_model_set, temp_module, path)   # #1602: the declared model set
   models_module = Base.invokelatest(getfield, temp_module, :models)
   current_models = Base.invokelatest(get_all_models, models_module)
   Base.invokelatest(_resolve_fk_targets_and_pk!, current_models, models_module)

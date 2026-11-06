@@ -52,6 +52,7 @@ PormG.config["lpr_mock_pg"] = PormG.Configuration.Settings(
 module LprModelsSL
 import PormG
 import PormG.Models
+Models.@models Lpr_team Lpr_code Lpr_driver
 Lpr_team = Models.Model("lpr_team", id = Models.IDField(), name = Models.CharField())
 Lpr_code = Models.Model("lpr_code", code = Models.CharField(primary_key = true), label = Models.CharField())
 Lpr_driver = Models.Model("lpr_driver",
@@ -74,6 +75,7 @@ end
 module LprModelsPG
 import PormG
 import PormG.Models
+Models.@models Lpr_team Lpr_code Lpr_driver
 Lpr_team = Models.Model("lpr_team", id = Models.IDField(), name = Models.CharField())
 Lpr_code = Models.Model("lpr_code", code = Models.CharField(primary_key = true), label = Models.CharField())
 Lpr_driver = Models.Model("lpr_driver",

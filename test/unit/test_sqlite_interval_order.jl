@@ -67,6 +67,7 @@ import PormG
 import PormG.Models
 
 # `starts_at - date` is the projected difference; `circuit` groups it for the aggregate cases.
+Models.@models Io_race Io_lap Io_stop
 Io_race = Models.Model("io_race",
   id        = Models.IDField(),
   circuit   = Models.CharField(null = true),

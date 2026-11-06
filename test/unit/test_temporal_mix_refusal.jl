@@ -64,6 +64,7 @@ module TmxModels
 import PormG
 import PormG.Models
 
+Models.@models Tmx_circuit Tmx_race
 Tmx_circuit = Models.Model("tmx_circuit",
   id     = Models.IDField(),
   opened = Models.DateField(null = true),

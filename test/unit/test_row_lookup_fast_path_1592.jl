@@ -35,6 +35,7 @@ PormG.config["row_lookup_1592"] = PormG.Configuration.Settings(
 module RowLookup1592Models
 import PormG
 import PormG.Models
+Models.@models Constructor Driver
 Constructor = Models.Model("rl1592_constructor", constructorid = Models.IDField(), name = Models.CharField())
 Driver = Models.Model("rl1592_driver",
   driverid      = Models.IDField(),

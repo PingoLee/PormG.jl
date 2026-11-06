@@ -52,6 +52,7 @@ import PormG.Models
 # tags. The shape Nitro.jl#379 hit — a compare-and-delete on `mf_task` — plus one of each statement
 # kind the deletion collector can emit.
 # The org a run belongs to: gives a task filter a second hop (`run__org__name`).
+Models.@models Mf_org Mf_run_stats_v Mf_run Mf_task Mf_note Mf_tag
 Mf_org = Models.Model("mf_org",
   id   = Models.IDField(),
   name = Models.CharField(),
@@ -516,6 +517,7 @@ PormG.config["mf765_sqlite"] = PormG.Configuration.Settings(
 module MfSqlite
 import PormG
 import PormG.Models
+Models.@models Mf_run Mf_task Mf_tag
 Mf_run = Models.Model("mf_run", id = Models.IDField(), status = Models.CharField())
 Mf_task = Models.Model("mf_task",
   id     = Models.IDField(),

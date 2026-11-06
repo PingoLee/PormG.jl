@@ -402,6 +402,9 @@ end
             constructorid = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "RESTRICT"),
             grid = Models.IntegerField(),
             points = Models.FloatField())
+          # #1602: the set `set_models` reads. Interpolated: the block's macros expand before its
+          # `import PormG.Models` runs, so `Models.@models` would not resolve here.
+          $(PormG.Models._model_set_declaration([:Driver, :Constructor, :Result]))
         end)
         # `invokelatest`: the bindings are newer than this code's world, the rule `@import_models`
         # handles the same way (#211).

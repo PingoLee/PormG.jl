@@ -139,6 +139,7 @@ end
 module Json773Models
 import PormG
 import PormG.Models
+Models.@models Stint773
 Stint773 = Models.Model("fu_stint773",
     id = Models.IDField(),
     payload = Models.JSONField(null = true),

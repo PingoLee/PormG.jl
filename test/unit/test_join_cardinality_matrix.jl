@@ -44,6 +44,7 @@ for (modname, key) in ((:JcardPGModels, "jcard_pg"), (:JcardSLModels, "jcard_sl"
   @eval module $modname
   import PormG
   import PormG.Models
+  Models.@models Team Sponsor Driver Profile Result
   Team = Models.Model("team",
     teamid = Models.IDField(),
     name = Models.CharField(),

@@ -41,6 +41,7 @@ import PormG
 import PormG.Models
 
 # The F1 driver, with a few columns of the types under test.
+Models.@models Unn_driver Unn_result
 Unn_driver = Models.Model("unn_driver",
   driverid = Models.IDField(),
   token    = Models.UUIDField(null = true),

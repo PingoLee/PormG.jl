@@ -44,6 +44,7 @@ for (modname, key) in ((:UjPGModels, "uj_pg"), (:UjSLModels, "uj_sl"), (:UjMYMod
   @eval module $modname
   import PormG
   import PormG.Models
+  Models.@models Team Driver Result Pit_stop
   Team = Models.Model("team",
     teamid = Models.IDField(),
     name = Models.CharField(),

@@ -80,6 +80,7 @@ end
     # and the "skipped" assertion would pass for the wrong reason.
     holder = Module(:Heal1250Holder)
     Core.eval(holder, :(Heal1250_tbl = $bare))
+    Core.eval(holder, PormG.Models._model_set_declaration([:Heal1250_tbl]))   # #1602: the model set
     delete!(Models.REGISTERED_MODULES, placeholder)
     Models.REGISTERED_MODULES[holder] = key
     @test Base.invokelatest(Models.ensure_model_initialized, bare) === false

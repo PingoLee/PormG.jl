@@ -46,6 +46,7 @@ module UseModels
 import PormG
 import PormG.Models
 
+Models.@models Use_driver Use_result
 Use_driver = Models.Model("use_driver",
   driverid = Models.IDField(),
   code     = Models.CharField(null = true),

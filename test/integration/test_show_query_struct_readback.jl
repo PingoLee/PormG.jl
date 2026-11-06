@@ -87,6 +87,7 @@ end
 
 module Sqs1634Models
 import PormG.Models
+Models.@models Car Lap
 Car = Models.Model("sqs1634_car",
   id = Models.IDField(),
   ref = Models.CharField(max_length = 32),

@@ -53,6 +53,7 @@ module CteRefModels
 import PormG
 import PormG.Models
 
+Models.@models Cj_grand Cj_parent Cj_child
 Cj_grand = Models.Model("cj_grand", id = Models.IDField(), code = Models.CharField())
 
 Cj_parent = Models.Model("cj_parent",

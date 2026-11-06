@@ -46,6 +46,7 @@ for (modname, key) in ((:BtPGModels, "bt_pg"), (:BtSLModels, "bt_sl"), (:BtMyMod
   @eval module $modname
   import PormG
   import PormG.Models
+  Models.@models Driver Result
   Driver = Models.Model(
     driverid = Models.IDField(),
     forename = Models.CharField(),
@@ -88,6 +89,7 @@ PormG.ConnectionPool.fetch(::BtNoSequencePg, sql::String; kwargs...) =
   occursin("reserved_id", sql) ? [(reserved_id = missing,), (reserved_id = missing,)] : NamedTuple[]
 module BtNoSeqModels
 import PormG, PormG.Models
+Models.@models Status
 Status = Models.Model(statusid = Models.IDField(), status = Models.CharField())
 PormG.Models.set_models(@__MODULE__, "bt_noseq")
 end

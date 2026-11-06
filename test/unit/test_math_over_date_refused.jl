@@ -50,6 +50,7 @@ module MdtModels
 import PormG
 import PormG.Models
 
+Models.@models Race Result Field_validation_scratch New_join_position
 Race = Models.Model(
   raceid   = Models.IDField(),
   year     = Models.IntegerField(),

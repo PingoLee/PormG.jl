@@ -77,6 +77,7 @@ module AliasOrderModels
 import PormG
 import PormG.Models
 
+Models.@models Ao_parent Ao_child
 Ao_parent = Models.Model("ao_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),

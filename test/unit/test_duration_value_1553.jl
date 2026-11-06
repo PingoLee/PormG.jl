@@ -52,6 +52,7 @@ module Dv1553Models
 import PormG
 import PormG.Models
 
+Models.@models Dv_lap
 Dv_lap = Models.Model("dv_lap",
   id        = Models.IDField(),
   grid      = Models.IntegerField(null = true),

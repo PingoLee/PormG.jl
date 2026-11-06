@@ -48,6 +48,7 @@ module PtcModels
 import PormG
 import PormG.Models
 
+Models.@models Ptc_race Ptc_pit
 Ptc_race = Models.Model("ptc_race",
   raceid   = Models.IDField(),
   round    = Models.IntegerField(),

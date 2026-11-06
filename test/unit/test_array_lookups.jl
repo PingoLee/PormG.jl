@@ -32,6 +32,7 @@ PormG.config["arr_lookup28"] = PormG.Configuration.Settings(
 module ArrayLookupModels
 import PormG
 import PormG.Models
+Models.@models Race_strategy Stint
 Race_strategy = Models.Model("race_strategy",
   id             = Models.IDField(),
   team           = Models.CharField(max_length = 100),   # not an array: every type guard's subject

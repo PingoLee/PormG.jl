@@ -980,6 +980,7 @@ PormG.config["window_685_sl"] = PormG.Configuration.Settings(connections = Windo
 
 module Window685Pg
 import PormG, PormG.Models
+Models.@models Result
 Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
                       points = Models.FloatField(), surname = Models.CharField())
 PormG.Models.set_models(@__MODULE__, "window_685_pg")
@@ -987,6 +988,7 @@ end
 
 module Window685Sl
 import PormG, PormG.Models
+Models.@models Result
 Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
                       points = Models.FloatField(), surname = Models.CharField())
 PormG.Models.set_models(@__MODULE__, "window_685_sl")
@@ -1351,6 +1353,7 @@ PormG.config["window_1116_sl"] = PormG.Configuration.Settings(connections = Wind
 for (name, key) in ((:Window1116Pg, "window_1116_pg"), (:Window1116Sl, "window_1116_sl"))
   Core.eval(@__MODULE__, :(module $name
     import PormG, PormG.Models
+    Models.@models Race Result
     Race = Models.Model("w1116_race", raceid = Models.IDField(), date = Models.DateField(), round = Models.IntegerField())
     Result = Models.Model("w1116_result", resultid = Models.IDField(),
                           raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),

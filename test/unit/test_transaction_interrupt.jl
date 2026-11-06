@@ -496,6 +496,7 @@ PormG.config[KEY_1638] = PormG.Configuration.Settings(
 module Models1638
 import PormG
 import PormG.Models
+Models.@models Status Result
 Status = Models.Model("t1638_status", statusid = Models.IDField(), status = Models.CharField())
 Result = Models.Model("t1638_result",
   resultid = Models.IDField(),

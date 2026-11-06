@@ -53,6 +53,7 @@ module JoinRowsModels
 import PormG
 import PormG.Models
 
+Models.@models Jr_team Jr_sponsor Jr_driver Jr_result Jr_badge
 Jr_team = Models.Model("jr_team",
   id   = Models.IDField(),
   name = Models.CharField(null = true),

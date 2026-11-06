@@ -19,6 +19,7 @@ module P3kModels
 import PormG
 import PormG.Models
 # `ref` is the upsert target; `code` a second, nullable unique key.
+Models.@models Team Car Status Stint Garage Sponsor Season Kit
 Team = Models.Model("p3k_team",
   id = Models.IDField(),
   ref = Models.CharField(unique = true),

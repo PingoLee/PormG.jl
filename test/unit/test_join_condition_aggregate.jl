@@ -33,6 +33,7 @@ PormG.config["join_agg_sl"] = PormG.Configuration.Settings(
 module JoinAggPGModels
 import PormG
 import PormG.Models
+Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -50,6 +51,7 @@ end
 module JoinAggSLModels
 import PormG
 import PormG.Models
+Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),

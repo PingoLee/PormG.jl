@@ -47,6 +47,7 @@ import PormG
 import PormG.Models
 
 # F1-shaped: a lap with its grid slot, points, lap time, race date and driver code.
+Models.@models Ib_lap
 Ib_lap = Models.Model("ib_lap",
   id        = Models.IDField(),
   grid      = Models.IntegerField(null = true),

@@ -55,6 +55,7 @@ PormG.config["ln1370_sqlite"] = PormG.Configuration.Settings(
 module LnModels
 import PormG
 import PormG.Models
+Models.@models Ln_lineage Ln_lineage_default Ln_lineage_cascade Ln_lineage_driver Ln_team Ln_driver Ln_squad Ln_squad_view Ln_squad_driver
 Ln_lineage = Models.Model("ln_lineage",
   id          = Models.IDField(),
   name        = Models.CharField(),

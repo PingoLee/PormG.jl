@@ -89,6 +89,9 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 public Model, ModelType, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
 # #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
 public search_vector_expression
+# #1602: the declaration a models module ends with, `Models.@models Circuit Race` — the model set
+# registration reads instead of scanning the module's names.
+public @models, ModelSet
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -584,13 +587,232 @@ Base.deepcopy_internal(m::ModelType, stackdict::IdDict) = get!(stackdict, m, m)
 
 const REGISTERED_MODULES = Dict{Module, String}()
 
+#───────────────────────────────────────────────────────────────────────────────
+# The declared model set (#1602)
+#
+# Which models a module defines is DECLARED, never discovered. Registration used to walk
+# `names(module; all = true, imported = true)` and then a second pass with `usings = true` (#354),
+# reading every name through `invokelatest(getfield, …)` and keeping what `isa PormGModel`. That is
+# reflection a static compiler cannot follow (#1599 round 3, row 8), and action at a distance: a model
+# reached through `using` registered or not depending on which pass saw it.
+#
+# The set is one PormG-owned constant per models module, `__pormg_models__::ModelSet`, written by:
+#   * the module itself, `Models.@models Circuit Race` as its last line (the Generator writes it);
+#   * `@import_models` / `import_models` / `@models_module`, from the file's top-level
+#     `X = Models.Model(…)` assignments, when the module does not declare one
+#     (`_with_model_set`, applied to the parsed module before it is evaluated).
+# A module with neither is refused at registration, naming the line to add.
+#
+# BINDING NAMES, not model values: a typed global reassigned by a reload stays current, and the
+# declaration never needs re-evaluating to follow it. A concrete struct rather than a tuple: the read
+# `getglobal(mod, :__pormg_models__)` is untyped (any module), and one typeassert to `ModelSet` makes
+# it concrete, where an `NTuple{N,Symbol}` differs per module.
+#───────────────────────────────────────────────────────────────────────────────
+"""
+    ModelSet
+
+The model set a models module declares: the binding names of its models, in declaration order.
+Written by [`@models`](@ref) as the module's `__pormg_models__` constant, and read by
+[`set_models`](@ref) instead of scanning the module's names (#1602). Build it with `@models`, not by
+hand.
+"""
+mutable struct ModelSet
+  bindings::Vector{Symbol}
+end
+
+const _MODEL_SET_NAME = :__pormg_models__
+
+_is_models_macro_name(x)::Bool =
+  x === Symbol("@models") ||
+  (x isa GlobalRef && x.name === Symbol("@models")) ||
+  (x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode &&
+   x.args[2].value === Symbol("@models"))
+
+# A call that builds a model, under any qualification: `Model(…)`, `Models.Model(…)`,
+# `PormG.Models.Model(…)`, and the `ModelType(…)` constructor itself.
+_is_model_ctor_name(x)::Bool = x === :Model || x === :ModelType
+function _is_model_call(rhs)::Bool
+  rhs isa Expr && rhs.head === :call && !isempty(rhs.args) || return false
+  f = rhs.args[1]
+  _is_model_ctor_name(f) && return true
+  f isa GlobalRef && return _is_model_ctor_name(f.name)
+  return f isa Expr && f.head === :. && length(f.args) == 2 && f.args[2] isa QuoteNode &&
+         _is_model_ctor_name(f.args[2].value)
+end
+
+# The binding an assignment of a `Model(…)` call names, or `nothing`: `X = Model(…)`,
+# `X::T = Model(…)`, `const X = Model(…)`, `const X::T = Model(…)`.
+function _model_assignment_binding(ex)::Union{Symbol, Nothing}
+  ex isa Expr || return nothing
+  ex.head === :const && length(ex.args) == 1 && return _model_assignment_binding(ex.args[1])
+  ex.head === :(=) && length(ex.args) == 2 || return nothing
+  _is_model_call(ex.args[2]) || return nothing
+  lhs = ex.args[1]
+  lhs isa Symbol && return lhs
+  lhs isa Expr && lhs.head === :(::) && lhs.args[1] isa Symbol && return lhs.args[1]
+  return nothing
+end
+
+"""
+    _declared_model_bindings(body::Expr) -> Vector{Symbol}
+
+The model bindings a module body assigns at its top level (`begin … end` blocks included, nested
+modules and function bodies not), in order: each `X = Model(…)`, `X::T = Model(…)` and
+`const X = Model(…)`, under any qualification of `Model`. Syntactic: nothing is evaluated. The one
+parser behind `@models_module`, `@import_models`, `import_models`, the Revise reload, the migration
+planner and the Generator (#1602).
+"""
+function _declared_model_bindings(body::Expr)::Vector{Symbol}
+  out = Symbol[]
+  for ex in body.args
+    if ex isa Expr && ex.head === :block
+      for b in _declared_model_bindings(ex)
+        b in out || push!(out, b)
+      end
+      continue
+    end
+    b = _model_assignment_binding(ex)
+    b === nothing || b in out || push!(out, b)
+  end
+  return out
+end
+
+# Whether a module body already declares its model set: a top-level `@models …` call.
+_declares_model_set(body::Expr)::Bool =
+  any(ex -> ex isa Expr && ex.head === :macrocall && _is_models_macro_name(ex.args[1]), body.args)
+
+# The declaration `@models` would write for `bindings`, as an expression that needs no binding in the
+# module it lands in (`GlobalRef`): an `@import_models` file need not `import PormG.Models`.
+_model_set_declaration(bindings::Vector{Symbol}, line::LineNumberNode = LineNumberNode(0, :none)) =
+  Expr(:macrocall, GlobalRef(Models, Symbol("@models")), line, bindings...)
+
+"""
+    _with_model_set(ex) -> ex
+
+The `mapexpr` `@import_models` and `import_models` pass to `Base.include`, also applied by the Revise
+reload and the migration planner: a `module` expression whose body declares no model set gets
+`@models` with the bindings `_declared_model_bindings` finds, appended as its last statement. Any
+other expression, and a module that declares its own, is returned unchanged (#1602).
+"""
+function _with_model_set(@nospecialize(ex))
+  ex isa Expr && ex.head === :module || return ex
+  body = ex.args[3]::Expr
+  if _declares_model_set(body)
+    _warn_undeclared_assignments(ex.args[2], body)
+    return ex
+  end
+  new_body = Expr(:block, body.args..., _model_set_declaration(_declared_model_bindings(body)))
+  return Expr(:module, ex.args[1], ex.args[2], new_body)
+end
+
+# A module that declares its set but assigns a top-level `X = Model(…)` the declaration leaves out:
+# that model is not registered, which is what an edit that adds a model and forgets the list looks
+# like. A warning, not a refusal: leaving a model out of the set is allowed.
+function _warn_undeclared_assignments(name, body::Expr)::Nothing
+  declared = Set{Symbol}()
+  for ex in body.args
+    ex isa Expr && ex.head === :macrocall && _is_models_macro_name(ex.args[1]) || continue
+    for a in ex.args[2:end]
+      a isa Symbol && push!(declared, a)
+    end
+  end
+  missing_ = [b for b in _declared_model_bindings(body) if !(b in declared)]
+  isempty(missing_) || @warn(
+    "PormG: the models module `$(name)` assigns $(join(("`" * string(b) * "`" for b in missing_), ", ")) " *
+    "with `Models.Model(…)` but its `Models.@models` line does not list " *
+    (length(missing_) == 1 ? "it" : "them") * ", so registration leaves " *
+    (length(missing_) == 1 ? "it" : "them") * " unbound. Add " *
+    (length(missing_) == 1 ? "it" : "them") * " to the `Models.@models` line.")
+  return nothing
+end
+
+"""
+    @models Circuit Race …
+
+Declare the models a models module defines, by their bindings, as the module's last line. Registration
+([`set_models`](@ref), `@import_models`) reads this list instead of scanning the module (#1602):
+
+```julia
+module models
+import PormG.Models
+
+Circuit::Models.ModelType = Models.Model(circuitid = Models.IDField(), name = Models.CharField())
+Race::Models.ModelType    = Models.Model(raceid = Models.IDField(),
+                                         circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE"))
+
+Models.@models Circuit Race
+end
+```
+
+The Generator writes this line. `@import_models` and `@models_module` add it for you, from the file's
+top-level `X = Models.Model(…)` assignments, when the module does not declare it; a module included
+with plain `include` and registered with `set_models` must declare it, or registration raises
+`ModelDefinitionError` naming the line to add. List a model the module reaches through `using` or
+`import` to register it here. A long list may be written `Models.@models(Circuit, Race, …)` across
+lines.
+"""
+macro models(bindings...)
+  for b in bindings
+    b isa Symbol || throw(ArgumentError(
+      "@models takes the bindings of the module's models, as bare names (`Models.@models Circuit " *
+      "Race`); got `$(b)`."))
+  end
+  length(unique(bindings)) == length(bindings) || throw(ArgumentError(
+    "@models lists a binding twice: $(join(bindings, ", "))."))
+  syms = Symbol[bindings...]
+  return :(const $(esc(_MODEL_SET_NAME)) = $(ModelSet)($(syms)))
+end
+
+# A global of `mod` read in the latest world, or `_UNBOUND`. `set_models` runs from a caller whose
+# world may predate the binding (a macro expansion's next statement, `__init__`, a reload), so the read
+# goes through `invokelatest` — of THIS function, never of the builtins `isdefinedglobal`/`getglobal`
+# themselves: `juliac --trim` refuses `invokelatest` of a builtin ("trim verification not yet
+# implemented for builtin `Core.invokelatest`"), and accepts it of an ordinary method (#1599 round 1).
+struct _Unbound end
+const _UNBOUND = _Unbound()
+_global_or_unbound(mod::Module, name::Symbol) =
+  isdefinedglobal(mod, name) ? getglobal(mod, name) : _UNBOUND
+_latest_global(mod::Module, name::Symbol) = Base.invokelatest(_global_or_unbound, mod, name)
+
+# The module's declared set, or `nothing`.
+function _model_set(mod::Module)::Union{ModelSet, Nothing}
+  s = _latest_global(mod, _MODEL_SET_NAME)
+  return s isa ModelSet ? s : nothing
+end
+
+function _undeclared_models_error(mod::Module)::ModelDefinitionError
+  return ModelDefinitionError(
+    "PormG cannot tell which models $(mod) defines: it declares no model set. Add " *
+    "`Models.@models Circuit Race …`, naming every model binding, as the module's last line " *
+    "(the Generator writes it; `@import_models` and `@models_module` add it from the file's " *
+    "top-level `X = Models.Model(…)` assignments). PormG does not scan a module's names for models.")
+end
+
+# The declared models of `mod`, binding => model, in declaration order. Raises when the module
+# declares none, or when a declared binding is unbound or holds something that is not a model.
+function _declared_models(mod::Module)::Vector{Pair{Symbol, ModelType}}
+  set = _model_set(mod)
+  set === nothing && throw(_undeclared_models_error(mod))
+  out = Pair{Symbol, ModelType}[]
+  for b in set.bindings
+    m = _latest_global(mod, b)
+    m isa _Unbound && throw(ModelDefinitionError(
+      "$(mod) declares the model `$(b)` (`Models.@models`), but nothing is bound to `$(b)` there."))
+    m isa ModelType || throw(ModelDefinitionError(
+      "$(mod) declares `$(b)` as a model (`Models.@models`), but `$(b)` holds a " *
+      "$(nameof(typeof(m))), not a `Models.Model(…)`."))
+    any(p -> last(p) === m, out) && continue     # one model bound under two declared names
+    push!(out, b => m)
+  end
+  return out
+end
+
 # #479 — `Base.binding_module` THROWS for a name a module imports from two places ("Constant
-# binding was imported from multiple modules", Julia 1.12), and both module walkers below called it
-# bare. That never surfaced while the walkers ran only inside `set_models` on a clean models module;
-# `_with`'s table-name check (#479) now walks the query's module on every `.with()` call, and a
-# module such as a test suite's `Main` — or any REPL session that `using`s two packages exporting
-# one name — carries such a binding. An ambiguous name cannot be a model, so it is skipped exactly
-# like a name whose `getfield` fails. Returns the owner module, or `nothing` when resolution throws.
+# binding was imported from multiple modules", Julia 1.12). The module walkers that called it bare are
+# gone (#1602: the model set is declared); the plain-binding warning still asks it which module owns
+# a declared binding, in a module such as a test suite's `Main` that may carry such a name. An
+# ambiguous name cannot be a model's owner, so it is skipped. Returns the owner module, or `nothing`
+# when resolution throws.
 function _binding_owner_or_nothing(modules::Module, name::Symbol)::Union{Module,Nothing}
   try
     Base.binding_module(modules, name)
@@ -602,13 +824,15 @@ end
 
 # #1671: the name under which `owner` binds `model`. An import can rename the model
 # (`import .Owner: Circuit as Track`), so the importer's `binding` may not exist in `owner`. Fast path:
-# `owner` holds the model under the same name. Otherwise the owned name whose value is this model, the
-# first in `names` order if `owner` binds it twice. Public calls only: the binding-partition API names
-# just the immediate hop of a chained import, and it is not public. `invokelatest` for the world-age
-# reason `_collect_models_and_bindings` gives. Returns `nothing` when no owned name holds the model.
+# `owner` holds the model under the same name. Otherwise the binding in `owner`'s own declared set
+# (#1602) that holds this model. No scan of `owner`'s names: an owner that declares no set, and does
+# not hold the model under the importer's name, returns `nothing`, and the warning names the binding in
+# the registering module. `invokelatest` for the world-age reason `_model_set` gives.
 function _owner_binding_name(owner::Module, binding::Symbol, model::PormGModel)::Union{Symbol,Nothing}
   _owner_holds(owner, binding, model) && return binding
-  for name in names(owner; all = true)
+  set = _model_set(owner)
+  set === nothing && return nothing
+  for name in set.bindings
     _owner_holds(owner, name, model) && return name
   end
   return nothing
@@ -616,119 +840,45 @@ end
 
 function _owner_holds(owner::Module, name::Symbol, model::PormGModel)::Bool
   _binding_owner_or_nothing(owner, name) === owner || return false
-  Base.invokelatest(isdefinedglobal, owner, name)::Bool || return false
-  return Base.invokelatest(getglobal, owner, name) === model
+  return _latest_global(owner, name) === model
 end
 
 """
-Returns a vector containing all the models defined in the given module.
+    get_all_models(mod::Module; symbol::Bool = false) -> Vector{Union{Symbol, PormGModel}}
 
-# Arguments
-    get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbol, PormGModel}}
-- `modules::Module`: The module to search for models.
-- `symbol::Bool=false`: If `true`, returns the model names as symbols. If `false`, returns the model instances.
-
-# Returns
-A vector containing all the models defined in the module.
+The models `mod` declares (`Models.@models`, #1602), in declaration order: the models themselves, or
+their bindings with `symbol = true`. A module that declares no model set has none (an empty vector);
+registration is what refuses such a module. Fills an empty `name` from the binding, as registration
+does.
 """
 function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbol, PormGModel}}
-  model_names = []
-  seen_names = Set{Symbol}()
-  for name in names(modules; all=true, imported=true)
-    push!(seen_names, name)
-    # Check if the attribute is an instance of ModelType
-    # Use invokelatest to avoid World Age issues in Julia 1.12+
-    attr = try
-        Base.invokelatest(getfield, modules, name)
-    catch
-        # swallows a name whose read fails (declared but unassigned, for one): it is not a model.
-        nothing
-    end
-    if isa(attr, PormGModel)
-      if attr.name == ""
-        attr.name = name |> format_model_name
-      end
-      push!(model_names, symbol ? name : attr)
-    end
+  out = Union{Symbol, PormGModel}[]
+  _model_set(modules) === nothing && return out
+  for (name, model) in _declared_models(modules)
+    _fill_model_name!(model, name)
+    push!(out, symbol ? name : model)
   end
-  # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
-  for name in names(modules; all=true, imported=true, usings=true)
-    _binding_owner_or_nothing(modules, name) === Base && continue
-    name in seen_names && continue
-    attr = try
-        Base.invokelatest(getfield, modules, name)
-    catch
-        # swallows a name whose read fails (above): it is not a model.
-        nothing
-    end
-    if isa(attr, PormGModel)
-      symbol && (name in model_names) && continue
-      !symbol && any(m === attr for m in model_names) && continue
-      if attr.name == ""
-        attr.name = name |> format_model_name
-      end
-      push!(model_names, symbol ? name : attr)
-    end
-  end
-  return model_names
+  return out
 end
 
-# Two passes, two outputs: the model vector `set_models` iterates, and the model → binding map it
-# records into `ReverseRelation.binding` (#343).
-#
-# Split from `get_all_models` rather than folded into its `symbol` kwarg, which returns the Symbol
-# XOR the model and so can never express the PAIRING. Kept separate from `_find_model_binding_name`
-# too, deliberately: that helper is an O(N) identity scan, and calling it once per foreign key across
-# a real app's ~670 models is ~450k `invokelatest` calls per `set_models`. Here the binding is simply
-# not thrown away in the first place.
-#
-# Airtight by construction: every `push!(models, ...)` is paired with a `get!(bindings, ...)` in
-# both passes, so every model in `models` is a key of `bindings`. The second pass (#354) catches
-# `using`-scoped models invisible to `imported=true`, filtered by `Base.binding_module` to avoid
-# sweeping in ~1100 implicit `Base` names.
-#
-# `get!` keeps the FIRST binding when one model object is bound under several names, matching
-# `_find_model_binding_name`; `names` returns sorted symbols, so that choice is deterministic.
+# `Model(; fields...)` leaves `name` empty; registration derives it from the binding (#1602: from the
+# declared binding, no longer from a scan).
+function _fill_model_name!(model::ModelType, binding::Symbol)::Nothing
+  model.name == "" && (model.name = format_model_name(binding))
+  return nothing
+end
+
+# The models `set_models` iterates and the model → binding map it records into
+# `ReverseRelation.binding` (#343), both read from the declared set (#1602). The binding cannot be
+# recovered later from a model — `name` is validated lowercase (#300) — so it is captured here.
+# `_declared_models` keeps the FIRST declared binding when one model is declared under two names.
 function _collect_models_and_bindings(modules::Module)
   models = PormGModel[]
   bindings = IdDict{PormGModel, Symbol}()
-  seen_names = Set{Symbol}()
-  for name in names(modules; all=true, imported=true)
-    push!(seen_names, name)
-    # Use invokelatest to avoid World Age issues in Julia 1.12+
-    attr = try
-        Base.invokelatest(getfield, modules, name)
-    catch
-        # swallows a name whose read fails (see `get_all_models`): it is not a model.
-        nothing
-    end
-    isa(attr, PormGModel) || continue
-    # Same binding-derived name fill as `get_all_models` — load-bearing for `Model(; fields...)`,
-    # which leaves `name` empty and relies on registration to derive it from the binding.
-    if attr.name == ""
-      attr.name = name |> format_model_name
-    end
-    push!(models, attr)
-    get!(bindings, attr, name)
-  end
-  # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
-  # Filtered by `Base.binding_module` to exclude implicit `using Base` names.
-  for name in names(modules; all=true, imported=true, usings=true)
-    _binding_owner_or_nothing(modules, name) === Base && continue
-    name in seen_names && continue
-    attr = try
-        Base.invokelatest(getfield, modules, name)
-    catch
-        # swallows a name whose read fails (see `get_all_models`): it is not a model.
-        nothing
-    end
-    isa(attr, PormGModel) || continue
-    haskey(bindings, attr) && continue
-    if attr.name == ""
-      attr.name = name |> format_model_name
-    end
-    push!(models, attr)
-    get!(bindings, attr, name)
+  for (name, model) in _declared_models(modules)
+    _fill_model_name!(model, name)
+    push!(models, model)
+    bindings[model] = name
   end
   return models, bindings
 end
@@ -1065,8 +1215,10 @@ _add_revise_callback(path::String, mod::Module, folder::String) =
 """
     set_models(_module::Module, path::String; implicit = isinteractive(), source = nothing) -> nothing
 
-Register every model defined in `_module` against the database configuration folder `path`, and
-resolve the relationships between them. A package app calls it from its `__init__`, after loading
+Register every model `_module` declares (its `Models.@models …` line, #1602) against the database
+configuration folder `path`, and resolve the relationships between them. A module that declares no
+model set raises `ModelDefinitionError` naming the line to add: PormG does not scan a module's names
+for models. `@import_models` and `@models_module` declare it for you. A package app calls it from its `__init__`, after loading
 its configuration, on a models module it `include`d in the module body — the run-time bind, which
 reads no `connection.yml` at precompile time (see `docs/src/configuration/setup.md`). In a REPL or a
 script, `PormG.@import_models` (or `PormG.@models_module` for inline definitions) calls it for you.
@@ -1091,7 +1243,7 @@ executing it raises `InvalidConfigurationError`.
 Registration does four things:
 
 1. **Names the unnamed.** A model declared without a positional table name carries `name == ""`; it
-   is filled in here from the Julia binding, lowercased (`Race = Model(...)` → table `race`).
+   is filled in here from its declared binding, lowercased (`Race = Model(...)` → table `race`).
 2. **Binds the connection.** `path` is matched against the loaded configurations to find the
    connection key, strongest match first and preferring an explicitly loaded key over one minted by
    the implicit load (`_resolve_connect_key`). A folder that matches **no loaded configuration
@@ -1231,7 +1383,7 @@ const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
 # about. The check runs here, at registration, never on the query path.
 #
 # Cadence: one `@warn` per registration that finds bindings not reported before, naming the first
-# (in `names` order) and counting the rest, with `maxlog = 1`, so the console shows it once per
+# (in declaration order, #1602) and counting the rest, with `maxlog = 1`, so the console shows it once per
 # session however many models modules a process registers (the unit suite registers hundreds). The
 # seen set above is what keeps a re-registration silent under a logger whose `maxlog` count is fresh.
 #

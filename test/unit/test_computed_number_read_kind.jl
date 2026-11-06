@@ -39,6 +39,7 @@ for (modname, key) in ((:CnPGModels, "cn_pg"), (:CnSLModels, "cn_sl"))
   @eval module $modname
   import PormG
   import PormG.Models
+  Models.@models Race Constructor_results Result
   Race = Models.Model(raceid = Models.IDField(), year = Models.IntegerField())
   Constructor_results = Models.Model(
     constructorresultsid = Models.IDField(),

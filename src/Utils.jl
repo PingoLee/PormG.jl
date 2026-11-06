@@ -28,7 +28,9 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
         # The module the file defines for `existing_mod`, by name: evaluating another module's body
         # into it (a wrong `source =`) would overwrite its bindings with unrelated ones.
         if expr isa Expr && expr.head === :module && expr.args[2] === nameof(existing_mod)
-            body_block = expr.args[3]           # the body block Expr
+            # #1602: the same model-set declaration `@import_models` adds, so a model added by the
+            # edit is in the set the `set_models` after the reload reads.
+            body_block = Models._with_model_set(expr).args[3]
             line = 0
             for sub in body_block.args
                 if sub isa LineNumberNode
@@ -198,6 +200,10 @@ The `alias` must match the module name defined in the file.
 
 The macro automatically:
 - Resolves the path relative to the calling file
+- Declares the model set (`Models.@models …`, #1602) from the file's top-level
+  `X = Models.Model(…)` assignments, when the file does not end with its own `Models.@models`
+  line. A model built any other way, or reached through `using`, is registered only when the file
+  declares it
 - Registers models for the current session
 - Injects an `__init__()` into the model module (see `ensure_models_init!` for what that does
   and does not guarantee — post-precompilation recovery is `Models.ensure_model_initialized`)
@@ -231,7 +237,7 @@ macro import_models(path_expr, alias)
     alias_sym = alias isa Expr ? alias.args[1] : alias
 
     resolve_ref  = GlobalRef(Utils, :resolve_import_models_path)
-    includet_ref = GlobalRef(Utils, :_includet)
+    with_set_ref = GlobalRef(Models, :_with_model_set)
     setup_ref    = GlobalRef(Utils, :_post_import_setup)
 
     sf = QuoteNode(source_file)
@@ -239,21 +245,11 @@ macro import_models(path_expr, alias)
     as = QuoteNode(alias_sym)
 
     return Expr(:toplevel,
-        # Statement 1 — resolve path + include.
-        # Executed as its own top-level statement so the submodule binding
-        # is established in the current world age before the next statement
-        # (and before any subsequent `import .alias` in the caller).
-        # During precompilation we skip Revise to avoid file-watcher hangs.
-        :(if ccall(:jl_generating_output, Cint, ()) != 0
-            Base.include($calling_module, $resolve_ref($sf, $ip, $calling_module))
-        else
-            let __path = $resolve_ref($sf, $ip, $calling_module)
-                $includet_ref($calling_module, __path)
-                if !isdefined($calling_module, $as)
-                    Base.include($calling_module, __path)
-                end
-            end
-        end),
+        # Statement 1 — resolve the path and include the file, appending the model-set declaration
+        # (`Models.@models …`, #1602) to its module when the file does not write one. Its own
+        # top-level statement, so the submodule binding is established in the current world age
+        # before the next statement (and before any subsequent `import .alias` in the caller).
+        :(Base.include($with_set_ref, $calling_module, $resolve_ref($sf, $ip, $calling_module))),
 
         # Statement 2 — inject __init__, register Revise callback, set_models.
         # Runs as a separate top-level statement so it can see the binding.
@@ -266,7 +262,9 @@ end
 
 Defines a new module with inline model definitions and registers it with PormG.
 
-Use this when you want to define models directly in code rather than in a separate file.
+Use this when you want to define models directly in code rather than in a separate file. The
+model set (`Models.@models`, #1602) is declared for you from the block's top-level
+`X = Models.Model(…)` assignments, unless the block declares its own.
 
 # Example
 ```julia
@@ -280,6 +278,9 @@ end
 """
 macro models_module(name, path, block)
     source_file = string(__source__.file)
+    body = block isa Expr && block.head === :block ? block : Expr(:block, block)
+    declaration = Models._declares_model_set(body) ? nothing :
+        Models._model_set_declaration(Models._declared_model_bindings(body), __source__)
     return Expr(:toplevel,
         :(module $(esc(name))
             using PormG
@@ -291,6 +292,8 @@ macro models_module(name, path, block)
             end
 
             $(esc(block))
+
+            $(declaration === nothing ? nothing : esc(declaration))
 
             Base.invokelatest(Models.set_models, @__MODULE__, __pormg_init_path__)
 

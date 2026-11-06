@@ -53,6 +53,7 @@ module EksModels
 import PormG
 import PormG.Models
 
+Models.@models Eks_driver Eks_result
 Eks_driver = Models.Model("eks_driver",
   id      = Models.IDField(),
   surname = Models.CharField(),

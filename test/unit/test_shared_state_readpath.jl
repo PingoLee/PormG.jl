@@ -37,6 +37,7 @@ module SharedStateReadPathModels
 import PormG
 import PormG.Models
 
+Models.@models Result
 Result = Models.Model("ss_results",
   id = Models.IDField(),
   driverid = Models.IntegerField(),

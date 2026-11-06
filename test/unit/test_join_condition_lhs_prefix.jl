@@ -40,6 +40,7 @@ PormG.config["join_lhs_sl"] = PormG.Configuration.Settings(
 module JoinLhsPGModels
 import PormG
 import PormG.Models
+Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -59,6 +60,7 @@ end
 module JoinLhsSLModels
 import PormG
 import PormG.Models
+Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),

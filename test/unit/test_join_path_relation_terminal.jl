@@ -28,6 +28,7 @@ PormG.config["reltermdb"] = PormG.Configuration.Settings(
 module RelTermModels
   import PormG
   import PormG.Models
+  Models.@models Circuit Race Sponsor Constructor Result Lap_time
   Circuit = Models.Model("circuit",
     circuitid = Models.IDField(),
     name = Models.CharField(),

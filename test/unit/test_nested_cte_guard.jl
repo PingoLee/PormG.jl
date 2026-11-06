@@ -83,6 +83,7 @@ module NcgModels
 import PormG
 import PormG.Models
 
+Models.@models Ncg_grand Ncg_parent Ncg_child
 Ncg_grand = Models.Model("ncg_grand",
   id   = Models.IDField(),
   code = Models.CharField(),

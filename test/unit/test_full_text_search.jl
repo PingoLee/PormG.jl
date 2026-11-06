@@ -46,6 +46,7 @@ PormG.config["fts31"] = PormG.Configuration.Settings(connections = _FTS_PG, chan
 module FtsModels31
 import PormG
 import PormG.Models
+Models.@models Driver Race Result Report Story
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   forename = Models.CharField(max_length = 255),

@@ -56,6 +56,7 @@ module TlpModels
 import PormG
 import PormG.Models
 
+Models.@models Tlp_row Tlp_clock Tlp_day Tlp_visit
 Tlp_row = Models.Model("tlp_row",
   id   = Models.IDField(),
   seen = Models.DateField(null = true),
@@ -754,6 +755,7 @@ end
 module TlpJoinModels
 import PormG
 import PormG.Models
+Models.@models Tlp_driver Tlp_result
 Tlp_driver = Models.Model("tlp_driver", id = Models.IDField(), surname = Models.CharField(null = true),
   dob = Models.DateField(null = true))
 Tlp_result = Models.Model("tlp_result", id = Models.IDField(),

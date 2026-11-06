@@ -577,4 +577,23 @@ Odd_identifier_scratch::Models.ModelType = Models.Model("odd_identifier_scratch"
   points = Models.IntegerField(null=true),
 )
 
+
+# #1602: the model set `set_models` reads.
+Models.@models(
+  Status, Circuit, Race, Driver, Driver_standings, Lap_times, Pit_stops, Constructor,
+  Constructor_results, Constructor_standings, Qualifying, Sprint_results, Result,
+  Just_a_test_deletion, Just_a_nested_roll_back, New_join_position, Field_validation_scratch,
+  Django_contract_scratch, Bulk_update_required_parent_scratch, Bulk_update_optional_parent_scratch,
+  Bulk_update_payload_scratch, Bulk_copy_fidelity_scratch, M2m_sponsor_scratch,
+  M2m_driver_endorsement_scratch, M2m_country_scratch, M2m_sponsor_with_country_scratch,
+  M2m_driver_multi_hop_scratch, M2m_team_scratch, M2m_driver_explicit_scratch,
+  M2m_membership_scratch, M2m_team_plain_scratch, M2m_driver_plain_scratch, M2m_link_plain_scratch,
+  M2m_squad_dbtable_scratch, M2m_tester_dbtable_scratch, M2m_enrolment_dbtable_scratch,
+  M2m_crew_dbcol_scratch, M2m_mechanic_dbcol_scratch, M2m_crewslot_dbcol_scratch, M2m_brand_scratch,
+  M2m_driver_default_reverse_scratch, M2m_teammate_scratch, Case_preserve_parent_scratch,
+  Case_preserve_child_scratch, Db_column_scratch, Db_column_child_scratch, Db_column_pk_scratch,
+  Db_column_setnull_child_scratch, Db_column_pk_child_scratch, Db_column_pk_strchild_scratch,
+  M2m_rpk_sponsor_scratch, M2m_rpk_driver_scratch, Db_table_scratch, Db_table_child_scratch,
+  Db_table_col_scratch, Odd_identifier_scratch,
+)
 end

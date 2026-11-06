@@ -19,6 +19,7 @@ import PormG.QueryBuilder: F
 module P3wModels
 import PormG
 import PormG.Models
+Models.@models Team Driver Note Guard Token Plain Node Constructor Circuit Season Lap
 Team = Models.Model("p3w_team",
   id = Models.IDField(),
   name = Models.CharField(),

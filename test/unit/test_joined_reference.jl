@@ -51,6 +51,7 @@ module JnModels
 import PormG
 import PormG.Models
 
+Models.@models Jn_driver Jn_result Jn_entry
 Jn_driver = Models.Model("jn_driver",
   id      = Models.IDField(),
   # `db_column` on purpose: every assertion below reads `family_name`, so a reference that silently

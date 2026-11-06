@@ -40,6 +40,7 @@ PormG.config["sfu_of_sl"] = PormG.Configuration.Settings(
 module SfuOfModels
 import PormG
 import PormG.Models
+Models.@models Circuit Race Sponsor Driver Constructor Result
 Circuit = Models.Model("circuit",
   circuitid = Models.IDField(),
   name      = Models.CharField(),
@@ -82,6 +83,7 @@ const SFU = SfuOfModels
 module SfuOfModelsSL
 import PormG
 import PormG.Models
+Models.@models Circuit Race Constructor Result
 Circuit = Models.Model("circuit",
   circuitid = Models.IDField(),
   name      = Models.CharField(),

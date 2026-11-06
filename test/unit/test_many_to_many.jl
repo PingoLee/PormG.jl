@@ -17,6 +17,7 @@ module ManyToManyUnitModels
 import PormG
 import PormG.Models
 
+Models.@models Driver Driver_championship
 Driver = Models.Model("drivers",
   id = Models.IDField(),
   surname = Models.CharField(),
@@ -50,6 +51,7 @@ module ManyToManyDbTableModels
   import PormG
   import PormG.Models
 
+  Models.@models Team Driver Membership Squad Tester Enrolment
   Team = Models.Model("team", db_table = "racing_team",
     id = Models.IDField(),
     name = Models.CharField(),
@@ -111,6 +113,7 @@ module ManyToManyDbColumnModels
   import PormG
   import PormG.Models
 
+  Models.@models Marque Pilot Contract Livery Scout Signing
   Marque = Models.Model("marque", db_table = "racing_marque",
     id = Models.IDField(),
     name = Models.CharField(),
@@ -476,10 +479,11 @@ end
 # callback both swallow a `set_models` throw, so the symptom is "no models registered at all", not an
 # error anyone can read. That is why this is pinned by a test and not only by a comment.
 # ─────────────────────────────────────────────────────────────────────────────
-# #354: the `usings=true` miss-path in `_find_model_binding_name` and `_collect_models_and_bindings`
-# now finds `using`-scoped bindings directly. For `Xxxxx`-style bindings like `Uschampionship`, the
-# scan result is identical to the old `uppercasefirst` guess. The mixed-case fixture below
-# (`Dim_CNES`) is the case that discriminates — only the scan can spell it correctly.
+# #354 → #1602: a module's models are the ones it DECLARES (`Models.@models`); nothing scans its names.
+# A model the module reaches through `using` is registered by listing it in the declaration, which
+# also records its exact binding (`Dim_CNES`, the mixed-case spelling no guess can produce). The
+# fixtures below declare their `using`-scoped targets; the third module does not, and its target stays
+# unregistered.
 module UsingScopedSharedModels
   import PormG
   import PormG.Models
@@ -501,6 +505,7 @@ module UsingScopedAppModels
     surname = Models.CharField(),
     championships = Models.ManyToManyField(Uschampionship, related_name = "drivers"),
   )
+  Models.@models Usdriver Uschampionship
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -525,49 +530,57 @@ module UsingScopedMixedCaseAppModels
     name = Models.CharField(),
     cnes_units = Models.ManyToManyField(Dim_CNES, related_name = "users"),
   )
+  Models.@models UsUser Dim_CNES
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
-@testset "using-scoped M2M target resolved via usings=true scan (#343/#354)" begin
-  # Preconditions: `using`-scoped names are invisible to `imported=true` but reachable via
-  # the `usings=true` miss-path added in #354.
-  @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
-  @test isdefined(UsingScopedAppModels, :Uschampionship)
+module UsingScopedUndeclaredSharedModels
+  import PormG
+  import PormG.Models
+  export Usconstructor
+  Usconstructor = Models.Model("usconstructor", id = Models.IDField())
+end
 
-  # The binding is found by the `usings=true` scan (not the `uppercasefirst` fallback).
-  # Before #354 this was a guess; now it is an exact match. The string is identical either way
-  # for `Xxxxx`-style bindings, but the code path is different.
+module UsingScopedUndeclaredAppModels
+  import PormG
+  import PormG.Models
+  using ..UsingScopedUndeclaredSharedModels
+  Usteam = Models.Model("usteam", id = Models.IDField())
+  Models.@models Usteam
+end
+
+@testset "a using-scoped model the module declares is registered there (#354, #1602)" begin
+  # `names(...; imported = true)` never lists it — the reason the scan needed a second pass.
+  @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
+  @test Models.get_all_models(UsingScopedAppModels; symbol = true) == [:Usdriver, :Uschampionship]
+  @test UsingScopedSharedModels.Uschampionship._module === UsingScopedAppModels
+  @test UsingScopedSharedModels.Uschampionship.connect_key == "m2m_mock"
+
   rel = Models.get_many_to_many_relation(UsingScopedAppModels.Usdriver, "championships")
   @test rel.related_binding == "Uschampionship"
-
-  # The binding resolves via `isdefined`, which sees `using`-scoped names.
-  @test isdefined(UsingScopedAppModels, Symbol(rel.related_binding))
   @test PormG.QueryBuilder._resolve_m2m_side_model(
       UsingScopedAppModels, rel.related_binding, "uschampionship", "championships"
     ) === UsingScopedSharedModels.Uschampionship
 end
 
-@testset "using-scoped model with mixed-case binding is fully registered (#354)" begin
-  # Preconditions: Dim_CNES is brought in via using, so it is invisible to `imported=true`
+@testset "a declared using-scoped model with a mixed-case binding records it exactly (#354, #1602)" begin
   @test !(:Dim_CNES in names(UsingScopedMixedCaseAppModels; all=true, imported=true))
-  @test isdefined(UsingScopedMixedCaseAppModels, :Dim_CNES)
-
-  # get_all_models includes the using-scoped model
   all_models = Models.get_all_models(UsingScopedMixedCaseAppModels)
-  @test UsingScopedMixedCaseSharedModels.Dim_CNES in all_models
-
-  # Registration set _module and connect_key on the using-scoped model
+  @test any(m -> m === UsingScopedMixedCaseSharedModels.Dim_CNES, all_models)
   @test UsingScopedMixedCaseSharedModels.Dim_CNES._module === UsingScopedMixedCaseAppModels
   @test UsingScopedMixedCaseSharedModels.Dim_CNES.connect_key == "m2m_mock"
 
-  # M2M relation correctly recorded the exact binding, NOT the lossy "Dim_cnes" guess
+  # The exact binding, from the declaration — not the lossy "Dim_cnes" guess.
   rel = Models.get_many_to_many_relation(UsingScopedMixedCaseAppModels.UsUser, "cnes_units")
   @test rel.related_binding == "Dim_CNES"
-
-  # The exact binding resolves cleanly in _resolve_m2m_side_model
   @test PormG.QueryBuilder._resolve_m2m_side_model(
       UsingScopedMixedCaseAppModels, rel.related_binding, "dim_cnes", "cnes_units"
     ) === UsingScopedMixedCaseSharedModels.Dim_CNES
+end
+
+@testset "a using-scoped model the module does not declare is not its model (#1602)" begin
+  @test isdefined(UsingScopedUndeclaredAppModels, :Usconstructor)
+  @test Models.get_all_models(UsingScopedUndeclaredAppModels; symbol = true) == [:Usteam]
 end
 
 @testset "_find_model_binding_name uppercasefirst fallback when both scans miss" begin
@@ -1090,6 +1103,7 @@ module ManyToManyUnderscoreThroughModels
   Visit = Models.Model(id = Models.IDField(),
     driver_id = Models.ForeignKey("Driver_", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"),
     circuit_id = Models.ForeignKey("Circuit", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"))
+  Models.@models Circuit Driver_ Visit
   # `set_models` runs inside the testset below, so a regression is a test error, not a file abort.
 end
 
@@ -1218,6 +1232,7 @@ module ManyToManySelfModels
 import PormG
 import PormG.Models
 
+Models.@models Teammate Rival
 Teammate = Models.Model("teammate",
   id = Models.IDField(),
   driverref = Models.CharField(),
@@ -1598,6 +1613,7 @@ end
   m = Module(:M2MBaseNameResolve)
   Core.eval(m, :(import PormG; import PormG.Models))
   Core.eval(m, :(Pos = Models.Model("position", id = Models.IDField())))
+  Core.eval(m, :(Models.@models Pos))   # #1602: the model set
   pos = Core.eval(m, :(Pos))
   @test Models._resolve_model_reference(m, "position") === pos
   @test Models._try_resolve_model_reference(m, "position") === pos
@@ -1611,6 +1627,7 @@ end
     id = Models.IDField(),
     positions = Models.ManyToManyField("position", related_name = "grid_slots"),
   )))
+  Core.eval(app, :(Models.@models Pos Grid))   # #1602: the model set
   Models.set_models(app, "m2m_mock")
   grid = Core.eval(app, :(Grid))
   rel = Models.get_many_to_many_relation(grid, "positions")
@@ -1708,6 +1725,7 @@ PormG.config["m2m_tx_mock_1399"] = PormG.Configuration.Settings(
 module ManyToManyTx1399
 import PormG
 import PormG.Models
+Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
@@ -1781,6 +1799,7 @@ end
 module ManyToManyKeys1413
 import PormG
 import PormG.Models
+Models.@models Livery Grid Season
 Livery = Models.Model("liveries", uid = Models.UUIDField(primary_key = true), name = Models.CharField())
 Grid = Models.Model("grids", slot = Models.CharField(primary_key = true, max_length = 8))
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
@@ -1845,6 +1864,7 @@ PormG.config["m2m_my_mock_1413"] = PormG.Configuration.Settings(
 module ManyToManyMy1413
 import PormG
 import PormG.Models
+Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
@@ -1939,6 +1959,7 @@ PormG.config["m2m_sl_mock_1473"] = PormG.Configuration.Settings(
 module ManyToManySL1473
 import PormG
 import PormG.Models
+Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))

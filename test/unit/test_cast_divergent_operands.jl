@@ -85,6 +85,7 @@ module CcdModels
 import PormG
 import PormG.Models
 
+Models.@models Ccd_team Ccd_driver
 Ccd_team = Models.Model("ccd_team",
   id     = Models.IDField(),
   name   = Models.CharField(),

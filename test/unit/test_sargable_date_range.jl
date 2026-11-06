@@ -59,6 +59,7 @@ import PormG
 import PormG.Models
 using PormG.Models: Model, IDField, DateField, DateTimeField, CharField, ForeignKey, ManyToManyField
 
+Models.@models _SdrTeam _SdrTag _SdrEvent _SdrLog
 _SdrTeam = Model("sdr_teams",
   id         = IDField(),
   founded    = DateField(),

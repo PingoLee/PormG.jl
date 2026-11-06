@@ -34,6 +34,7 @@ for (engine, key) in pairs(KEYS_1239)
   @eval module $modname
     import PormG
     import PormG.Models as Mo
+    Mo.@models Driver Result
     Driver = Mo.Model("driver", driverid = Mo.IDField(), surname = Mo.CharField(max_length = 30))
     Result = Mo.Model("result",
       resultid = Mo.IDField(),

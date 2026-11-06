@@ -46,6 +46,7 @@ PormG.config["order_agg_group_sl"] = PormG.Configuration.Settings(
 module OrderAggGroupPg
 import PormG
 import PormG.Models
+Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),
@@ -59,6 +60,7 @@ end
 module OrderAggGroupSl
 import PormG
 import PormG.Models
+Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),

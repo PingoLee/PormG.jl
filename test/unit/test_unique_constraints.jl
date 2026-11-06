@@ -37,6 +37,7 @@ import PormG
 import PormG.Models
 
 # Two plain columns, auto-derived index name (<table>_<cols>_uniq).
+Models.@models Season_entry Grid_slot
 Season_entry = Models.Model("season_entries",
   id = Models.IDField(),
   season = Models.IntegerField(),

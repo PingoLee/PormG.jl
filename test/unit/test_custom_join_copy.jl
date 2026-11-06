@@ -51,6 +51,7 @@ module CustomJoinCopyModels
 import PormG
 import PormG.Models
 
+Models.@models Cjc_driver Cjc_results
 Cjc_driver = Models.Model("cjc_driver",
   driverid = Models.IDField(),
   surname = Models.CharField(),

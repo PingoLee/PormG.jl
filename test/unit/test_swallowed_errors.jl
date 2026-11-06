@@ -154,6 +154,7 @@ end
       Base.:(==)(::Odd, ::AbstractString) = throw(MethodError(==, (Odd(), "")))
       const __pormg_init_path__ = Odd()
       Circuit::Models.ModelType = Models.Model("swe_circuit", circuitid = Models.IDField(), name = Models.CharField())
+      $(PormG.Models._model_set_declaration([:Circuit]))   # #1602: the model set
     end)
     @test_throws MethodError Base.invokelatest(Models.set_models, mod, "swe_mock")
   end
@@ -168,6 +169,7 @@ end
       import PormG; import PormG.Models
       global __pormg_init_path__::Int
       Circuit::Models.ModelType = Models.Model("swe_circuit2", circuitid = Models.IDField(), name = Models.CharField())
+      $(PormG.Models._model_set_declaration([:Circuit]))   # #1602: the model set
     end)
     @test Base.invokelatest(Models.set_models, mod, "swe_mock") === nothing
     @test !isdefined(mod, :__pormg_init_path__)

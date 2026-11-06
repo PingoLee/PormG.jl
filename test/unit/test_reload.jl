@@ -120,6 +120,9 @@ end
 function _reload_models_source(mod::String, model::String, edited::Bool)
     added = edited ? ",\n        added = Models.IntegerField(default = 10)" : ""
     extra = edited ? "\n    Extra = Models.Model(\"extra\", id = Models.IDField())" : ""
+    # #1602: the model set, edited with the file as a user would — a package `include`s `rt_models.jl`
+    # with no macro to add it.
+    set = edited ? "$(model) Extra" : model
     return """
     module $(mod)
         import PormG.Models
@@ -127,6 +130,7 @@ function _reload_models_source(mod::String, model::String, edited::Bool)
             id = Models.IDField(),
             name = Models.CharField()$(added)
         )$(extra)
+        Models.@models $(set)
     end
     """
 end
@@ -489,7 +493,7 @@ end
         try
             # const → const: the reload rebinds.
             write(file, models_src("const ", false))
-            mod = Base.include(Module(:ConstHost), file)
+            mod = Base.include(PormG.Models._with_model_set, Module(:ConstHost), file)
             Base.invokelatest(PormG.Models.set_models, mod, dir)
             before = Base.invokelatest(getfield, mod, :ConstLap)
             @test Base.invokelatest(isconst, mod, :ConstLap)
@@ -518,7 +522,7 @@ end
             # plain → const in the same session: Julia refuses to declare an existing global
             # constant, so the reload warns and keeps the plain binding's object.
             write(file, models_src("", false))
-            plain_mod = Base.include(Module(:PlainHost), file)
+            plain_mod = Base.include(PormG.Models._with_model_set, Module(:PlainHost), file)
             Base.invokelatest(PormG.Models.set_models, plain_mod, dir)
             plain_before = Base.invokelatest(getfield, plain_mod, :ConstLap)
             write(file, models_src("const ", true))
@@ -592,7 +596,7 @@ end
         try
             # typed → typed: the reload rebinds, and a running task sees it.
             write(file, models_src(typed, false))
-            mod = Base.include(Module(:TypedHost), file)
+            mod = Base.include(PormG.Models._with_model_set, Module(:TypedHost), file)
             Base.invokelatest(PormG.Models.set_models, mod, dir)
             before = lap(mod)
             @test binding_type(mod) === PormG.Models.ModelType
@@ -629,7 +633,7 @@ end
 
             # plain → typed in a live session: refused with Julia's text, twice; the plain object stays.
             write(file, models_src(plain, false))
-            plain_mod = Base.include(Module(:PlainHost), file)
+            plain_mod = Base.include(PormG.Models._with_model_set, Module(:PlainHost), file)
             Base.invokelatest(PormG.Models.set_models, plain_mod, dir)
             plain_before = lap(plain_mod)
             write(file, models_src(typed, true))
@@ -643,7 +647,7 @@ end
 
             # const → typed in a live session: refused the same way, naming the constant.
             write(file, models_src(constant, false))
-            const_mod = Base.include(Module(:ConstHost), file)
+            const_mod = Base.include(PormG.Models._with_model_set, Module(:ConstHost), file)
             Base.invokelatest(PormG.Models.set_models, const_mod, dir)
             const_before = lap(const_mod)
             write(file, models_src(typed, true))
@@ -689,7 +693,7 @@ end
             PormG.Utils.set_revise_hooks!(add_revise_callback = spy)
 
             host = Module(:SpyHost)
-            mod = Base.include(host, file)
+            mod = Base.include(PormG.Models._with_model_set, host, file)
             Base.invokelatest(PormG.Models.set_models, mod, dir)
             @test isempty(calls)                       # no `source`, no reload
 
@@ -715,7 +719,7 @@ end
                     raceid = Models.ForeignKey("NoSuchRace", pk_field = "id", on_delete = "CASCADE"))
             end
             """)
-            bad_mod = Base.include(Module(:BadHost), bad)
+            bad_mod = Base.include(PormG.Models._with_model_set, Module(:BadHost), bad)
             @test_throws PormG.ModelDefinitionError Base.invokelatest(
                 PormG.Models.set_models, bad_mod, dir; source = bad)
             @test calls == [(bad, bad_mod, dir)]
@@ -728,7 +732,7 @@ end
         # bind. Skipped where Revise is loaded, which would watch a file this test deletes.
         if Base.get_extension(PormG, :PormGReviseExt) === nothing
             @test PormG.Models._add_revise_callback_hook[] === PormG.Models._noop_add_revise_callback
-            mod2 = Base.include(Module(:NoReviseHost), file)
+            mod2 = Base.include(PormG.Models._with_model_set, Module(:NoReviseHost), file)
             Base.invokelatest(PormG.Models.set_models, mod2, dir; source = file)
             @test basename(Base.invokelatest(getfield, mod2, :SpyThing).connect_key) == "db_spy"
         end

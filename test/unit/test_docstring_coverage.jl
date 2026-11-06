@@ -355,8 +355,9 @@ end
             # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
             # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39, and
             # `ModelType` (#1672) = 40: the concrete model type, which every models file names in
-            # its typed binding (`Race::Models.ModelType = Models.Model(…)`, #1663).
-            PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
+            # its typed binding (`Race::Models.ModelType = Models.Model(…)`, #1663). `@models` and
+            # `ModelSet` (#1602) = 42: the declaration a models module ends with, and its value.
+            PormG.Models       => [Symbol("@models"), :ModelSet, :ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
                                    :CharField, :CheckConstraint, :CIDRField, :DateField, :DateTimeField,
                                    :DecimalField, :DurationField, :EmailField, :FileField, :FloatField,
                                    :ForeignKey, :GenericIPAddressField, :IDField, :ImageField, :Index,

@@ -319,6 +319,7 @@ DbtPlain.connect_key = "db_table_mock"
     # db_table-aware key lands on the physical one.
     Base.eval(mod, :(Whatever = PormG.Models.Model("dbt_logical_scratch",
       db_table = "Dbt_Physical_Scratch", id = PormG.Models.IDField())))
+    Base.eval(mod, :(PormG.Models.@models Whatever))   # #1602: the model set the planner reads
 
     declared = PormG.Migrations.get_all_models(mod)
     @test haskey(declared, Symbol("Dbt_Physical_Scratch"))
@@ -327,6 +328,7 @@ DbtPlain.connect_key = "db_table_mock"
 
     # A model WITHOUT db_table still keys on its own name, exactly as before.
     Base.eval(mod, :(Plain = PormG.Models.Model("dbt_plain_keyed_scratch", id = PormG.Models.IDField())))
+    Base.eval(mod, :(PormG.Models.@models Whatever Plain))
     @test haskey(PormG.Migrations.get_all_models(mod), :dbt_plain_keyed_scratch)
 
     # …and the RENDERED PLAN must agree with that key. Asserting only on `get_all_models` is not

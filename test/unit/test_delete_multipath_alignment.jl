@@ -88,6 +88,7 @@ import PormG.Models
 
 # Grandparent of the root, reachable only through a cjoin. Its `on_delete` is DO_NOTHING so it
 # contributes a parameterized JOIN to the root query WITHOUT adding a cascade path of its own.
+Models.@models Dmp_root Dmp_a Dmp_b Dmp_c Dmp_k
 Dmp_root = Models.Model("dmp_root",
   id  = Models.IDField(),
   tag = Models.CharField(),

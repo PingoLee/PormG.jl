@@ -57,6 +57,7 @@ module OrfModels
 import PormG
 import PormG.Models
 
+Models.@models Orf_driver Orf_note
 Orf_driver = Models.Model("orf_driver",
   id      = Models.IDField(),
   surname = Models.CharField(),

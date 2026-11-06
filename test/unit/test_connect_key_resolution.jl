@@ -353,6 +353,7 @@ function _ck1226_scratch(name::Symbol)
   scratch = Module(name)
   Core.eval(scratch, :(import PormG.Models))
   Core.eval(scratch, :(Thing = Models.Model("thing", id = Models.IDField())))
+  Core.eval(scratch, :(Models.@models Thing))   # #1602: the model set
   return scratch
 end
 

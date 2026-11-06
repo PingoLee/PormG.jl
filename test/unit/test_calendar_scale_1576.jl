@@ -48,6 +48,7 @@ module Cs1576Models
 import PormG
 import PormG.Models
 
+Models.@models Cs_result
 Cs_result = Models.Model("cs_result",
   id     = Models.IDField(),
   grid   = Models.IntegerField(null = true),

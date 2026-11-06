@@ -40,6 +40,7 @@ module PncModels
 import PormG
 import PormG.Models
 
+Models.@models Pnc_driver Pnc_result
 Pnc_driver = Models.Model("pnc_driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(),

@@ -95,6 +95,8 @@ const EXPLAIN_MODELS = quote
     surname = Models.CharField(),
     nationality = Models.CharField(),
   )
+  # #1602: the model set; interpolated, since this block's macros expand before its `import` runs.
+  $(PormG.Models._model_set_declaration([:Driver]))
 end
 module ExplainPG end
 module ExplainSL end

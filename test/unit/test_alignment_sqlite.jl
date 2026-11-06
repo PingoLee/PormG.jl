@@ -2169,6 +2169,7 @@ end
         mod = Module(modname)
         Core.eval(mod, :(const Parent = $parent))
         Core.eval(mod, :(const Child = $child))
+        Core.eval(mod, PormG.Models._model_set_declaration([:Parent, :Child]))   # #1602: the model set
         return mod
     end
 
@@ -2245,6 +2246,7 @@ end
     Core.eval(mod, :(const Parent  = $parent))
     Core.eval(mod, :(const Child_a = $child_a))
     Core.eval(mod, :(const Child_b = $child_b))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Parent, :Child_a, :Child_b]))   # #1602
 
     err = _set_models_error(mod)
     # Registration must still FAIL, and with the same type — #303 changed the message, not the
@@ -2403,6 +2405,7 @@ end
     dup_mod = Module(:dup_test_module)
     Core.eval(dup_mod, :(const DupParent = $DupParent))
     Core.eval(dup_mod, :(const DupChild = $DupChild))
+    Core.eval(dup_mod, PormG.Models._model_set_declaration([:DupParent, :DupChild]))   # #1602
 
     # set_models should reject the duplicate related_name
     dup_err = @test_throws PormG.ModelDefinitionError PormG.Models.set_models(dup_mod, "mock_sl_path")

@@ -42,6 +42,7 @@ module LncModels
 import PormG
 import PormG.Models
 
+Models.@models Lnc_note
 Lnc_note = Models.Model("lnc_note",
   id       = Models.IDField(),
   search   = Models.CharField(max_length = 50, null = true),

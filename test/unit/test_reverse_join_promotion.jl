@@ -43,6 +43,7 @@ PormG.config["rj1367_sqlite"] = PormG.Configuration.Settings(
 module RjModels
 import PormG
 import PormG.Models
+Models.@models Rj_driver Rj_sponsor Rj_race Rj_result Rj_report
 Rj_driver  = Models.Model("rj_driver", id = Models.IDField(), code = Models.CharField())
 Rj_sponsor = Models.Model("rj_sponsor", id = Models.IDField(), name = Models.CharField())
 Rj_race = Models.Model("rj_race",

@@ -73,6 +73,7 @@ module ReplShowModels
 import PormG
 import PormG.Models
 
+Models.@models Rs_team Rs_driver Rs_tagged
 Rs_team = Models.Model("rs_team",
   id      = Models.IDField(),
   name    = Models.CharField(max_length = 80),

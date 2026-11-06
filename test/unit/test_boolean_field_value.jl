@@ -39,6 +39,8 @@ const _BFV_MODEL_EXPR = quote
     resultid     = Models.IDField(),
     positiontext = Models.CharField(null = true, unique = true),
     finished     = Models.BooleanField(null = true))
+  # #1602: the model set; interpolated, since this block's macros expand before its `import` runs.
+  $(PormG.Models._model_set_declaration([:Result]))
 end
 module BfvPg end
 module BfvSl end

@@ -69,6 +69,7 @@ module AdmModels
 import PormG
 import PormG.Models
 
+Models.@models Adm_parent Adm_child
 Adm_parent = Models.Model("adm_parent", id = Models.IDField(), sku = Models.CharField())
 Adm_child = Models.Model("adm_child",
   id     = Models.IDField(),

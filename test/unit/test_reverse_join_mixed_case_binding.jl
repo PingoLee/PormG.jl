@@ -46,6 +46,7 @@ import PormG
 import PormG.Models
 
 # Plain binding — the parent every reverse hop starts from.
+Models.@models Dim_Unidade Dim_CNES CustomUser
 Dim_Unidade = Models.Model("dim_unidade",
   id = Models.IDField(),
   nome = Models.CharField(),

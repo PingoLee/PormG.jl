@@ -42,6 +42,7 @@ PormG.config["bh665_sl"] = PormG.Configuration.Settings(
 # `_module`, which a bare `Model(...)` leaves as `nothing`.
 module BulkHandlerScopePg
 import PormG.Models
+Models.@models Bh665_driver Bh665_result
 Bh665_driver = Models.Model("bh665_driver", id = Models.IDField(), surname = Models.CharField())
 Bh665_result = Models.Model("bh665_result",
     id     = Models.IDField(),
@@ -54,6 +55,7 @@ end
 
 module BulkHandlerScopeSl
 import PormG.Models
+Models.@models Bh665_driver Bh665_result
 Bh665_driver = Models.Model("bh665_driver", id = Models.IDField(), surname = Models.CharField())
 Bh665_result = Models.Model("bh665_result",
     id     = Models.IDField(),

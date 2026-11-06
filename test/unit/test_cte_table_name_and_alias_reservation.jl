@@ -61,6 +61,7 @@ module CtsModels
 import PormG
 import PormG.Models
 
+Models.@models Cts_grand Cts_parent Cts_child Cts_orphan Cts_tag Cts_item
 Cts_grand = Models.Model("cts_grand",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -111,6 +112,7 @@ module CtsOther
 import PormG
 import PormG.Models
 
+Models.@models Cts_other_parent
 Cts_other_parent = Models.Model("cts_other_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
@@ -124,6 +126,7 @@ import PormG
 import PormG.Models
 import ..CtsOther
 
+Models.@models Cts_cross_child
 Cts_cross_child = Models.Model("cts_cross_child",
   id     = Models.IDField(),
   parent = Models.ForeignKey(CtsOther.Cts_other_parent, on_delete = "CASCADE", related_name = "cts_cross_kids", null = true),
@@ -140,6 +143,7 @@ module CtsFarDb
 import PormG
 import PormG.Models
 
+Models.@models Cts_far_parent
 Cts_far_parent = Models.Model("cts_far_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
@@ -153,6 +157,7 @@ import PormG
 import PormG.Models
 import ..CtsFarDb
 
+Models.@models Cts_far_child
 Cts_far_child = Models.Model("cts_far_child",
   id     = Models.IDField(),
   parent = Models.ForeignKey(CtsFarDb.Cts_far_parent, on_delete = "CASCADE", related_name = "cts_far_kids", null = true),
@@ -436,6 +441,7 @@ end
 module CtsPolluted
 import PormG
 import PormG.Models
+Models.@models Cts_polluted_parent Cts_polluted_child
 module TwinA; export cts_twin; const cts_twin = 1; end
 module TwinB; export cts_twin; const cts_twin = 1; end
 using .TwinA, .TwinB

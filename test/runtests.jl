@@ -203,6 +203,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Error-contract Drift Guard (#239)" include("unit/test_docs_error_type_drift.jl")
     @testset "Documented Error Types (#239)" include("unit/test_docs_error_types.jl")
     @testset "Kernel Layering" include("unit/test_kernel_layering.jl")
+    @testset "No joinpath Splat in src/ (#1649)" include("unit/test_joinpath_splat_1649.jl")
     @testset "Documented Test Commands (#624)" include("unit/test_documented_commands.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Value Representation Table (#564)" include("unit/test_value_repr_table.jl")

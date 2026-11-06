@@ -1363,7 +1363,7 @@ function _binding_root(key::AbstractString, folder::AbstractString)::Union{Nothi
   key_parts, folder_parts = splitpath(normpath(key)), splitpath(folder)
   n = length(key_parts)
   (n < length(folder_parts) && folder_parts[end-n+1:end] == key_parts) || return nothing
-  return joinpath(folder_parts[1:end-n]...)
+  return joinpath(folder_parts[1:end-n])
 end
 
 # #1227: rebind `mod` from the `__pormg_binding__` it recorded at import. `false` when it recorded

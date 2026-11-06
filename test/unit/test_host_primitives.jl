@@ -184,7 +184,8 @@ end
 
   _host1230_sqlite(change_db = false) do key
     timing = _host1230_timing()
-    @test_logs (:warn, r"not set to change_db") @test Migrations.ensure_table!(timing, key) === :disabled
+    # The warning names the way out for a library-owned table (#1677).
+    @test_logs (:warn, r"not set to change_db.*`force = true`") @test Migrations.ensure_table!(timing, key) === :disabled
     rows = DataFrame(PormG.fetch(PormG.config[key].connections,
       "SELECT count(*) AS n FROM sqlite_master WHERE tbl_name = 'live_timing'"))
     @test rows[1, :n] == 0
@@ -205,5 +206,50 @@ end
     end
     @test err isa PormG.TransactionError
     @test occursin("cannot run inside an open transaction", sprint(showerror, err))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ensure_table!(...; force = true) on a change_db: false connection (#1677)
+# What it tests: on a `change_db: false` SQLite `:memory:` key, `force = true` creates the table and
+#   its index exactly as the `change_db: true` case above does (`:created`, the same `sqlite_master`
+#   rows), logs nothing, and a second call returns `:exists` and changes nothing; inside an open
+#   transaction it still raises `TransactionError` and creates nothing; `force = false`, the default,
+#   still returns `:disabled` (pinned in the testset above).
+# Why it matters: `register_connection` builds `change_db = false`, and it is the documented
+#   production posture, so a library creating its own table at boot found none in most deployments
+#   and kept raw DDL instead. `force` is the caller's consent for a table outside the application's
+#   migrations; the lock, the transaction refusal and "never alters" must not move with it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ensure_table!(...; force = true) creates a library's table on a change_db: false connection (#1677)" begin
+  pair = Models.Index(fields = ("driverref", "payload"), name = "live_timing_driverref")
+  _host1230_sqlite(change_db = false) do key
+    @test PormG.config[key].change_db === false
+    timing = _host1230_timing(indexes = [pair])
+    Models.bind!(timing, key)
+    @test_logs @test Migrations.ensure_table!(timing, key; force = true) === :created
+    conn = PormG.config[key].connections
+    rows = DataFrame(PormG.fetch(conn,
+      "SELECT type, name FROM sqlite_master WHERE tbl_name = 'live_timing' AND name NOT LIKE 'sqlite_%' ORDER BY type, name"))
+    @test collect(zip(rows.type, rows.name)) == [("index", "live_timing_driverref"), ("table", "live_timing")]
+    @test_logs @test Migrations.ensure_table!(timing, key; force = true) === :exists
+    # The default on the same key is still `migrate`'s rule, even with the table there.
+    @test_logs (:warn, r"not set to change_db") @test Migrations.ensure_table!(timing, key) === :disabled
+  end
+
+  # The transaction refusal does not move with `force`.
+  _host1230_sqlite(change_db = false) do key
+    conn = PormG.config[key].connections
+    err = try
+      PormG.run_in_transaction(conn) do
+        Migrations.ensure_table!(_host1230_timing(), key; force = true)
+      end
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.TransactionError
+    rows = DataFrame(PormG.fetch(conn, "SELECT count(*) AS n FROM sqlite_master WHERE tbl_name = 'live_timing'"))
+    @test rows[1, :n] == 0
   end
 end

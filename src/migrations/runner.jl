@@ -4392,12 +4392,19 @@ function _ensure_table_statements(connection::_SQLEngine, model::PormGModel;
 end
 
 """
-    ensure_table!(model, key::String; indexes = true) -> Symbol
+    ensure_table!(model, key::String; indexes = true, force = false) -> Symbol
 
 Create `model`'s table on the connection `key` if it does not exist yet, and return what happened:
 `:created`, `:exists`, or `:disabled` when the connection is `change_db: false` (nothing is read or
 written, as with `migrate`). For the infrastructure tables a library ships on top of PormG (a
 live-timing feed table, say) that are kept out of `makemigrations` with `register_ignore_tables!` (#1230).
+
+`force = true` creates the table on a `change_db: false` connection too (#1677). `change_db: false` is
+the documented production posture and what `register_connection` builds, and it is `migrate`'s rule
+for the application's schema; a table `register_ignore_tables!` keeps out of the migrations is not part
+of that schema, so the library that owns it says so at the call site. Pass it only for such a table.
+Everything else is unchanged: the lock, the transaction refusal, and `:exists` for a table that is
+already there — `force` never alters or recreates a table.
 
 The DDL is what a migration would emit for a new model — `CREATE TABLE`, its foreign keys, indexes
 (including a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`), unique constraints and
@@ -4408,6 +4415,7 @@ check and the DDL share one write transaction.
 
 ```julia
 PormG.Migrations.ensure_table!(M.Lap_times, "db")   # :created the first time, :exists after
+PormG.Migrations.ensure_table!(M.Lap_times, "db"; force = true)   # also on a change_db: false connection
 ```
 
 `ensure_table!` never alters a table that exists: a changed model is `migrate`'s job. A `key` that is
@@ -4415,7 +4423,7 @@ not loaded raises `InvalidConfigurationError`. Inside an open transaction on tha
 `TransactionError`: its DDL would become a savepoint that commits only with the outer block, after the
 lock that serializes it is released.
 """
-function ensure_table!(model::PormGModel, key::String; indexes::Bool = true,
+function ensure_table!(model::PormGModel, key::String; indexes::Bool = true, force::Bool = false,
                        config::Dict{String,PormGSettings} = config)::Symbol
   haskey(config, key) || throw(InvalidConfigurationError(
     "ensure_table!: no configuration is loaded under \"$(key)\". Load it first — " *
@@ -4424,8 +4432,11 @@ function ensure_table!(model::PormGModel, key::String; indexes::Bool = true,
   connection = settings.connections
   connection === nothing && throw(InvalidConfigurationError(
     "ensure_table!: the configuration \"$(key)\" has no connection pool."))
-  if !settings.change_db
-    @warn("ensure_table!: the connection is not set to change_db, so the table was not created.",
+  # `force` (#1677): the caller states the table is its own, outside the application's migrations, so
+  # `migrate`'s `change_db` gate does not apply to it. Nothing below it changes.
+  if !settings.change_db && !force
+    @warn("ensure_table!: the connection is not set to change_db, so the table was not created. " *
+          "Pass `force = true` for a table your library owns and keeps out of the migrations.",
           key = key, table = model_table_name(model))
     return :disabled
   end

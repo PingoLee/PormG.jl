@@ -174,6 +174,23 @@ job_model().objects.
     list()
 ```
 
+### Creating your tables at boot
+
+Your tables are not in the consumer's models file, so `migrate` never creates them. Create each
+one at boot with [`ensure_table!`](api.md), which renders the DDL a migration would emit for a new
+model and does nothing when the table is already there:
+
+```julia
+PormG.Models.bind!(job_model(), "db")
+PormG.Migrations.ensure_table!(job_model(), "db"; force = true)   # :created once, then :exists
+```
+
+Pass `force = true` for a table you register with `register_ignore_tables!`. Without it,
+`ensure_table!` follows `migrate`'s rule and returns `:disabled` on a `change_db: false`
+connection, which is the usual production setting and what `register_connection` builds, so most
+deployments would get no table. `force` never alters a table that exists: a changed model of yours
+needs its own upgrade step.
+
 ### Implementing PormG-backed store interfaces
 
 If your framework defines abstract store interfaces (session stores, job stores, …), a PormG

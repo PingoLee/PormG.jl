@@ -877,10 +877,14 @@ consults as `get_settings(key)` does (#1255). Any other key raises `InvalidConfi
 folder is loaded for you. It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
 accessors.
 
-### `Migrations.ensure_table!(model, key; indexes = true)`
+### `Migrations.ensure_table!(model, key; indexes = true, force = false)`
 
 Creates `model`'s table on `key` if it does not exist and returns `:created`, `:exists`, or
-`:disabled` on a `change_db: false` connection (#1230). The DDL is what a migration emits for a new
+`:disabled` on a `change_db: false` connection (#1230). `force = true` creates it there too (#1677):
+pass it for a table your library owns and keeps out of `makemigrations` with
+`register_ignore_tables!`, since `change_db: false` is `migrate`'s rule for the application's schema
+and the usual production setting. It changes nothing else, and never alters or recreates a table
+that exists. The DDL is what a migration emits for a new
 model — table, foreign keys, indexes (a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`
 included), unique constraints and CHECKs — in one transaction, under the migration advisory lock on
 PostgreSQL. On MySQL it runs under the migration's `GET_LOCK` on one connection, with no transaction, and drops the table again when a statement after its `CREATE TABLE` fails. It never alters an existing table. For infrastructure tables kept out of
@@ -891,6 +895,7 @@ LiveTiming::PormG.Models.ModelType = PormG.Models.Model("live_timing", id = Porm
                                       driverref = PormG.Models.CharField(max_length = 64))
 PormG.Models.bind!(LiveTiming, "db")
 PormG.Migrations.ensure_table!(LiveTiming, "db")   # :created, then :exists on every later boot
+PormG.Migrations.ensure_table!(LiveTiming, "db"; force = true)   # also under change_db: false
 ```
 
 ### `Configuration.redact_secret(conn_str)`

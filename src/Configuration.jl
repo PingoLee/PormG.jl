@@ -861,6 +861,50 @@ function _already_loaded(settings::PormGSettings, folder::AbstractString, env::S
   return !isempty(settings.loaded_folder) && settings.loaded_folder == _canonical_folder_path(folder)
 end
 
+# ── Typed reads of the configuration block (#1606; #1599 row 4) ────────────────────────────────────
+#
+# `db_config_settings` is a `Dict{String,Any}`: the parsed YAML block, or what `register_connection`
+# stored. Every value read from it is an `Any`, so each use of one (`adapter == "SQLite"`,
+# `parse(Int, string(v))`) was a dynamic call: one dispatch per read under the JIT, and a verifier row in
+# a `juliac --trim` build. These readers narrow the value once, by the types a YAML scalar or a keyword
+# argument can have, and return a concrete type. A value of any other type takes the one dynamic
+# `string(v)` it always took (`_cfg_text_other`).
+
+# A setting as text: `nothing` when unset, otherwise the value spelled as a string, as `string(v)` did.
+function _cfg_text(@nospecialize(v))::Union{Nothing, String}
+  v === nothing && return nothing
+  v isa String && return v
+  v isa SubString{String} && return String(v)
+  v isa Symbol && return String(v)
+  v isa Bool && return v ? "true" : "false"
+  v isa Int && return string(v)
+  v isa Float64 && return string(v)
+  return _cfg_text_other(v)
+end
+@noinline _cfg_text_other(@nospecialize(v))::String = string(v)
+
+# The text of `key` in the block, or `nothing` when it is absent or `nothing`.
+_cfg_string(settings::PormGSettings, key::String)::Union{Nothing, String} =
+  _cfg_text(get(settings.db_config_settings, key, nothing))
+
+# An integer setting: `default` when the key is absent, else the value parsed as `parse(Int, string(v))`
+# did, so a value that is not an integer still raises.
+function _cfg_int(settings::PormGSettings, key::String, default::Int)::Int
+  haskey(settings.db_config_settings, key) || return default
+  v = settings.db_config_settings[key]
+  v isa Int && return v
+  return parse(Int, something(_cfg_text(v), "nothing"))
+end
+
+# Whether a raw setting reads as true: a `Bool`, or one of the usual truthy strings.
+function _cfg_truthy(@nospecialize(v))::Bool
+  v isa Bool && return v
+  return lowercase(strip(something(_cfg_text(v), "nothing"))) in ("1", "true", "yes", "on")
+end
+
+# A real number as Float64, for a value no branch of `_config_secs` names (a `Rational`, a `BigFloat`).
+@noinline _cfg_float_other(@nospecialize(v::Real))::Float64 = Float64(v)
+
 # Parse a seconds-valued pool setting from connection.yml. Returns `default` when the key is absent OR
 # the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
 # any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
@@ -868,7 +912,11 @@ end
 function _config_secs(settings::PormGSettings, key::String, default::Float64 = 0.0)::Float64
   haskey(settings.db_config_settings, key) || return default
   v = settings.db_config_settings[key]
-  return v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), default)
+  v isa Float64 && return v
+  v isa Int && return Float64(v)
+  v isa Bool && return Float64(v)
+  v isa Real && return _cfg_float_other(v)
+  return something(tryparse(Float64, strip(something(_cfg_text(v), "nothing"))), default)
 end
 
 # Parse a boolean pool setting from connection.yml. Returns `default` when the key is absent; otherwise
@@ -876,9 +924,7 @@ end
 # for `sqlite_split_read_write` so new bool keys (e.g. `fail_fast_on_connect`, #72) don't re-duplicate it.
 function _config_bool(settings::PormGSettings, key::String, default::Bool)::Bool
   haskey(settings.db_config_settings, key) || return default
-  v = settings.db_config_settings[key]
-  v isa Bool && return v
-  return lowercase(strip(string(v))) in ("1", "true", "yes", "on")
+  return _cfg_truthy(settings.db_config_settings[key])
 end
 
 # The environment variable that picks the PostgreSQL driver when no configuration names one (#788).
@@ -890,19 +936,20 @@ const POSTGRES_DRIVER_ENV = "PORMG_POSTGRES_DRIVER"
 # `register_connection` kwarg — when set, else `ENV[POSTGRES_DRIVER_ENV]`, else LibPQ. A value is the
 # package's name, matched case-insensitively against `_PG_DRIVER_PACKAGES`, so the accepted spellings
 # and the drivers a pool can hold are one list. `source` names where a bad value came from.
-function _resolve_postgres_driver(raw; source::AbstractString)::Symbol
-  if _is_unset(raw)
-    raw = get(ENV, POSTGRES_DRIVER_ENV, nothing)
-    _is_unset(raw) && return :libpq
+function _resolve_postgres_driver(@nospecialize(raw); source::AbstractString)::Symbol
+  text = _cfg_text(raw)   # #1606: the setting as text once, so what follows is typed
+  if _is_unset(text)
+    text = get(ENV, POSTGRES_DRIVER_ENV, nothing)
+    _is_unset(text) && return :libpq
     source = "environment variable $(POSTGRES_DRIVER_ENV)"
   end
-  wanted = lowercase(strip(string(raw)))
+  wanted = lowercase(strip(text))
   for (driver, package) in pairs(_PG_DRIVER_PACKAGES)
     lowercase(package) == wanted && return driver
   end
   throw(InvalidConfigurationError(
     "$(source): `postgres_driver` must be one of $(join(values(_PG_DRIVER_PACKAGES), " or ")) " *
-    "(case-insensitive); got $(repr(string(raw)))"))
+    "(case-insensitive); got $(repr(text))"))
 end
 
 # Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
@@ -965,8 +1012,7 @@ end
 
 function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
-  pool_size = haskey(settings.db_config_settings, "pool_size") ?
-              parse(Int, string(settings.db_config_settings["pool_size"])) : 3
+  pool_size = _cfg_int(settings, "pool_size", 3)
 
   # Default acquire timeout (#126), seconds; absent = DEFAULT_POOL_TIMEOUT. Values <= 0 fall back (a
   # "never wait" setting is ambiguous across frameworks and a footgun), warned once at build.
@@ -982,26 +1028,16 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   # pool_timeout, then raise a truthful PoolConnectError (#72). Default on; set `false` to keep waiting.
   fail_fast_on_connect = _config_bool(settings, "fail_fast_on_connect", true)
 
-  sqlite_split_read_write = false
-  if haskey(settings.db_config_settings, "sqlite_split_read_write")
-    raw_value = settings.db_config_settings["sqlite_split_read_write"]
-    sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
-  elseif haskey(settings.db_config_settings, "options") && isa(settings.db_config_settings["options"], Dict)
-    options = settings.db_config_settings["options"]
-    if haskey(options, "sqlite_split_read_write")
-      raw_value = options["sqlite_split_read_write"]
-      sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
-    end
-  end
+  sqlite_split_read_write = haskey(settings.db_config_settings, "sqlite_split_read_write") ?
+    _config_bool(settings, "sqlite_split_read_write", false) :
+    _options_split_read_write(get(settings.db_config_settings, "options", nothing))
 
-  if settings.db_config_settings["adapter"] == "SQLite"
-    dbname =  if haskey(settings.db_config_settings, "host") && settings.db_config_settings["host"] !== nothing
-      settings.db_config_settings["host"]
-        elseif haskey(settings.db_config_settings, "database") && settings.db_config_settings["database"] !== nothing
-          settings.db_config_settings["database"]
-        else
-          nothing
-        end
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  adapter = _cfg_string(settings, "adapter")
+  # #1606: the pool is built into a local, so the monitor calls below take it at its concrete type;
+  # `settings.connections` reads back as the field's untyped union.
+  pool = if adapter == "SQLite"
+    dbname = something(_cfg_string(settings, "host"), _cfg_string(settings, "database"), Some(nothing))
 
     # SQLite reads two unrelated kinds of string here: a filesystem path, and its own keywords (#545) —
     # the `:memory:` in-memory database and `file:` URI filenames. Only a path may be resolved
@@ -1027,30 +1063,30 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     end
 
     @pormg_debug false
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
 
-  elseif settings.db_config_settings["adapter"] == "PostgreSQL"
+  elseif adapter == "PostgreSQL"
     dns = String[]
 
     # Check for direct URL/Connection String support. A blank `url:` counts as unset, not as an
     # empty DSN: gating on `!== nothing` meant `url: ''` discarded every credential below it and
     # handed libpq an empty conninfo, which falls back to PGHOST/PGUSER or the local socket as the
     # OS user — a fully-populated-looking config silently connecting to the wrong database (#348).
-    if !_is_unset(get(settings.db_config_settings, "url", nothing))
-      dns_str = settings.db_config_settings["url"]
+    url = _cfg_string(settings, "url")
+    if !_is_unset(url)
+      dns_str = url
     else
       # Standard parameters loop
       for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey"]
-        get!(settings.db_config_settings, key, nothing)
-        settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", _conninfo_value(key, settings.db_config_settings[key])))
+        v = _cfg_text(get!(settings.db_config_settings, key, nothing))
+        v === nothing || push!(dns, string(key, "=", _conninfo_value(key, v)))
       end
 
-      get!(settings.db_config_settings, "database", nothing)
-      settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", _conninfo_value("database", settings.db_config_settings["database"])))
+      v = _cfg_text(get!(settings.db_config_settings, "database", nothing))
+      v === nothing || push!(dns, string("dbname=", _conninfo_value("database", v)))
 
-      get!(settings.db_config_settings, "username", nothing)
-      settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", _conninfo_value("username", settings.db_config_settings["username"])))
+      v = _cfg_text(get!(settings.db_config_settings, "username", nothing))
+      v === nothing || push!(dns, string("user=", _conninfo_value("username", v)))
 
       dns_str = join(dns, " ")
     end
@@ -1058,32 +1094,28 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     driver = _resolve_postgres_driver(get(settings.db_config_settings, "postgres_driver", nothing);
                                       source = "connection.yml")
 
-    # Use parent module reference to avoid circular dependency during module loading
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
 
-  elseif settings.db_config_settings["adapter"] == "MySQL"
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
-                                                  pool_size=pool_size, pool_timeout=pool_timeout,
-                                                  fail_fast_on_connect=fail_fast_on_connect)
+  elseif adapter == "MySQL"
+    CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
+                           pool_size=pool_size, pool_timeout=pool_timeout,
+                           fail_fast_on_connect=fail_fast_on_connect)
 
   else
-    adapter = settings.db_config_settings["adapter"]
-    throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
+    throw(InvalidConfigurationError("Unsupported adapter: $(something(adapter, "nothing"))"))
   end
+  settings.connections = pool
 
   # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
   # No-op when the respective keys are 0/absent. All three merge into one PoolMonitorState.
-  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   # #1548: ping a connection idle past `validate_after_idle` seconds before it is handed out. Absent or
   # unreadable, the engine's default: 60 on MySQL, off elsewhere. First, because above 0 on a backend
   # without the feature it raises, and a refused configuration must not leave its pool installed: a
   # second `load` would find it (`_already_loaded`) and run without the refusal. No pool is connected or
   # monitored yet, so dropping it is all the undoing there is.
-  validate_after_idle = _config_secs(settings, "validate_after_idle", CP._default_validate_after_idle(settings.connections))
+  validate_after_idle = _config_secs(settings, "validate_after_idle", CP._default_validate_after_idle(pool))
   try
-    CP.enable_idle_validation!(settings.connections; after = validate_after_idle)
+    CP.enable_idle_validation!(pool; after = validate_after_idle)
   catch
     # swallows nothing: drops the refused pool, then rethrows.
     settings.connections = nothing
@@ -1091,12 +1123,20 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   end
   reap_on = idle_timeout > 0 || max_lifetime > 0
   reap_on &&
-    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    CP.enable_reaping!(pool; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   leak_detection_threshold > 0 &&
-    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
+    CP.enable_leak_detection!(pool; threshold=leak_detection_threshold)
 
   return settings
 end
+
+# `sqlite_split_read_write` under `options:`, the older spelling, read as `_build_connection_pool!` did.
+function _options_split_read_write(@nospecialize(options))::Bool
+  options isa AbstractDict || return false
+  return _options_split_read_write_in(options)
+end
+@noinline _options_split_read_write_in(@nospecialize(options::AbstractDict))::Bool =
+  haskey(options, "sqlite_split_read_write") ? _cfg_truthy(options["sqlite_split_read_write"]) : false
 
 """
     _configured_extensions(settings::PormGSettings)::Vector{String}
@@ -1509,6 +1549,26 @@ function _warn_unknown_top_level_keys(db_conn_data::AbstractDict, app_env::Abstr
   return nothing
 end
 
+# One `config:` key onto `settings` (#1606): a branch per entry of `VALID_CONFIG_KEYS`, in place of a
+# `setfield!` by the key's name, so each assignment is typed. A value of the wrong type raises the
+# `TypeError` the `setfield!` raised. A string starting with ":" is still read as a Symbol first, which
+# no field takes, as before.
+function _set_config_key!(settings::Settings, key::String, @nospecialize(raw))::Nothing
+  v = (raw isa String && startswith(raw, ":")) ? Symbol(raw[2:end]) : raw
+  if key == "change_db"
+    settings.change_db = v::Bool
+  elseif key == "change_data"
+    settings.change_data = v::Bool
+  elseif key == "django_prefix"
+    settings.django_prefix = v::Union{Nothing, String}
+  elseif key == "time_zone"
+    settings.time_zone = v::String
+  elseif key == "model_file"
+    settings.model_file = v::String
+  end
+  return nothing
+end
+
 """
     read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
 
@@ -1577,9 +1637,9 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     cfg = get(env_block, "config", nothing)
     if cfg isa AbstractDict
       for (k, v) in cfg
-        k_str = string(k)
+        k_str = something(_cfg_text(k), "nothing")
         if k_str in VALID_CONFIG_KEYS
-          setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
+          _set_config_key!(settings, k_str, v)
         elseif k_str in VALID_CONNECTION_KEYS
           # Exact membership only — no `_suggest_name` fallback in this direction, which would
           # resolve `connections:` to `options` and mislabel an internal-field attempt.
@@ -2008,21 +2068,9 @@ connection(key::String) = connection(; key = key)
 function _resolve_lazily!(key::String)::Nothing
   (haskey(config, key) || _CONNECTION_RESOLVER[] === nothing) && return nothing
   try
+    # The user's function: one dynamic call. Its answer is converted once, by `_register_resolved!`.
     res = _CONNECTION_RESOLVER[](key)
-    if res !== nothing
-      if res isa Tuple
-        url, adapter, pool_size = res
-        register_connection(key, url; adapter=adapter, pool_size=pool_size)
-      elseif res isa Dict
-        url = get(res, "url", nothing)
-        adapter = get(res, "adapter", "PostgreSQL")
-        pool_size = get(res, "pool_size", 3)
-        postgres_driver = get(res, "postgres_driver", nothing)
-        env = get(res, "env", nothing)
-        url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
-                                               postgres_driver=postgres_driver, env=env)
-      end
-    end
+    res === nothing || _register_resolved!(key, res)
   catch e
     # A refusal from `register_connection` — no environment stated (#1256), an unsupported adapter —
     # is the caller's to see: logging it and then raising "not found" hid what to fix.
@@ -2030,6 +2078,43 @@ function _resolve_lazily!(key::String)::Nothing
     @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
   end
   return nothing
+end
+
+# What a connection resolver answered, registered (#1606: typed once, here). A `(url, adapter,
+# pool_size)` tuple, or a `Dict` with "url" and optional "adapter", "pool_size", "postgres_driver",
+# "env", "change_db" and "change_data". A value of the wrong type raises `InvalidConfigurationError`
+# naming the entry. Any other answer registers nothing, as before.
+function _register_resolved!(key::String, @nospecialize(res))::Nothing
+  if res isa Tuple
+    length(res) >= 3 || throw(InvalidConfigurationError(
+      "the connection resolver answered a tuple for \"$(key)\" that is not (url, adapter, pool_size)."))
+    register_connection(key, _resolved_text(key, "url", res[1]);
+                        adapter = _resolved_text(key, "adapter", res[2]),
+                        pool_size = _resolved_int(key, "pool_size", res[3]))
+  elseif res isa AbstractDict
+    url = get(res, "url", nothing)
+    url === nothing && return nothing
+    register_connection(key, _resolved_text(key, "url", url);
+                        adapter = _resolved_text(key, "adapter", get(res, "adapter", "PostgreSQL")),
+                        pool_size = _resolved_int(key, "pool_size", get(res, "pool_size", 3)),
+                        postgres_driver = _cfg_text(get(res, "postgres_driver", nothing)),
+                        env = _cfg_text(get(res, "env", nothing)),
+                        change_db = _resolved_bool(key, "change_db", get(res, "change_db", false)),
+                        change_data = _resolved_bool(key, "change_data", get(res, "change_data", false)))
+  end
+  return nothing
+end
+function _resolved_text(key::String, entry::String, @nospecialize(v))::String
+  v isa AbstractString && return something(_cfg_text(v), "")
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be text."))
+end
+function _resolved_int(key::String, entry::String, @nospecialize(v))::Int
+  v isa Int && return v
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be an Int."))
+end
+function _resolved_bool(key::String, entry::String, @nospecialize(v))::Bool
+  v isa Bool && return v
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be true or false."))
 end
 
 # The environment a `register_connection` entry records (#1256): the #1228 rule `load` follows, with
@@ -2074,8 +2159,19 @@ neither gets `InvalidConfigurationError`, before any pool is built or replaced. 
 `postgres_driver` picks the driver of a PostgreSQL pool, as the `postgres_driver:` key does in
 `connection.yml`: `"LibPQ"` or `"Postgres"`. Unset, it falls back to the
 `PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
+
+`change_data` and `change_db` are the `config:` settings of the same names in `connection.yml`:
+`change_data = true` lets the entry write (`create`, `update`, `delete`, bulk writes), and
+`change_db = true` lets it run `makemigrations`/`migrate`. Both default to `false`, so an entry is
+read-only unless it says otherwise. A connection resolver states them with `"change_data"` and
+`"change_db"` entries in the `Dict` it returns.
+
+```julia
+PormG.Configuration.register_connection("f1", "postgresql://f1:…@db.internal/f1";
+                                        env = "prod", change_data = true)
+```
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing, change_db::Bool = false, change_data::Bool = false)
   _refuse_while_building("PormG.Configuration.register_connection")   # #1606
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
@@ -2094,7 +2190,10 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   adapter == "MySQL" && throw(InvalidConfigurationError(
     "register_connection does not take `adapter = \"MySQL\"`: a MySQL connection is configured by " *
     "its keys (`host:`, `port:`, `username:`, `password:`, `database:`) in connection.yml, through `load`."))
-  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
+  # The value is not echoed (#1606 review): a resolver answer with its entries swapped would put the
+  # connection URL, password included, into the message.
+  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError(
+    "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
   app_env = _registered_env(env, key)
 
   if haskey(config, key)
@@ -2108,7 +2207,9 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   settings = Settings(
     app_env = app_env,
     db_def_folder = "dynamic_connection",
-    dynamic = true
+    dynamic = true,
+    change_db = change_db,       # #1606: an app with its configuration in code can write
+    change_data = change_data,
   )
   
   settings.db_config_settings = Dict{String, Any}(
@@ -2126,22 +2227,25 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
-  if adapter == "PostgreSQL"
+  # A local, so the monitor calls below take the pool at its concrete type (#1622).
+  pool = if adapter == "PostgreSQL"
     driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
-    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
   elseif adapter == "SQLite"
     _is_unset(postgres_driver) ||
       @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key
-    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   else
-    throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
+    throw(InvalidConfigurationError(
+      "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
   end
+  settings.connections = pool
 
   # Opt into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured. No-ops when 0.
   (idle_timeout > 0 || max_lifetime > 0) &&
-    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    CP.enable_reaping!(pool; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   leak_detection_threshold > 0 &&
-    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
+    CP.enable_leak_detection!(pool; threshold=leak_detection_threshold)
 
   config[key] = settings
   return key

@@ -219,6 +219,53 @@ struct _TspStandInPool <: PormG.PormGSQLite end
     @test isempty(_dynamic_calls(Configuration._is_offline_key, (String,)))
   end
 
+  # What: the typed reads of a connection's configuration block (`db_config_settings`, a
+  #   `Dict{String,Any}`): the seconds, boolean, integer and text readers, the `config:` key setter and
+  #   the PostgreSQL driver name.
+  # Expected: no dynamic call in any of them, and each answers as the untyped read did: a number from
+  #   a string, an `Int`, a `Float64`, a `Bool` or another `Real`; the truthy strings; `parse(Int, …)`
+  #   raising on a non-integer; a `config:` value of the wrong type raising `TypeError` (the
+  #   `setfield!` it replaces did).
+  # Why: every read of the block was an `Any`, and every use of it a dynamic call (#1599 row 4, the
+  #   typing half of #1606), in `read_db_connection_data`, `_build_connection_pool!` and the pool
+  #   settings. `setfield!(settings, Symbol(key), v)` set a field by a name read at run time.
+  @testset "the configuration block reads are typed (#1606, row 4)" begin
+    S = Configuration.Settings
+    @test isempty(_dynamic_calls(Configuration._config_secs, (S, String, Float64)))
+    @test isempty(_dynamic_calls(Configuration._config_bool, (S, String, Bool)))
+    @test isempty(_dynamic_calls(Configuration._cfg_int, (S, String, Int)))
+    @test isempty(_dynamic_calls(Configuration._cfg_string, (S, String)))
+    @test isempty(_dynamic_calls(Configuration._set_config_key!, (S, String, Any)))
+    @test isempty(_dynamic_calls_kw(Configuration._resolve_postgres_driver, (Any,)))
+    s = S(db_config_settings = Dict{String,Any}("a" => "5", "b" => 5, "c" => 2.5, "d" => true,
+          "e" => 1//2, "f" => "x", "g" => "yes", "h" => "0", "i" => nothing, "j" => "7", "k" => :SQLite))
+    @test Configuration._config_secs(s, "a") === 5.0
+    @test Configuration._config_secs(s, "b") === 5.0
+    @test Configuration._config_secs(s, "c") === 2.5
+    @test Configuration._config_secs(s, "d") === 1.0
+    @test Configuration._config_secs(s, "e") === 0.5
+    @test Configuration._config_secs(s, "f", 3.0) === 3.0
+    @test Configuration._config_secs(s, "absent", 4.0) === 4.0
+    @test Configuration._config_bool(s, "g", false) === true
+    @test Configuration._config_bool(s, "h", true) === false
+    @test Configuration._config_bool(s, "i", true) === false
+    @test Configuration._config_bool(s, "absent", true) === true
+    @test Configuration._cfg_int(s, "j", 3) === 7
+    @test Configuration._cfg_int(s, "b", 3) === 5
+    @test Configuration._cfg_int(s, "absent", 3) === 3
+    @test_throws ArgumentError Configuration._cfg_int(s, "f", 3)
+    @test Configuration._cfg_string(s, "k") == "SQLite"
+    @test Configuration._cfg_string(s, "absent") === nothing
+    Configuration._set_config_key!(s, "change_data", true)
+    Configuration._set_config_key!(s, "time_zone", "America/Sao_Paulo")
+    Configuration._set_config_key!(s, "django_prefix", nothing)
+    @test s.change_data === true && s.time_zone == "America/Sao_Paulo" && s.django_prefix === nothing
+    @test_throws TypeError Configuration._set_config_key!(s, "change_db", "yes")
+    @test_throws TypeError Configuration._set_config_key!(s, "model_file", ":models")
+    @test Configuration._resolve_postgres_driver(:Postgres; source = "test") === :postgres
+    @test Configuration._resolve_postgres_driver("libpq"; source = "test") === :libpq
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

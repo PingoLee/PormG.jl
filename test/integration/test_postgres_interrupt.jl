@@ -5,13 +5,15 @@ An interrupt that lands inside the Postgres.jl driver's read still stops the sta
 A statement runs in a task in its caller's threadpool (#1577), so under plain `julia`, `-t N` and
 `-t auto` a statement awaited by the main task or the REPL runs on thread 1, the interactive thread,
 and a Ctrl-C lands in the statement's own task, inside Postgres.jl's read loop. The driver then
-closes the socket, and `Postgres.cancel_query!` refuses a closed connection, so before the fix the
-cancel never left the client and the statement ran on. The extension now sends the cancel by key
-(the backend's pid and secret, on a separate connection, as the protocol defines it).
+closes the socket. Before Postgres.jl 2.6, `Postgres.cancel_query!` refused a closed connection, so the
+cancel never left the client and the statement ran on, until the extension sent the cancel by key
+itself. Since 2.6 (JuliaDatabases/Postgres.jl#45, #1647) the driver's `cancel_query!` sends it by key
+(the backend's pid and secret, on a separate connection, as the protocol defines it), and the
+extension calls it alone.
 
 Inside a `run_in_transaction` body the abandoned-await recovery does not run, so before #1588 nothing
 sent that cancel: the cleanup `ROLLBACK` failed on the closed socket, the slot was renewed, and the
-statement ran to its end with its locks held. The transaction's cleanup now sends the cancel by key
+statement ran to its end with its locks held. The transaction's cleanup now sends the cancel
 before it renews the slot; the second testset holds a row lock and checks that it is released.
 
 `delete()` drives its own BEGIN/ROLLBACK, and had the same gap (#1638). Its statements never reach a

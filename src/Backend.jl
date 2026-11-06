@@ -164,7 +164,8 @@ backend_postgres_parameter_limit(::PormGPostgres)::Int = 65535
 # `:samepool` sends a caller on a foreign thread to `:default`.
 # Under plain `julia`, `-t N` and `-t auto` the interactive thread is thread 1, which takes `Ctrl+C`, so
 # a statement awaited by the main task or the REPL now takes the interrupt inside its driver. Postgres.jl
-# then closes the connection, and its extension cancels the statement by key (`_cancel_by_key`).
+# then closes the connection, and the driver's `cancel_query!` still cancels the statement by the
+# backend's key (Postgres.jl 2.6, JuliaDatabases/Postgres.jl#45).
 # A verb, so it stays in `PormG` with the extensions' generics; `test/unit/test_statement_threadpool.jl`
 # fails on a `Threads.@spawn` written in `ext/`.
 _statement_task(f::F) where {F} = Threads.@spawn :samepool f()

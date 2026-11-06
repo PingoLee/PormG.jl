@@ -220,6 +220,15 @@ end
 #          BindComplete must close its socket (JuliaDatabases/Postgres.jl#17), or every later
 #          statement on the connection hits `EOFError` — but 2.2.2 changed `isvalid` (#20), the
 #          extension's liveness probe, and 2.2.2 is the version every probe and integration run used.
+#          Then "2.2.2" -> "2.6" (#1647). The extension cancels a statement after an interrupt closed
+#          the connection's socket (#1577, #1588), which happens whenever the interrupt lands inside
+#          the driver's read. Below 2.6 `cancel_query!` refused a closed socket ("connection not
+#          open"), so PormG sent the cancel by key itself, through five driver internals. 2.6.0
+#          (JuliaDatabases/Postgres.jl#45) sends it by the pid and secret key the connection keeps,
+#          so the extension calls `cancel_query!` alone; below 2.6 the statement would run on with
+#          its locks held. Measured before narrowing: this PormG resolves with Postgres 2.6.0,
+#          LibPQ 1.18.0 and PrecompileTools 1.2.0, and an add pinned to Postgres 2.5.0 no longer
+#          resolves.
 #   MySQL  raised "2" -> "2.2" (#1502). The extension retries a statement that failed with error
 #          2006 ("MySQL server has gone away"), because MySQL.jl 2.2.0 is the first release where
 #          2006 means the command was never sent: its write failed, or the session was already
@@ -240,7 +249,7 @@ end
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the
-# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.2.2
+# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.6
 # or MySQL below 2.2.2 fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Measured floors that PormG cannot go below (#574)" begin
@@ -272,7 +281,7 @@ end
     ("TimeZones", v"1.12.0"),
     ("Aqua", v"0.8.14"),
     ("PrecompileTools", v"1.2.0"),
-    ("Postgres", v"2.2.2"),
+    ("Postgres", v"2.6.0"),
     ("MySQL", v"2.2.2"),
   )
     entry = _compat_entry(name)

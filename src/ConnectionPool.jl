@@ -792,15 +792,22 @@ end
 # runs with SIGINT deferred; it holds `pool.lock` only briefly, since no connect runs under it.
 function _drop_owned!(pool, owned::_OwnedSlot; failed_connect::Bool = false)
   disable_sigint() do
-    Base.lock(pool.lock) do
-      held = owned[]
-      held === nothing && return nothing
+    # (reported slot or 0, its hold, the threshold): a reservation the leak scan reported "while
+    # connecting" goes back to the pool here, so it logs the returned line like any return (#1643).
+    slot, held, threshold = Base.lock(pool.lock) do
+      claim = owned[]
+      claim === nothing && return (0, 0.0, 0.0)
       owned[] = nothing
-      i, expected = held
-      (i <= length(pool.available) && !pool.available[i] && pool.connections[i] === expected) || return nothing
+      i, expected = claim
+      (i <= length(pool.available) && !pool.available[i] && pool.connections[i] === expected) ||
+        return (0, 0.0, 0.0)
+      st = _monitor_state(pool)
+      h = _reported_hold(st, i)
       _handoff_or_free!(pool, i; skip_retry = failed_connect)
-      return nothing
+      return h >= 0.0 ? (i, h, (st::PoolMonitorState).leak_threshold) : (0, 0.0, 0.0)
     end
+    slot > 0 && _log_reported_return(pool, slot, held, threshold)
+    return nothing
   end
   return nothing
 end
@@ -898,6 +905,24 @@ function _monitor_note_create!(pool, i::Int)
       push!(st.statement_started, 0.0)
     end
     st.statement_started[i] = 0.0
+  end
+  return nothing
+end
+
+# A connect installed into a slot reserved for it (#1540): a fresh connection, but the same lease,
+# which began at the reservation. A slot the leak scan already reported while it connected keeps the
+# flag and the reservation's clock (#1643), so its return logs the "returned" line and its hold counts
+# from the reservation; any other slot is recorded as `_monitor_note_create!` records it. Call UNDER
+# pool.lock.
+function _monitor_note_install!(pool, i::Int)
+  st = _monitor_state(pool)
+  if st !== nothing && i <= length(st.leak_warned) && st.leak_warned[i]
+    leased_since = st.last_used[i]
+    _monitor_note_create!(pool, i)
+    st.leak_warned[i] = true
+    st.last_used[i] = leased_since
+  else
+    _monitor_note_create!(pool, i)
   end
   return nothing
 end
@@ -1152,6 +1177,25 @@ function _leak_check!(pool, st::Union{PoolMonitorState, Nothing})
       @warn "Pool connection held past leak_detection_threshold — likely acquired without release; await the FetchTask or release the connection" slot=i held_s threshold_s=st.leak_threshold connection_string
     end
   end
+  return nothing
+end
+
+# A lease the leak scan already reported, now returned (#1643): how long it was held, or -1.0 when
+# the slot was never reported (or leak detection is off). Read BEFORE `_monitor_note_touch!`, which
+# clears `leak_warned[i]` and overwrites `last_used[i]`. Call UNDER pool.lock.
+function _reported_hold(st::Union{PoolMonitorState, Nothing}, i::Int)::Float64
+  st === nothing && return -1.0
+  st.leak_threshold > 0 || return -1.0
+  (i <= length(st.leak_warned) && st.leak_warned[i]) || return -1.0
+  return time() - st.last_used[i]
+end
+
+# The follow-up to the scan's `@warn` (#1643), HikariCP's "unleaked" line: a reported lease came back,
+# so it was not a leak. A warning with no such line after it is the leak. `@info`, not `@warn`: the
+# level separates the suspects from the ones that returned, and both still match a log search for
+# `leak_detection_threshold`. Called OUTSIDE pool.lock, as the scan's own `@warn` is.
+function _log_reported_return(pool, slot::Int, held::Float64, threshold::Float64)
+  @info "Pool connection reported past leak_detection_threshold was returned to the pool" slot held_s=round(held; digits = 1) threshold_s=threshold connection_string=redact_secret(pool.connection_string)
   return nothing
 end
 
@@ -1459,7 +1503,7 @@ function _connect_reserved!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, last_co
     owned[] = nothing
     ours || return false
     pool.connections[i] = new_conn
-    _monitor_note_create!(pool, i)                      # fresh connection timestamp (#125)
+    _monitor_note_install!(pool, i)                     # fresh connection, same lease (#125, #1643)
     return true
   end
   if !installed
@@ -1704,6 +1748,9 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
           pool.connections[i] = nothing
           owned[] = (i, nothing)
         end
+        # A new lease, reserved for a connect like (B) and (C): its leak clock starts here, and it
+        # does not inherit the warning of the lease that handed the slot on (#127, #1643).
+        _monitor_note_touch!(pool, i)
         return (:connect, i)                             # connect OFF the lock (#1540)
       end
 
@@ -1918,6 +1965,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
           pool.connections[i] = nothing
           owned[] = (i, nothing)
         end
+        _monitor_note_touch!(pool, i)                    # a new lease — see the PormGPostgres twin (#1643)
         return (:connect, i)                             # connect OFF the lock (#1540)
       end
 
@@ -2056,48 +2104,64 @@ See also [`acquire_connection`](@ref).
 """
 function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
   retired = nothing
-  released = Base.lock(pool.lock) do
+  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
+  # of the lock as values, so it logs outside it (#1643).
+  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
+        st = _monitor_state(pool)
+        held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
+        threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
           retired = pool.connections[i]
           pool.connections[i] = nothing
         else
-          _monitor_note_touch!(pool, i)       # last_used = now (#125)
+          _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return true
+        return (true, held >= 0.0 ? i : 0, held, threshold)
       end
     end
+    return (false, 0, 0.0, 0.0)
   end
+  # A retired slot was returned too: its caller released it, so it logs like any other return.
+  reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
     try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
   end
-  released !== nothing && return released
+  found && return true
   @warn "$(_backend_name(pool)) connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end
 
 function release_connection(pool::PormGSQLite, conn)
   retired = nothing
-  released = Base.lock(pool.lock) do
+  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
+  # of the lock as values, so it logs outside it (#1643).
+  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
+        st = _monitor_state(pool)
+        held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
+        threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
           retired = pool.connections[i]
           pool.connections[i] = nothing
         else
-          _monitor_note_touch!(pool, i)       # last_used = now (#125)
+          _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return true
+        return (true, held >= 0.0 ? i : 0, held, threshold)
       end
     end
+    return (false, 0, 0.0, 0.0)
   end
+  # A retired slot was returned too: its caller released it, so it logs like any other return.
+  reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
     try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
   end
-  released !== nothing && return released
+  found && return true
   @warn "SQLite Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end

@@ -167,6 +167,11 @@ julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.in
 - Docs and examples use the Formula 1 dataset, not generic `User`/`Post` placeholders.
 - Every `@testset` says what it tests, the expected SQL, and why it matters
   (`docs/src/contributing.md` → *Testing conventions*).
+- **A bare `catch` says what it swallows (#1668).** A catch-all hides a bug, a Ctrl-C and, in a
+  `juliac --trim` build, the `MethodError` a call with no compiled target raises (#1599). Catch what
+  you expect (`catch e; e isa X || rethrow()`); a bare `catch` (`catch` alone on its line, or an inline
+  `catch;`) that stays carries a `# swallows <what>: <why>` comment on its line, the one before or the
+  one after. `test/unit/test_swallowed_errors.jl` scans `src/` for them.
 - **Concrete types and fewer allocations (#1346).** Code that is added or refactored moves toward
   concrete types and never away from them. Untyped code costs a dynamic dispatch and an allocation on
   every call, and it is what a static compiler (`juliac --trim`) cannot follow. This is a ratchet,

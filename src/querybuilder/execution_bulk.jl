@@ -1509,6 +1509,7 @@ function _bulk_returning_key_text(meta, formatted)
   text = strip(string(formatted))
   n = tryparse(Int128, text)
   n === nothing || return string(n)
+  # swallows a parse failure: a non-numeric key compares as its text
   d = formatted isa Decimals.Decimal ? formatted : (try parse(Decimals.Decimal, text) catch; nothing end)
   d === nothing && return string(formatted)
   d = Decimals.normalize(d)

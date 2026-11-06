@@ -92,6 +92,7 @@ function resolve_import_models_path(source_file::AbstractString, import_path::Ab
     pkg_dir = try
         Base.pkgdir(calling_module)
     catch
+        # swallows pkgdir's failure: a module outside a package has no package root to search.
         nothing
     end
 
@@ -138,6 +139,8 @@ function ensure_models_init!(mod::Module, dir_path::AbstractString)
             try
                 Base.invokelatest(PormG.Models._bind_if_loaded, @__MODULE__, $dir_path)
             catch
+                # swallows any error: an `__init__` that throws fails `using`; the first
+                # `.objects` binds or refuses instead (`ensure_model_initialized`, see above).
             end
         end
     end
@@ -297,6 +300,8 @@ macro models_module(name, path, block)
                 try
                     Base.invokelatest(Models._bind_if_loaded, @__MODULE__, __pormg_init_path__)
                 catch
+                    # swallows any error: an `__init__` that throws fails `using`; see
+                    # `ensure_models_init!`.
                 end
             end
         end)

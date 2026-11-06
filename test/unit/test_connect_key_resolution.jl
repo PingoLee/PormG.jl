@@ -341,7 +341,7 @@ end
 # a file run from a REPL (`include("test/unit/…")`) testing the same branch.
 function _ck_with_interactive(f, flag::Bool)
   previous = Configuration._INTERACTIVE[]
-  Configuration._INTERACTIVE[] = () -> flag
+  Configuration._INTERACTIVE[] = flag
   try
     return f()
   finally

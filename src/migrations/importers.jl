@@ -6914,6 +6914,7 @@ function _normalize_django_set_default!(options::Dict, field_name, class_label::
   mode = try
     Models._get_on_delete_mode(options[:on_delete])
   catch
+    # swallows a malformed on_delete: the field constructor raises it in its usual place (above).
     return options
   end
   mode === Models.SET_DEFAULT || return options

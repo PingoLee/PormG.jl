@@ -725,7 +725,7 @@ end
 # `f`. The env fallbacks below are a REPL's only, so the tests that exercise them say so explicitly.
 function _cfg_with_interactive(f, flag::Bool)
     previous = PormG.Configuration._INTERACTIVE[]
-    PormG.Configuration._INTERACTIVE[] = () -> flag
+    PormG.Configuration._INTERACTIVE[] = flag
     try
         return f()
     finally

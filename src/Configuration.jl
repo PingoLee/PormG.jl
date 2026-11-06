@@ -166,9 +166,14 @@ const _BEFORE_CONNECT_HOOK = Ref{Union{Nothing, Function}}(nothing)
 # `default_env:`/`dev` environment fallback — are a REPL's, and they say in the log that they
 # decided; a non-interactive process (a service, a test, a script, a precompile) gets only what was
 # stated. A `Ref` so the tests can stand in for `isinteractive()` the way they stand in for a
-# connection; nothing outside the tests sets it.
-const _INTERACTIVE = Ref{Function}(isinteractive)
-_is_interactive()::Bool = _INTERACTIVE[]()::Bool
+# connection; nothing outside the tests sets it. It holds the answer, not a function (#1667): a test
+# stores a `Bool`, and `nothing` (the default) means "ask `isinteractive()`". A function behind the
+# abstract `Function` made every call dynamic, a `juliac --trim` wall at boot (#1599 row 12).
+const _INTERACTIVE = Ref{Union{Nothing, Bool}}(nothing)
+function _is_interactive()::Bool
+  stored = _INTERACTIVE[]
+  return stored === nothing ? isinteractive() : stored
+end
 
 """
     set_before_connect_hook(f::Function)

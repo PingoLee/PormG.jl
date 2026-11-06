@@ -81,7 +81,7 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # before. The two steps move together — and so does the frozen set in
 # `test/unit/test_docstring_coverage.jl`, which fails if this line and that literal disagree.
 #
-# `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
+# `ModelType` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
 public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
@@ -93,7 +93,7 @@ public search_vector_expression
 # SECTION: Core Types
 #═══════════════════════════════════════════════════════════════════════════════
 """
-    Model_Type <: PormGModel
+    ModelType <: PormGModel
 
 The concrete model object — what [`Model`](@ref) returns and what `M.Driver` is. It is the only
 concrete subtype of `PormGModel`, and it is reached by *holding* one, not by naming it: build models
@@ -120,7 +120,7 @@ keeps the same model.
 
 See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref).
 """
-@kwdef mutable struct Model_Type <: PormGModel
+@kwdef mutable struct ModelType <: PormGModel
   name::AbstractString
   db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
   # `false`: PormG queries the table but never migrates it — a view, or a table another system owns
@@ -438,7 +438,7 @@ function _accessor_illegality_reason(accessor::AbstractString)::String
     "\e[1m_<column>\e[0m — the registered name is never the key that is looked up"
   end
   # NOT "permanently unaddressable": a reverse many-to-many accessor is still reachable as a property
-  # (`Base.getproperty(::Model_Type, sym)` probes `related_objects` with the WHOLE name, no splitting),
+  # (`Base.getproperty(::ModelType, sym)` probes `related_objects` with the WHOLE name, no splitting),
   # so the claim would be false for that one shape. What is true for every shape is that the name can
   # never be written as a lookup-path SEGMENT, which is the surface the guard exists to protect.
   return mechanism * ". Such a name registers cleanly and can then never be written as a " *
@@ -550,11 +550,11 @@ function _register_reverse_accessor!(target::PormGModel, accessor::AbstractStrin
   return nothing
 end
 
-# A Model_Type is resolved schema state — its `fields`, `_module`, and `related_objects` are built once
+# A ModelType is resolved schema state — its `fields`, `_module`, and `related_objects` are built once
 # by `set_models` and treated as an immutable, SHARED reference everywhere (the query builder copies query
 # state but shares the model verbatim: `SQLObjectQuery` deepcopy sets `model=obj.model`). Deep-copying a
 # model is never wanted and, worse, throws: the moment recursion reaches a relation field's resolved
-# `.to` (another Model_Type) it descends into `_module::Module` → "deepcopy of Modules not supported".
+# `.to` (another ModelType) it descends into `_module::Module` → "deepcopy of Modules not supported".
 # Override the recursion hook to SHARE — return the same model, registered in `stackdict` so its identity
 # is stable across the surrounding copy. So `deepcopy(model) === model`, and any container/field that
 # holds a model shares it rather than cloning the schema graph. Resolves the module-traversal throw (#157).
@@ -566,7 +566,7 @@ end
 # #65 shipped a hand-written `deepcopy_internal(::ManyToManyRelation, …)` that did this by hand; #157
 # added the hook below, which superseded it, and #343 removed it. Do not reintroduce one for a new
 # relation struct without first checking whether the default already does the job.
-Base.deepcopy_internal(m::Model_Type, stackdict::IdDict) = get!(stackdict, m, m)
+Base.deepcopy_internal(m::ModelType, stackdict::IdDict) = get!(stackdict, m, m)
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Management/Reflection
@@ -606,7 +606,7 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   seen_names = Set{Symbol}()
   for name in names(modules; all=true, imported=true)
     push!(seen_names, name)
-    # Check if the attribute is an instance of Model_Type
+    # Check if the attribute is an instance of ModelType
     # Use invokelatest to avoid World Age issues in Julia 1.12+
     attr = try
         Base.invokelatest(getfield, modules, name)
@@ -861,7 +861,7 @@ before rendering. The third key is load-bearing since #741: the two `on_delete` 
 exclusive on one field, but the unmanaged-target rule (`_collect_unmanaged_target_contradiction!`)
 can fire alongside either, so `(model, field)` alone no longer orders two entries for the same
 field. The key keeps the order *total* and the message byte-stable. `model.field_names` is deliberately NOT the order — it defaults to empty on a
-hand-built `Model_Type` and is itself hash-ordered from the `Model(name, ::Dict)` constructors, so
+hand-built `ModelType` and is itself hash-ordered from the `Model(name, ::Dict)` constructors, so
 it is a meaningful order only sometimes. `sort` (not `sort!`) because this runs on the error path and must not reorder a vector
 the caller — or a debugger stopped at the throw — still holds.
 
@@ -1125,7 +1125,7 @@ with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = 
 Each model is bound with `const`, so `M.Race` is a typed read rather than a dynamic one (#1650). A
 module that binds its models without `const` is accepted and registered the same way, with one
 warning, once per session, naming the first plain binding (#1664). A typed global
-(`Race::Models.Model_Type = …`) is not warned about.
+(`Race::Models.ModelType = …`) is not warned about.
 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
@@ -1194,7 +1194,7 @@ const _REPORTED_PLAIN_BINDINGS = Set{Tuple{Module, Symbol}}()
 const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
 
 # #1664: warn when a model binding has no type the compiler can know — neither `const` nor a typed
-# global (`Race::Models.Model_Type = …`, #1663). Such a binding works, but every `M.Race` read is
+# global (`Race::Models.ModelType = …`, #1663). Such a binding works, but every `M.Race` read is
 # untyped: a dynamic call under the JIT, an error under `juliac --trim`. The check runs here, at
 # registration, never on the query path.
 #
@@ -1756,7 +1756,7 @@ end
 
 # A POSITIONAL model name must already be lowercase (#300) and must not start with '_' (#306). It is
 # the one identifier in a `Model(...)` call that nothing normalizes: the two callers that FILL
-# `Model_Type.name` run it through `format_model_name` but guard on `attr.name == ""`, so they only
+# `ModelType.name` run it through `format_model_name` but guard on `attr.name == ""`, so they only
 # ever reach a binding-derived name (`src/Models.jl` `get_all_models`, `src/migrations/planner.jl`
 # `get_all_models`), which `format_model_name` lowercases as it fills it. Field names get their own
 # declaration-time gate, `_validate_declared_field_name` below.
@@ -1971,7 +1971,7 @@ field_db_column(field::PormGField, name::Symbol)::String = field_db_column(field
 # of the rule #64 already applies to the CTE side of a `join_field` key.
 #
 # COPY, never mutate: `_build_cte_custom_model` reuses the REAL model's field objects verbatim, and
-# a model is live shared schema state — `Base.deepcopy_internal(::Model_Type, …)` shares it on
+# a model is live shared schema state — `Base.deepcopy_internal(::ModelType, …)` shares it on
 # purpose. Mutating here would rename the base table's column for every other query.
 #
 # Rebuilt through the struct's DEFAULT POSITIONAL CONSTRUCTOR rather than `setfield!`, because
@@ -2464,7 +2464,7 @@ declared_check_constraints(model::PormGModel)::Vector{CheckConstraint} =
 #
 # Only the UniqueConstraints of the list (#742): a CheckConstraint is `_apply_check_constraints!`'s,
 # and a list holding only checks leaves the `"unique_constraints"` key unset, as no constraints did.
-function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
+function _apply_unique_constraints!(model::ModelType, constraints)::ModelType
   list = UniqueConstraint[c for c in _as_constraint_vector(constraints) if c isa UniqueConstraint]
   isempty(list) && return model
   seen_names = Set{String}()
@@ -2495,7 +2495,7 @@ end
 # carried the same way. The constructor has already checked each one alone; what needs the model is
 # the name, which must be unique among ALL the model's constraints. The condition's column names are
 # not checked: it is SQL, and the database reports an unknown column when the CHECK is created.
-function _apply_check_constraints!(model::Model_Type, constraints)::Model_Type
+function _apply_check_constraints!(model::ModelType, constraints)::ModelType
   list = CheckConstraint[c for c in _as_constraint_vector(constraints) if c isa CheckConstraint]
   isempty(list) && return model
   taken = _constraint_names(model, :unique)
@@ -2960,7 +2960,7 @@ end
 # introspection's physical-column ⇒ index-name map for per-field `db_index` (#325), and two keys
 # one letter apart, holding unrelated shapes, is a trap. The INNER key is "indexes", mirroring
 # `unique_constraints`'s inner "constraints".
-function _apply_indexes!(model::Model_Type, indexes)::Model_Type
+function _apply_indexes!(model::ModelType, indexes)::ModelType
   list = _as_index_vector(indexes)
   isempty(list) && return model
   seen_names = Set{String}()
@@ -2994,7 +2994,7 @@ end
 #
 # Only on the declaration paths (the keyword `Model` forms and `add_field!`): the `Dict` forms are how
 # `inspectdb` and the Django importer build a model from names read out of a catalog, the #317 split.
-function _validate_generated_fields!(model::Model_Type)::Model_Type
+function _validate_generated_fields!(model::ModelType)::ModelType
   for (name, field) in model.fields
     _validate_generated_field(model.name, name, field, pairs(model.fields))
   end
@@ -3029,7 +3029,7 @@ end
 # validation, no forced case fold — the whole point is to carry an arbitrary legacy spelling
 # (including mixed case) through DDL/queries/migrations verbatim. `nothing` (the default) is a
 # no-op, so a model that never sets `db_table` behaves exactly as before this option existed.
-function _apply_db_table!(model::Model_Type, db_table)::Model_Type
+function _apply_db_table!(model::ModelType, db_table)::ModelType
   db_table === nothing && return model
   db_table isa AbstractString || throw(ModelDefinitionError(
     "The 'db_table' option on model '$(model.name)' must be a String or nothing, got $(typeof(db_table))"))
@@ -3042,7 +3042,7 @@ end
 # `"false"` would read as the opposite of what was meant, and the cost of that mistake is the
 # migration planner dropping or rebuilding a table another system owns. `nothing` (the default) is a
 # no-op, so a model that never sets it stays managed.
-function _apply_managed!(model::Model_Type, managed)::Model_Type
+function _apply_managed!(model::ModelType, managed)::ModelType
   managed === nothing && return model
   managed isa Bool || throw(ModelDefinitionError(
     "The 'managed' option on model '$(model.name)' must be true or false, got $(typeof(managed)). " *
@@ -3059,7 +3059,7 @@ end
     Model(; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
     Model(name; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
 
-Define a model — one database table, described by its fields. Returns a `Model_Type`: the object the
+Define a model — one database table, described by its fields. Returns a `ModelType`: the object the
 query builder starts from, as in `M.Driver.objects`.
 
 Every keyword other than `constraints`/`db_table`/`indexes` declares a field: `field_name = FieldType(...)`,
@@ -3287,11 +3287,11 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   # println(fields_dict)
   # #612: `String(name)`, so the stored name is never a view. This is the seam BOTH user-facing
   # forms funnel through — the kwargs `Model(name; fields...)` builds its tuple and lands here — and
-  # `Model_Type.name` is an `AbstractString` slot, so an unconverted `SubString` is retained for the
+  # `ModelType.name` is an `AbstractString` slot, so an unconverted `SubString` is retained for the
   # model's whole process lifetime along with its entire parent buffer. Measured: a name sliced out
   # of a 143-character request string kept all 143. The `Dict` methods below are deliberately left
   # alone; their names come from a live catalog or a Python class, not from a request.
-  return Model_Type(name=String(name), fields=fields_dict, field_names=field_names)
+  return ModelType(name=String(name), fields=fields_dict, field_names=field_names)
 end
 # `inspectdb` path. No name normalization or validation at all (#317): the keys ARE live column names,
 # and `field_names` must agree with them key-for-key. It previously ran `format_fild_name` here while
@@ -3299,7 +3299,7 @@ end
 # `field_names == ["end"]` — a split — and an `a__b` column aborted the whole import from inside this
 # loop, before `Model_to_str` ever got a chance to render it.
 #
-# Widened from `Dict` to `AbstractDict` for #544. `Model_Type.fields` is an `OrderedDict` now, and a
+# Widened from `Dict` to `AbstractDict` for #544. `ModelType.fields` is an `OrderedDict` now, and a
 # caller that already knows the physical column order — both introspection readers do — must be able
 # to hand that order over instead of having it dropped on the way in. A plain `Dict` still works and
 # behaves exactly as it did: there is simply no order in it to preserve.
@@ -3310,13 +3310,13 @@ function Model(name::AbstractString, dict::AbstractDict{String, PormGField})
   for (field_name, field) in pairs(fields)
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
-  return Model_Type(name=name, fields=fields, field_names=field_names)
+  return ModelType(name=name, fields=fields, field_names=field_names)
 end
 # Django-importer path. Same exemption as the `Dict{String,…}` method above (#317) — the keys are
 # Python class attributes read from a live model; a Django `_foo = models.CharField()` used to import
 # as the column `foo`, which was simply wrong.
 function Model(name::AbstractString, fields::Dict{Symbol, Any})
-  # Ordered to satisfy `Model_Type.fields` (#544). The SOURCE here is a plain `Dict`, so there is no
+  # Ordered to satisfy `ModelType.fields` (#544). The SOURCE here is a plain `Dict`, so there is no
   # declaration order left to recover — this preserves whatever order the caller's Dict iterates in
   # rather than inventing one.
   fields_dict = OrderedCollections.OrderedDict{String, PormGField}()
@@ -3330,7 +3330,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
     fields_dict[field_name] = field
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
-  return Model_Type(name=name, fields=fields_dict, field_names=field_names)
+  return ModelType(name=name, fields=fields_dict, field_names=field_names)
 end
 function Model(; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
@@ -3421,8 +3421,8 @@ physical table with `_apply_db_table!` before calling this, so there is exactly 
 derives `<app label>_<class>` instead of two that had to agree.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
-- `model::Union{Model_Type, PormGModel}`: The model object to convert.
+    Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
+- `model::Union{ModelType, PormGModel}`: The model object to convert.
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
   the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
   model option, or otherwise not a legal identifier) is emitted under a sanitized name with the real
@@ -3480,7 +3480,7 @@ const users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
+function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
@@ -3679,7 +3679,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # ⇒ physical" from the string would make it pin a table that does not exist.
   #
   # `model_has_db_table`/`model_table_name` rather than `model.db_table`: the signature accepts any
-  # `PormGModel`, and only `Model_Type` is guaranteed to carry the field.
+  # `PormGModel`, and only `ModelType` is guaranteed to carry the field.
   pin_introspected = name_is_physical_table &&
                      (model.name != lowercase(model.name) || startswith(model.name, "_"))
   # An explicit `db_table` is ABSOLUTE, exactly as in Django, so it stays first.
@@ -5072,9 +5072,9 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
   end
 
   physical_field_names = [field_name for field_name in model.field_names if haskey(physical_fields, field_name)]
-  return Model_Type(
+  return ModelType(
     name=model.name,
-    # MUST be carried (#59). This rebuilds a Model_Type field by field, so an omitted slot silently
+    # MUST be carried (#59). This rebuilds a ModelType field by field, so an omitted slot silently
     # @kwdef-defaults — and every model reaching the migration planner passes through here
     # (`synthesize_many_to_many_through_models`). Dropping `db_table` left the plan keyed by the
     # physical name while the model it renders from had reverted to the logical one, so

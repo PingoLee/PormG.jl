@@ -78,7 +78,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Check Constraints (CheckConstraint #742)" include("unit/test_check_constraints.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
-    @testset "Model_Type deepcopy Shares (#157)" include("unit/test_model_deepcopy.jl")
+    @testset "ModelType deepcopy Shares (#157)" include("unit/test_model_deepcopy.jl")
     @testset "Model Field Order (#544)" include("unit/test_model_field_order.jl")
     @testset "cjoin_on Anchor-less Joins (#45)" include("unit/test_cjoin_on.jl")
     @testset "Joined Reference — Joined(alias, path) (#481)" include("unit/test_joined_reference.jl")

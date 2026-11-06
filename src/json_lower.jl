@@ -17,14 +17,14 @@
 #      first idea: `show(::PormGField)` renders the constructor call the user typed, so it would put
 #      `default=` values into the document, `repr`-escaped and cut at 40 columns
 #      (`src/display.jl`, `_d_field_args` / `_d_value`).
-#   4. **Read slots with `getfield`.** `Model_Type`, `ObjectHandler` and `PormGRow` all overload
+#   4. **Read slots with `getfield`.** `ModelType`, `ObjectHandler` and `PormGRow` all overload
 #      `Base.getproperty`, so property access from inside a serializer would run
 #      `ensure_model_initialized` or the many-to-many / lazy-traversal dispatch.
 #
 # ## Why the file exists at all
 #
 # `JSON.json` reflects over any struct it has no method for. The model graph is a dense cyclic DAG —
-# `Model_Type.fields` -> `sForeignKey.to` -> `Model_Type.related_objects` ->
+# `ModelType.fields` -> `sForeignKey.to` -> `ModelType.related_objects` ->
 # `ReverseRelation.model_resolved` -> ... . JSON.jl breaks true cycles with an ancestor stack, so it
 # terminates, but it memoizes nothing: every distinct PATH through the graph is serialized again,
 # which is exponential in the schema's density. Measured on the 14-model F1 fixture, before these
@@ -116,7 +116,7 @@ _jl_flag(x, slot::Symbol) = (v = _jl_slot(x, slot); v === nothing ? nothing : v 
 # all. The `pormg_` prefix is what makes it unmistakably a marker PormG inserted, rather than data a
 # consumer could mistake for their own — and it refuses to look like the schema-export API this has
 # not promised to be.
-JSON.StructUtils.lower(::JSON.JSONStyle, m::Models.Model_Type) =
+JSON.StructUtils.lower(::JSON.JSONStyle, m::Models.ModelType) =
   Dict("pormg_model" => _jl_name(m, :name))
 
 # On the ABSTRACT type, so EVERY field struct is covered by one method — 25 of them today, and the

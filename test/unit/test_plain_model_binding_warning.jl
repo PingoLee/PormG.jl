@@ -5,7 +5,7 @@ A models file that binds a model with a plain global (`Race = Models.Model(…)`
 every `M.Race` read is untyped: a dynamic call under the JIT, an error under `juliac --trim`. #1650
 made the Generator write `const`; a file written by hand, or generated before #1650, keeps the plain
 form, and nothing told the author. Registration now does, once, and only for a binding whose type the
-compiler cannot know: a `const` binding and a typed global (`Race::Models.Model_Type = …`, the form
+compiler cannot know: a `const` binding and a typed global (`Race::Models.ModelType = …`, the form
 #1663 is measuring) both pass without a word.
 
 Cadence: one `@warn` per registration that finds bindings not reported before, naming the first and
@@ -115,21 +115,21 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. A typed global is silent.
 #
-# `Driver::Models.Model_Type = …` fixes the binding's type, not its value, so the read is typed; it
+# `Driver::Models.ModelType = …` fixes the binding's type, not its value, so the read is typed; it
 # is the form #1663 is measuring, and this check must not reopen that decision. `isconst` is false
 # here, so only the binding-type arm keeps it out; dropping that arm fails this one. The direct
 # `Core.get_binding_type` assertion pins the non-public call for the Julia this suite runs on.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a typed-global models module logs no warning (#1664)" begin
   mod = _pmb_module(:PmbTypedModels, quote
-    Driver::Models.Model_Type = Models.Model("pmbt_driver",
+    Driver::Models.ModelType = Models.Model("pmbt_driver",
       driverid = Models.IDField(), surname = Models.CharField())
-    Result::Models.Model_Type = Models.Model("pmbt_result",
+    Result::Models.ModelType = Models.Model("pmbt_result",
       resultid = Models.IDField(),
       driverid = Models.ForeignKey(Driver, pk_field = "driverid", related_name = "pmbt_results"))
   end)
   @test !isconst(mod, :Driver)
-  @test Core.get_binding_type(mod, :Driver) === Models.Model_Type
+  @test Core.get_binding_type(mod, :Driver) === Models.ModelType
   @test isempty(_pmb_warnings(mod))
   @test Models.connection_key(mod.Driver) == "pmb_mock"
 end

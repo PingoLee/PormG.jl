@@ -1053,7 +1053,7 @@ _cte_state(instruc::SQLInstruction, name::AbstractString)::Union{Nothing,CTEStat
 # build's instruction: its view of the projection, its records, its `projection_kinds`.
 function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
   values = instruct.object.values
-  # Ordered to satisfy `Model_Type.fields` (#544), and meaningfully so: the loop below walks
+  # Ordered to satisfy `ModelType.fields` (#544), and meaningfully so: the loop below walks
   # `instruct.object.values` in the order the caller selected them, so the synthetic CTE model now
   # describes its columns in that same order instead of a hash of the aliases.
   fields = OrderedCollections.OrderedDict{String,PormGField}()
@@ -1123,7 +1123,7 @@ function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
   end
   @pormg_debug false
 
-  model = Models.Model_Type(
+  model = Models.ModelType(
     name = "",
     fields = fields,
     field_names = selected_field_names,

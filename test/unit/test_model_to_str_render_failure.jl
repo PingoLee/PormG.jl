@@ -30,9 +30,9 @@ struct _ThrowingRenderField <: PormG.PormGField
   payload::Any
 end
 
-# Bare Model_Type around a fields dict — bypasses the Model() constructor (and any config/FK
+# Bare ModelType around a fields dict — bypasses the Model() constructor (and any config/FK
 # resolution) so the test isolates the rendering loop only, mirroring test_migration_diff_failsafe.jl.
-# `AbstractDict` in, `OrderedDict` out (#544). `Model_Type.fields` is an `OrderedDict`, and callers
+# `AbstractDict` in, `OrderedDict` out (#544). `ModelType.fields` is an `OrderedDict`, and callers
 # here pass a plain `Dict` because these cases are about the RENDERING loop, not about order.
 #
 # The conversion has to be explicit: OrderedCollections 2.0 removed `convert(::OrderedDict, ::Dict)`
@@ -40,7 +40,7 @@ end
 # `@kwdef` to convert works on OC1 and throws on OC2. `[compat]` narrowed to `"2"` in #549, so OC2 is
 # now the only supported version and the explicit conversion is required rather than merely safer.
 _mk_render_model(fields::AbstractDict{String, PormG.PormGField}) =
-  PormG.Models.Model_Type(name = "drivers_render_scratch",
+  PormG.Models.ModelType(name = "drivers_render_scratch",
                           fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(fields))
 
 # Model_to_str only reads settings.django_prefix (nothing by default) — an all-default

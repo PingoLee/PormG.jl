@@ -46,7 +46,7 @@ _doccov_files(dir) = isdir(dir) ? sort!([joinpath(root, f)
 _doccov_rel(path) = replace(relpath(path, DOCCOV_REPO_ROOT), '\\' => '/')
 
 # Isolate the body of `Base.getproperty(q::ObjectHandler, …)` — shared by the two scans below.
-# The file holds a SECOND getproperty (on `Models.Model_Type`, for `.objects`) whose branches are
+# The file holds a SECOND getproperty (on `Models.ModelType`, for `.objects`) whose branches are
 # not fluent query methods, so a whole-file scan would demand docs for `:objects` and fail wrongly.
 # The `"\nend\n"` stop works only because every nested `end` inside the chain is indented.
 # Returns "" when either anchor is missing, so the callers' floors turn a broken scan into a
@@ -354,7 +354,7 @@ end
             # `search_vector_expression` (#1021), the text a full-text index is declared with, and
             # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
             # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39.
-            # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
+            # `ModelType` is deliberately absent — it is documented but NOT public: users hold one
             # as `M.Driver`, never name it.
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
                                    :CharField, :CheckConstraint, :CIDRField, :DateField, :DateTimeField,

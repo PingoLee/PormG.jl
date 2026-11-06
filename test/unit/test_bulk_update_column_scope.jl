@@ -758,7 +758,7 @@ end
 
     # A model with no primary key and no match_on cannot identify rows: hard error.
     @testset "no match_on and no primary key raises" begin
-        NoPk = PormG.Models.Model_Type(
+        NoPk = PormG.Models.ModelType(
             name = "no_pk_scope_model",
             fields = PormG.OrderedCollections.OrderedDict(
                 "a" => IntegerField(),
@@ -917,7 +917,7 @@ end
         # write to mapping (it is the auto-populated field branch). The Pair is the sole claim on df data.
         @testset "bare string absent from df + Pair mapping is allowed (both orders)" begin
             # Model with a defaulted field `laps` that is absent from DataFrame
-            StintModel = PormG.Models.Model_Type(
+            StintModel = PormG.Models.ModelType(
                 name = "stint_col_collision_model",
                 fields = PormG.OrderedCollections.OrderedDict(
                     "id"   => IDField(),

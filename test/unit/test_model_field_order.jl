@@ -1,5 +1,5 @@
 """
-Regression (#544): `Model_Type.fields` must preserve the order its source supplied, because that
+Regression (#544): `ModelType.fields` must preserve the order its source supplied, because that
 order IS the physical column order of every table PormG creates.
 
 `fields` was a plain `Dict{String, PormGField}`, so the order came from hashing the FIELD NAMES.

@@ -863,11 +863,11 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   end
 end
 
-# Dispatches on the concrete Model_Type (the sole concrete PormGModel). It was on `::PormGModel` and
+# Dispatches on the concrete ModelType (the sole concrete PormGModel). It was on `::PormGModel` and
 # carried a `hasfield(…, :cache)` guard only because fields used to be `<: PormGModel` and would recurse
 # into their absent `.cache` (a StackOverflowError, #108). Fields are no longer `<: PormGModel` (#186),
 # so that guard is gone and field property access uses Julia's default getproperty.
-function Base.getproperty(m::Models.Model_Type, sym::Symbol)
+function Base.getproperty(m::Models.ModelType, sym::Symbol)
   if sym === :objects
     # Self-healing: Ensure models are initialized before returning objects
     Models.ensure_model_initialized(m)
@@ -877,7 +877,7 @@ function Base.getproperty(m::Models.Model_Type, sym::Symbol)
     # accessor check below.  has_many_to_many_accessor() itself accesses m.cache and
     # m.related_objects; if those go through getproperty again we get infinite recursion.
     # This `fieldnames` intercept is itself what stops a user-defined M2M accessor from shadowing a
-    # `Model_Type` struct field — a struct field always wins here, whatever the accessor is called.
+    # `ModelType` struct field — a struct field always wins here, whatever the accessor is called.
     # (It used to be attributed to `format_fild_name` rejecting such names; that was never the
     # mechanism, and since #317 that function rewrites nothing at all.)
     return getfield(m, sym)

@@ -3,7 +3,7 @@ Serializing a `PormGRow` with `JSON.json` (#641).
 
 `PormGRow` is `{_data, _model, _dirty}` and JSON.jl has no method for it, so the writer reflected
 over all three slots and walked into `_model` — the model graph. That graph is a dense, cyclic DAG
-(`Model_Type.fields` → `sForeignKey.to` → `Model_Type.related_objects` →
+(`ModelType.fields` → `sForeignKey.to` → `ModelType.related_objects` →
 `ReverseRelation.model_resolved` → …). JSON.jl breaks true cycles with an ANCESTOR stack, so the
 call terminates; what it does NOT do is memoize, so every distinct PATH through the graph is
 serialized again. The cost is therefore exponential in the schema's density, not linear in the row:
@@ -133,8 +133,8 @@ const HAS_LOWER = _lower_owned_by(PormG.PormGRow, PormG.QueryBuilder)
   @test HAS_LOWER
 
   # The fixture is only a fixture while the graph is actually closed (see above).
-  @test getfield(getfield(JM.J_team, :related_objects)["j_drivers"], :model_resolved) isa Models.Model_Type
-  @test getfield(getfield(JM.J_driver, :fields)["mentor"], :to) isa Models.Model_Type
+  @test getfield(getfield(JM.J_team, :related_objects)["j_drivers"], :model_resolved) isa Models.ModelType
+  @test getfield(getfield(JM.J_driver, :fields)["mentor"], :to) isa Models.ModelType
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,8 +226,8 @@ end
 # Measured against THIS fixture (3 models), fixed vs. reverted — the revert being the
 # `include("json_lower.jl")` line commented out of `src/PormG.jl`:
 #
-#     Model_Type               26  /  5,476        ObjectHandler         26  /  5,741
-#     Model_Type (parent)      24  /  5,476        SQLObjectQuery        26  /  5,730
+#     ModelType               26  /  5,476        ObjectHandler         26  /  5,741
+#     ModelType (parent)      24  /  5,476        SQLObjectQuery        26  /  5,730
 #     sCharField               27  /    244        InstructionObject     32  /  6,415
 #     sForeignKey              28  /  5,476        ManyToManyRelation    48  / 10,268
 #     sForeignKey (self)       28  /  5,476        ReverseRelation       42  /  5,575
@@ -238,7 +238,7 @@ end
 # loose or wrong. Here every document is a one-key marker, so the fixed range is 24–48 against a
 # reverted minimum of 244 — a single bound sits an order of magnitude clear at both ends.
 #
-# At the 14-model F1 scale the same reverts measure 2,175,304 (`Model_Type`), 2,158,654 (one
+# At the 14-model F1 scale the same reverts measure 2,175,304 (`ModelType`), 2,158,654 (one
 # `sForeignKey`), 3,087,881 (`ReverseRelation`) and 2,177,351 (`InstructionObject`). This fixture
 # cannot reach those; `test/integration/test_row_and_get.jl` carries the real-scale assertion.
 # ═════════════════════════════════════════════════════════════════════════════
@@ -260,8 +260,8 @@ end
 
 # label => (value, the exact document it must produce)
 const GRAPH_CASES = Pair{String, Tuple{Any, String}}[
-  "Model_Type"          => (JM.J_driver,                                               "{\"pormg_model\":\"j_driver\"}"),
-  "Model_Type (parent)" => (JM.J_team,                                                 "{\"pormg_model\":\"j_team\"}"),
+  "ModelType"          => (JM.J_driver,                                               "{\"pormg_model\":\"j_driver\"}"),
+  "ModelType (parent)" => (JM.J_team,                                                 "{\"pormg_model\":\"j_team\"}"),
   "sCharField"          => (getfield(JM.J_driver, :fields)["surname"],                 "{\"pormg_field\":\"CharField\"}"),
   "sForeignKey"         => (getfield(JM.J_driver, :fields)["team"],                    "{\"pormg_field\":\"ForeignKey\"}"),
   "sForeignKey (self)"  => (getfield(JM.J_driver, :fields)["mentor"],                  "{\"pormg_field\":\"ForeignKey\"}"),
@@ -285,7 +285,7 @@ const GRAPH_CEILING = 120     # fixed range 24–48; reverted minimum 244
 # alone would still pass if someone narrowed the signature to one struct.
 # ─────────────────────────────────────────────────────────────────────────────
 const GRAPH_TYPES = [
-  Models.Model_Type, PormG.PormGField, Models.sCharField, Models.sForeignKey,
+  Models.ModelType, PormG.PormGField, Models.sCharField, Models.sForeignKey,
   Models.sManyToManyField, Models.ReverseRelation, Models.ManyToManyRelation,
   PormG.QueryBuilder.SQLObjectQuery, PormG.QueryBuilder.ObjectHandler,
   PormG.QueryBuilder.InstructionObject,
@@ -322,7 +322,7 @@ if HAS_GRAPH_LOWER
   # ───────────────────────────────────────────────────────────────────────────
   # The ceiling, and the containers. A bare value is not how these are met in practice — they are met
   # nested inside something a handler is serializing, which is the whole reason a marker on
-  # `Model_Type` and on the ABSTRACT field type bounds everything holding one.
+  # `ModelType` and on the ABSTRACT field type bounds everything holding one.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "a model-graph value is bounded wherever it appears" begin
     for (label, (value, _)) in GRAPH_CASES
@@ -333,7 +333,7 @@ if HAS_GRAPH_LOWER
       end
     end
 
-    # The whole fields collection at once: an `OrderedDict{String,PormGField}` is what a `Model_Type`
+    # The whole fields collection at once: an `OrderedDict{String,PormGField}` is what a `ModelType`
     # holds, and before the abstract method every entry expanded the graph again.
     @test length(J641.json(getfield(JM.J_driver, :fields))) < 6 * GRAPH_CEILING
   end

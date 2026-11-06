@@ -421,7 +421,7 @@ end
   @testset "a nested expression chain still deep-copies, and still shares the model" begin
     # The risk this pins: `Base.deepcopy(::T)` is NOT a `deepcopy_internal` hook, so deleting the
     # seven methods sends the recursion through Base's generic walk instead — deeper than before.
-    # That is the #157 shape, and the thing that must survive it is model SHARING: a `Model_Type`
+    # That is the #157 shape, and the thing that must survive it is model SHARING: a `ModelType`
     # reached through a query must come back identical, not cloned (`test_model_deepcopy.jl` owns
     # the contract; this asserts it still holds through an expression chain).
     q = FI.Fi_child.objects

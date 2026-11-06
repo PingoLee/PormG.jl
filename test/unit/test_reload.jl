@@ -439,7 +439,7 @@ end
     @test PormG.Utils.reload_module_contents!(RM, broken) == false
     write(broken, "module other_models\n    ReloadTest = 1\nend\n")
     @test PormG.Utils.reload_module_contents!(RM, broken) == false
-    @test RM.ReloadTest isa PormG.Models.Model_Type         # untouched by either
+    @test RM.ReloadTest isa PormG.Models.ModelType         # untouched by either
     rm(broken)
 
     @test haskey(RM.ReloadTest.fields, "new_field")

@@ -133,7 +133,7 @@ end
   `const` binding is typed. A file without `const` is still accepted and works the same, only
   slower; `generate_models_from_db` and the Django importer write `const` (#1650). `set_models`
   warns once per session when it registers a model bound by a plain global, naming the binding;
-  a typed global (`Race::Models.Model_Type = …`) is typed too and passes without a warning (#1664).
+  a typed global (`Race::Models.ModelType = …`) is typed too and passes without a warning (#1664).
   Hot reload works over a `const` binding (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions)).
 
 ## Composite Uniqueness (`unique_together`)

@@ -331,7 +331,7 @@ DbtPlain.connect_key = "db_table_mock"
 
     # …and the RENDERED PLAN must agree with that key. Asserting only on `get_all_models` is not
     # enough: `get_migration_plan` funnels every model through `strip_many_to_many_fields`, which
-    # rebuilds `Model_Type` field by field — an omitted slot silently defaults. When `db_table` was
+    # rebuilds `ModelType` field by field — an omitted slot silently defaults. When `db_table` was
     # dropped there, the plan key was the physical name while the DDL it rendered used the logical
     # one, so `CREATE TABLE` and the FK `REFERENCES` disagreed and a second `makemigrations`
     # proposed dropping the live table. This is the assertion that would have caught it.
@@ -345,7 +345,7 @@ DbtPlain.connect_key = "db_table_mock"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # strip_many_to_many_fields rebuilds a Model_Type slot by slot, so anything it forgets is silently
+  # strip_many_to_many_fields rebuilds a ModelType slot by slot, so anything it forgets is silently
   # lost — and EVERY model on the migration path goes through it. Pinned directly, because the
   # symptom (a plan that creates the wrong table) is several layers away from the cause.
   # ─────────────────────────────────────────────────────────────────────────────

@@ -1621,8 +1621,8 @@ end
 # #641 — a `PormGRow` handed to `JSON.json` used to serialize the SCHEMA, not the row.
 #
 # JSON.jl has no method for `PormGRow`, so it reflects over all three slots and walks into
-# `_model::PormGModel` — the model graph, which is a dense, cyclic DAG (`Model_Type.fields` ->
-# `sForeignKey.to` -> `Model_Type.related_objects` -> `ReverseRelation.model_resolved` -> ...). The
+# `_model::PormGModel` — the model graph, which is a dense, cyclic DAG (`ModelType.fields` ->
+# `sForeignKey.to` -> `ModelType.related_objects` -> `ReverseRelation.model_resolved` -> ...). The
 # writer breaks true cycles with an ANCESTOR stack, so it terminates, but it memoizes nothing: every
 # distinct PATH through the graph is serialized again. That is exponential in the schema's density,
 # and it is the whole bug — a 26-character row measured 1,843,565 characters and 5.3s of CPU on the

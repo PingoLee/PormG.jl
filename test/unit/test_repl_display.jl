@@ -3,8 +3,8 @@ Unit coverage for #534 — `Base.show` for the model/query/row types (`src/displ
 
 Before this, no core PormG type defined `Base.show`, so Julia's `show_default` walked struct slots
 with the 2-argument `show` and followed the model graph to exhaustion:
-`Model_Type.fields` → `sForeignKey.to` → `Model_Type` → `related_objects` → `ReverseRelation.model_resolved`
-→ `Model_Type`. Measured on the 14-model F1 fixture, on ONE line each:
+`ModelType.fields` → `sForeignKey.to` → `ModelType` → `related_objects` → `ReverseRelation.model_resolved`
+→ `ModelType`. Measured on the 14-model F1 fixture, on ONE line each:
 
     M.Driver                     1,623,608 chars
     a single PormGRow            1,623,696 chars
@@ -117,7 +117,7 @@ _inner(x) = sprint(show, x)
 #      so a single 4,000-char ceiling caught exactly one of the ten cases.
 #   2. **One ceiling for both routes.** A model's card (`_plain`, ~430 chars) and its compact form
 #      (`_inner`, ~28 chars) differ by 15x, so a ceiling loose enough for the card was useless for
-#      the compact form — and the compact form is precisely where the 2-arg `show(::IO, ::Model_Type)`
+#      the compact form — and the compact form is precisely where the 2-arg `show(::IO, ::ModelType)`
 #      lives, the method the whole design rests on. Deleting only that method moved `_inner` from 28
 #      to 342 and was caught by no ceiling at all.
 #
@@ -126,8 +126,8 @@ _inner(x) = sprint(show, x)
 const CEILING = 4_000                          # the standard-vector case; its real size is ~190
 const CEILINGS = Dict{String,Tuple{Int,Int}}(
   #                          plain  inner        real p/i      full revert   partial revert (2-arg model show)
-  "Model_Type (parent)"  => ( 600,    60),     # 214/26         2259/2259     215/342
-  "Model_Type (child)"   => ( 900,    60),     # 432/28         2259/2259     433/621
+  "ModelType (parent)"  => ( 600,    60),     # 214/26         2259/2259     215/342
+  "ModelType (child)"   => ( 900,    60),     # 432/28         2259/2259     433/621
   "ObjectHandler"        => ( 700,   120),     # 189/39         3441/3441
   "SQLObjectQuery"       => ( 120,   120),     # 39/39          3407/3407
   "sForeignKey"          => ( 200,   200),     # 68/68          2260/2260
@@ -157,8 +157,8 @@ const CEILINGS = Dict{String,Tuple{Int,Int}}(
     row = PormG.PormGRow(Dict(:id => 7, :surname => "Senna", :team => "Lotus"), RS.Rs_driver)
 
     cases = Pair{String,Any}[
-      "Model_Type (parent)"      => RS.Rs_team,
-      "Model_Type (child)"       => RS.Rs_driver,
+      "ModelType (parent)"      => RS.Rs_team,
+      "ModelType (child)"       => RS.Rs_driver,
       "ObjectHandler"            => q,
       "SQLObjectQuery"           => q.object,
       "sForeignKey"              => RS.Rs_driver.fields["team"],
@@ -187,10 +187,10 @@ const CEILINGS = Dict{String,Tuple{Int,Int}}(
   # `show`, so bounding THAT bounds every container, including ones with no method of their own.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "a nested model renders compactly, not recursively" begin
-    # The FK's `to` is a live Model_Type after `set_models` resolved it — this is the exact slot the
+    # The FK's `to` is a live ModelType after `set_models` resolved it — this is the exact slot the
     # dump travelled through.
     fk = RS.Rs_driver.fields["team"]
-    @test getfield(fk, :to) isa Models.Model_Type
+    @test getfield(fk, :to) isa Models.ModelType
     @test _inner(getfield(fk, :to)) == "Model(\"rs_team\", 3 fields)"
 
     # And the reverse direction: the parent's `related_objects` hold the child model.
@@ -216,7 +216,7 @@ const CEILINGS = Dict{String,Tuple{Int,Int}}(
   # `ReverseRelation` pair was worse — asserted, but by a substring and a length bound that Julia's
   # DEFAULT rendering also satisfies.
   #
-  # They are cosmetic rather than dangerous — the `Model_Type` and `PormGField` compact methods
+  # They are cosmetic rather than dangerous — the `ModelType` and `PormGField` compact methods
   # already bound everything these hold, so the megabyte dump cannot return through them — but a file
   # that presents a method as covered when it is not is the thing this repo's review checklist calls
   # green theater. Exact matches, so deleting any one of them fails here.

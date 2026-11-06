@@ -20,7 +20,7 @@ So the copy rebuilds each entry with a fresh vector, and the last testset here a
 that, in the one form the public writers cannot reach.
 
 The `PormGField` (and, for `cjoin_on`, the `PormGModel`) inside an entry stays shared by
-reference: it holds a Model_Type → Module that `deepcopy` cannot traverse — the very reason
+reference: it holds a ModelType → Module that `deepcopy` cannot traverse — the very reason
 the original copy was shallow. So does each `FilterType` element inside the vector; writers
 replace the vector, never an element.
 

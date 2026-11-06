@@ -1707,13 +1707,14 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   end
 
   # Resolve the environment with the file's `default_env:` folded into the precedence (#205). The
-  # guesses (`default_env:`, `dev`) are a REPL's or an implicit load's only (#1228).
-  selected_env = _effective_env(env, _peek_default_env(db_settings_file);
+  # guesses (`default_env:`, `dev`) are a REPL's or an implicit load's only (#1228). The file is read
+  # for `default_env:` only when neither `env` nor `PORMG_ENV` states the environment, since
+  # `_effective_env` ignores it then: a repeated load with a stated environment does not read the
+  # file at all (#1668).
+  file_default = (env === nothing && _pormg_env() === nothing) ? _peek_default_env(db_settings_file) : nothing
+  selected_env = _effective_env(env, file_default;
                                 fallback = implicit || _is_interactive(), path = path, folder = folder,
                                 root = root)
-  # #1232: the driver's extension, before anything below closes or replaces an entry — a refused
-  # load leaves the registry exactly as it found it.
-  _require_driver_extension(_peek_driver(db_settings_file, selected_env), path)
 
   # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
   # folder was already registered under a different spelling — typically the absolute path minted
@@ -1742,6 +1743,12 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     before_connect === nothing || (config[existing].before_connect = before_connect)
     return existing
   end
+
+  # #1232: the driver's extension, before anything below closes or replaces an entry — a refused
+  # load leaves the registry exactly as it found it. After the no-op above, which replaces nothing
+  # and returns an entry whose driver was checked when it was loaded (an extension, once loaded,
+  # stays loaded), so a repeated load does not read the file for it (#1668).
+  _require_driver_extension(_peek_driver(db_settings_file, selected_env), path)
 
   if existing !== nothing && existing != path
     if config[existing].implicit && !implicit

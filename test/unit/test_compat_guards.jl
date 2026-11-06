@@ -246,11 +246,22 @@ end
 #          statement in 4 of 4 rounds, 2.2.1 ran it to its end. Measured before narrowing: this PormG
 #          resolves with LibPQ 1.18.0 and MySQL 2.2.2, and an add pinned to MySQL 2.2.1 no longer
 #          resolves.
+#   YAML   raised "0.4" -> "0.4.7" (#1668). The pre-check reads of connection.yml swallow only the
+#          errors a pre-check expects, YAML.jl's own syntax errors among them; anything else
+#          propagates. Below 0.4.7 an unterminated flow sequence (`test: [unterminated`) crashes the
+#          parser itself, `FieldError: type YAML.EventStream has no field mark` in
+#          `_parse_flow_sequence_entry` (parser.jl reads `stream.mark` at v0.4.6), instead of
+#          raising its `ParserError`. 0.4.7 (JuliaData/YAML.jl#116) raises the `ParserError`. The
+#          old catch-all hid the crash; CI's floor job (0.4.0) failed on it in 4 tests. Measured
+#          before narrowing: this PormG resolves with YAML 0.4.7 beside LibPQ 1.18.0, Postgres 2.6.0,
+#          MySQL 2.2.2, SQLite 1.6.1, TimeZones 1.12.0 and PrecompileTools 1.2.0; an add pinned to
+#          YAML 0.4.6 no longer resolves; at 0.4.7 the unterminated sequences raise `ParserError` and
+#          `test_swallowed_errors.jl` passes. The consuming apps already require 0.4.7 or newer.
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the
-# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.6
-# or MySQL below 2.2.2 fails the matching assertion here.
+# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.6,
+# MySQL below 2.2.2 or YAML below 0.4.7 fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Measured floors that PormG cannot go below (#574)" begin
   # Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
@@ -283,6 +294,7 @@ end
     ("PrecompileTools", v"1.2.0"),
     ("Postgres", v"2.6.0"),
     ("MySQL", v"2.2.2"),
+    ("YAML", v"0.4.7"),
   )
     entry = _compat_entry(name)
     @test entry !== nothing

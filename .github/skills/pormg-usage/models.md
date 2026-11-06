@@ -73,7 +73,7 @@ module in one step:
 
 ```julia
 PormG.@models_module Scratch "db" begin
-    Driver = Models.Model("drivers",
+    const Driver = Models.Model("drivers",
         driverid = Models.IDField(),
         surname  = Models.CharField(max_length = 50),
     )
@@ -83,19 +83,21 @@ end
 ## Defining models
 
 Models live in a module, one `Models.Model(...)` per table. `@import_models` registers the module,
-so the file itself does not call `Models.set_models`:
+so the file itself does not call `Models.set_models`. Bind each model with `const`: a plain global
+makes every `M.Race` an untyped read. A file without `const` still loads; add it when you touch one
+(#1650):
 
 ```julia
 module models
 import PormG.Models
 
-Circuit = Models.Model("circuits",
+const Circuit = Models.Model("circuits",
     circuitid = Models.IDField(),
     name      = Models.CharField(max_length = 255),
     country   = Models.CharField(max_length = 100),
 )
 
-Driver = Models.Model("drivers",
+const Driver = Models.Model("drivers",
     driverid    = Models.IDField(),
     driverref   = Models.CharField(max_length = 255),
     forename    = Models.CharField(max_length = 50),
@@ -104,7 +106,7 @@ Driver = Models.Model("drivers",
     dob         = Models.DateField(null = true),
 )
 
-Race = Models.Model("races",
+const Race = Models.Model("races",
     raceid    = Models.IDField(),
     year      = Models.IntegerField(),
     name      = Models.CharField(max_length = 255),
@@ -112,7 +114,7 @@ Race = Models.Model("races",
     circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE"),
 )
 
-Result = Models.Model("results",
+const Result = Models.Model("results",
     resultid      = Models.IDField(),
     raceid        = Models.ForeignKey(Race, on_delete = "CASCADE"),
     driverid      = Models.ForeignKey(Driver, on_delete = "RESTRICT"),

@@ -324,7 +324,7 @@ Every query above parses the text of every row it reads. A `SearchVectorField` s
 document in a `tsvector` column instead, as Django's does, so a search reads the stored document:
 
 ```julia
-Race_report = Models.Model("race_report",
+const Race_report = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
     body   = Models.TextField(null = true),
@@ -390,7 +390,7 @@ and every update, as a generated column (`GENERATED ALWAYS AS (…) STORED`). It
 nothing has to fill it:
 
 ```julia
-Race_report = Models.Model("race_report",
+const Race_report = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
     body   = Models.TextField(null = true),
@@ -441,7 +441,7 @@ that is simply never used. So declare the expression with `Models.search_vector_
 returns the text the query itself renders, rather than typing it by hand:
 
 ```julia
-Driver = Models.Model("driver",
+const Driver = Models.Model("driver",
     driverid = Models.IDField(),
     forename = Models.CharField(),
     surname  = Models.CharField(),

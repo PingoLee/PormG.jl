@@ -71,7 +71,7 @@ So a blank cell (`missing` or `nothing`) in a column you supplied means **`NULL`
 To have PormG supply the value, **leave the column out of the `DataFrame`**:
 
 ```julia
-# Stint = Models.Model("stint",
+# const Stint = Models.Model("stint",
 #     driver    = Models.CharField(),
 #     laps      = Models.IntegerField(default = 0, null = true),
 #     pit_stops = Models.IntegerField(default = 0))

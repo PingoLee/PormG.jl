@@ -252,7 +252,7 @@ says so in a marker. The name is the derived one with `__` collapsed and the tra
 # PormG: 'Driver_.circuit_id' is imported with related_name="driver" — the reverse accessor PormG
 #   derives for it on 'Circuit', 'driver_', ends with '_', so it can never be a lookup-path segment
 #   (Django refuses the class name too: models.E023). …
-Driver_ = Models.Model(
+const Driver_ = Models.Model(
   circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE, related_name="driver"))
 ```
 
@@ -272,9 +272,9 @@ import_models_from_django(
 Everything lands in **one** generated module, and each model's table carries its own app label:
 
 ```julia
-Circuit     = Models.Model(db_table = "racing_circuit",     …)
-User        = Models.Model(db_table = "access_user",        …)
-ImportBatch = Models.Model(db_table = "imports_importbatch",
+const Circuit     = Models.Model(db_table = "racing_circuit",     …)
+const User        = Models.Model(db_table = "access_user",        …)
+const ImportBatch = Models.Model(db_table = "imports_importbatch",
   circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE),
   steward_id = Models.ForeignKey("User", pk_field="id", on_delete=PROTECT))
 ```
@@ -360,8 +360,8 @@ class Driver(models.Model): ...    class Driver(models.Model): ...
 ```
 
 ```julia
-Racing_driver = Models.Model(db_table = "racing_driver", …)   # logical name "racing_driver"
-Access_driver = Models.Model(db_table = "access_driver", …)   # logical name "access_driver"
+const Racing_driver = Models.Model(db_table = "racing_driver", …)   # logical name "racing_driver"
+const Access_driver = Models.Model(db_table = "access_driver", …)   # logical name "access_driver"
 ```
 
 Renaming only the loser would make the output depend on the order you listed the apps, and PormG keys
@@ -384,7 +384,7 @@ is which.
 
 ```julia
 import_models_from_django(pairs; binding_overrides = Dict("access.Driver" => "DriverLicence"))
-# DriverLicence = Models.Model(db_table = "access_driver", …)   # logical name "driverlicence"
+# const DriverLicence = Models.Model(db_table = "access_driver", …)   # logical name "driverlicence"
 ```
 
 The value becomes the model's name, so the binding, the logical name and the reverse accessor all
@@ -412,11 +412,11 @@ class DimIbge(models.Model):
 imported with `django_prefix = "dash"` becomes:
 
 ```julia
-Dim_uf = Models.Model(db_table = "dash_dim_uf",
+const Dim_uf = Models.Model(db_table = "dash_dim_uf",
   id = Models.IDField(),
   nome = Models.CharField(max_length=50))
 
-DimIbge = Models.Model(db_table = "dash_dimibge",
+const DimIbge = Models.Model(db_table = "dash_dimibge",
   id = Models.IDField(),
   cidade = Models.CharField(max_length=10),
   ufs = Models.ManyToManyField("Dim_uf", db_table="dash_dimibge_ufs"))
@@ -813,7 +813,7 @@ class Dim_item_fabricante(models.Model):
 imports as:
 
 ```julia
-Dim_item_fabricante = Models.Model(
+const Dim_item_fabricante = Models.Model(
   id = Models.IDField(),
   fabricante_id = Models.ForeignKey("Dim_fabricante", pk_field="id", on_delete=CASCADE),
   item_id = Models.ForeignKey("Dim_item", pk_field="id", on_delete=CASCADE),
@@ -869,7 +869,7 @@ the same way, and it emits nothing of its own to carry the marker:
 # PormG: model 'Relatorio' inherits 'TimeStampedModel', not defined in this file — any fields
 #   declared there are MISSING below. Add them by hand, or pass every app of the project as
 #   "<app_label>" => "<models.py>" pairs so a base in another app is merged.
-Relatorio = Models.Model(
+const Relatorio = Models.Model(
   id = Models.IDField(),
   titulo = Models.CharField(max_length=80))
 ```
@@ -935,7 +935,7 @@ class ImportBatch(models.Model):
 imports as (fields are emitted in sorted order, so `canal` precedes `status`):
 
 ```julia
-ImportBatch = Models.Model(
+const ImportBatch = Models.Model(
   id = Models.IDField(),
   canal = Models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets"))),
   status = Models.CharField(max_length=20, default="DRAFT", choices=(("DRAFT", "Em processamento"), ("APPLIED", "Aplicado"), ("IN_PROGRESS", "In Progress"))))

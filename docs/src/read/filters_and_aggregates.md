@@ -1643,9 +1643,9 @@ has no year. Read the year through the relation instead, with `"raceid__date__@y
 weekends keyed by date, with a `year` column of its own, and the sessions held on each weekend:
 
 ```julia
-Weekend = Models.Model("weekend", weekendid = Models.IDField(),
+const Weekend = Models.Model("weekend", weekendid = Models.IDField(),
                        date = Models.DateField(unique = true), year = Models.IntegerField())
-Session = Models.Model("session", sessionid = Models.IDField(), name = Models.CharField(),
+const Session = Models.Model("session", sessionid = Models.IDField(), name = Models.CharField(),
                        weekend = Models.ForeignKey(Weekend, pk_field = "date"))
 ```
 

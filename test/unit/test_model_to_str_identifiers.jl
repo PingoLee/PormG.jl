@@ -25,6 +25,14 @@ using PormG: PormGField
 
 const MTS_SETTINGS = PormG.Configuration.Settings()
 
+# #1650: a generated model line is `const <Binding> = Models.Model(…)`. Reads the binding, and fails
+# when the line is not `const`, so every round-trip below also pins the form the Generator writes.
+function _mts_binding(generated::AbstractString)::String
+    m = match(r"(?m)^const (.+?) = Models\.Model\(", generated)
+    m === nothing && error("not a const model binding: " * first(generated, 120))
+    return String(m.captures[1])
+end
+
 # One module reused by every round-trip below; `Models` must be bound because the generated text
 # says `Models.Model(...)`.
 const MTS_MOD = Module(:ModelToStrIdentScratch)
@@ -230,7 +238,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
   @testset "the generated binding matches a child's ForeignKey target" begin
     for parent in ["driver", "_order", "end", "db_table", "constraints", "Driver_Profile"]
       m = Model(parent, Dict{String, PormGField}("id" => IDField()))
-      binding = first(split(Model_to_str(m; name_is_physical_table = true), " = "))
+      binding = _mts_binding(Model_to_str(m; name_is_physical_table = true))
       # What `inspectdb` writes into a child's `.to` for this parent table.
       @test binding == uppercasefirst(parent)
     end
@@ -244,7 +252,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     # (Julia 1.12), which would make the check pass for the wrong reason.
     for parent in ["2fast", "driver profile", "we\"ird", "_", "__", "___"]
       m = Model(parent, Dict{String, PormGField}("id" => IDField()))
-      binding = first(split(Model_to_str(m; name_is_physical_table = true), " = "))
+      binding = _mts_binding(Model_to_str(m; name_is_physical_table = true))
       @test Base.isidentifier(binding)
       @test !isempty(lstrip(binding, '_'))
     end
@@ -255,7 +263,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     for (parent, expected) in ["2fast" => "Col_2fast", "driver profile" => "Driver_profile",
                                "we\"ird" => "We_ird", "_" => "Col", "__" => "Col", "___" => "Col"]
       m = Model(parent, Dict{String, PormGField}("id" => IDField()))
-      @test first(split(Model_to_str(m; name_is_physical_table = true), " = ")) == expected
+      @test _mts_binding(Model_to_str(m; name_is_physical_table = true)) == expected
     end
   end
 
@@ -343,8 +351,8 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       m2 = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
       g1 = Model_to_str(m1; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
       g2 = Model_to_str(m2; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
-      b1 = first(split(g1, " = "))
-      b2 = first(split(g2, " = "))
+      b1 = _mts_binding(g1)
+      b2 = _mts_binding(g2)
       @test b1 == "Driver_profile"
       @test b2 != b1 && Base.isidentifier(b2)   # the whole point — no shared binding
       r1 = _reload(g1)
@@ -363,7 +371,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       taken_names = Set{String}()
       m = Model("models", Dict{String, PormGField}("id" => IDField()))
       generated = Model_to_str(m; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
-      binding = first(split(generated, " = "))
+      binding = _mts_binding(generated)
       @test binding == "Models2"          # not "Models" — would shadow `import PormG.Models`
       @test PormG.model_table_name(_reload(generated)) == "models"
     end
@@ -459,7 +467,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       m = Model("pit_stop", Dict{String, PormGField}("id" => IDField(), "profile_id" => fk))
       g = Model_to_str(m; name_is_physical_table = true)
 
-      parent_binding = first(split(Model_to_str(parent; name_is_physical_table = true), " = "))
+      parent_binding = _mts_binding(Model_to_str(parent; name_is_physical_table = true))
       @test occursin("Models.ForeignKey(\"$(parent_binding)\"", g)
       # Stated concretely too, so the assertion above cannot pass by comparing two equally-wrong
       # strings: it is the sanitized binding, not `uppercasefirst("driver profile")`.

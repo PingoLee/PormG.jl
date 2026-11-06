@@ -887,8 +887,8 @@ PostgreSQL. On MySQL it runs under the migration's `GET_LOCK` on one connection,
 `makemigrations` with `register_ignore_tables!`:
 
 ```julia
-LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
-                                driverref = PormG.Models.CharField(max_length = 64))
+const LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                      driverref = PormG.Models.CharField(max_length = 64))
 PormG.Models.bind!(LiveTiming, "db")
 PormG.Migrations.ensure_table!(LiveTiming, "db")   # :created, then :exists on every later boot
 ```

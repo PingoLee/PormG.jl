@@ -15,12 +15,12 @@ Consider a Formula 1 scenario where drivers have personal sponsors:
 ```julia
 using PormG.Models
 
-M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",
+const M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",
   id = Models.IDField(),
   name = Models.CharField(unique=true)
 )
 
-M2m_driver_endorsement_scratch = Models.Model("m2m_driver_endorsement_scratch",
+const M2m_driver_endorsement_scratch = Models.Model("m2m_driver_endorsement_scratch",
   id = Models.IDField(),
   driverref = Models.CharField(unique=true),
   
@@ -60,7 +60,7 @@ that succeed one another, constructors that share an engine supplier. Reference 
 string**, since its own binding does not exist yet at the point the field is written:
 
 ```julia
-M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
+const M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
   id = Models.IDField(),
   driverref = Models.CharField(unique=true),
   teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of")
@@ -137,7 +137,7 @@ WHERE "Tb_2"."driverref" = $1
     ([#396](https://github.com/PingoLee/PormG.jl/issues/396)):
 
     ```julia
-    M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
+    const M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
       id = Models.IDField(),
       driverref = Models.CharField(unique=true),
       mentor = Models.ForeignKey("M2m_teammate_scratch", null=true),
@@ -193,12 +193,12 @@ To do this, you define a regular model with two `ForeignKey` fields, and then te
 ```julia
 using PormG.Models
 
-M2m_team_scratch = Models.Model("m2m_team_scratch",
+const M2m_team_scratch = Models.Model("m2m_team_scratch",
   id = Models.IDField(),
   name = Models.CharField(unique=true)
 )
 
-M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
+const M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
   id = Models.IDField(),
   driverref = Models.CharField(unique=true),
   
@@ -208,7 +208,7 @@ M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
 )
 
 # The explicit through model
-M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+const M2m_membership_scratch = Models.Model("m2m_membership_scratch",
   id = Models.IDField(),
   driver = Models.ForeignKey(M2m_driver_explicit_scratch, on_delete=Models.CASCADE),
   team = Models.ForeignKey(M2m_team_scratch, on_delete=Models.CASCADE),
@@ -226,7 +226,7 @@ This pattern matches Django exactly and keeps your model definitions clean and r
     Keeping the model above and adding the pin:
 
     ```julia
-    M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+    const M2m_membership_scratch = Models.Model("m2m_membership_scratch",
       db_table = "racing_membership",      # the real table, whatever the logical name is
       id = Models.IDField(),
       driver = Models.ForeignKey(M2m_driver_explicit_scratch, on_delete=Models.CASCADE),
@@ -248,7 +248,7 @@ This pattern matches Django exactly and keeps your model definitions clean and r
     ([#377](https://github.com/PingoLee/PormG.jl/issues/377)):
 
     ```julia
-    M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+    const M2m_membership_scratch = Models.Model("m2m_membership_scratch",
       db_table = "racing_membership",
       id = Models.IDField(),
       driver_id = Models.ForeignKey(M2m_driver_explicit_scratch, db_column="drv", on_delete=Models.CASCADE),

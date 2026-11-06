@@ -440,13 +440,13 @@ end
 
     # The importer leaves the positional name out (#1043), so `managed = false` is the first argument
     # when no `db_table` precedes it.
-    @test occursin("\nDriverPoints = Models.Model(db_table = \"driver_points_v\", managed = false,", generated)
-    @test occursin("\nFeedRow = Models.Model(managed = false,", generated)   # inherited
-    @test occursin("\nCircuit = Models.Model(\n", generated)
-    @test !occursin("\nCircuit = Models.Model(managed", generated)
+    @test occursin("\nconst DriverPoints = Models.Model(db_table = \"driver_points_v\", managed = false,", generated)
+    @test occursin("\nconst FeedRow = Models.Model(managed = false,", generated)   # inherited
+    @test occursin("\nconst Circuit = Models.Model(\n", generated)
+    @test !occursin(r"\n(const )?Circuit = Models\.Model\(managed", generated)
     # Not a literal: the model stays managed, and both the log and the file say so.
-    @test occursin("\nLap = Models.Model(\n", generated)
-    @test !occursin("\nLap = Models.Model(managed", generated)
+    @test occursin("\nconst Lap = Models.Model(\n", generated)
+    @test !occursin(r"\n(const )?Lap = Models\.Model\(managed", generated)
     @test occursin("# PormG: Meta.managed on 'Lap' is not True or False", generated)
     @test any(r -> r.level == Logging.Warn && occursin("Meta.managed", string(r.message)), logs)
     # A managed model's key into an unmanaged one: Django allows the constraint, PormG does not (the

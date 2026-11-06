@@ -444,13 +444,14 @@ end
 # binds, in the same order — with the kind that render computed: `(sql, kind)`. Only two shapes keep a
 # kind: `F` arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders
 # through), and a function that renders as an interval (`_get_select_query(::SQLTypeFunction)`'s own
-# arm). The `Concat`, `LPad`/`RPad` and declared-cast checks read it until #1304; they read the walk
-# now, and the expression-kind matrix records it as its `render` channel, the render's own answer.
+# arm), with the calendar part it may hold (#1621). The `Concat`, `LPad`/`RPad` and declared-cast
+# checks read it until #1304; they read the walk now, and the expression-kind matrix records it as its
+# `render` channel, the render's own answer.
 function _render_operand_kind(node, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   node isa FExpression && return _set_update_query_typed(node, instruc)
   if node isa FObject
-    sql, interval_ms, interval = _render_function_typed(node, instruc; _as = _as)
-    return (interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql), (interval ? CInterval() : nothing)
+    sql, interval_ms, interval_kind = _render_function_typed(node, instruc; _as = _as)
+    return (interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql), interval_kind
   end
   return _get_select_query(node, instruc; _as = _as), nothing
 end
@@ -516,14 +517,17 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   return interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
 end
 
-# The function's SQL, whether it is an interval held in SQLite milliseconds, and whether it is an
-# interval at all (#894). Only the functions in `_INTERVAL_MS_AGGREGATES`/`_INTERVAL_MS_VARIADIC` over
-# an interval are either. `MAX` over the milliseconds is the longest interval, where `MAX` over the
-# stored `HH:MM:SS` text was the last one in text order (`"99:00:00"` over `"100:00:00"`, and
-# `"-01:00:00"` over `"02:00:00"`); `SUM` and `AVG` over the text added up its leading hours (#900).
+# The function's SQL, whether it is an interval held in SQLite milliseconds, and its interval kind, or
+# `nothing` when it is no interval (#894). Only the functions in `_INTERVAL_MS_AGGREGATES` and
+# `_INTERVAL_MS_VARIADIC` over an interval are either. `MAX` over the milliseconds is the longest
+# interval, where `MAX` over the stored `HH:MM:SS` text was the last one in text order (`"99:00:00"`
+# over `"100:00:00"`, and `"-01:00:00"` over `"02:00:00"`); `SUM` and `AVG` over the text added up its
+# leading hours (#900).
 # The third value types the projection on both engines: the render knows it as soon as it has
-# rendered, for `Max(F("start_at") - F("date"))` and a `Sum` alike. Every other function
-# renders exactly as before and answers `false, false`.
+# rendered, for `Max(F("start_at") - F("date"))` and a `Sum` alike. It is the kind, not a Bool
+# (#1621), as `_set_update_query_typed`'s is: `Max(F("grid") * Month(1))` may hold a month, and a Bool
+# rebuilt at the call site as `CInterval()` said it could not (#1583). Every other function renders
+# exactly as before and answers `false, nothing`.
 #
 # #932: a grouping aggregate's argument is evaluated per input row, before GROUP BY, so it renders in
 # the `:row` phase — `Sum(Case([When("grid" => Subquery(…), then = 1)], default = 0))` correlates on
@@ -532,7 +536,7 @@ end
 # never `_is_aggregate_call`, so its arguments keep the clause's phase; the `Sum` inside
 # `Lag(Sum(…))` is a real grouping aggregate and takes `:row` for its own argument.
 function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
-                                _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
+                                _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Union{CInterval,Nothing}}
   v.function_name == "WHEN" && throw(_bare_when_refusal())
   _check_fts_render(v, instruc)
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
@@ -778,7 +782,7 @@ function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, c
 end
 
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
-                               _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
+                               _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Union{CInterval,Nothing}}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
   # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
   # places condition params first positionally (e.g., WHEN cond THEN ? ... ELSE ? END).
@@ -826,7 +830,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # On PostgreSQL the operand of an extremum over arithmetic renders through the typed renderer,
   # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
   # only its kind is kept.
-  interval_ms = interval = false
+  interval_ms = false
+  interval::Union{CInterval,Nothing} = nothing   # #1621: the interval kind, calendar part included
   # #1356: an integer cast an engine guards names its operand more than once (`_integer_cast_guard`), so
   # the values the operand binds are read back from here and bound again for each further occurrence.
   # #1405: a declared `output_field` is the same cast over the whole function, whose values (a `Case`'s
@@ -841,7 +846,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # MySQL (#1130) would take it of the microseconds. #1324: the refusal is the one every number
     # function over a duration takes (`_operand_domain`), here because this arm renders the operand in
     # milliseconds before the check after Phase 3 would see it.
-    (ms === nothing && !operand_interval) || throw(_duration_math_refusal("ABS", instruc.connection))
+    (ms === nothing && operand_interval === nothing) || throw(_duration_math_refusal("ABS", instruc.connection))
   elseif v isa FObject && _interval_ms_candidate(v)
     sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector
@@ -851,19 +856,21 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       valued = [f for (x, f) in zip(operands, forms) if !_is_null_operand(x)]
       if sqlite && !isempty(valued) && all(f -> f[2] !== nothing, valued)
         resolved_column = Any[_is_null_operand(x) ? f[1] : f[2] for (x, f) in zip(operands, forms)]
-        interval_ms = interval = true
+        interval_ms = true
+        interval = _one_of_intervals(valued)
       else
         resolved_column = Any[f[1] for f in forms]
-        interval = !sqlite && !isempty(valued) && all(f -> f[3], valued)
+        interval = !sqlite && !isempty(valued) && all(f -> f[3] !== nothing, valued) ?
+                   _one_of_intervals(valued) : nothing
       end
     else
       fanout_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
       if sqlite && ms !== nothing
-        resolved_column, interval_ms, interval = ms, true, true
+        resolved_column, interval_ms, interval = ms, true, something(operand_interval, CInterval())
       else
         # An interval with no millisecond form on SQLite is its text, and `SUM` over that is a number:
         # only PostgreSQL's value is typed from the operand here.
-        resolved_column, interval = fanout_column, !sqlite && operand_interval
+        resolved_column, interval = fanout_column, sqlite ? nothing : operand_interval
       end
     end
   elseif v.function_name == "CASE"
@@ -1130,6 +1137,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
+# #1621 — the kind of a value that is one of these interval operands (`Coalesce`, `Greatest`, `Least`):
+# it may hold a calendar part where any of them may, the rule `_unify_kinds` states for the walk
+# (#1583). The caller leaves NULL operands out; every operand here is an interval, or has a millisecond
+# form, which only an interval has.
+_one_of_intervals(forms)::CInterval =
+  CInterval(any(f -> (k = f[3]; k isa CInterval && k.calendar), forms))
 # #1405 — a `Coalesce`, `Greatest`, `Least` or `Case` that declares its `output_field`, which casts the
 # whole function to it as `Cast` casts its operand. A NULL-skipping rotation (#844) declares nothing.
 _declared_output_function(v::SQLTypeFunction)::Bool =

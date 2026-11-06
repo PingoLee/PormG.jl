@@ -176,6 +176,62 @@ function _is_interactive()::Bool
   return stored === nothing ? isinteractive() : stored
 end
 
+# ── Configuration is read at run time (#1606) ──────────────────────────────────
+#
+# A heap image (a sysimage, a `juliac` executable) saves every global as the build left it. A
+# configuration loaded while one is written travels in it, the database password in the pool's
+# connection string included, and at run time `load` finds the key and returns early (#1225), so the
+# image serves the build machine's settings instead of the deployment's. Measured on a `juliac`
+# executable whose entry loaded at its top level: the password was in the artifact (`strings`), and
+# the key was in `config` at start. So configuration is read at run time:
+#   - `load`, `register_connection`, `register_offline` and the two hook setters refuse while an image
+#     is written. The refusal is what keeps a credential out of the file: nothing is read or stored.
+#   - `__init__` drops any entry an image still carries (one written into `config` by hand). That
+#     removes it from the running program, not from the file's bytes, so its warning says so.
+# A package image is not a heap image: it saves none of PormG's state, and a package that loads in
+# its module body (precompile time) loads again in its `__init__`, as `configuration/setup.md` says.
+
+# Whether Julia is writing a heap image now: generating output, and not incrementally (a package
+# image is incremental). `_BUILDING` is the tests' stand-in, as `_INTERACTIVE` is: `nothing` (the
+# default) asks the runtime, a stored `Bool` answers.
+const _BUILDING = Ref{Union{Nothing, Bool}}(nothing)
+function _building_image()::Bool
+  stored = _BUILDING[]
+  stored === nothing || return stored
+  return _heap_image(ccall(:jl_generating_output, Cint, ()) == 1, Base.JLOptions().incremental != 0)
+end
+# The rule itself, apart from the runtime it asks: a heap image is output that is not incremental.
+_heap_image(generating::Bool, incremental::Bool)::Bool = generating && !incremental
+
+# The refusal, named by the call the app made.
+function _refuse_while_building(call::String)::Nothing
+  _building_image() || return nothing
+  throw(InvalidConfigurationError(
+    "`$(call)` was called while an image (a sysimage or a `juliac` executable) is being built. The " *
+    "image would keep the configuration, its credentials included, and serve it in place of the " *
+    "deployment's: PormG reads configuration at run time. Call it from `main` or from the app's " *
+    "`__init__`, not at the top level of the code the build runs."))
+end
+
+# Entries in `config` when this module initializes: only an image can hold them, written while it was
+# built. They are dropped, not closed: their pools hold driver handles from the build process, which
+# are not valid in this one. Returns how many were dropped.
+function _drop_image_entries!(cfg::Dict{String,Settings} = config)::Int
+  n = length(cfg)
+  n == 0 && return 0
+  dropped = sort!(collect(keys(cfg)))
+  empty!(cfg)
+  @warn "PormG dropped the connections this image was built with: configuration is read at run " *
+        "time. Load it in `main` or `__init__`. The image file may still hold their settings, " *
+        "credentials included: rebuild it without loading at build time, and rotate them." keys = dropped
+  return n
+end
+
+function __init__()
+  _drop_image_entries!()
+  return nothing
+end
+
 """
     set_before_connect_hook(f::Function)
 
@@ -200,6 +256,8 @@ When no hook is registered, connections proceed normally. A key loaded with its 
 longer has to test `key == "…"` and be registered from both the module body and `__init__`.
 """
 function set_before_connect_hook(f::Function)
+  # #1606: a hook set while an image is built travels in it, with anything its closure captured.
+  _refuse_while_building("PormG.Configuration.set_before_connect_hook")
   _BEFORE_CONNECT_HOOK[] = f
   return f
 end
@@ -213,6 +271,8 @@ The function `f` should accept a `key::String` and return:
 - A `Tuple` of `(url, adapter, pool_size)` or a `Dict` with those keys.
 """
 function set_connection_resolver(f::Function)
+  # #1606: a resolver set while an image is built travels in it, with anything its closure captured.
+  _refuse_while_building("PormG.Configuration.set_connection_resolver")
   _CONNECTION_RESOLVER[] = f
 end
 
@@ -1174,9 +1234,9 @@ end
 # from inside the precompile worker: the build needed the database and its credentials, and with the
 # database down it waited out the pool's connect timeout before warning. Nothing is lost for a
 # package image: it saves none of PormG's state, so the run-time `load` in `__init__` comes back
-# here. A sysimage or `juliac` build keeps the loaded key, so its run-time `load` returns early
-# (#1225) and the probe never runs; a missing extension then surfaces at the first `iunaccent_*`
-# query. `extensions:` is still validated at precompile time, by `_configured_extensions` in `load`.
+# here. A sysimage or `juliac` build keeps no configuration (#1606: `load` refuses while the image is
+# written), so its run-time `load` comes back here too. `extensions:` is still validated at precompile
+# time, by `_configured_extensions` in `load`.
 # `generating` is a keyword so the unit test can take the precompile branch.
 function _check_configured_extensions!(settings::PormGSettings;
                                        generating::Bool = ccall(:jl_generating_output, Cint, ()) == 1)::Nothing
@@ -1643,6 +1703,7 @@ included: loading would replace the offline entry with a live pool. Call `unregi
 first, or load under another key.
 """
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,Settings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+  _refuse_while_building("PormG.Configuration.load")   # #1606: configuration is read at run time
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -2015,6 +2076,7 @@ neither gets `InvalidConfigurationError`, before any pool is built or replaced. 
 `PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
 """
 function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing)
+  _refuse_while_building("PormG.Configuration.register_connection")   # #1606
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(InvalidConfigurationError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -2185,6 +2247,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
                           server_version::Union{Nothing, Integer} = nothing,
                           django_prefix::Union{Nothing, AbstractString} = nothing,
                           change_data::Bool = true)::String
+  _refuse_while_building("PormG.Configuration.register_offline")   # #1606
   adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
     "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
   # #1452: the version an offline SQLite key renders for. Checked before anything is replaced.

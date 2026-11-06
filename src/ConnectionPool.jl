@@ -1269,9 +1269,9 @@ const _reaper_started = Ref(false)
 # whose `__init__` loads it). Nothing is latched then either, so a later run-time call starts it:
 # - a package image saves none of PormG's state, so the run-time `load` in `__init__` registers the
 #   pool again and comes back here;
-# - a sysimage or `juliac` build saves the whole heap, the loaded key and the pool's monitor state
-#   included, so that `load` returns early and never reaches `enable_reaping!`. The first acquire
-#   starts the sweeper instead (`_start_reaper_if_reaping!`).
+# - a sysimage or `juliac` build keeps no configuration (#1606): `load` refuses while the image is
+#   written and `Configuration.__init__` drops what it holds, so the run-time `load` comes back here
+#   as well. `_start_reaper_if_reaping!` stays as the backstop for a pool that reaps with no sweeper.
 # `generating` is a keyword so the unit test can take the precompile branch.
 function _ensure_reaper!(; generating::Bool = ccall(:jl_generating_output, Cint, ()) == 1)
   generating && return nothing
@@ -1293,9 +1293,9 @@ function _ensure_reaper!(; generating::Bool = ccall(:jl_generating_output, Cint,
   return nothing
 end
 
-# The lazy start (#1562): this pool reaps but the sweeper is not running, because its configuration
-# was loaded while generating output and the image kept it (see `_ensure_reaper!`). A pool with leak
-# detection only needs no sweeper, so it starts none.
+# The lazy start (#1562): this pool reaps but the sweeper is not running, because reaping was enabled
+# while generating output (see `_ensure_reaper!`). Since #1606 no image keeps such a pool, so this is a
+# backstop. A pool with leak detection only needs no sweeper, so it starts none.
 function _start_reaper_if_reaping!(st::PoolMonitorState)
   (st.config.idle_timeout > 0 || st.config.max_lifetime > 0) && _ensure_reaper!()
   return nothing
@@ -4321,6 +4321,34 @@ function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,
       backoff > 0 && sleep(backoff)
     end
   end
+end
+
+# ── Latches an image keeps (#1606) ────────────────────────────────────────────
+#
+# A heap image (a sysimage, a `juliac` executable) saves every global as the build left it, and no task
+# survives. A flag that says "the task is running" would then stop the run-time process from ever
+# starting it: the SQLite worker (every SQLite statement would wait on a queue no task reads), the
+# reaper. The registries keyed by a pool name pools of the build process, which `Configuration.__init__`
+# has dropped. In a package image all of these are at their defaults already, so this is a no-op there.
+function _reset_image_latches!()::Nothing
+  _reaper_started[] = false
+  Base.@lock _sqlite_async_worker_lock begin
+    _sqlite_async_worker_started[] = false
+    while isready(_sqlite_async_work_queue)   # work queued for a connection that no longer exists
+      take!(_sqlite_async_work_queue)
+    end
+  end
+  Base.@lock _sqlite_pending_lock empty!(_sqlite_pending)
+  Base.@lock _POOL_MONITOR_LOCK empty!(_POOL_MONITOR)
+  Base.@lock _POOL_WAITERS_LOCK empty!(_POOL_WAITERS)
+  _MONITOR_ANY[] = false
+  _LEAK_ANY[] = false
+  return nothing
+end
+
+function __init__()
+  _reset_image_latches!()
+  return nothing
 end
 
 end # module

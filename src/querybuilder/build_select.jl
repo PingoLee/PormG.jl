@@ -131,7 +131,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # (#882's reason). A `Subquery` over it inherits the kind through the inner build's record.
         kind = _read_kind(v_copy, instruc)
         kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
-        instruc.projection_params[alias] = bound_since(mark)
+        _projection_params!(instruc)[alias] = bound_since(mark)
       end
       continue
     end
@@ -281,7 +281,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       end
     end
     out = _projection_output_name(instruc.select[i])
-    out === nothing || (instruc.projection_params[out] = bound_since(mark))
+    out === nothing || (_projection_params!(instruc)[out] = bound_since(mark))
   end
 
   # #194: the coarse warn that used to sit here is gone — the precise guard is
@@ -680,7 +680,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
         order_expr = v_field_copy.field
         null_flag = _projection_null_key(alias_name, instruc)
       else
-        push!(instruc.alias_null_keys, alias_name)   # rechecked once every join exists
+        push!(_alias_null_keys!(instruc), alias_name)   # rechecked once every join exists
       end
     end
     # #1497: an ordering over an uncast JSON key is refused on every engine, as `Max` is (#1491). A term
@@ -763,7 +763,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # is skipped, and the term is recorded for the #798 guard instead. The push and the copy below
       # move together — a copy without its push binds values no marker consumes, the #587
       # misalignment from the other side.
-      groups_term || (push!(instruc.ungrouped_order_terms, v.field); continue)
+      groups_term || (push!(_ungrouped_order_terms!(instruc), v.field); continue)
       push!(instruc.group, v_field_copy.field)
       # #587: GROUP BY prints this same string — `?`s included — BEFORE HAVING and ORDER BY, so on a
       # positional backend the values the term bound are needed a second time, under `:group`.

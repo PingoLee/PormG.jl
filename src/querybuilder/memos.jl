@@ -99,12 +99,19 @@ memo_key(ns::Symbol, name::AbstractString)::MemoKey = (ns, String(name))
 # write no-op would silently change that behaviour, and is the one thing in this file that could
 # have broken #478's neutrality claim.
 
+# #1593: each memo is `nothing` until its first write, so a build that never memoizes (a `count()`, an
+# `exists()`) allocates none of the three. A reader answers the miss for an unset memo; a writer
+# allocates it, unsized. The `sizehint!(…, 12)` the two dicts had allocated a 32-slot table up front
+# (976 bytes on Julia 1.13, against 80 for an empty `Dict`, which allocates its table on first insert),
+# and most builds hold a handful of keys.
 memo_projection(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,SQLTypeField} =
-  get(instruc.cache, key, nothing)
+  (memo = instruc.cache; memo === nothing ? nothing : get(memo, key, nothing))
 memo_projection(::SQLInstruction, ::Nothing)::Nothing = nothing
 
 memo_projection!(instruc::SQLInstruction, key::MemoKey, v::SQLTypeField)::SQLTypeField =
-  instruc.cache[key] = v
+  _projection_memo!(instruc)[key] = v
+_projection_memo!(instruc::SQLInstruction)::Dict{MemoKey,SQLTypeField} =
+  (memo = instruc.cache; memo === nothing ? (instruc.cache = Dict{MemoKey,SQLTypeField}()) : memo)
 
 # (`memo_projection_names` used to sit here, listing the NAME half of every key for the unknown-field
 # message. #1004 removed it: a memo name is not a declared name — a path projection is keyed by its
@@ -112,14 +119,21 @@ memo_projection!(instruc::SQLInstruction, key::MemoKey, v::SQLTypeField)::SQLTyp
 # instead, `_declared_alias_names` in `build_filter.jl`.)
 
 memo_field(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,PormGField} =
-  get(instruc.tab_field_cache, key, nothing)
+  (memo = instruc.tab_field_cache; memo === nothing ? nothing : get(memo, key, nothing))
 memo_field(::SQLInstruction, ::Nothing)::Nothing = nothing
 
 memo_field!(instruc::SQLInstruction, key::MemoKey, f::PormGField)::PormGField =
-  instruc.tab_field_cache[key] = f
+  _field_memo!(instruc)[key] = f
+_field_memo!(instruc::SQLInstruction)::Dict{MemoKey,PormGField} =
+  (memo = instruc.tab_field_cache; memo === nothing ? (instruc.tab_field_cache = Dict{MemoKey,PormGField}()) : memo)
 
-memo_json_lookup(instruc::SQLInstruction, key::MemoKey)::Bool = key in instruc.json_lookup_paths
+memo_json_lookup(instruc::SQLInstruction, key::MemoKey)::Bool =
+  (memo = instruc.json_lookup_paths; memo !== nothing && key in memo)
 memo_json_lookup(::SQLInstruction, ::Nothing)::Bool = false
 
-memo_json_lookup!(instruc::SQLInstruction, key::MemoKey)::Nothing =
-  (push!(instruc.json_lookup_paths, key); nothing)
+function memo_json_lookup!(instruc::SQLInstruction, key::MemoKey)::Nothing
+  memo = instruc.json_lookup_paths
+  memo === nothing && (memo = instruc.json_lookup_paths = Set{MemoKey}())
+  push!(memo, key)
+  return nothing
+end

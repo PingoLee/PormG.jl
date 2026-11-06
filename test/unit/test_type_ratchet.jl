@@ -99,7 +99,7 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/models/fields.jl" => 68,
   "src/querybuilder/many_to_many.jl" => 4,
   "src/querybuilder/parameters.jl" => 1,
-  "src/querybuilder/types.jl" => 36,
+  "src/querybuilder/types.jl" => 35,    # #1593: SQLTbAlias.count::Int
 )
 
 # :ok, :any or :abstract for one declared field type.

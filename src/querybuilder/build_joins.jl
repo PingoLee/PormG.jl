@@ -135,7 +135,7 @@ function _build_cjoin_on_row_join(config::AliasJoin, user_alias::String, instruc
   end
   # #484 — `track_path = false`: an alias is not a join path, so it must not claim a name in
   # `row_path`, which is the PATH loop's membership set. Same argument #474 made for a CTE hop.
-  _insert_join(instruct.row_join, row_join, instruct.row_path, user_alias; track_path = false)
+  _insert_join(instruct.row_join, row_join, instruct, user_alias; track_path = false)
   return nothing
 end
 
@@ -276,7 +276,7 @@ function _insert_many_to_many_joins(
     how = join_type,
   )
 
-  through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through"; track_path=track_path)
+  through_alias = _insert_join(instruct.row_join, through_row, instruct, "$(join_path)__through"; track_path=track_path)
 
   # `to_many` is NOT set here (#487): `_apply_many_to_many_branch` stamps it onto whichever row
   # SURVIVES dedup for this alias, which is not always this one.
@@ -293,7 +293,7 @@ function _insert_many_to_many_joins(
     how = join_type,
   )
 
-  return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path; track_path=track_path)
+  return _insert_join(instruct.row_join, related_row, instruct, join_path; track_path=track_path)
 end
 
 # #74 / #487: stamp `to_many` onto the row that SURVIVED dedup for `alias` — which may be a row an
@@ -634,10 +634,10 @@ function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String;
   # query — under the canonical path, so the spelling this traversal used does not decide whether
   # they are found.
   key = cte ? "" : _join_key(instruct, join_path)
-  join_type_override = cte ? nothing : get(instruct.join_type_overrides, key, nothing)
-  join_filters = cte ? nothing : get(instruct.join_conditions, key, nothing)
+  join_type_override = cte ? nothing : _lazy_get(instruct.join_type_overrides, key, nothing)
+  join_filters = cte ? nothing : _lazy_get(instruct.join_conditions, key, nothing)
   row = _with_config(row, join_type_override, join_filters)
-  alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
+  alias = _insert_join(instruct.row_join, row, instruct, join_path; track_path = !cte)
   # #169: `alias` is the dedup SURVIVOR's, so every spelling of one relation maps to the row emitted.
   cte || _record_join_alias!(instruct, key, alias)
   if join_type_override !== nothing   # #1367: a stated join type is never promoted

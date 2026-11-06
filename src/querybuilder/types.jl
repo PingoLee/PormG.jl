@@ -124,7 +124,8 @@ Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lo
 `:base` (the query's own model: field paths and join paths), `:cte` (a `.with(...)` label, #444) or
 `:joined` (a `cjoin_on` alias, #481).
 
-`row_path` is deliberately NOT one of these — it stays a `Vector{String}` and simply does not record
+`row_path` is deliberately NOT one of these — it stays a vector of paths (`nothing` until the first,
+#1593) and simply does not record
 CTE hops, nor (since #484) `cjoin_on` aliases (`_insert_join`'s `track_path`). Do not "unify" it onto
 this key: it is the PATH namespace's membership set, a CTE hop has no `custom_join` entry for the
 path materialization loop to skip, and recording one at all is what made a user's own join vanish.
@@ -449,6 +450,11 @@ second error rather than a fix.
 const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr, :phase, :group_key),
                                  Tuple{String,String,String,String,Symbol,Bool}}
 
+# One at-risk aggregate the #74 fan-out guard records (`InstructionObject.agg_sources`): the source
+# alias, the function, the projection's label and whether it is DISTINCT. Named so the lazy field and
+# its accessor spell the type once (#1593).
+const AggSource = NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}
+
 """
     RenderScope
 
@@ -568,36 +574,42 @@ end
   alias::String
   object::SQLObject
   select::Vector{SQLTypeField} = SQLTypeField[] # one slot per projection; `get_select_query` sizes it (#1335)
-  join::Vector{String} = []  # values to be used in join query
-  _where::Vector{String} = []  # values to be used in where query
+  # #1593: the clause vectors are typed at construction (`String[]`, not an `Any[]` converted on
+  # assignment) and stay eager — every build reads them, from the render and the dialects.
+  join::Vector{String} = String[]  # values to be used in join query
+  _where::Vector{String} = String[]  # values to be used in where query
   aggregate::Bool = false
-  group::Vector{String} = []  # values to be used in group query
+  group::Vector{String} = String[]  # values to be used in group query
   # #789: every non-aggregate `PARTITION BY` / `ORDER BY` term a window's OVER clause rendered, with
   # the values it bound, in render order. `_group_window_terms!` adds them to `group` once the
   # statement is known to aggregate; rendering them a second time there would bind them twice.
-  window_group_terms::Vector{Tuple{String,Vector{Any}}} = Tuple{String,Vector{Any}}[]
+  # `nothing` until the first window (#1593); write through `_window_group_terms!`.
+  window_group_terms::Union{Nothing,Vector{Tuple{String,Vector{Any}}}} = nothing
   # #1115: the `order_by` terms `get_order_query` rendered but left out of `group` because they hold
   # an aggregate or a window, as declared. `_check_mixed_grouping` walks exactly these — a term that
   # resolved to a projection alias is not here: its expression is the projection's, already checked
-  # there, even where a NULL sort key repeats it (#1130).
-  ungrouped_order_terms::Vector{SQLTypeField} = SQLTypeField[]
+  # there, even where a NULL sort key repeats it (#1130). `nothing` until the first such term (#1593).
+  ungrouped_order_terms::Union{Nothing,Vector{SQLTypeField}} = nothing
   # #1130: the values each projection bound, by output name, in the order its markers print. An ORDER
   # BY term that repeats a projection's SQL in its NULL sort key (`_projection_null_key`) binds them
-  # again from here, so the projection is never rendered a second time.
-  projection_params::Dict{String,Vector{Any}} = Dict{String,Vector{Any}}()
+  # again from here, so the projection is never rendered a second time. `nothing` until a projection
+  # binds a value (#1593).
+  projection_params::Union{Nothing,Dict{String,Vector{Any}}} = nothing
   # #1130: the ORDER BY terms whose NULL sort key kept the projection's alias, which no FROM column
   # named when ORDER BY rendered; `_refuse_late_shadowed_null_key` rechecks them once every join exists.
-  alias_null_keys::Vector{String} = String[]
+  # `nothing` until the first one (#1593).
+  alias_null_keys::Union{Nothing,Vector{String}} = nothing
   # #1130: this build is the predicate of an UPDATE or DELETE (`build(…; mutation = true)`).
   mutation::Bool = false
   # #1431: the caller checks the RIGHT/FULL capability rows itself, against the statement it prints
   # (`update()`), so `build_row_join_sql_text` leaves them to it (`build(…; defer_outer_join_check = true)`).
   defer_outer_join_check::Bool = false
-  having::Vector{String} = [] # values to be used in having query
-  order::Vector{String} = [] # values to be used in order query  
+  having::Vector{String} = String[] # values to be used in having query
+  order::Vector{String} = String[] # values to be used in order query
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
-  row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
+  # The path of each join `_insert_join` tracked (model__model__ etc). `nothing` until the first (#1593).
+  row_path::Union{Nothing,Vector{String}} = nothing
   # #169: the alias each relation path's join ended up under, keyed by the CANONICAL path — what a
   # `select_for_update(of = …)` target resolves through. `row_path` cannot answer that: it is not
   # aligned with `row_join` and records nothing on a dedup hit. Written by `_finish_hop!` and the M2M
@@ -610,17 +622,19 @@ end
   # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
   # resolved), so `on("status", …)` and a traversal spelled `status_id__…` find each other. The query
   # object keeps them as written; a hop reads them from here (`_finish_hop!`).
-  join_conditions::Dict{String,Vector{FilterType}} = Dict{String,Vector{FilterType}}()
-  join_type_overrides::Dict{String,String} = Dict{String,String}()
+  # Both `nothing` until the query declares an `on()` / `cjoin(filters = …)` path (#1593).
+  join_conditions::Union{Nothing,Dict{String,Vector{FilterType}}} = nothing
+  join_type_overrides::Union{Nothing,Dict{String,String}} = nothing
   # #982: the `cjoin_on` half of the same binding (`_bind_cjoin_on_conditions!`). `cjoin_on_paths` is
   # every relation path an alias's ON clause names, as the segments `build()` materializes BEFORE the
   # alias rows, so rendering that ON clause adds no join; `cjoin_on_order` is the order the alias rows
   # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
-  cjoin_on_paths::Vector{Vector{String}} = Vector{String}[]
+  # The three are `nothing` until the query declares a `cjoin_on` alias (#1593).
+  cjoin_on_paths::Union{Nothing,Vector{Vector{String}}} = nothing
   # #1002: for each `cjoin_on_paths` entry, the alias whose ON clause names it and the column as the
   # caller wrote it — what a cardinality refusal quotes.
-  cjoin_on_written::Vector{Tuple{String,String}} = Tuple{String,String}[]
-  cjoin_on_order::Vector{String} = String[]
+  cjoin_on_written::Union{Nothing,Vector{Tuple{String,String}}} = nothing
+  cjoin_on_order::Union{Nothing,Vector{String}} = nothing
   # #1002: every hop of this build that can repeat or drop a base row — a reverse or ManyToMany hop, or
   # a forward one to a non-unique column — keyed by the alias of the row that survived dedup, with what
   # first reached it and whether a declaring introducer reached it too (`_record_join_reach!`).
@@ -633,10 +647,11 @@ end
   stated_join_types::Union{Nothing,Set{String}} = nothing
   # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
   # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
-  # second time would bind every value twice.
-  cjoin_on_rendered::Dict{String,Vector{String}} = Dict{String,Vector{String}}()
+  # second time would bind every value twice. `nothing` until the first such ON clause (#1593).
+  cjoin_on_rendered::Union{Nothing,Dict{String,Vector{String}}} = nothing
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
-  tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
+  # The three memos (#474) are `nothing` until their first write (#1593), through `memos.jl` only.
+  tab_field_cache::Union{Nothing,Dict{MemoKey,PormGField}} = nothing # cache to be used in join query (#474: keyed by MemoKey)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
   # JSON-path gate renders an extraction; tested by the filter-render branch to bind the RHS as
   # plain text (not through the JSON formatter) and to reject containment operators on a nested key
@@ -648,7 +663,7 @@ end
   # BEFORE the write, and both readers were `haskey` membership tests — `_render_json_lookup_comparison`
   # re-derives everything it needs from the filter expression it is handed. It was a `Set` wearing a
   # `Dict`'s allocation, so it is spelled as one now. Reach it through `memo_json_lookup` (`memos.jl`).
-  json_lookup_paths::Set{MemoKey} = Set{MemoKey}()
+  json_lookup_paths::Union{Nothing,Set{MemoKey}} = nothing
   # #564 — the canonical kind each PROJECTION evaluates to, keyed by the RESULT-ROW column name
   # (`_projection_output_name`, the same expression `_query_select` renders the `AS` alias from, so
   # this key and the one the driver hands back agree by construction rather than by coincidence).
@@ -705,7 +720,7 @@ end
   cte_state::Union{Nothing,Dict{String,CTEState}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
-  cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
+  cache::Union{Nothing,Dict{MemoKey,SQLTypeField}} = nothing
   django::OptionalString = nothing
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
@@ -722,8 +737,8 @@ end
   # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
   # survivor by `_flag_to_many!`) or `AnchorlessJoin.to_many` (#174, `_cjoin_on_to_many`) and the many-side alias set is derived from the *deduped* row_join at check time
   # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
-  agg_sources::Vector{NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}} =
-    NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}[]
+  # `nothing` until the first aggregate (#1593).
+  agg_sources::Union{Nothing,Vector{AggSource}} = nothing
   # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
   # the same reason: what the guard needs cannot be read back off the rendered state.
   #
@@ -744,12 +759,51 @@ end
   # `expr` is the resolved outer SQL (`"Tb"."driverid"`), directly comparable to the group set —
   # which is why the guard needs no parallel semantic bookkeeping on the group side. `phase` and
   # `group_key` are the scope at the moment of rendering — the two facts a walker could not know.
-  outer_refs::Vector{CorrelatedRef} = CorrelatedRef[]
+  # `nothing` until the first correlated reference (#1593).
+  outer_refs::Union{Nothing,Vector{CorrelatedRef}} = nothing
 end
+
+# #1593: the containers above that only a join condition, a `cjoin_on`, a window, an aggregate, a
+# correlated subquery or a JSON lookup fills are `nothing` until their first write, as the six lazy
+# fields before them (`join_reaches`, …): a plain read fills none of them, and a build is
+# allocation-sensitive (#41). Each is written through its accessor below, which allocates it on first
+# use; a reader takes the `nothing` arm (`_lazy_isempty`, `_lazy_length`, `_lazy_get`,
+# `something(x, ())`). The three memos have theirs in `memos.jl`, their only reader (#474).
+_window_group_terms!(i::InstructionObject)::Vector{Tuple{String,Vector{Any}}} =
+  (v = i.window_group_terms; v === nothing ? (i.window_group_terms = Tuple{String,Vector{Any}}[]) : v)
+_ungrouped_order_terms!(i::InstructionObject)::Vector{SQLTypeField} =
+  (v = i.ungrouped_order_terms; v === nothing ? (i.ungrouped_order_terms = SQLTypeField[]) : v)
+_projection_params!(i::InstructionObject)::Dict{String,Vector{Any}} =
+  (v = i.projection_params; v === nothing ? (i.projection_params = Dict{String,Vector{Any}}()) : v)
+_alias_null_keys!(i::InstructionObject)::Vector{String} =
+  (v = i.alias_null_keys; v === nothing ? (i.alias_null_keys = String[]) : v)
+_row_path!(i::InstructionObject)::Vector{String} =
+  (v = i.row_path; v === nothing ? (i.row_path = String[]) : v)
+_join_conditions!(i::InstructionObject)::Dict{String,Vector{FilterType}} =
+  (v = i.join_conditions; v === nothing ? (i.join_conditions = Dict{String,Vector{FilterType}}()) : v)
+_join_type_overrides!(i::InstructionObject)::Dict{String,String} =
+  (v = i.join_type_overrides; v === nothing ? (i.join_type_overrides = Dict{String,String}()) : v)
+_cjoin_on_paths!(i::InstructionObject)::Vector{Vector{String}} =
+  (v = i.cjoin_on_paths; v === nothing ? (i.cjoin_on_paths = Vector{String}[]) : v)
+_cjoin_on_written!(i::InstructionObject)::Vector{Tuple{String,String}} =
+  (v = i.cjoin_on_written; v === nothing ? (i.cjoin_on_written = Tuple{String,String}[]) : v)
+_cjoin_on_order!(i::InstructionObject)::Vector{String} =
+  (v = i.cjoin_on_order; v === nothing ? (i.cjoin_on_order = String[]) : v)
+_cjoin_on_rendered!(i::InstructionObject)::Dict{String,Vector{String}} =
+  (v = i.cjoin_on_rendered; v === nothing ? (i.cjoin_on_rendered = Dict{String,Vector{String}}()) : v)
+_agg_sources!(i::InstructionObject)::Vector{AggSource} =
+  (v = i.agg_sources; v === nothing ? (i.agg_sources = AggSource[]) : v)
+_outer_refs!(i::InstructionObject)::Vector{CorrelatedRef} =
+  (v = i.outer_refs; v === nothing ? (i.outer_refs = CorrelatedRef[]) : v)
+
+# Read a lazy container as empty while it is unset.
+_lazy_isempty(x)::Bool = x === nothing || isempty(x)
+_lazy_length(x)::Int = x === nothing ? 0 : length(x)
+_lazy_get(d, key, default) = d === nothing ? default : get(d, key, default)
 
 # Store information to decide the name from table alias in subquery
 mutable struct SQLTbAlias <: SQLTableAlias
-  count::Integer
+  count::Int   # #1593: was `Integer`, an abstract field that boxed every `get_alias` increment
 end
 SQLTbAlias() = SQLTbAlias(0)
 function get_alias(s::SQLTableAlias)

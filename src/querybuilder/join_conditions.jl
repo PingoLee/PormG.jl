@@ -226,8 +226,9 @@ function _bind_join_conditions!(instruct::SQLInstruction)
     # spellings of one path in `custom_join` meet here and are ANDed, as two `on()` calls on one path
     # always are.
     key = _canonical_join_path(q, path)
-    instruct.join_conditions[key] = vcat(get(instruct.join_conditions, key, FilterType[]), bound)
-    cfg.join_type === nothing || (instruct.join_type_overrides[key] = cfg.join_type)
+    conditions = _join_conditions!(instruct)
+    conditions[key] = vcat(get(conditions, key, FilterType[]), bound)
+    cfg.join_type === nothing || (_join_type_overrides!(instruct)[key] = cfg.join_type)
   end
   _bind_cjoin_on_conditions!(instruct)
   return instruct
@@ -271,8 +272,8 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
           path = String(first(split(column, "__@")))
           path in built && return nothing
           push!(built, path)
-          push!(instruct.cjoin_on_paths, String.(split(path, "__")))
-          push!(instruct.cjoin_on_written, (alias, written))   # #1002: what a refusal quotes
+          push!(_cjoin_on_paths!(instruct), String.(split(path, "__")))
+          push!(_cjoin_on_written!(instruct), (alias, written))   # #1002: what a refusal quotes
         end
         return nothing
       end
@@ -281,7 +282,7 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
     # A `Joined` naming no declared alias is left to the render, which refuses it with the declared list.
     names_of[alias] = filter(n -> haskey(q.alias_join, n), names)
   end
-  append!(instruct.cjoin_on_order, _cjoin_on_emission_order(names_of))
+  append!(_cjoin_on_order!(instruct), _cjoin_on_emission_order(names_of))
   return instruct
 end
 

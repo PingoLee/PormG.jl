@@ -234,7 +234,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # interval text — the second door #881 describes, and typed the way a difference is, on
           # both engines. The kind is taken from the same call that renders, as above; the walk names
           # the same one since #1034 step 5a (`Max(F("start_at") - F("date"))` is an interval to both).
-          interval = false
+          # #1621: the render's kind itself, so a month it may hold is recorded (`CInterval(true)`).
+          interval_kind = nothing
           if _is_fts_node(original, "SEARCH_VECTOR")
             # #1021: a `SearchVector` may be projected under a name — what `"doc__@search"` filters on,
             # Django's annotate-then-filter — and reads as its `tsvector` text. Only HERE, at the top
@@ -251,7 +252,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
             # #1004: the memo NAME, not the output name. A transform's `_as` (`raceid__year`) spells
             # the related path, and the column render below refreshes the field memo under whatever
             # it is handed — so `_as` filed the FK's own field under the path to the race's `year`.
-            sql, interval_ms, interval = _render_function_typed(original, instruc; _as = memo_name(v_copy))
+            sql, interval_ms, interval_kind = _render_function_typed(original, instruc; _as = memo_name(v_copy))
             v_copy.field = interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
           else
             v_copy.field = _get_select_query(original, instruc, _as=memo_name(v_copy))   # #1004, as above
@@ -260,7 +261,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # dotted join key cannot be typed before it has been resolved. A path or a handle reads by the
           # same rule in the reuse branch above (#979); a `Subquery(...)` reads as its one column, which
           # rendering it recorded (#888).
-          kind = _read_kind(original, instruc; rendered = interval ? CInterval() : nothing)
+          kind = _read_kind(original, instruc; rendered = interval_kind)
         end
         kind
       end

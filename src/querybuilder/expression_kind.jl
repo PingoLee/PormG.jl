@@ -759,9 +759,10 @@ _stored_read_view(::Any) = nothing
 
 The kind the read path records for the projection `x` (#564), or `nothing` when no read parser has
 anything to undo. `rendered` is the kind the render itself computed: temporal arithmetic
-(`_set_update_query_typed`, whose kind is the walk's one copy since #1034 step 5b) and an interval
-aggregate SQLite held in milliseconds (`_render_function_typed`). It answers first, ahead of the view,
-so a day count records the `CInt32` the view would drop. Otherwise:
+(`_set_update_query_typed`, whose kind is the walk's one copy since #1034 step 5b) and a function the
+render typed an interval (`_render_function_typed`: an interval aggregate SQLite held in milliseconds,
+or one PostgreSQL computes on the `interval`), with the calendar part it may hold (#1621). It answers
+first, ahead of the view, so a day count records the `CInt32` the view would drop. Otherwise:
 
 - a literal is its Julia value's kind (#721), and a `Bool` a boolean (#1122);
 - a `Subquery` or a CTE column reads as its own build recorded it, by this same view (#888, #824);

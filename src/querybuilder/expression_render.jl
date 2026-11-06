@@ -869,31 +869,38 @@ function _render_interval_ms(node, instruc::SQLInstruction; _as::Union{Nothing,S
   return ms === nothing ? (sql, false) : (ms, true)
 end
 
-# #900 — one operand of a function that may be an interval, rendered exactly ONCE: `(sql, ms, interval)`.
+# #900 — one operand of a function that may be an interval, rendered exactly ONCE: `(sql, ms, kind)`.
 # `sql` is exactly what `_get_select_query` renders for it — the text on SQLite. `ms` is its SQLite
 # millisecond form, or `nothing` (always `nothing` on PostgreSQL, which computes on the `interval`
-# itself). `interval` says whether the operand is an interval at all, on either engine, and types the
-# function's projection. Both forms are built from the one render: the text of an `_IntervalMs` is
-# `_sqlite_interval_text` over it, and a `DurationField` column's millisecond form repeats a column
-# reference, which binds nothing. So a caller picks either form after the fact without a second
-# render, and a function whose operands disagree keeps the SQL it always rendered.
+# itself). `kind` is the operand's interval kind, or `nothing` when it is no interval, on either engine,
+# and types the function's projection; it is never `nothing` where `ms` is not. #1621: a kind, not a
+# Bool, so the calendar part an operand may hold (`CInterval(true)`, #1583) reaches the function's
+# recorded kind instead of being rebuilt as `CInterval()`. Both forms are built from the one render:
+# the text of an `_IntervalMs` is `_sqlite_interval_text` over it, and a `DurationField` column's
+# millisecond form repeats a column reference, which binds nothing. So a caller picks either form
+# after the fact without a second render, and a function whose operands disagree keeps the SQL it
+# always rendered.
 function _render_interval_operand(node, instruc::SQLInstruction;
-                                  _as::Union{Nothing,String}=nothing)::Tuple{String,Union{String,Nothing},Bool}
+                                  _as::Union{Nothing,String}=nothing)::Tuple{String,Union{String,Nothing},Union{CInterval,Nothing}}
   sqlite = _interval_as_ms(instruc.connection)
   if node isa FExpression
     raw, kind = _render_expr_typed(node, instruc)
     sql, final_kind = _finalize_render(raw, kind, instruc)
-    return sql, sqlite ? _interval_ms_sql(raw, node, kind, instruc) : nothing, final_kind isa CInterval
+    return sql, sqlite ? _interval_ms_sql(raw, node, kind, instruc) : nothing,
+           final_kind isa CInterval ? final_kind : nothing
   elseif node isa FObject
     raw, ms, interval = _render_function_typed(node, instruc; _as = _as)
-    ms && return _interval_ms_as_text(raw, instruc.connection), raw, true
+    ms && return _interval_ms_as_text(raw, instruc.connection), raw, something(interval, CInterval())
     # #1456: the walk decides, as it does for every other operand below. The read kind named no interval
     # for `Cast(d, "interval")`, a `Case` over durations or `Max(Case(…))`, so on MySQL, which stores
     # the microseconds, an alias filter over the cast bound `"00:01:00"` against the BIGINT — compared
     # as the number 0, it matched every positive duration.
-    interval = interval || _expression_kind(node, instruc) isa CInterval
+    if interval === nothing
+      walked = _expression_kind(node, instruc)
+      walked isa CInterval && (interval = walked)
+    end
     # #1130: where the engine stores the integer, an interval function is its own integer form.
-    sqlite && interval && _stores_interval_as_units(instruc.connection) && return raw, raw, true
+    sqlite && interval !== nothing && _stores_interval_as_units(instruc.connection) && return raw, raw, interval
     return raw, nothing, interval
   elseif sqlite && node isa SQLText &&
          (literal_ms = _duration_literal_units(node.field, _interval_unit_ns(instruc.connection))) !== nothing
@@ -904,15 +911,16 @@ function _render_interval_operand(node, instruc::SQLInstruction;
     # with the value it always compared. Binding the text first and the number later is not an option:
     # SQLite's parameters are positional, and a later operand may already have bound after it.
     ph = add_parameter!(instruc, literal_ms)
-    return _interval_ms_as_text(ph, instruc.connection), ph, true
+    return _interval_ms_as_text(ph, instruc.connection), ph, CInterval()   # no month has a millisecond count
   end
   sql = _get_select_query(node, instruc; _as = _as)
   # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
   bare = node isa SQLField ? node.field : node
-  interval = _expression_kind(bare, instruc) isa CInterval
+  walked = _expression_kind(bare, instruc)
+  interval = walked isa CInterval ? walked : nothing
   # #1287: a `Subquery` binds its correlation and filters, so its text is parsed once, in a scalar
   # subquery around it, where a column's millisecond form repeats the column reference.
-  ms = !(sqlite && interval) ? nothing :
+  ms = !(sqlite && interval !== nothing) ? nothing :
        _stores_interval_as_units(instruc.connection) ? sql :
        _is_bare_column(bare) ? _interval_text_as_ms(sql, instruc.connection) :
        bare isa SubqueryObject ? _interval_subquery_as_ms(sql, instruc.connection) : nothing
@@ -1299,8 +1307,8 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
        left_kind isa Union{CInterval,_IntervalMs} && v.operand isa Union{CTEReference,SubqueryObject}
       # #985: on a join condition the right side renders on the right, as `_set_update_query_operand`'s does.
       right_side, right_ms, right_interval = _on_join_right(() -> _render_interval_operand(v.operand, instruc), instruc)
-      right_interval || _refuse_interval_against_number(op, instruc)
-      if right_interval
+      right_interval === nothing && _refuse_interval_against_number(op, instruc)
+      if right_interval !== nothing
         lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
         lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
         lms === nothing && throw(_unordered_interval_error(op, instruc.connection))   # #1301

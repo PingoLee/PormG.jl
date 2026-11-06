@@ -89,6 +89,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Interval Arithmetic With No Meaning Is Refused (#1572)" include("unit/test_interval_meaningless_1572.jl")
     @testset "A Month or a Year Scales by a Whole Number Only (#1576)" include("unit/test_calendar_scale_1576.jl")
     @testset "A CTE Interval on the Right, and Bitwise on an Interval (#1581)" include("unit/test_interval_cte_bitwise_1581.jl")
+    @testset "A Function's Interval Kind Keeps Its Calendar Part (#1621)" include("unit/test_function_interval_calendar_1621.jl")
     @testset "SQLite Interval Ordering (#894)" include("unit/test_sqlite_interval_order.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
     @testset "LPad/RPad String Padding (#122)" include("unit/test_lpad_rpad.jl")

@@ -2000,7 +2000,7 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
   if units && compares && v.values isa Union{SubqueryObject,CTEReference}
     sql, _ = _render_interval_source_ms(source, instruc)
     rhs, _, interval = _on_join_right(() -> _render_interval_operand(v.values, instruc), instruc)
-    interval || _refuse_interval_against_number(v.operator, instruc)
+    interval === nothing && _refuse_interval_against_number(v.operator, instruc)
     return _render_column_rhs(sql, v, rhs, instruc)
   end
   ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)

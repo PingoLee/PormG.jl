@@ -463,10 +463,11 @@ end
 #   migrates its file — a plain binding turned `const` in a live session, and back — warn naming
 #   the file and keep the previous object, which is what an expression that fails to evaluate does.
 #   No SQL.
-# Why it matters: #1650 makes `const` the documented binding form (an untyped global read on every
-#   `M.<Model>` otherwise, and a `juliac --trim` verifier row). Julia 1.13 allows a `const` to be
-#   redefined in a new world, so hot reload keeps working; this pins it, and the two mixed cases are
-#   why the upgrade entry tells a live session to restart once after adding `const`.
+# Why it matters: #1650 made `const` the documented binding form (an untyped global read on every
+#   `M.<Model>` otherwise, and a `juliac --trim` verifier row); #1672 moved it to the typed global
+#   (next testset), and `const` stays accepted. Julia 1.13 allows a `const` to be redefined in a new
+#   world, so hot reload keeps working over a `const` file; this pins it, the caveat the typed form
+#   removes (a task created before the reload), and the two mixed cases.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Reload over a const-bound models file (#1650)" begin
     models_src(prefix::String, edited::Bool) = """
@@ -494,7 +495,7 @@ end
             @test Base.invokelatest(isconst, mod, :ConstLap)
             # A function compiled against the binding itself (the global read, not a lookup by name).
             Core.eval(mod, :(lap_fields() = collect(keys(ConstLap.fields))))
-            @test !("position" in Base.invokelatest(getfield(mod, :lap_fields)))
+            @test !("position" in Base.invokelatest(Base.invokelatest(getfield, mod, :lap_fields)))
             # A task created before the reload, parked until the reload is done.
             reader = Base.invokelatest(Core.eval, mod, :(Threads.@spawn begin
                 take!($go)
@@ -510,7 +511,7 @@ end
             @test haskey(after.fields, "position")
             @test after.fields["position"].default == 1
             @test basename(after.connect_key) == "db_const"
-            @test "position" in Base.invokelatest(getfield(mod, :lap_fields))   # a fresh call: the new model
+            @test "position" in Base.invokelatest(Base.invokelatest(getfield, mod, :lap_fields))   # a fresh call: the new model
             put!(go, nothing)
             @test fetch(reader) === before    # the task created before the reload: the old model
 
@@ -529,6 +530,130 @@ end
             write(file, models_src("", true))
             @test_logs (:warn, r"failed; its binding keeps the previous value") PormG.Utils.reload_module_contents!(mod, file)
             @test Base.invokelatest(getfield, mod, :ConstLap) === after
+        finally
+            isready(go) || put!(go, nothing)
+            PormG.Configuration.close_pool!(dir)
+            pop!(PormG.config, dir, nothing)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reload over a typed-global models file (#1663, #1672)
+# What it tests: the same reload body (`reload_module_contents!` + `set_models`) over a file that
+#   binds `TypedLap::Models.ModelType = Models.Model(…)`, the form PormG writes since #1672. What
+#   #1663 measured on Julia 1.13.3, case by case:
+#   - typed → typed: the edited file rebinds with no warning (the added field is there, the object
+#     is new, the key is kept). A fresh call of a function the module defines sees the new model, and
+#     so does a task created BEFORE the reload: a typed global is reassigned, not redefined in a new
+#     world. Compare #1660's testset above, where that task keeps the old model.
+#   - plain → typed and `const` → typed in a live session: Julia refuses to add a type to a global that
+#     already has a value (`cannot set type for global …`) or is a constant (`cannot set type for
+#     constant …`). The reload warns with that text, the previous object stays, and a second reload
+#     of the same file does the same.
+#   - typed → plain: an ordinary assignment, so it is silent and rebinds, and the binding stays typed
+#     for the rest of the session (`Core.get_binding_type`).
+#   No SQL.
+# Why it matters: #1672 makes the typed global the documented form because its reload reaches a
+#   running task, which `const`'s does not. This pins that claim, and the refusal behind the
+#   upgrade entry's "restart once after switching the file" (#1650's entry, amended by #1672).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Reload over a typed-global models file (#1663, #1672)" begin
+    models_src(decl::String, edited::Bool) = """
+    module typed_reload_models
+        import PormG.Models
+        $(decl) = Models.Model("typed_lap",
+            id = Models.IDField(),
+            lap = Models.IntegerField()$(edited ? ",\n        position = Models.IntegerField(default = 1)" : "")
+        )
+    end
+    """
+    typed, plain, constant = "TypedLap::Models.ModelType", "TypedLap", "const TypedLap"
+    lap(mod) = Base.invokelatest(getfield, mod, :TypedLap)
+    binding_type(mod) = Base.invokelatest(Core.get_binding_type, mod, :TypedLap)
+    # Reload `file` into `mod`, and return the text of each exception the reload's warnings carry:
+    # every failed expression logs the same message, so Julia's own refusal is in the exception.
+    function reload_errors(mod, file)
+        logs, reloaded = Test.collect_test_logs() do
+            PormG.Utils.reload_module_contents!(mod, file)
+        end
+        @test reloaded
+        warns = [l for l in logs if l.level == Base.CoreLogging.Warn]
+        @test all(l -> occursin("failed; its binding keeps the previous value", string(l.message)), warns)
+        return [sprint(showerror, l.kwargs[:exception]) for l in warns]
+    end
+    mktempdir() do root
+        dir = joinpath(root, "db_typed")
+        mkpath(dir)
+        _write_reload_sqlite_connection(joinpath(dir, "connection.yml"))
+        file = joinpath(dir, "typed_models.jl")
+        PormG.Configuration.load(dir; env = "test")
+        go = Channel{Nothing}(1)   # releases the reader task below; `finally` releases it on an early exit
+        try
+            # typed → typed: the reload rebinds, and a running task sees it.
+            write(file, models_src(typed, false))
+            mod = Base.include(Module(:TypedHost), file)
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            before = lap(mod)
+            @test binding_type(mod) === PormG.Models.ModelType
+            @test !Base.invokelatest(isconst, mod, :TypedLap)
+            # A function compiled against the binding itself (the global read, not a lookup by name).
+            Core.eval(mod, :(lap_fields() = collect(keys(TypedLap.fields))))
+            @test !("position" in Base.invokelatest(Base.invokelatest(getfield, mod, :lap_fields)))
+            # A task created before the reload, parked until the reload is done.
+            reader = Base.invokelatest(Core.eval, mod, :(Threads.@spawn begin
+                take!($go)
+                TypedLap
+            end))
+
+            write(file, models_src(typed, true))
+            @test_logs PormG.Utils.reload_module_contents!(mod, file)    # no warning
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            after = lap(mod)
+            @test after !== before
+            @test binding_type(mod) === PormG.Models.ModelType
+            @test haskey(after.fields, "position")
+            @test after.fields["position"].default == 1
+            @test basename(after.connect_key) == "db_typed"
+            @test "position" in Base.invokelatest(Base.invokelatest(getfield, mod, :lap_fields))   # a fresh call: the new model
+            put!(go, nothing)
+            @test fetch(reader) === after     # the task created before the reload: the NEW model
+
+            # typed → plain: an ordinary assignment, silent; the binding keeps its type.
+            write(file, models_src(plain, false))
+            @test_logs PormG.Utils.reload_module_contents!(mod, file)
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            @test lap(mod) !== after
+            @test !haskey(lap(mod).fields, "position")
+            @test binding_type(mod) === PormG.Models.ModelType
+
+            # plain → typed in a live session: refused with Julia's text, twice; the plain object stays.
+            write(file, models_src(plain, false))
+            plain_mod = Base.include(Module(:PlainHost), file)
+            Base.invokelatest(PormG.Models.set_models, plain_mod, dir)
+            plain_before = lap(plain_mod)
+            write(file, models_src(typed, true))
+            for _ in 1:2
+                errors = reload_errors(plain_mod, file)
+                @test length(errors) == 1
+                @test occursin(r"cannot set type for global \S*TypedLap", only(errors))
+                @test lap(plain_mod) === plain_before
+                @test binding_type(plain_mod) === Any
+            end
+
+            # const → typed in a live session: refused the same way, naming the constant.
+            write(file, models_src(constant, false))
+            const_mod = Base.include(Module(:ConstHost), file)
+            Base.invokelatest(PormG.Models.set_models, const_mod, dir)
+            const_before = lap(const_mod)
+            write(file, models_src(typed, true))
+            for _ in 1:2
+                errors = reload_errors(const_mod, file)
+                @test length(errors) == 1
+                @test occursin(r"cannot set type for constant \S*TypedLap", only(errors))
+                @test lap(const_mod) === const_before
+                @test Base.invokelatest(isconst, const_mod, :TypedLap)
+            end
         finally
             isready(go) || put!(go, nothing)
             PormG.Configuration.close_pool!(dir)

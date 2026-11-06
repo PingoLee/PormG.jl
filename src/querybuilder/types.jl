@@ -1913,9 +1913,27 @@ dot-access to fields and many-to-many relationship accessors.
 mutable struct PormGRow
   _data::Dict{Symbol,Any}
   _model::PormGModel
-  _dirty::Set{Symbol}
+  # #1591: the fields assigned since the row was read, which `save` writes. `nothing` until the first
+  # assignment (`_dirty!`): most rows are only read, and `list()` builds one per result row (#41).
+  _dirty::Union{Nothing,Set{Symbol}}
 end
-PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any}(data), model, Set{Symbol}())
+# The public constructor copies: the caller may keep using the `Dict` it passed, and a `Dict` of a
+# narrower value type has to be widened anyway.
+PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any}(data), model, nothing)
+
+# #1591: the constructor every read and write terminal uses. It takes OWNERSHIP of `data`, a `Dict` the
+# terminal built and holds nowhere else, so the row is not copied a second time — `list()` pays it once
+# per result row.
+_owned_row(data::Dict{Symbol,Any}, model::PormGModel) = PormGRow(data, model, nothing)
+
+# The dirty set, allocated on first use. `row._dirty` goes through it, so it is a live `Set` as before.
+function _dirty!(row::PormGRow)::Set{Symbol}
+  dirty = getfield(row, :_dirty)
+  dirty === nothing || return dirty
+  fresh = Set{Symbol}()
+  setfield!(row, :_dirty, fresh)
+  return fresh
+end
 
 """Validate a row-facing symbol against the declared-case storage keys used internally. Each `__`
 segment goes through `format_fild_name`, which since #317 rewrites nothing — the name is returned
@@ -1949,7 +1967,7 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
   # with `row[:_data]` (indexing skips this dispatch), not dot access.
   sym === :_data && return getfield(row, :_data)
   sym === :_model && return getfield(row, :_model)
-  sym === :_dirty && return getfield(row, :_dirty)
+  sym === :_dirty && return _dirty!(row)
   sym === :save && return (; show_query::Symbol=:execute) -> save(row; show_query=show_query)
   sym === :delete && return (; show_query::Symbol=:execute) -> delete(row; show_query=show_query)
 
@@ -2008,7 +2026,7 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
   end
 
   getfield(row, :_data)[normalized] = value
-  push!(getfield(row, :_dirty), normalized)
+  push!(_dirty!(row), normalized)
   return value
 end
 

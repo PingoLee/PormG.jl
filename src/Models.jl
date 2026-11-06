@@ -81,10 +81,12 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # before. The two steps move together — and so does the frozen set in
 # `test/unit/test_docstring_coverage.jl`, which fails if this line and that literal disagree.
 #
-# `ModelType` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
-# named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
-# the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
+# `ModelType`, the concrete model type, is public because every models file names it: a model is
+# bound with a typed global, `Race::Models.ModelType = Models.Model(…)` (#1663, #1672). That gives
+# `M.Race` a type the compiler knows, for a typed read under the JIT and no verifier row under
+# `juliac --trim`, while a reload stays an ordinary assignment. The abstract `PormGModel` does not do
+# the job: #1663 measured `Race::Models.PormGModel = …`, and `.objects` comes back `Any`.
+public Model, ModelType, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
 # #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
 public search_vector_expression
 
@@ -96,8 +98,16 @@ public search_vector_expression
     ModelType <: PormGModel
 
 The concrete model object — what [`Model`](@ref) returns and what `M.Driver` is. It is the only
-concrete subtype of `PormGModel`, and it is reached by *holding* one, not by naming it: build models
-with `Model(...)` rather than calling this constructor.
+concrete subtype of `PormGModel`. Build models with `Model(...)` rather than calling this
+constructor; name the type where a model is bound, so the binding has a type the compiler can rely
+on:
+
+```julia
+Driver::Models.ModelType = Models.Model(
+  driverid = Models.IDField(),
+  surname  = Models.CharField(max_length = 255),
+)
+```
 
 Construction fills `name`, `fields` and `field_names`; the remaining slots are populated later by
 [`set_models`](@ref) (directly or through `@import_models`), which is why a model used before

@@ -353,15 +353,15 @@ end
             # `CheckConstraint` (#742), the two network-address fields (#28), `ArrayField` (#28),
             # `search_vector_expression` (#1021), the text a full-text index is declared with, and
             # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
-            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39.
-            # `ModelType` is deliberately absent — it is documented but NOT public: users hold one
-            # as `M.Driver`, never name it.
+            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39, and
+            # `ModelType` (#1672) = 40: the concrete model type, which every models file names in
+            # its typed binding (`Race::Models.ModelType = Models.Model(…)`, #1663).
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
                                    :CharField, :CheckConstraint, :CIDRField, :DateField, :DateTimeField,
                                    :DecimalField, :DurationField, :EmailField, :FileField, :FloatField,
                                    :ForeignKey, :GenericIPAddressField, :IDField, :ImageField, :Index,
                                    :IntegerField,
-                                   :JSONField, :ManyToManyField, :Model, :OneToOneField,
+                                   :JSONField, :ManyToManyField, :Model, :ModelType, :OneToOneField,
                                    :PasswordField, :PositiveIntegerField,
                                    :PositiveSmallIntegerField, :search_vector_expression, :SearchVectorField, :SlugField,
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,

@@ -154,18 +154,18 @@ end
                                                            output_file = "django_project_clash.jl")
     try
         # Both bindings, both logical names, both tables — app-qualified on both sides.
-        @test occursin("\nRacing_driver = Models.Model(db_table = \"racing_driver\"", generated)
-        @test occursin("\nAccess_driver = Models.Model(db_table = \"access_driver\"", generated)
+        @test occursin("\nconst Racing_driver = Models.Model(db_table = \"racing_driver\"", generated)
+        @test occursin("\nconst Access_driver = Models.Model(db_table = \"access_driver\"", generated)
         # Neither survives as the bare name, and #338's digit backstop never runs.
-        @test !occursin("\nDriver = Models.Model(", generated)
+        @test !occursin(r"\n(const )?Driver = Models\.Model\(", generated)
         @test !occursin("Driver2", generated)
         @test !occursin("driver2", generated)
 
         # A class name only ONE app declares is untouched — qualification is for collisions, not a
         # blanket rename. `Circuit`, `Race` and `ImportBatch` keep their Python spelling.
-        @test occursin("\nCircuit = Models.Model(", generated)
+        @test occursin("\nconst Circuit = Models.Model(", generated)
         @test !occursin("Racing_circuit", generated)
-        @test occursin("\nImportBatch = Models.Model(", generated)
+        @test occursin("\nconst ImportBatch = Models.Model(", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -385,7 +385,7 @@ class Circuit(models.Model):
         @test occursin("the relation is DROPPED", generated)
 
         # The model, and every column it really has, is untouched.
-        @test occursin("\nCircuit = Models.Model(db_table = \"racing_circuit\"", generated)
+        @test occursin("\nconst Circuit = Models.Model(db_table = \"racing_circuit\"", generated)
         @test occursin("name = Models.CharField(max_length=120)", generated)
 
         # And the file still loads — a dropped relation must not leave a dangling reference.
@@ -507,7 +507,7 @@ class Race(models.Model):
     try
         import_models_from_django(["access" => two_users]; db = config_key3,
                                   file = "auth_unused.jl", force_replace = true)
-        @test occursin("\nUser = Models.Model(", read(joinpath(config_key3, "auth_unused.jl"), String))
+        @test occursin("\nconst User = Models.Model(", read(joinpath(config_key3, "auth_unused.jl"), String))
     finally
         cleanup_project_test!(config_key3, existed3)
     end
@@ -633,17 +633,17 @@ end
         # The override becomes the model's name, so the binding, the logical name and the reverse
         # accessor all follow it — while `db_table` still carries the real table. Because the name IS
         # the override lowercased, the positional slot is omitted like any other model's (#1043).
-        @test occursin("\nDriverLicence = Models.Model(db_table = \"access_driver\"", generated)
+        @test occursin("\nconst DriverLicence = Models.Model(db_table = \"access_driver\"", generated)
         @test !occursin("Access_driver", generated)
         # An override on a class that never collided is legitimate: "spell this one differently".
-        @test occursin("\nF1Circuit = Models.Model(db_table = \"racing_circuit\"", generated)
+        @test occursin("\nconst F1Circuit = Models.Model(db_table = \"racing_circuit\"", generated)
         # ...and every reference to it followed.
         @test occursin("circuit_id = Models.ForeignKey(\"F1Circuit\"", generated)
         @test !occursin("ForeignKey(\"Circuit\"", generated)
 
         # The renamed side of the collision is still qualified — overriding one does not un-qualify
         # the other, because `racing_driver` is what its table is called.
-        @test occursin("\nRacing_driver = Models.Model(", generated)
+        @test occursin("\nconst Racing_driver = Models.Model(", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -725,7 +725,7 @@ class Batch(models.Model):
                                    "access"  => django_project_app("access")];
                                   db = config_key3, file = "override_bare.jl", force_replace = true,
                                   binding_overrides = Dict("ImportBatch" => "Batch"))
-        @test occursin("\nBatch = Models.Model(db_table = \"imports_importbatch\"",
+        @test occursin("\nconst Batch = Models.Model(db_table = \"imports_importbatch\"",
                        read(joinpath(config_key3, "override_bare.jl"), String))
     finally
         cleanup_project_test!(config_key3, existed3)
@@ -916,7 +916,7 @@ def helper():
     try
         @test occursin("# PormG: app 'empty' contributed no model to this file", generated)
         # The other apps are unaffected.
-        @test occursin("\nCircuit = Models.Model(", generated)
+        @test occursin("\nconst Circuit = Models.Model(", generated)
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         @test Core.eval(sandbox, :(isdefined(empty_app, :Circuit)))
@@ -949,7 +949,7 @@ class Season(models.Model):
         @test occursin("through model 'calendar.SeasonCircuit' is not in the imported app set", generated)
         @test occursin("the relation is DROPPED", generated)
         # The rest of the model is untouched — one bad relation never costs a table.
-        @test occursin("\nSeason = Models.Model(db_table = \"racing_season\"", generated)
+        @test occursin("\nconst Season = Models.Model(db_table = \"racing_season\"", generated)
         @test occursin("year = Models.IntegerField()", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -1002,7 +1002,7 @@ class Stop(models.Model):
         output_file = "residual_clash.jl")
     try
         # Three distinct bindings for the colliders, and the digit backstop landed on exactly one.
-        bindings = [m.captures[1] for m in eachmatch(r"^(\w+) = Models\.Model\("m, generated)]
+        bindings = [m.captures[1] for m in eachmatch(r"^const (\w+) = Models\.Model\("m, generated)]
         @test length(unique(bindings)) == length(bindings)
         @test "Racing_pit" in bindings
         @test "Access_pit" in bindings
@@ -1075,7 +1075,7 @@ class ImportBatch(TimeStampedModel):
         @test !occursin("not defined in", generated)
         # The abstract base itself still emits no table of its own.
         @test !occursin("TimeStampedModel = Models.Model", generated)
-        @test occursin("\nImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
+        @test occursin("\nconst ImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -1135,7 +1135,7 @@ class Relatorio(ExternalBase):
         @test !occursin("not defined in this file", generated3)
         @test occursin("add the app that defines them to the pair list", generated3)
         # The model is still imported, with its own columns — a missing base never costs a table.
-        @test occursin("\nRelatorio = Models.Model(db_table = \"imports_relatorio\"", generated3)
+        @test occursin("\nconst Relatorio = Models.Model(db_table = \"imports_relatorio\"", generated3)
         @test occursin("titulo = Models.CharField(max_length=80)", generated3)
     finally
         cleanup_project_test!(config_key4, existed4)
@@ -1168,14 +1168,14 @@ class Ref(models.Model):
                                                            autofields_ignore = ["Manager", "CharField"])
     try
         # The model survives — with a synthetic primary key, since the declared one was ignored.
-        @test occursin("\nThing = Models.Model(db_table = \"racing_thing\"", generated)
+        @test occursin("\nconst Thing = Models.Model(db_table = \"racing_thing\"", generated)
         @test occursin("ForeignKey(\"Thing\"", generated)
         # The ignored field really is gone, and `id` really did replace it. Without BOTH of these
         # the testset passes even when `autofields_ignore` is not applied at all — the model is
         # emitted either way, just with a different set of columns, so asserting only its existence
         # tests nothing about the ordering this testset is named for.
         @test !occursin("codigo", generated)
-        @test occursin("\nThing = Models.Model(db_table = \"racing_thing\",\n  id = Models.IDField())", generated)
+        @test occursin("\nconst Thing = Models.Model(db_table = \"racing_thing\",\n  id = Models.IDField())", generated)
 
         # ...and the FK actually resolves, which is the property that was broken.
         sandbox = Module()
@@ -1539,7 +1539,7 @@ class ImportBatch(core_models.TimeStampedModel):
                                                            output_file = "django_1197_abstract.jl")
     try
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
-        @test occursin("\nImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
+        @test occursin("\nconst ImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
         @test !occursin("core_models.TimeStampedModel", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -1559,7 +1559,7 @@ class Pilot(racing.models.Driver):
     try
         @test occursin("inherits the concrete model 'racing.models.Driver' (Django multi-table inheritance)", generated)
         @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
-        @test !occursin("\nPilot = Models.Model", generated)
+        @test !occursin(r"\n(const )?Pilot = Models\.Model", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -1603,7 +1603,7 @@ class Pilot(models.Model):
     try
         @test !occursin("PilotForm", generated)
         @test !occursin("Django multi-table inheritance", generated)
-        @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+        @test occursin("\nconst Pilot = Models.Model(db_table = \"legacy_pilot\"", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -1632,7 +1632,7 @@ class Pilot($(base)):
             try
                 @test !occursin("Django multi-table inheritance", generated)
                 @test !occursin("status_ptr_id", generated)
-                @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+                @test occursin("\nconst Pilot = Models.Model(db_table = \"legacy_pilot\"", generated)
             finally
                 cleanup_project_test!(config_key, db_dir_existed)
             end
@@ -1893,8 +1893,8 @@ class Circuit(models.Model):
         # there — and for this `Thing`, which owns no relation, `set_models` does not either; the
         # throw waits for a query or a `save()`. (The `with_m2m` variant below is the shape that DOES
         # fail at `set_models`, because relation wiring reads the key.)
-        @test occursin("\nCircuit = Models.Model(db_table = \"access_circuit\"", generated)
-        @test occursin("\nThing = Models.Model(db_table = \"access_thing\"", generated)
+        @test occursin("\nconst Circuit = Models.Model(db_table = \"access_circuit\"", generated)
+        @test occursin("\nconst Thing = Models.Model(db_table = \"access_thing\"", generated)
         # Both declared keys are emitted verbatim: the importer reports what the models.py says, it
         # does not silently pick a winner.
         @test occursin("a = Models.CharField(primary_key=true, max_length=5)", generated)
@@ -1909,7 +1909,7 @@ class Circuit(models.Model):
     try
         import_models_from_django(source; db = config_key2, file = "two_pk_single.jl",
                                   force_replace = true)
-        @test occursin("\nCircuit = Models.Model(",
+        @test occursin("\nconst Circuit = Models.Model(",
                        read(joinpath(config_key2, "two_pk_single.jl"), String))
     finally
         cleanup_project_test!(config_key2, existed2)
@@ -1938,7 +1938,7 @@ class Thing(models.Model):
                                       file = "two_pk_m2m.jl", force_replace = true)
             read(joinpath(config_key3, "two_pk_m2m.jl"), String)
         end
-        @test occursin("\nCircuit = Models.Model(", generated)
+        @test occursin("\nconst Circuit = Models.Model(", generated)
         # The join TABLE still pins (it needs no primary key); the columns do not.
         @test occursin("others = Models.ManyToManyField(\"Circuit\", db_table=\"access_thing_others\")", generated)
         @test !occursin("source_field=", generated)
@@ -2271,8 +2271,8 @@ class PESSOA(models.Model):
         generated, config_key, db_dir_existed = import_project(pairs; output_file = "case_clash.jl")
         try
             # Both qualified, both tables intact, and no digit suffix anywhere.
-            @test occursin("\nCore_pessoa = Models.Model(db_table = \"core_pessoa\"", generated)
-            @test occursin("\nLegacy_pessoa = Models.Model(db_table = \"legacy_pessoa\"", generated)
+            @test occursin("\nconst Core_pessoa = Models.Model(db_table = \"core_pessoa\"", generated)
+            @test occursin("\nconst Legacy_pessoa = Models.Model(db_table = \"legacy_pessoa\"", generated)
             @test !occursin("pessoa2", generated)
             @test !occursin("Pessoa2", generated)
             # ...and the file still loads with two distinct bindings.
@@ -2381,7 +2381,7 @@ class Circuit(models.Model):
     try
         # The handle is the caller's choice; the TABLE stays Django's. Before the fix this line was
         # `Pista = Models.Model("pista",` with no `db_table` anywhere in the file.
-        @test occursin("\nPista = Models.Model(db_table = \"circuit\"", generated)
+        @test occursin("\nconst Pista = Models.Model(db_table = \"circuit\"", generated)
 
         # Stronger than the string: the model PormG actually builds must ADDRESS Django's table.
         sandbox = Module()
@@ -2406,7 +2406,7 @@ class CASCADE(models.Model):
     try
         # Pre-#346 emitted `Models.Model("cascade")`; the branch regressed it to `"cascade2"` with
         # nothing pinned. Both the handle rename AND the real table, together.
-        @test occursin("\nCASCADE2 = Models.Model(db_table = \"cascade\"", generated)
+        @test occursin("\nconst CASCADE2 = Models.Model(db_table = \"cascade\"", generated)
 
         # The marker says "Its db_table below still names the real table" — assert that claim is
         # TRUE, not merely that a marker exists. `occursin("# PormG:", ...)` was the first thing
@@ -2449,8 +2449,8 @@ class Foo(models.Model):
 """]; output_file = "django_project_strip_clash.jl")
     try
         # Both sides app-qualified, both tables distinct and correct.
-        @test occursin("\nRacing__foo = Models.Model(db_table = \"racing__foo\"", generated)
-        @test occursin("\nRacing_foo = Models.Model(db_table = \"racing_foo\"", generated)
+        @test occursin("\nconst Racing__foo = Models.Model(db_table = \"racing__foo\"", generated)
+        @test occursin("\nconst Racing_foo = Models.Model(db_table = \"racing_foo\"", generated)
         # The old outcome: one of them silently became the positional name `foo2`.
         @test !occursin("foo2", generated)
 
@@ -2510,7 +2510,7 @@ class _Pit_window(models.Model):
 """; output_file = "django_1095_lone.jl")
     try
         # The binding keeps Django's class name. The logical name loses the `_`, and the table keeps it.
-        @test occursin("\n_Pit_window = Models.Model(\"pit_window\", db_table = \"_pit_window\",", generated)
+        @test occursin("\nconst _Pit_window = Models.Model(\"pit_window\", db_table = \"_pit_window\",", generated)
         # The pre-fix spelling, which raised `ModelDefinitionError` at include time.
         @test !occursin("Models.Model(\"_pit_window\"", generated)
         # A lone class has nothing to collide with, so there is no rename and no marker.
@@ -2562,10 +2562,10 @@ class _Internal(models.Model):
         try
             # `Internal` is untouched: the #1043 short form, no table pinned. The `id` line directly
             # after the opening paren shows the call carries no positional name and no `db_table`.
-            @test occursin("\nInternal = Models.Model(\n  id = Models.IDField(),", generated)
+            @test occursin("\nconst Internal = Models.Model(\n  id = Models.IDField(),", generated)
             # `_Internal` is the one renamed, whichever class came first in models.py. Its table is
             # still Django's.
-            @test occursin("\n_Internal2 = Models.Model(\"internal2\", db_table = \"_internal\",", generated)
+            @test occursin("\nconst _Internal2 = Models.Model(\"internal2\", db_table = \"_internal\",", generated)
             # The marker names the clash correctly: the model name, not a binding nobody holds.
             @test occursin("# PormG: '_Internal' would be the model name 'internal', which is " *
                            "already used by 'Internal' — emitted as '_Internal2' instead.", generated)
@@ -3224,11 +3224,11 @@ end
             output_file = "django_1095_three_$(i).jl")
         try
             # The declared `_Internal2` keeps its own binding and table…
-            @test occursin("\n_Internal2 = Models.Model(\"internal2\", db_table = \"_internal2\",", generated)
+            @test occursin("\nconst _Internal2 = Models.Model(\"internal2\", db_table = \"_internal2\",", generated)
             # …and the renamed `_Internal` skips past it to `_Internal3`, still on Django's `_internal`.
-            @test occursin("\n_Internal3 = Models.Model(\"internal3\", db_table = \"_internal\",", generated)
+            @test occursin("\nconst _Internal3 = Models.Model(\"internal3\", db_table = \"_internal\",", generated)
             @test !occursin("_Internal22", generated)
-            @test occursin("\nInternal = Models.Model(\n", generated)
+            @test occursin("\nconst Internal = Models.Model(\n", generated)
         finally
             cleanup_project_test!(config_key, db_dir_existed)
         end
@@ -3349,12 +3349,12 @@ class BaseReport(models.Model):
                                              output_file = "crossapp_thirdparty.jl")
     try
         # The table is HERE. This assertion is the issue.
-        @test occursin("\nRelatorio = Models.Model(db_table = \"reports_relatorio\"", generated)
+        @test occursin("\nconst Relatorio = Models.Model(db_table = \"reports_relatorio\"", generated)
         @test occursin("titulo = Models.CharField(max_length=80)", generated)
         # ...and it is not refused for inheritance it never had.
         @test !occursin("Django multi-table inheritance", generated)
         # `billing`'s own class is untouched by any of this.
-        @test occursin("\nBaseReport = Models.Model(db_table = \"billing_basereport\"", generated)
+        @test occursin("\nconst BaseReport = Models.Model(db_table = \"billing_basereport\"", generated)
         # The marker still reports the missing columns, and now says why the same-named class next
         # door was not used — and says it accurately. `reports` DOES import `BaseReport`; claiming
         # it does not would be a plain lie, and the useful fact is where it imports it from.
@@ -3516,7 +3516,7 @@ class Foo(Bar):
         # On `main`, classifying `l.Foo` marks the bare name "Foo" as in-progress; the walk into
         # `core.Bar` then resolves ITS base `Foo` through an own-app-first flat index straight back
         # to `l.Foo`, reads that as a cycle, and drops the model without a word. Here it is emitted.
-        @test occursin("\nFoo = Models.Model(db_table = \"l_foo\"", generated)
+        @test occursin("\nconst Foo = Models.Model(db_table = \"l_foo\"", generated)
         # And it carries the whole chain: its own column, `core.Bar`'s, and `core.Foo`'s.
         @test occursin("b = Models.IntegerField()", generated)
         @test occursin("shared = Models.CharField(max_length=10)", generated)
@@ -3678,7 +3678,7 @@ class Artigo(Page):
         ["core" => joinpath(nest_root, "apps", "core", "models.py"), "cms" => vendor];
         output_file = "vendor_models_tail.jl")
     try
-        @test occursin("\nArtigo = Models.Model(db_table = \"cms_artigo\"", generated6)
+        @test occursin("\nconst Artigo = Models.Model(db_table = \"cms_artigo\"", generated6)
         @test occursin("corpo = Models.CharField(max_length=100)", generated6)
         @test !occursin("Django multi-table inheritance", generated6)
     finally
@@ -3891,7 +3891,7 @@ class Artigo(Page):
     generated, key, existed = import_project(["core" => core, "cms" => cms];
                                              output_file = "thirdparty_tail.jl")
     try
-        @test occursin("\nArtigo = Models.Model(db_table = \"cms_artigo\"", generated)
+        @test occursin("\nconst Artigo = Models.Model(db_table = \"cms_artigo\"", generated)
         @test occursin("corpo = Models.CharField(max_length=100)", generated)
         @test !occursin("Django multi-table inheritance", generated)
     finally
@@ -3913,7 +3913,7 @@ class Conta(Perfil):
         generated2, key2, existed2 = import_project(["core" => core, "shop" => shop];
                                                     output_file = "relative_$(name).jl")
         try
-            @test occursin("\nConta = Models.Model(db_table = \"shop_conta\"", generated2)
+            @test occursin("\nconst Conta = Models.Model(db_table = \"shop_conta\"", generated2)
             @test !occursin("Django multi-table inheritance", generated2)
         finally
             cleanup_project_test!(key2, existed2)

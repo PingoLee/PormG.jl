@@ -148,7 +148,7 @@ When a model declares **two or more** relations to the same target, one name can
 
 ```julia
 # Incident points at Driver twice, so neither reverse accessor is the bare `incident`:
-Incident = Models.Model("incident",
+const Incident = Models.Model("incident",
   id = Models.IDField(),
   causing_driver_id  = Models.ForeignKey(Driver, pk_field="id"),
   affected_driver_id = Models.ForeignKey(Driver, pk_field="id"),

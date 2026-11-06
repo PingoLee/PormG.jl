@@ -268,7 +268,7 @@ Use this when you want to define models directly in code rather than in a separa
 # Example
 ```julia
 @models_module MyDB "db" begin
-    Driver = Models.Model("drivers",
+    const Driver = Models.Model("drivers",
         id = Models.IDField(),
         name = Models.CharField()
     )

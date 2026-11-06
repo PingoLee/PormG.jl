@@ -1100,12 +1100,12 @@ many-to-many caches are cleared before being rebuilt, so a reload cannot accumul
 module f1_models
 import PormG.Models
 
-Circuit = Models.Model(
+const Circuit = Models.Model(
   circuitid = Models.IDField(),
   name      = Models.CharField(max_length = 100),
 )
 
-Race = Models.Model(
+const Race = Models.Model(
   raceid    = Models.IDField(),
   year      = Models.IntegerField(),
   circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"),
@@ -1116,6 +1116,9 @@ end
 ```
 
 with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = "dev")`.
+
+Each model is bound with `const`, so `M.Race` is a typed read rather than a dynamic one (#1650). A
+module that binds its models without `const` is accepted and registered the same way.
 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
@@ -1326,8 +1329,8 @@ Bind one model to the loaded connection `key`, and do nothing else (#1230): the 
 part of a models module. It sets the connection the model's queries use and returns the model.
 
 ```julia
-LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
-                                payload = PormG.Models.TextField())
+const LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                      payload = PormG.Models.TextField())
 PormG.Models.bind!(LiveTiming, "db")
 PormG.Migrations.ensure_table!(LiveTiming, "db")
 ```
@@ -2185,7 +2188,7 @@ model is built.
 
 # Examples
 ```julia
-Constructor_engine = Models.Model("constructor_engines",
+const Constructor_engine = Models.Model("constructor_engines",
   id                  = Models.IDField(),
   constructorid       = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "CASCADE"),
   year                = Models.IntegerField(),
@@ -2302,7 +2305,7 @@ when the model is built.
 
 # Examples
 ```julia
-Result = Models.Model("result";
+const Result = Models.Model("result";
   resultid = Models.IDField(),
   grid     = Models.IntegerField(),
   laps     = Models.IntegerField(),
@@ -2541,7 +2544,7 @@ planning, where every name is known.
 
 # Examples
 ```julia
-Result = Models.Model("result",
+const Result = Models.Model("result",
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
@@ -2720,7 +2723,7 @@ quoted in the result. A column that is not an identifier, no `config`, or a `for
 `InvalidValueError`.
 
 ```julia
-Driver = Models.Model("driver",
+const Driver = Models.Model("driver",
   driverid = Models.IDField(),
   forename = Models.CharField(max_length = 255),
   surname  = Models.CharField(max_length = 255),
@@ -3060,7 +3063,7 @@ option existed. This is the table-level sibling of [`CharField`](@ref)'s `db_col
 
 ```julia
 # The logical name stays lowercase; db_table carries the exact legacy spelling.
-DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
+const DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
   id = Models.IDField(),
 )
 ```
@@ -3077,7 +3080,7 @@ exactly as for any other model. A foreign key from a managed model to an unmanag
 `db_constraint = false`, because the target may be a view and a view cannot be referenced:
 
 ```julia
-DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
+const DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
   driverstandingsid = Models.IDField(),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", db_constraint = false),
   points   = Models.FloatField(),
@@ -3114,13 +3117,13 @@ DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
 
 # Examples
 ```julia
-Circuit = Models.Model(                       # table `circuit`, inferred from the binding
+const Circuit = Models.Model(                       # table `circuit`, inferred from the binding
   circuitid = Models.IDField(),
   name      = Models.CharField(max_length = 100),
   country   = Models.CharField(max_length = 50),
 )
 
-Race = Models.Model(
+const Race = Models.Model(
   raceid    = Models.IDField(),
   year      = Models.IntegerField(),
   round     = Models.IntegerField(),
@@ -3132,7 +3135,7 @@ Race = Models.Model(
   ],
 )
 
-Lap_times = Models.Model(
+const Lap_times = Models.Model(
   raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
   lap      = Models.IntegerField(),
@@ -3143,7 +3146,7 @@ Lap_times = Models.Model(
 )
 
 # Porting a legacy schema PormG doesn't control: the live table is `Constructor_Standings`.
-ConstructorStandings = Models.Model("constructor_standings",
+const ConstructorStandings = Models.Model("constructor_standings",
   db_table = "Constructor_Standings",
   id = Models.IDField(),
 )
@@ -3403,7 +3406,7 @@ derives `<app label>_<class>` instead of two that had to agree.
 
 # Examples
 ```julia
-users = Models.Model("users", 
+const users = Models.Model("users", 
   name = Models.CharField(), 
   email = Models.CharField(), 
   age = Models.IntegerField()
@@ -3691,6 +3694,9 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # without a special case for either. Never for a leading underscore: a PormG model name never
   # carries one (#306), and the no-name form would load what that positional gate refuses — so an
   # unpinned `_Internal` keeps the spelling it had, rather than changing what the file loads.
+  # The binding is `const` (#1650): a plain global has no type the compiler can rely on, so every
+  # `M.<Model>` an application writes would start with an untyped read (a dynamic call under the JIT,
+  # a verifier row under `juliac --trim`). A file without `const` still loads; this is what PormG writes.
   omit_name = omit_derived_name && !startswith(model_name_abs, "_") &&
               model_name_abs == format_model_name(model_var_name)
   if fields == ""
@@ -3705,14 +3711,14 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
     # reading: it is a stub to fix by hand, not a definition to restore. It keeps the explicit name
     # even under `omit_derived_name` (#1043): hand-edited is the case that option leaves explicit.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
-    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
+    result = """$(marker)$(note)\n# const $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
   elseif omit_name
     # Every part after the name opens with its own separator (`", db_table = …"`, `",\n  id = …"`);
     # with no name before it, the first one has nothing to separate.
     args = chopprefix(chopprefix("$db_table_part$managed_part$fields", ","), " ")
-    result = """$(marker)$(model_var_name) = Models.Model($(args))"""
+    result = """$(marker)const $(model_var_name) = Models.Model($(args))"""
   else
-    result = """$(marker)$(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
+    result = """$(marker)const $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
   end
   @info(result)
 

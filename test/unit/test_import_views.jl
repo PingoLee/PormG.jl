@@ -61,7 +61,7 @@ function _iv_with_db(f)
 end
 
 # The text of one generated model, from its binding line to the next blank line.
-_iv_block(content, binding) = match(Regex("(?ms)^$(binding) = Models\\.Model\\(.*?(?=\\n\\n|\\nend)"), content)
+_iv_block(content, binding) = match(Regex("(?ms)^const $(binding) = Models\\.Model\\(.*?(?=\\n\\n|\\nend)"), content)   # #1650: generated bindings are `const`
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite importer: views are written only on request, as managed = false keyless models (#767)
@@ -92,7 +92,7 @@ _iv_block(content, binding) = match(Regex("(?ms)^$(binding) = Models\\.Model\\(.
              "# PormG: the database reports no type for 'points' of the view 'driver_points' — SQLite " *
              "gives none to a computed column — so it is emitted as TextField. Declare the real field " *
              "type by hand: as a TextField, a filter compares the column as text.\n" *
-             "Driver_points = Models.Model(\"driver_points\""
+             "const Driver_points = Models.Model(\"driver_points\""
     @test occursin(marker, content)
     # `senna_results` only selects columns, which keep their table's types: no second marker.
     @test count("# PormG: the database reports no type", content) == 1

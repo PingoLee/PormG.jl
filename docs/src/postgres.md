@@ -73,7 +73,7 @@ These field types work on every backend, but PostgreSQL gives them a **native, i
 ### `JSONField` — `JSONB` vs `TEXT`
 
 ```julia
-Race_config = Models.Model("race_configs",
+const Race_config = Models.Model("race_configs",
   id = Models.IDField(),
   settings = Models.JSONField(),
   metadata = Models.JSONField(null=true, blank=true),
@@ -87,7 +87,7 @@ Race_config = Models.Model("race_configs",
 ### `UUIDField` — native `UUID` vs `TEXT`
 
 ```julia
-Api_token = Models.Model("api_tokens",
+const Api_token = Models.Model("api_tokens",
   id = Models.IDField(),
   token = Models.UUIDField(unique=true, auto_add=true),  # auto_add ⇒ uuid4() on create
 )
@@ -109,7 +109,7 @@ any migration is written. Such a model runs on PostgreSQL only.
 ### `GenericIPAddressField` / `CIDRField` — `inet` / `cidr`
 
 ```julia
-Pit_wall_session = Models.Model("pit_wall_session",
+const Pit_wall_session = Models.Model("pit_wall_session",
   id = Models.IDField(),
   client_ip = Models.GenericIPAddressField(),   # one host address
   garage_lan = Models.CIDRField(null=true),     # one network
@@ -136,7 +136,7 @@ Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Field
 ### `SearchVectorField` — `tsvector`
 
 ```julia
-Race_report = Models.Model("race_report",
+const Race_report = Models.Model("race_report",
   id = Models.IDField(),
   title = Models.CharField(max_length = 200),
   search_vector = Models.SearchVectorField(null = true),   # a stored full-text document
@@ -157,7 +157,7 @@ Reference: **[Full-Text Search → A stored document](read/full_text_search.md#A
 ### `ArrayField` — `integer[]`, `character varying(n)[]`, …
 
 ```julia
-Race_strategy = Models.Model("race_strategy",
+const Race_strategy = Models.Model("race_strategy",
   id = Models.IDField(),
   tyre_compounds = Models.ArrayField(Models.CharField(max_length = 12); size = 6),
   pit_laps = Models.ArrayField(Models.IntegerField(), default = Int[]),

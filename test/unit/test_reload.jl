@@ -453,6 +453,91 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Reload over a const-bound models file (#1650)
+# What it tests: the Revise reload body (`reload_module_contents!` + `set_models`) over a file that
+#   binds `const ConstLap = Models.Model(…)`. The edited file rebinds the constant to the new model
+#   (the added field is there, the object is new, the key is kept), with no warning. A function the
+#   models module itself defines, which reads `ConstLap` as a global, sees the new model on a fresh
+#   call; a task created before the reload keeps the old one (a `const` is redefined in a new world,
+#   and a task stays in the world it was created in). The two mixed edits an app makes while it
+#   migrates its file — a plain binding turned `const` in a live session, and back — warn naming
+#   the file and keep the previous object, which is what an expression that fails to evaluate does.
+#   No SQL.
+# Why it matters: #1650 makes `const` the documented binding form (an untyped global read on every
+#   `M.<Model>` otherwise, and a `juliac --trim` verifier row). Julia 1.13 allows a `const` to be
+#   redefined in a new world, so hot reload keeps working; this pins it, and the two mixed cases are
+#   why the upgrade entry tells a live session to restart once after adding `const`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Reload over a const-bound models file (#1650)" begin
+    models_src(prefix::String, edited::Bool) = """
+    module const_reload_models
+        import PormG.Models
+        $(prefix)ConstLap = Models.Model("const_lap",
+            id = Models.IDField(),
+            lap = Models.IntegerField()$(edited ? ",\n        position = Models.IntegerField(default = 1)" : "")
+        )
+    end
+    """
+    mktempdir() do root
+        dir = joinpath(root, "db_const")
+        mkpath(dir)
+        _write_reload_sqlite_connection(joinpath(dir, "connection.yml"))
+        file = joinpath(dir, "const_models.jl")
+        PormG.Configuration.load(dir; env = "test")
+        go = Channel{Nothing}(1)   # releases the reader task below; `finally` releases it on an early exit
+        try
+            # const → const: the reload rebinds.
+            write(file, models_src("const ", false))
+            mod = Base.include(Module(:ConstHost), file)
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            before = Base.invokelatest(getfield, mod, :ConstLap)
+            @test Base.invokelatest(isconst, mod, :ConstLap)
+            # A function compiled against the binding itself (the global read, not a lookup by name).
+            Core.eval(mod, :(lap_fields() = collect(keys(ConstLap.fields))))
+            @test !("position" in Base.invokelatest(getfield(mod, :lap_fields)))
+            # A task created before the reload, parked until the reload is done.
+            reader = Base.invokelatest(Core.eval, mod, :(Threads.@spawn begin
+                take!($go)
+                ConstLap
+            end))
+
+            write(file, models_src("const ", true))
+            @test_logs PormG.Utils.reload_module_contents!(mod, file)    # no warning
+            Base.invokelatest(PormG.Models.set_models, mod, dir)
+            after = Base.invokelatest(getfield, mod, :ConstLap)
+            @test after !== before
+            @test Base.invokelatest(isconst, mod, :ConstLap)
+            @test haskey(after.fields, "position")
+            @test after.fields["position"].default == 1
+            @test basename(after.connect_key) == "db_const"
+            @test "position" in Base.invokelatest(getfield(mod, :lap_fields))   # a fresh call: the new model
+            put!(go, nothing)
+            @test fetch(reader) === before    # the task created before the reload: the old model
+
+            # plain → const in the same session: Julia refuses to declare an existing global
+            # constant, so the reload warns and keeps the plain binding's object.
+            write(file, models_src("", false))
+            plain_mod = Base.include(Module(:PlainHost), file)
+            Base.invokelatest(PormG.Models.set_models, plain_mod, dir)
+            plain_before = Base.invokelatest(getfield, plain_mod, :ConstLap)
+            write(file, models_src("const ", true))
+            @test_logs (:warn, r"failed; its binding keeps the previous value") PormG.Utils.reload_module_contents!(plain_mod, file)
+            @test Base.invokelatest(getfield, plain_mod, :ConstLap) === plain_before
+            @test !Base.invokelatest(isconst, plain_mod, :ConstLap)
+
+            # const → plain: an assignment to a constant is refused the same way.
+            write(file, models_src("", true))
+            @test_logs (:warn, r"failed; its binding keeps the previous value") PormG.Utils.reload_module_contents!(mod, file)
+            @test Base.invokelatest(getfield, mod, :ConstLap) === after
+        finally
+            isready(go) || put!(go, nothing)
+            PormG.Configuration.close_pool!(dir)
+            pop!(PormG.config, dir, nothing)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Which bindings register a Revise reload, and with what (#1487)
 # What it tests: with a spy installed as the reload hook (`Utils.set_revise_hooks!`, what
 #   `PormGReviseExt` does), `set_models(mod, folder; source)` and `import_models` call it once with

@@ -154,8 +154,10 @@ end
                 @test PormG.config[key].connections === pool
             end
 
-            @testset "the file is not read again" begin
-                # A file that no longer parses would make a re-read throw.
+            @testset "with the environment stated, the file is not read again" begin
+                # A file that no longer parses would make a re-read throw. `env` is stated, so neither
+                # `default_env:` nor the driver is peeked before the already-loaded check (#1668).
+                # Under `env = nothing` (and no `PORMG_ENV`) a re-load reads `default_env:` first.
                 cp(yml, yml * ".bak"; force = true)
                 write(yml, "test: [unterminated\n")
                 try

@@ -13,6 +13,10 @@ counting the rest, with `maxlog = 1` (the console shows it once per session). A 
 keeps a second registration of the same module silent even under a fresh `TestLogger`, whose `maxlog`
 count starts at zero; that is what the second-call testset below pins.
 
+A renamed import (`import .Owner: Circuit as Track`, #1671) is checked on the importer, where the
+name exists, and reported under the owner's own name: a `const` owner passes, a plain one is named
+`Owner.Circuit`, never the `Owner.Track` that does not exist.
+
 No SQL is involved anywhere in this file: registration renders nothing. Hermetic — a mock backend
 and `Module` objects built in place, no database, no folder.
 
@@ -160,6 +164,52 @@ end
   @test length(warnings) == 1
   @test occursin("`$(owner).Circuit` is a plain global", only(warnings))
   @test !occursin("more model binding", only(warnings))
+  @test isempty(_pmb_warnings(owner))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5b. A `const` model imported with `as` is silent.
+#
+# `import .Owner: Circuit as Track`: the owner has no `:Track`, so asking it `isconst(Owner, :Track)`
+# read `false` and a `const` model was reported as the plain global `Owner.Track`, a name that does not
+# exist (#1671). On the importer, `isconst` follows the renamed import to `Owner.Circuit`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a const model imported with `as` logs no warning (#1671)" begin
+  mod = _pmb_module(:PmbRenConstImporter, quote
+    module PmbRenConstOwner
+      import PormG.Models
+      const Circuit = Models.Model("pmbrc_circuit", circuitid = Models.IDField(), name = Models.CharField())
+    end
+    import .PmbRenConstOwner: Circuit as Track
+  end)
+  @test isconst(mod, :Track)
+  @test !isdefined(mod.PmbRenConstOwner, :Track)
+  @test isempty(_pmb_warnings(mod))
+  @test Models.connection_key(mod.Track) == "pmb_mock"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5c. A plain model imported with `as` is reported under the owner's real name.
+#
+# The warning names the binding to fix, `Owner.Circuit`, and suggests the typed global under that name;
+# `Track` appears nowhere (#1671). The seen set is keyed by the owner's real name, so registering the
+# owner afterwards is silent: one binding, one report.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a plain model imported with `as` is reported under the owner's real name (#1671)" begin
+  mod = _pmb_module(:PmbRenPlainImporter, quote
+    module PmbRenPlainOwner
+      import PormG.Models
+      Circuit = Models.Model("pmbrp_circuit", circuitid = Models.IDField(), name = Models.CharField())
+    end
+    import .PmbRenPlainOwner: Circuit as Track
+  end)
+  owner = mod.PmbRenPlainOwner
+  warnings = _pmb_warnings(mod)
+  @test length(warnings) == 1
+  msg = only(warnings)
+  @test occursin("`$(owner).Circuit` is a plain global", msg)
+  @test occursin("bind it with `Circuit::Models.ModelType = Models.Model(…)`", msg)
+  @test !occursin("Track", msg)
   @test isempty(_pmb_warnings(owner))
 end
 

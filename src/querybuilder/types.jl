@@ -1945,17 +1945,24 @@ function _normalize_row_symbol(sym::Symbol)::Symbol
   return Symbol(join(Models.format_fild_name.(String.(parts)), "__"))
 end
 
-Base.getindex(row::PormGRow, key::Symbol) = getfield(row, :_data)[_normalize_row_symbol(key)]
+# #1592: the storage key a row read looks up. A stored key is returned as it is, so a hit allocates
+# nothing; only a miss is normalized, which is where the empty-segment refusal (`row.a__`) and a
+# name's validation still answer. `_normalize_row_symbol` rewrites nothing since #317, so a key that
+# is stored is the key it would return — it used to rebuild the Symbol on every read (a `String`, a
+# `split`, a `join` and an intern) to hand back the one it was given.
+_row_key(data::Dict{Symbol,Any}, key::Symbol)::Symbol = haskey(data, key) ? key : _normalize_row_symbol(key)
+
+Base.getindex(row::PormGRow, key::Symbol) = (data = getfield(row, :_data); data[_row_key(data, key)])
 # #612: `AbstractString`, not `String` — the READ side of the web-app pattern #603 was written
 # around. A value goes into the query as a `SubString` out of `split(query_string, "=")` and comes
 # back out of the row the same way (`row[split(cols, ",")[1]]`), which was a raw `MethodError`
 # naming an internal signature. `Symbol(key)` already takes any `AbstractString`, so the annotation
 # is the whole fix — nothing here needs to normalize, because the Symbol is the storage key.
-Base.getindex(row::PormGRow, key::AbstractString) = getfield(row, :_data)[_normalize_row_symbol(Symbol(key))]
-Base.haskey(row::PormGRow, key::Symbol) = haskey(getfield(row, :_data), _normalize_row_symbol(key))
-Base.haskey(row::PormGRow, key::AbstractString) = haskey(getfield(row, :_data), _normalize_row_symbol(Symbol(key)))
-Base.get(row::PormGRow, key::Symbol, default) = get(getfield(row, :_data), _normalize_row_symbol(key), default)
-Base.get(row::PormGRow, key::AbstractString, default) = get(getfield(row, :_data), _normalize_row_symbol(Symbol(key)), default)
+Base.getindex(row::PormGRow, key::AbstractString) = row[Symbol(key)]
+Base.haskey(row::PormGRow, key::Symbol) = (data = getfield(row, :_data); haskey(data, _row_key(data, key)))
+Base.haskey(row::PormGRow, key::AbstractString) = haskey(row, Symbol(key))
+Base.get(row::PormGRow, key::Symbol, default) = (data = getfield(row, :_data); get(data, _row_key(data, key), default))
+Base.get(row::PormGRow, key::AbstractString, default) = get(row, Symbol(key), default)
 Base.keys(row::PormGRow) = keys(getfield(row, :_data))
 Base.values(row::PormGRow) = values(getfield(row, :_data))
 Base.pairs(row::PormGRow) = pairs(getfield(row, :_data))
@@ -1972,6 +1979,9 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
   sym === :delete && return (; show_query::Symbol=:execute) -> delete(row; show_query=show_query)
 
   data = getfield(row, :_data)
+  # #1592: a stored column is returned before anything is normalized, so `row.surname` allocates
+  # nothing. Everything below is the miss path, unchanged.
+  haskey(data, sym) && return data[sym]
   model = getfield(row, :_model)
   normalized = _normalize_row_symbol(sym)
 
@@ -2074,14 +2084,14 @@ function Base.propertynames(row::PormGRow, private::Bool = false)
   return Tuple(cols)
 end
 
-# haskey(row, ::Symbol) applies the same leading-underscore normalization getproperty does, so
-# this matches getproperty's success set for stored columns exactly.
+# haskey(row, ::Symbol) answers a stored key as getproperty does (#1592), and both refuse the same
+# malformed name on a miss, so this matches getproperty's success set for stored columns exactly.
 Base.hasproperty(row::PormGRow, sym::Symbol) =
   sym in (:save, :_data, :_model, :_dirty) || haskey(row, sym)
 
 Tables.isrowtable(::Type{Vector{PormGRow}}) = true
 Tables.columnnames(row::PormGRow) = collect(keys(getfield(row, :_data)))
-Tables.getcolumn(row::PormGRow, nm::Symbol) = getfield(row, :_data)[_normalize_row_symbol(nm)]
+Tables.getcolumn(row::PormGRow, nm::Symbol) = row[nm]
 
 
 """

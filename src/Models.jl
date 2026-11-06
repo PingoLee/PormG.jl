@@ -1115,12 +1115,12 @@ many-to-many caches are cleared before being rebuilt, so a reload cannot accumul
 module f1_models
 import PormG.Models
 
-const Circuit = Models.Model(
+Circuit::Models.ModelType = Models.Model(
   circuitid = Models.IDField(),
   name      = Models.CharField(max_length = 100),
 )
 
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
   raceid    = Models.IDField(),
   year      = Models.IntegerField(),
   circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"),
@@ -1132,10 +1132,11 @@ end
 
 with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = "dev")`.
 
-Each model is bound with `const`, so `M.Race` is a typed read rather than a dynamic one (#1650). A
-module that binds its models without `const` is accepted and registered the same way, with one
-warning, once per session, naming the first plain binding (#1664). A typed global
-(`Race::Models.ModelType = …`) is not warned about.
+Each model is bound with a typed global, `Race::Models.ModelType = …`, so `M.Race` is a typed read
+rather than a dynamic one, and a reload is an ordinary assignment that reaches a running task too
+(#1650, #1663). A module that binds its models with plain globals is accepted and registered the same
+way, with one warning, once per session, naming the first plain binding (#1664). A `const` binding is
+typed as well and is not warned about.
 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
@@ -1404,7 +1405,7 @@ Bind one model to the loaded connection `key`, and do nothing else (#1230): the 
 part of a models module. It sets the connection the model's queries use and returns the model.
 
 ```julia
-const LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+LiveTiming::PormG.Models.ModelType = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
                                       payload = PormG.Models.TextField())
 PormG.Models.bind!(LiveTiming, "db")
 PormG.Migrations.ensure_table!(LiveTiming, "db")
@@ -2265,7 +2266,7 @@ model is built.
 
 # Examples
 ```julia
-const Constructor_engine = Models.Model("constructor_engines",
+Constructor_engine::Models.ModelType = Models.Model("constructor_engines",
   id                  = Models.IDField(),
   constructorid       = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "CASCADE"),
   year                = Models.IntegerField(),
@@ -2382,7 +2383,7 @@ when the model is built.
 
 # Examples
 ```julia
-const Result = Models.Model("result";
+Result::Models.ModelType = Models.Model("result";
   resultid = Models.IDField(),
   grid     = Models.IntegerField(),
   laps     = Models.IntegerField(),
@@ -2621,7 +2622,7 @@ planning, where every name is known.
 
 # Examples
 ```julia
-const Result = Models.Model("result",
+Result::Models.ModelType = Models.Model("result",
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
@@ -2800,7 +2801,7 @@ quoted in the result. A column that is not an identifier, no `config`, or a `for
 `InvalidValueError`.
 
 ```julia
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid = Models.IDField(),
   forename = Models.CharField(max_length = 255),
   surname  = Models.CharField(max_length = 255),
@@ -3140,7 +3141,7 @@ option existed. This is the table-level sibling of [`CharField`](@ref)'s `db_col
 
 ```julia
 # The logical name stays lowercase; db_table carries the exact legacy spelling.
-const DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
+DriverRaces::Models.ModelType = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
   id = Models.IDField(),
 )
 ```
@@ -3157,7 +3158,7 @@ exactly as for any other model. A foreign key from a managed model to an unmanag
 `db_constraint = false`, because the target may be a view and a view cannot be referenced:
 
 ```julia
-const DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
+DriverStandingsV::Models.ModelType = Models.Model("driver_standings_v"; managed = false,
   driverstandingsid = Models.IDField(),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", db_constraint = false),
   points   = Models.FloatField(),
@@ -3194,13 +3195,13 @@ const DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
 
 # Examples
 ```julia
-const Circuit = Models.Model(                       # table `circuit`, inferred from the binding
+Circuit::Models.ModelType = Models.Model(                       # table `circuit`, inferred from the binding
   circuitid = Models.IDField(),
   name      = Models.CharField(max_length = 100),
   country   = Models.CharField(max_length = 50),
 )
 
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
   raceid    = Models.IDField(),
   year      = Models.IntegerField(),
   round     = Models.IntegerField(),
@@ -3212,7 +3213,7 @@ const Race = Models.Model(
   ],
 )
 
-const Lap_times = Models.Model(
+Lap_times::Models.ModelType = Models.Model(
   raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
   lap      = Models.IntegerField(),
@@ -3223,7 +3224,7 @@ const Lap_times = Models.Model(
 )
 
 # Porting a legacy schema PormG doesn't control: the live table is `Constructor_Standings`.
-const ConstructorStandings = Models.Model("constructor_standings",
+ConstructorStandings::Models.ModelType = Models.Model("constructor_standings",
   db_table = "Constructor_Standings",
   id = Models.IDField(),
 )

@@ -19,7 +19,7 @@ A model is a Julia object that defines the fields (columns) and their types for 
 2. **Example Model Definition**
 
 ```julia
-const Driver = Models.Model(
+Driver::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     birthdate = Models.DateField(),
@@ -35,12 +35,12 @@ import PormG.Models
 import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
 
-const Status = Models.Model(
+Status::Models.ModelType = Models.Model(
   statusid = Models.IDField(),
   status = Models.CharField()
 )
 
-const Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the Julia BINDING (`Circuit`) — it is lowercased to derive the table name. A positional table name, when you give one, must itself be lowercase: `Models.Model("Circuit", …)` raises ModelDefinitionError.
+Circuit::Models.ModelType = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the Julia BINDING (`Circuit`) — it is lowercased to derive the table name. A positional table name, when you give one, must itself be lowercase: `Models.Model("Circuit", …)` raises ModelDefinitionError.
   circuitid = Models.IDField(), # House style: declare field names in lowercase snake_case. PormG preserves the case you declare (so mixed-case/uppercase legacy columns are supported) and field lookups are case-sensitive — query fields in the same case you declared them.
   circuitref = Models.CharField(),
   name = Models.CharField(),
@@ -52,7 +52,7 @@ const Circuit = Models.Model( # You can create a model like a Django model for e
   url = Models.CharField()
 )
 
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
   raceid = Models.IDField(),
   year = Models.IntegerField(),
   round = Models.IntegerField(),
@@ -74,7 +74,7 @@ const Race = Models.Model(
   sprint_time = Models.TimeField(null=true),
 )
 
-const Driver = Models.Model(
+Driver::Models.ModelType = Models.Model(
   driverid = Models.IDField(),
   driverref = Models.CharField(),
   number = Models.IntegerField(null=true),
@@ -86,7 +86,7 @@ const Driver = Models.Model(
   url = Models.CharField()
 )
 
-const Constructor = Models.Model(
+Constructor::Models.ModelType = Models.Model(
   constructorid = Models.IDField(),
   constructorref = Models.CharField(),
   name = Models.CharField(),
@@ -94,7 +94,7 @@ const Constructor = Models.Model(
   url = Models.CharField()
 )
 
-const Result = Models.Model(
+Result::Models.ModelType = Models.Model(
   resultid = Models.IDField(),
   raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
@@ -115,7 +115,7 @@ const Result = Models.Model(
   statusid = Models.ForeignKey(Status, pk_field="statusid", on_delete="CASCADE")
 )
 
-const Just_a_test_deletion = Models.Model(
+Just_a_test_deletion::Models.ModelType = Models.Model(
   id = Models.IDField(),
   name = Models.CharField(),
   test_result = Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion"),
@@ -127,14 +127,18 @@ end
 
 - Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
 - You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
-- Each model is bound with `const`. A plain global (`Race = Models.Model(…)`) has no type the
-  compiler can rely on, so every `M.Race` your application writes starts with an untyped read: a
-  dynamic call under the JIT, and an error row for every such call under `juliac --trim`. A
-  `const` binding is typed. A file without `const` is still accepted and works the same, only
-  slower; `generate_models_from_db` and the Django importer write `const` (#1650). `set_models`
-  warns once per session when it registers a model bound by a plain global, naming the binding;
-  a typed global (`Race::Models.ModelType = …`) is typed too and passes without a warning (#1664).
-  Hot reload works over a `const` binding (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions)).
+- Each model is bound with a typed global, `Race::Models.ModelType = Models.Model(…)`. A plain
+  global (`Race = Models.Model(…)`) has no type the compiler can rely on, so every `M.Race` your
+  application writes starts with an untyped read: a dynamic call under the JIT, and an error row
+  for every such call under `juliac --trim`. The typed global fixes the binding's type, so the read
+  is typed. `Models.ModelType` is the concrete model type: the abstract `PormGModel` does not do the
+  job, because `M.Race.objects` would read back untyped. `generate_models_from_db` and the Django
+  importer write the typed form (#1650, #1672).
+- A file with plain bindings is still accepted and works the same, only slower. `set_models` warns
+  once per session when it registers a model bound by a plain global, naming the binding (#1664).
+  A `const` binding is typed too, so it is accepted without a warning, but a hot reload of a
+  `const` does not reach a task that is already running (see
+  [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions)).
 
 ## Composite Uniqueness (`unique_together`)
 
@@ -144,7 +148,7 @@ model-level `constraints=[...]` list of `Models.UniqueConstraint` objects (the s
 Django 2.2+ / SQLAlchemy named constraints):
 
 ```julia
-const Constructor_engine = Models.Model("constructor_engines",
+Constructor_engine::Models.ModelType = Models.Model("constructor_engines",
   id = Models.IDField(),
   constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="CASCADE"),
   year = Models.IntegerField(),
@@ -181,7 +185,7 @@ Django's `UniqueConstraint` also takes a `condition` and expressions, and so doe
 text of an [expression or partial index](#Expression-and-partial-indexes), made unique:
 
 ```julia
-const Sprint_result = Models.Model("sprint_results",
+Sprint_result::Models.ModelType = Models.Model("sprint_results",
   sprintid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   position = Models.IntegerField(null=true),
@@ -192,7 +196,7 @@ const Sprint_result = Models.Model("sprint_results",
   ],
 )
 
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid  = Models.IDField(),
   driverref = Models.CharField(),
   constraints = [
@@ -229,7 +233,7 @@ more** columns — Django's `Meta.indexes` — or to give an index a direction, 
 operator class, declare a model-level `indexes=[...]` list of `Models.Index` objects:
 
 ```julia
-const Lap_times = Models.Model("lap_times",
+Lap_times::Models.ModelType = Models.Model("lap_times",
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
   lap      = Models.IntegerField(),
@@ -277,7 +281,7 @@ Three options make an index more than a plain b-tree over ascending columns — 
 spells `Index(fields=["-points"])`, `GinIndex(...)` and `opclasses=[...]`:
 
 ```julia
-const Result = Models.Model("result",
+Result::Models.ModelType = Models.Model("result",
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
@@ -288,7 +292,7 @@ const Result = Models.Model("result",
   ],
 )
 
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(max_length=255),
   dob      = Models.DateField(null=true),
@@ -349,7 +353,7 @@ Two more options take **SQL text**, the way a [`CheckConstraint`](#Check-Constra
 does — Django's `Index(Lower("surname"))` and `Index(..., condition=Q(...))`:
 
 ```julia
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(max_length=255),
   indexes = [
@@ -358,7 +362,7 @@ const Driver = Models.Model("driver",
   ],
 )
 
-const Result = Models.Model("result",
+Result::Models.ModelType = Models.Model("result",
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   position = Models.IntegerField(null=true),
@@ -425,7 +429,7 @@ never planned away.
 carried columns is answered from the index alone, without visiting the table:
 
 ```julia
-const Result = Models.Model("result",
+Result::Models.ModelType = Models.Model("result",
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   points   = Models.FloatField(),
@@ -541,7 +545,7 @@ A table-level `CHECK` — Django's `CheckConstraint` — goes in the same `const
 `UniqueConstraint`:
 
 ```julia
-const Result = Models.Model(
+Result::Models.ModelType = Models.Model(
   resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
@@ -639,7 +643,7 @@ False`. Use it for a view, or for a table another system owns:
 # A view the database already holds, e.g.
 #   CREATE VIEW driver_points_v AS
 #     SELECT driverid AS id, driverid, SUM(points) AS points FROM result GROUP BY driverid;
-const Driver_points = Models.Model("driver_points_v"; managed = false,
+Driver_points::Models.ModelType = Models.Model("driver_points_v"; managed = false,
   id       = Models.IDField(),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", db_constraint = false),
   points   = Models.FloatField(),
@@ -695,7 +699,7 @@ on PostgreSQL:
 
 ```julia
 # PormG: generated from the view 'driver_points_v' — managed = false, so migrations never create, alter or drop it. A view has no primary key, so none is declared: reads work, but writes that address rows by key (a filtered delete, bulk_update without match_on) need one — mark a column that is unique in the view primary_key = true.
-const Driver_points_v = Models.Model("driver_points_v", managed = false,
+Driver_points_v::Models.ModelType = Models.Model("driver_points_v", managed = false,
   driverid = Models.BigIntegerField(null=true),
   points = Models.FloatField(null=true))
 ```
@@ -860,7 +864,7 @@ julia> RaceControl.M.Driver.fields   # includes the new field
 ```
 
 Revise alone does not reload a model. In a file loaded with `includet` it re-evaluates only
-method definitions, and where it does re-evaluate an assignment (`const Driver = Models.Model(...)`
+method definitions, and where it does re-evaluate an assignment (`Driver::Models.ModelType = Models.Model(...)`
 in a package's own files), the new model is unbound until `set_models` runs. So PormG registers its own
 callback for the file. It re-evaluates the module body into the same module, which keeps
 `import .models as M` valid, and then calls `set_models` again, which rebinds the models and
@@ -872,16 +876,24 @@ naming the file and line, and that model keeps its previous definition until the
 saved again. A file that no longer parses is not reloaded at all, and the warning names the file. Without Revise loaded, nothing is registered and the bind is unchanged. That is why the
 same boot runs in production.
 
-A `const` binding reloads too: Julia lets a `const` be redefined in a new world, so the edited
-`const Driver = Models.Model(…)` replaces the model for the REPL and for every task created after
-the reload. A task created before it, running or not, keeps the old model, as it keeps an edited
-method under Revise: a long-lived loop sees the new model once its task is recreated, or when it
-reads it through `Base.invokelatest`.
+A typed binding reloads as an ordinary assignment. The edited `Driver::Models.ModelType = Models.Model(…)`
+replaces the model for every reader at once: the REPL, a task created after the reload, and a task
+that is already running, such as a server's long-lived loop (#1663).
 
-The one edit a running session cannot take is the switch itself: turning a plain `Driver = …` into
-`const Driver = …` (or back) in a file the session already loaded fails like any other failing
-expression, with the warning above, and the previous model stays. Restart the session once after
-adding `const` to a models file.
+A `const` binding reloads too, but differently. Julia redefines a `const` in a new world, so the
+REPL and every task created after the reload see the new model, while a task created before it,
+running or not, keeps the old one. That is how Revise treats an edited method. Such a loop sees the
+new model once its task is recreated, or when it reads the model through `Base.invokelatest`.
+
+The one edit a running session cannot take is a change of binding form. Julia refuses to add a type
+to a global that already has a value (`cannot set type for global ….Driver`) or is a constant
+(`cannot set type for constant ….Driver`). It also refuses to turn a global into a constant, or a
+constant back into a global. So switching a loaded file from plain or `const` to
+`Driver::Models.ModelType = …` fails like any other failing expression. You get the warning above,
+the previous model stays, and reloading again does not help. Restart the session once after
+switching the file's form; every reload after that is an assignment. The one switch that does go
+through is typed → plain, an ordinary assignment, and the binding then stays typed until the
+session restarts.
 
 `@import_models` in a **package's** module body gets no reload. That code runs in the precompile
 worker, where no file is watched, and the restored session does not run it again. Use the run-time

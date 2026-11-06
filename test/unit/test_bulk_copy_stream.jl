@@ -57,7 +57,7 @@ end
 # One column per kind of value a field formatter hands `bulk_copy`. No key column: a supplied key
 # would add the sequence resync, which is not what this file is about. Every field is nullable so a
 # row can be all `missing`.
-const BCS1344_CELLS = Model("bcs1344_cells",
+BCS1344_CELLS::PormG.Models.ModelType = Model("bcs1344_cells",
   id       = IDField(),
   name     = CharField(max_length = 60, null = true),
   note     = TextField(null = true),
@@ -143,7 +143,7 @@ const BCS1344_WRITER_EXPECTED =
 end
 
 # A small table, 10,001 rows: one more than a chunk.
-const BCS1344_LAPS = Model("bcs1344_laps",
+BCS1344_LAPS::PormG.Models.ModelType = Model("bcs1344_laps",
   id = IDField(), code = CharField(max_length = 3), lap = IntegerField())
 BCS1344_LAPS.connect_key = "bcs1344_pg"
 

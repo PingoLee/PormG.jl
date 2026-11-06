@@ -23,8 +23,8 @@ A table name is the model's `name` **verbatim** — no pluralization, no Inflect
 and that `name` is always **lowercase**:
 
 ```julia
-const Result = Models.Model("result", …)   # → table  result
-const Driver = Models.Model("driver", …)   # → table  driver
+Result::Models.ModelType = Models.Model("result", …)   # → table  result
+Driver::Models.ModelType = Models.Model("driver", …)   # → table  driver
 ```
 
 The Julia binding stays capitalized (`Result`), while the stored `name` ("result") is what becomes
@@ -33,7 +33,7 @@ the table. To point a model at a *different* physical table — an existing data
 rather than folding the difference into `name`:
 
 ```julia
-const Result = Models.Model("result", db_table = "f1_results", …)   # → table  f1_results
+Result::Models.ModelType = Models.Model("result", db_table = "f1_results", …)   # → table  f1_results
 ```
 
 Naming the model `"f1_results"` outright also reaches that table, but it spends the logical name on a
@@ -69,7 +69,7 @@ Models.Model("_order", id = Models.IDField())
 If the physical table really is called `_order`, pin it — the same escape valve as for case:
 
 ```julia
-const Order = Models.Model("order", db_table = "_order", id = Models.IDField())
+Order::Models.ModelType = Models.Model("order", db_table = "_order", id = Models.IDField())
 ```
 
 !!! note "This rejection used to guard a bug; it is now a convention"
@@ -93,7 +93,7 @@ It is the table-level sibling of [`db_column`](fields.md#Database-Column-Mapping
 name stays a lowercase logical identifier, and `db_table` carries the physical one, **verbatim**.
 
 ```julia
-const DriverProfile = Models.Model("driver_profile",
+DriverProfile::Models.ModelType = Models.Model("driver_profile",
   db_table  = "Driver_Profile_Legacy",   # ← the table that actually exists
   driverid  = Models.IDField(),
   surname   = Models.CharField(max_length = 100),
@@ -203,13 +203,13 @@ first model — so a key aimed at the table whose binding got suffixed names the
 
 ```julia
 # live tables: "driver profile", "driver_profile", and a "pit_stop" holding one key into each
-const Driver_profile = Models.Model("driver profile",
+Driver_profile::Models.ModelType = Models.Model("driver profile",
   id = Models.IDField())
 
-const Driver_profile2 = Models.Model("driver_profile",
+Driver_profile2::Models.ModelType = Models.Model("driver_profile",
   id = Models.IDField())
 
-const Pit_stop = Models.Model("pit_stop",
+Pit_stop::Models.ModelType = Models.Model("pit_stop",
   id = Models.IDField(),
   plain_id = Models.ForeignKey("Driver_profile2", null=true, pk_field="id"),
   spaced_id = Models.ForeignKey("Driver_profile", null=true, pk_field="id"))
@@ -256,7 +256,7 @@ names the Django **app label** whose tables the connection reads, since Django n
 
   ```julia
   # class Dim_uf(models.Model) imported with django_prefix = "dash"
-  const Dim_uf = Models.Model(db_table = "dash_dim_uf", …)
+  Dim_uf::Models.ModelType = Models.Model(db_table = "dash_dim_uf", …)
   ```
 
   A `Meta.db_table` in the Django source still wins outright, exactly as in Django.
@@ -394,7 +394,7 @@ Accepts a bare model (`M.Driver`) or its handler (`M.Driver.objects`) — same d
 PormG does **not** auto-create an `id` primary key for a native model. You declare one explicitly:
 
 ```julia
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid = Models.IDField(),                 # explicit PK
   surname  = Models.CharField(max_length=255),
 )
@@ -420,7 +420,7 @@ A foreign-key column is the **declared field name, verbatim (case preserved)** �
 `_id`, lowercases, or otherwise transforms it:
 
 ```julia
-const Result = Models.Model("result",
+Result::Models.ModelType = Models.Model("result",
   resultid = Models.IDField(),
   driverid = Models.ForeignKey("driver", pk_field="driverid"),  # → column  driverid
 )
@@ -693,7 +693,7 @@ live `DEFAULT now()` column instead of fighting it, and it works identically on 
 pin:
 
 ```julia
-const Race_result = Models.Model("race_result",
+Race_result::Models.ModelType = Models.Model("race_result",
   id         = Models.IDField(),
   created_at = Models.DateTimeField(auto_now_add=true),   # live: TIMESTAMPTZ DEFAULT now()
 )
@@ -823,7 +823,7 @@ opt-in, via `auto_now_add` / `auto_now` on a `DateField` or `DateTimeField`, and
 is whatever you declare**:
 
 ```julia
-const Driver = Models.Model("driver",
+Driver::Models.ModelType = Models.Model("driver",
   driverid     = Models.IDField(),
   created_at   = Models.DateTimeField(auto_now_add=true),  # set once, on insert
   modified_at  = Models.DateTimeField(auto_now=true),      # refreshed on every save

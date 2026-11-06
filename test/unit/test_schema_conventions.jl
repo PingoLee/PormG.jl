@@ -27,7 +27,7 @@ struct MockSLConv <: PormG.PormGSQLite end
 # the `ON DELETE` mapping; the target just has to be real, and passing the model makes it so without
 # needing a models module. The rendered table is `"driver"` either way, so every assertion below is
 # unchanged.
-const CONV_DRIVER = Models.Model("driver", id = Models.IDField())
+CONV_DRIVER::Models.ModelType = Models.Model("driver", id = Models.IDField())
 
 # Render a model whose single FK carries the given keyword args, for on_delete assertions.
 _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),

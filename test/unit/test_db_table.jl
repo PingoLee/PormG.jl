@@ -273,7 +273,7 @@ DbtPlain.connect_key = "db_table_mock"
     for (bind, m) in ((:Dbtj_driver_scratch, jdriver), (:Dbtj_result_scratch, jresult))
       m._module = jmod
       m.connect_key = "db_table_mock"
-      Base.eval(jmod, :(const $bind = $m))
+      Base.eval(jmod, :($bind::$(PormG.Models.ModelType) = $m))
     end
 
     # Joining CHILD → PARENT puts the PARENT's db_table in the JOIN clause, while the child (which
@@ -372,7 +372,7 @@ DbtPlain.connect_key = "db_table_mock"
     for (bind, m) in ((:Dbtr_parent_scratch, rparent), (:Dbtr_child_scratch, rchild))
       m._module = rmod
       m.connect_key = "db_table_mock"
-      Base.eval(rmod, :(const $bind = $m))
+      Base.eval(rmod, :($bind::$(PormG.Models.ModelType) = $m))
     end
     # The reverse accessor `set_models` would install. `model_name` is the child's LOGICAL name —
     # which is precisely why the reverse renderer must consult `model_resolved` for a db_table, and

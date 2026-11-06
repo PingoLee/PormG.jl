@@ -199,7 +199,7 @@ function PormG.backend_copy_in!(::BulkRowCountsMockPg, conn, sql::String, data_i
   return popfirst!(BRC670_COUNTS)
 end
 
-const BRC670_PG_RESULT = Model("brc670_pg_result",
+BRC670_PG_RESULT::PormG.Models.ModelType = Model("brc670_pg_result",
   id = IDField(), driver = CharField(), year = IntegerField(), points = IntegerField())
 BRC670_PG_RESULT.connect_key = "brc670_pg"
 

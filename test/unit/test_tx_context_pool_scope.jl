@@ -116,12 +116,12 @@ function CP831.fetch(::MockSFUPool831, sql::String; kwargs...)
   return DataFrame()
 end
 
-const SFU_LAP_TIMES_831 = Model("pormg831_lap_times",
+SFU_LAP_TIMES_831::PormG.Models.ModelType = Model("pormg831_lap_times",
   id = IDField(), driver = CharField(), lap = IntegerField())
 SFU_LAP_TIMES_831.connect_key = "pormg831_pg_a"
 
 # The SQLite half (#1237): a model on scratch database B's `circuits` table.
-const SFU_CIRCUITS_831 = Model("circuits", id = IDField(), name = CharField())
+SFU_CIRCUITS_831::PormG.Models.ModelType = Model("circuits", id = IDField(), name = CharField())
 SFU_CIRCUITS_831.connect_key = POOL_B_KEY_831
 
 # ── A many-to-many pair bound to the mock database B (#838) ──
@@ -141,9 +141,9 @@ end
 # ── ORM models over the two SQLite scratch databases (#838) ──
 # The same `drivers` table, once bound to A and once to B, so `.db()` can route either one
 # across. Bound by key: the pools are registered under these keys inside the testset.
-const ORM_DRIVERS_A_831 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_A_831::PormG.Models.ModelType = Model("drivers", id = IDField(), surname = CharField())
 ORM_DRIVERS_A_831.connect_key = POOL_A_KEY_831
-const ORM_DRIVERS_B_831 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_B_831::PormG.Models.ModelType = Model("drivers", id = IDField(), surname = CharField())
 ORM_DRIVERS_B_831.connect_key = POOL_B_KEY_831
 
 @testset "Transaction context is scoped to its own pool (#831)" begin

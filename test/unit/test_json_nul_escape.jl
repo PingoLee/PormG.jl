@@ -172,7 +172,7 @@ function PormG.backend_execute_async(::Json954MockPg, conn, sql::String, params)
   throw(Json954Reached())
 end
 
-const JSON954_PG = Model("json954_pit_stop", id = IDField(), code = CharField(max_length = 20, null = true),
+JSON954_PG::PormG.Models.ModelType = Model("json954_pit_stop", id = IDField(), code = CharField(max_length = 20, null = true),
                          telemetry = JSONField(null = true))
 JSON954_PG.connect_key = "json954_pg"
 

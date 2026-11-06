@@ -73,7 +73,7 @@ module in one step:
 
 ```julia
 PormG.@models_module Scratch "db" begin
-    const Driver = Models.Model("drivers",
+    Driver::Models.ModelType = Models.Model("drivers",
         driverid = Models.IDField(),
         surname  = Models.CharField(max_length = 50),
     )
@@ -83,21 +83,24 @@ end
 ## Defining models
 
 Models live in a module, one `Models.Model(...)` per table. `@import_models` registers the module,
-so the file itself does not call `Models.set_models`. Bind each model with `const`: a plain global
-makes every `M.Race` an untyped read. A file without `const` still loads; add it when you touch one
-(#1650):
+so the file itself does not call `Models.set_models`. Bind each model with a typed global,
+`Race::Models.ModelType = Models.Model(…)`. A plain global makes every `M.Race` an untyped read: a
+dynamic call under the JIT, and an error under `juliac --trim`. The concrete `Models.ModelType` is
+the annotation to use, because `::Models.PormGModel` leaves `M.Race.objects` untyped. A plain or `const`
+file still loads; switch it to the typed form when you touch it, then restart the session once,
+because a live session refuses to change a binding's form on reload (#1650, #1672):
 
 ```julia
 module models
 import PormG.Models
 
-const Circuit = Models.Model("circuits",
+Circuit::Models.ModelType = Models.Model("circuits",
     circuitid = Models.IDField(),
     name      = Models.CharField(max_length = 255),
     country   = Models.CharField(max_length = 100),
 )
 
-const Driver = Models.Model("drivers",
+Driver::Models.ModelType = Models.Model("drivers",
     driverid    = Models.IDField(),
     driverref   = Models.CharField(max_length = 255),
     forename    = Models.CharField(max_length = 50),
@@ -106,7 +109,7 @@ const Driver = Models.Model("drivers",
     dob         = Models.DateField(null = true),
 )
 
-const Race = Models.Model("races",
+Race::Models.ModelType = Models.Model("races",
     raceid    = Models.IDField(),
     year      = Models.IntegerField(),
     name      = Models.CharField(max_length = 255),
@@ -114,7 +117,7 @@ const Race = Models.Model("races",
     circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE"),
 )
 
-const Result = Models.Model("results",
+Result::Models.ModelType = Models.Model("results",
     resultid      = Models.IDField(),
     raceid        = Models.ForeignKey(Race, on_delete = "CASCADE"),
     driverid      = Models.ForeignKey(Driver, on_delete = "RESTRICT"),

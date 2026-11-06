@@ -49,7 +49,7 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 
 ```julia
 # ✅ Good field naming
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),                      # Plain identifier — no prefix needed
     username = Models.CharField(max_length=30), # Lowercase
     first_name = Models.CharField(max_length=50), # Snake_case
@@ -60,16 +60,16 @@ const Team_member = Models.Model(
 )
 
 # ✅ Good model naming
-const Driver_profile = Models.Model(...)    # snake_case with capital first letter
-const Part_category = Models.Model(...)     # Clear relationship
-const Race_result = Models.Model(...)       # Descriptive compound name
+Driver_profile::Models.ModelType = Models.Model(...)    # snake_case with capital first letter
+Part_category::Models.ModelType = Models.Model(...)     # Clear relationship
+Race_result::Models.ModelType = Models.Model(...)       # Descriptive compound name
 ```
 
 ### Examples to Avoid
 
 ```julia
 # ❌ Bad naming practices
-const driver = Models.Model(                  # Should be capitalized
+driver::Models.ModelType = Models.Model(                  # Should be capitalized
     ID = Models.IDField(),              # Should be id — house style is lowercase
     firstName = Models.CharField(),     # Should be first_name
     Nationality__Code = Models.CharField(), # Never use __ (the lookup separator)
@@ -78,7 +78,7 @@ const driver = Models.Model(                  # Should be capitalized
 )
 
 # ✅ the reserved-word column, said properly
-const driver = Models.Model("driver",
+driver::Models.ModelType = Models.Model("driver",
     id   = Models.IDField(),
     end_ = Models.DateField(db_column = "end")   # field `end_` → column "end"
 )
@@ -94,13 +94,13 @@ then lacks. `primary_key = true` on a `BigIntegerField` created a table with **n
 
 ```julia
 # ✗ raises FieldValidationError: BigIntegerField does not accept `primary_key`
-const Circuit_source = Models.Model("circuit_source",
+Circuit_source::Models.ModelType = Models.Model("circuit_source",
   circuitid = Models.BigIntegerField(primary_key = true),
   name = Models.CharField(max_length = 255)
 )
 
 # ✓ an integer key the caller supplies (a source system's id)
-const Circuit_source = Models.Model("circuit_source",
+Circuit_source::Models.ModelType = Models.Model("circuit_source",
   circuitid = Models.IDField(generated = false),
   name = Models.CharField(max_length = 255)
 )
@@ -139,19 +139,19 @@ that does not take them:
 
 ```julia
 # Basic usage (most common)
-const Driver = Models.Model(
+Driver::Models.ModelType = Models.Model(
   id = Models.IDField(),
   surname = Models.CharField(max_length=50)
 )
 
 # With GENERATED ALWAYS (stricter identity)
-const Result = Models.Model(
+Result::Models.ModelType = Models.Model(
   id = Models.IDField(generated_always=true),
   points = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
 # A key the caller supplies, e.g. a source system's id
-const Circuit_source = Models.Model("circuit_source",
+Circuit_source::Models.ModelType = Models.Model("circuit_source",
   circuitid = Models.IDField(generated = false),
   name = Models.CharField(max_length = 255)
 )
@@ -191,7 +191,7 @@ one that relied on the documented auto-increment never did.
 Use `IDField` for every auto-incrementing integer key:
 
 ```julia
-const Part_category = Models.Model(
+Part_category::Models.ModelType = Models.Model(
     id   = Models.IDField(),
     name = Models.CharField(max_length=100)
 )
@@ -231,13 +231,13 @@ before `migrate()`; the
 
 ```julia
 # UUID as a primary key
-const Api_session = Models.Model(
+Api_session::Models.ModelType = Models.Model(
   id = Models.UUIDField(primary_key=true, auto_add=true),
   team_member_id = Models.ForeignKey("Team_member")
 )
 
 # UUID as a unique token
-const Access_token = Models.Model(
+Access_token::Models.ModelType = Models.Model(
   id = Models.IDField(),
   team_member = Models.ForeignKey("Team_member"),
   token = Models.UUIDField(unique=true, auto_add=true),
@@ -314,7 +314,7 @@ Store `nothing` in a `null = true` field instead of an empty string.
 of a timing relay.
 
 ```julia
-const Pit_wall_session = Models.Model("pit_wall_session",
+Pit_wall_session::Models.ModelType = Models.Model("pit_wall_session",
   id         = Models.IDField(),
   team       = Models.CharField(max_length = 100),
   client_ip  = Models.GenericIPAddressField(),
@@ -465,7 +465,7 @@ from the named columns on every write, and PormG never writes it. See
 [Full-Text Search → A generated document](read/full_text_search.md#A-generated-document).
 
 ```julia
-const Race_report = Models.Model("race_report",
+Race_report::Models.ModelType = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
     search_vector = Models.SearchVectorField(null = true),
@@ -473,7 +473,7 @@ const Race_report = Models.Model("race_report",
 )
 
 # Generated: kept current by PostgreSQL
-const Race_report = Models.Model("race_report",
+Race_report::Models.ModelType = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
     search_vector = Models.SearchVectorField(generated_from = ("title",), config = "simple"),
@@ -501,7 +501,7 @@ a model on SQLite or MySQL, put the elements in a related model with a `ForeignK
 brought to a race or the laps it pitted on.
 
 ```julia
-const Race_strategy = Models.Model("race_strategy",
+Race_strategy::Models.ModelType = Models.Model("race_strategy",
   id             = Models.IDField(),
   raceid         = Models.ForeignKey("Race"),
   team           = Models.CharField(max_length = 100),
@@ -703,7 +703,7 @@ does, and so does a date (`"2020-01-01"` is ten).
 
 ```julia
 # Basic string fields
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30, unique=true),
     email = Models.CharField(max_length=100, unique=true),
@@ -712,7 +712,7 @@ const Team_member = Models.Model(
 )
 
 # Field with choices (enum-like behavior)
-const Store_order = Models.Model(
+Store_order::Models.ModelType = Models.Model(
     id = Models.IDField(),
     status = Models.CharField(
         max_length=20,
@@ -728,7 +728,7 @@ const Store_order = Models.Model(
 )
 
 # Field with a human-readable label (the column name follows the field name: "part_number")
-const Part = Models.Model(
+Part::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     part_number = Models.CharField(
@@ -754,7 +754,7 @@ const Part = Models.Model(
 **Use Cases**: Articles, descriptions, comments, JSON data, large text content.
 
 ```julia
-const Race_report = Models.Model(
+Race_report::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -772,7 +772,7 @@ const Race_report = Models.Model(
 **Use Cases**: Team-member and driver emails, contact information, notification addresses.
 
 ```julia
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.EmailField(unique=true),
@@ -780,7 +780,7 @@ const Team_member = Models.Model(
 )
 
 # For contact forms
-const Team_contact = Models.Model(
+Team_contact::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     email = Models.EmailField(),
@@ -797,7 +797,7 @@ const Team_contact = Models.Model(
 **Use Cases**: Profile links, social media URLs, external references.
 
 ```julia
-const Driver_profile = Models.Model(
+Driver_profile::Models.ModelType = Models.Model(
     id = Models.IDField(),
     website = Models.URLField(max_length=500, null=true, blank=true),
     instagram_profile = Models.URLField(unique=true)
@@ -815,7 +815,7 @@ const Driver_profile = Models.Model(
 **Best Practice**: `SlugField` defaults to `db_index=true` as it is almost always used in `filter()` operations for routing.
 
 ```julia
-const Press_release = Models.Model(
+Press_release::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     slug = Models.SlugField(unique=true)
@@ -842,7 +842,7 @@ pbkdf2_sha256$720000$randomsalt$base64encodedHash
 
 ```julia
 # Team member account with password authentication
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=150, unique=true),
     email = Models.EmailField(unique=true),
@@ -894,7 +894,7 @@ raises, just as `FloatField(default = Inf)` does.
 
 ```julia
 # Basic numeric data
-const Part = Models.Model(
+Part::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     stock_quantity = Models.IntegerField(default=0),
@@ -902,7 +902,7 @@ const Part = Models.Model(
 )
 
 # Rating systems
-const Fan_review = Models.Model(
+Fan_review::Models.ModelType = Models.Model(
     id = Models.IDField(),
     race = Models.ForeignKey("Race"),
     rating = Models.IntegerField(),  # 1-5 stars
@@ -910,7 +910,7 @@ const Fan_review = Models.Model(
 )
 
 # Age and demographic data
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     age = Models.IntegerField(null=true, blank=true),
@@ -928,7 +928,7 @@ const Team_member = Models.Model(
 
 ```julia
 # Large counters and metrics
-const Season_analytics = Models.Model(
+Season_analytics::Models.ModelType = Models.Model(
     id = Models.IDField(),
     page_views = Models.BigIntegerField(default=0),
     unique_visitors = Models.BigIntegerField(default=0),
@@ -936,7 +936,7 @@ const Season_analytics = Models.Model(
 )
 
 # Timestamp storage (Unix timestamp)
-const Timing_event = Models.Model(
+Timing_event::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     timestamp_ms = Models.BigIntegerField(),  # Milliseconds since epoch
@@ -952,7 +952,7 @@ const Timing_event = Models.Model(
 
 ```julia
 # Telemetry measurements
-const Car_sensor = Models.Model(
+Car_sensor::Models.ModelType = Models.Model(
     id = Models.IDField(),
     temperature = Models.FloatField(),  # Celsius
     humidity = Models.FloatField(),     # Percentage
@@ -960,7 +960,7 @@ const Car_sensor = Models.Model(
 )
 
 # Geographic coordinates
-const Circuit = Models.Model(
+Circuit::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     latitude = Models.FloatField(),
@@ -969,7 +969,7 @@ const Circuit = Models.Model(
 )
 
 # Derived performance metrics (use DecimalField for currency)
-const Car_performance = Models.Model(
+Car_performance::Models.ModelType = Models.Model(
     id = Models.IDField(),
     pace_delta = Models.FloatField(),       # Seconds vs pole
     tyre_deg_rate = Models.FloatField(),    # Seconds lost per lap
@@ -998,7 +998,7 @@ width); `DECIMAL(max_digits, decimal_places)` on SQLite and MySQL.
 
 ```julia
 # Financial data
-const Sponsor_invoice = Models.Model(
+Sponsor_invoice::Models.ModelType = Models.Model(
     id = Models.IDField(),
     subtotal = Models.DecimalField(max_digits=10, decimal_places=2),
     tax_amount = Models.DecimalField(max_digits=8, decimal_places=2),
@@ -1007,7 +1007,7 @@ const Sponsor_invoice = Models.Model(
 )
 
 # Merchandise pricing
-const Merchandise = Models.Model(
+Merchandise::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2),
@@ -1070,7 +1070,7 @@ formatter (which returns a string) as its converter.
 
 ```julia
 # Personal information
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     birth_date = Models.DateField(null=true),
@@ -1078,7 +1078,7 @@ const Team_member = Models.Model(
 )
 
 # Event scheduling
-const Grand_prix = Models.Model(
+Grand_prix::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     event_date = Models.DateField(),
@@ -1086,7 +1086,7 @@ const Grand_prix = Models.Model(
 )
 
 # Business records
-const Sponsor_contract = Models.Model(
+Sponsor_contract::Models.ModelType = Models.Model(
     id = Models.IDField(),
     contract_number = Models.CharField(max_length=50),
     issue_date = Models.DateField(),
@@ -1125,7 +1125,7 @@ By default, `DateTimeField` uses `TIMESTAMPTZ`.
 
 ```julia
 # Audit and logging
-const Race_audit_log = Models.Model(
+Race_audit_log::Models.ModelType = Models.Model(
     id = Models.IDField(),
     team_member = Models.ForeignKey("Team_member"),
     action = Models.CharField(max_length=100),
@@ -1134,7 +1134,7 @@ const Race_audit_log = Models.Model(
 )
 
 # Content management
-const Race_report = Models.Model(
+Race_report::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -1144,7 +1144,7 @@ const Race_report = Models.Model(
 )
 
 # Team store
-const Store_order = Models.Model(
+Store_order::Models.ModelType = Models.Model(
     id = Models.IDField(),
     created_at = Models.DateTimeField(),
     shipped_at = Models.DateTimeField(null=true),
@@ -1175,7 +1175,7 @@ instead.
 
 ```julia
 # Facility hours
-const Team_store = Models.Model(
+Team_store::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     opening_time = Models.TimeField(),
@@ -1183,7 +1183,7 @@ const Team_store = Models.Model(
 )
 
 # Scheduling
-const Garage_booking = Models.Model(
+Garage_booking::Models.ModelType = Models.Model(
     id = Models.IDField(),
     date = Models.DateField(),
     start_time = Models.TimeField(),
@@ -1192,7 +1192,7 @@ const Garage_booking = Models.Model(
 )
 
 # Sports and timing
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=100),
     start_time = Models.TimeField(),
@@ -1211,7 +1211,7 @@ microseconds on MySQL, which has no interval type and whose `TIME` stops at 838:
 
 ```julia
 # Task tracking
-const Pit_task = Models.Model(
+Pit_task::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     estimated_duration = Models.DurationField(),
@@ -1219,7 +1219,7 @@ const Pit_task = Models.Model(
 )
 
 # Media content
-const Onboard_video = Models.Model(
+Onboard_video::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     duration = Models.DurationField(),
@@ -1330,7 +1330,7 @@ for any other value, a string such as `"true"` included (#1290).
 
 ```julia
 # Team member preferences and flags
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     is_active = Models.BooleanField(default=true),
@@ -1341,7 +1341,7 @@ const Team_member = Models.Model(
 )
 
 # Content moderation
-const Race_report = Models.Model(
+Race_report::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -1351,7 +1351,7 @@ const Race_report = Models.Model(
 )
 
 # System settings
-const System_setting = Models.Model(
+System_setting::Models.ModelType = Models.Model(
     id = Models.IDField(),
     maintenance_mode = Models.BooleanField(default=false),
     registration_enabled = Models.BooleanField(default=true),
@@ -1373,7 +1373,7 @@ const System_setting = Models.Model(
 
 ```julia
 # Driver profiles
-const Driver_profile = Models.Model(
+Driver_profile::Models.ModelType = Models.Model(
     id = Models.IDField(),
     driver = Models.OneToOneField("Driver"),
     avatar = Models.ImageField(null=true, blank=true),
@@ -1381,7 +1381,7 @@ const Driver_profile = Models.Model(
 )
 
 # Merchandise catalog
-const Merchandise = Models.Model(
+Merchandise::Models.ModelType = Models.Model(
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     main_image = Models.ImageField(),
@@ -1389,7 +1389,7 @@ const Merchandise = Models.Model(
 )
 
 # Gallery system
-const Race_photo = Models.Model(
+Race_photo::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     image = Models.ImageField(),
@@ -1426,7 +1426,7 @@ An `AbstractString` is also accepted on write and stored as its **UTF-8 code uni
 
 ```julia
 # Document storage
-const Technical_document = Models.Model("technical_document",
+Technical_document::Models.ModelType = Models.Model("technical_document",
     id = Models.IDField(),
     name = Models.CharField(max_length=200),
     file_data = Models.BinaryField(max_length=5_000_000),   # ≤ 5 MB
@@ -1446,7 +1446,7 @@ row = Technical_document.objects.filter("name" => "2024 Monza aero package").
 write("roundtrip.pdf", row[:file_data])     # Vector{UInt8}, byte-identical
 
 # Encryption and security
-const Encrypted_telemetry = Models.Model("encrypted_telemetry",
+Encrypted_telemetry::Models.ModelType = Models.Model("encrypted_telemetry",
     id = Models.IDField(),
     team_member = Models.ForeignKey("Team_member"),
     encrypted_content = Models.BinaryField(),
@@ -1498,7 +1498,7 @@ non-binary field is refused as an operator-less vector value.
 **NUL characters**: a value containing a NUL (`'\0'`) anywhere — a string value, a key, a nested element, or a JSON string carrying the escape `\u0000` — raises `InvalidValueError` before the statement is sent, on every backend (a `default=` carrying one raises `FieldValidationError` when the model is defined). PostgreSQL `jsonb` cannot store that escape, so SQLite and MySQL refuse it too and the engines stay aligned. The literal text `\u0000` (a backslash followed by `u0000`) is ordinary data and is stored as written.
 
 ```julia
-const Car_setup = Models.Model(
+Car_setup::Models.ModelType = Models.Model(
     id = Models.IDField(),
     settings = Models.JSONField(),
     metadata = Models.JSONField(null=true, blank=true)
@@ -1526,7 +1526,7 @@ Car_setup.objects.create("settings" => Dict("front_wing"=>5, "tyre_pressure"=>21
 
 ```julia
 # Press room
-const Race_report = Models.Model(
+Race_report::Models.ModelType = Models.Model(
     id = Models.IDField(),
     title = Models.CharField(max_length=200),
     author = Models.ForeignKey("Team_member", on_delete="CASCADE"),
@@ -1535,14 +1535,14 @@ const Race_report = Models.Model(
 )
 
 # Team store
-const Store_order = Models.Model(
+Store_order::Models.ModelType = Models.Model(
     id = Models.IDField(),
     customer = Models.ForeignKey("Fan", on_delete="PROTECT"),
     shipping_address = Models.ForeignKey("Shipping_address", on_delete="SET_NULL", null=true),
     total_amount = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
-const Order_line = Models.Model(
+Order_line::Models.ModelType = Models.Model(
     id = Models.IDField(),
     order = Models.ForeignKey("Store_order", on_delete="CASCADE"),
     product = Models.ForeignKey("Merchandise", on_delete="PROTECT"),
@@ -1552,7 +1552,7 @@ const Order_line = Models.Model(
 
 # Multiple ForeignKeys to the same model — related_name is optional, but recommended.
 # Without it PormG derives one per field: `team_radio_sender` and `team_radio_recipient`.
-const Team_radio = Models.Model(
+Team_radio::Models.ModelType = Models.Model(
     id = Models.IDField(),
     sender = Models.ForeignKey("Team_member", on_delete="CASCADE", related_name="sent_messages"),
     recipient = Models.ForeignKey("Team_member", on_delete="CASCADE", related_name="received_messages"),
@@ -1593,7 +1593,7 @@ and fix, so a schema carrying several of them is fixed in a single pass.
 
 ```julia
 # Driver profile extension
-const Driver_profile = Models.Model(
+Driver_profile::Models.ModelType = Models.Model(
     id = Models.IDField(),
     driver = Models.OneToOneField("Driver", on_delete="CASCADE"),
     bio = Models.TextField(blank=true),
@@ -1603,7 +1603,7 @@ const Driver_profile = Models.Model(
 )
 
 # Staff details
-const Staff_profile = Models.Model(
+Staff_profile::Models.ModelType = Models.Model(
     id = Models.IDField(),
     team_member = Models.OneToOneField("Team_member", on_delete="CASCADE"),
     staff_id = Models.CharField(max_length=20, unique=true),
@@ -1613,7 +1613,7 @@ const Staff_profile = Models.Model(
 )
 
 # Settings and preferences
-const Team_member_settings = Models.Model(
+Team_member_settings::Models.ModelType = Models.Model(
     id = Models.IDField(),
     team_member = Models.OneToOneField("Team_member", on_delete="CASCADE"),
     theme = Models.CharField(max_length=20, default="light"),
@@ -1641,7 +1641,7 @@ When `through` is not supplied, PormG migrations synthesize a join table with tw
 The field may also target the model that declares it (pass the model name as a string). Both join columns are then prefixed `from_` / `to_`, since one table cannot carry the same column twice — see [Self-Referential Relationships](many_to_many.md#Self-Referential-Relationships).
 
 ```julia
-const Driver_collection = Models.Model("driver_collections",
+Driver_collection::Models.ModelType = Models.Model("driver_collections",
     id = Models.IDField(),
     label = Models.CharField(max_length=120),
     drivers = Models.ManyToManyField(Driver, related_name="collections")
@@ -1697,7 +1697,7 @@ All field types support these common parameters:
 
 ### Example with All Common Options
 ```julia
-const Merchandise = Models.Model(
+Merchandise::Models.ModelType = Models.Model(
     id = Models.IDField(),
     
     # CharField with full options
@@ -1791,14 +1791,14 @@ These changes require data validation:
 ### Example Migration-Safe Model Evolution
 ```julia
 # Version 1: Initial model
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=100)
 )
 
 # Version 2: Safe additions
-const Team_member = Models.Model(
+Team_member::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=150, unique=true),  # Increased length, added unique

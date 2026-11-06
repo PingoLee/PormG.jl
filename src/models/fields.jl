@@ -765,13 +765,13 @@ system's id): no engine fills it, so an insert without it is refused. On SQLite 
 # Examples
 
 ```julia
-const Driver = Models.Model(
+Driver::Models.ModelType = Models.Model(
   driverid = Models.IDField(),
   surname = Models.CharField(max_length = 255)
 )
 
 # A key the caller supplies, e.g. copied from another system
-const Circuit_source = Models.Model("circuit_source",
+Circuit_source::Models.ModelType = Models.Model("circuit_source",
   circuitid = Models.IDField(generated = false),
   name = Models.CharField(max_length = 255)
 )
@@ -897,7 +897,7 @@ The two "requires" above are enforced, not advisory — `set_models` raises `Mod
 
 Basic foreign key relationship:
 ```julia
-const Article = Models.Model(
+Article::Models.ModelType = Models.Model(
     id = IDField()
     title = CharField(max_length=200)
     author = ForeignKey("User")
@@ -907,7 +907,7 @@ const Article = Models.Model(
 
 Foreign key allowing NULL values:
 ```julia
-const Product = Models.Model(
+Product::Models.ModelType = Models.Model(
     id = IDField()
     name = CharField(max_length=100)
     category = ForeignKey("Category", null=true, blank=true, on_delete=SET_NULL)
@@ -916,7 +916,7 @@ const Product = Models.Model(
 
 Multiple foreign keys to the same model — `related_name` is optional, but recommended:
 ```julia
-const Message = Models.Model(
+Message::Models.ModelType = Models.Model(
     id = IDField()
     sender = ForeignKey("User", related_name="sent_messages")
     recipient = ForeignKey("User", related_name="received_messages")
@@ -1242,13 +1242,13 @@ The two "requires" above are enforced, not advisory — `set_models` raises `Mod
 
 Basic one-to-one relationship (User Profile pattern):
 ```julia
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = IDField()
     username = CharField(max_length=150, unique=true)
     email = EmailField()
 )
 
-const UserProfile = Models.Model(
+UserProfile::Models.ModelType = Models.Model(
     id = IDField()
     user = OneToOneField("User", on_delete=CASCADE)
     bio = TextField(blank=true)
@@ -1259,13 +1259,13 @@ const UserProfile = Models.Model(
 
 One-to-one with null values allowed:
 ```julia
-const Employee = Models.Model(
+Employee::Models.ModelType = Models.Model(
     id = IDField()
     name = CharField(max_length=100)
     department = CharField(max_length=50)
 )
 
-const EmployeeSettings = Models.Model(
+EmployeeSettings::Models.ModelType = Models.Model(
     id = IDField()
     employee = OneToOneField("Employee", null=true, blank=true, on_delete=SET_NULL)
     email_notifications = BooleanField(default=true)
@@ -1275,13 +1275,13 @@ const EmployeeSettings = Models.Model(
 
 Extending a model without modifying it:
 ```julia
-const Product = Models.Model(
+Product::Models.ModelType = Models.Model(
     id = IDField()
     name = CharField(max_length=200)
     price = DecimalField(max_digits=10, decimal_places=2)
 )
 
-const ProductDetails = Models.Model(
+ProductDetails::Models.ModelType = Models.Model(
     id = IDField()
     product = OneToOneField("Product", on_delete=CASCADE, related_name="details")
     detailed_description = TextField()
@@ -1415,13 +1415,13 @@ the first General-registry release; see the upgrade log (`PormG.upgrade_guide`).
 
 ```julia
 # before
-const Part_category = Models.Model(
+Part_category::Models.ModelType = Models.Model(
     id   = Models.AutoField(),
     name = Models.CharField(max_length = 100)
 )
 
 # after
-const Part_category = Models.Model(
+Part_category::Models.ModelType = Models.Model(
     id   = Models.IDField(),
     name = Models.CharField(max_length = 100)
 )
@@ -1538,7 +1538,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 
 Basic string field:
 ```julia
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = IDField(),
     username = CharField(max_length=150, unique=true),
     first_name = CharField(max_length=50),
@@ -1548,7 +1548,7 @@ const User = Models.Model(
 
 String field with choices (enumeration):
 ```julia
-const Order = Models.Model(
+Order::Models.ModelType = Models.Model(
     id = IDField()
     status = CharField(
         max_length=20,
@@ -1567,7 +1567,7 @@ const Order = Models.Model(
 
 Field with a human-readable label (the column name follows the field name, "sku"):
 ```julia
-const Product = Models.Model(
+Product::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=200),
     sku = CharField(
@@ -1581,7 +1581,7 @@ const Product = Models.Model(
 
 Indexed field for performance:
 ```julia
-const Article = Models.Model(
+Article::Models.ModelType = Models.Model(
     id = IDField(),
     title = CharField(max_length=200, db_index=true),
     slug = CharField(max_length=200, unique=true, db_index=true),
@@ -1601,7 +1601,7 @@ priority_choices = (
     ("urgent", "Urgent")
 )
 
-const Task = Models.Model(
+Task::Models.ModelType = Models.Model(
     id = IDField(),
     title = CharField(max_length=200),
     priority = CharField(max_length=10, choices=priority_choices, default="medium")
@@ -1745,7 +1745,7 @@ The `IntegerField` stores whole numbers within the 32-bit signed integer range (
 
 Basic integer field:
 ```julia
-const Product = Models.Model(
+Product::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=200),
     quantity = IntegerField(default=0),
@@ -1755,7 +1755,7 @@ const Product = Models.Model(
 
 Integer field with constraints:
 ```julia
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = IDField(),
     username = CharField(max_length=150, unique=true),
     age = IntegerField(null=true, blank=true),
@@ -1765,7 +1765,7 @@ const User = Models.Model(
 
 Rating system:
 ```julia
-const Review = Models.Model(
+Review::Models.ModelType = Models.Model(
     id = IDField(),
     product = ForeignKey("Product"),
     rating = IntegerField(default=5),  # 1-5 star rating
@@ -1849,7 +1849,7 @@ re-derived whenever the table is recreated during an alter.
 
 # Examples
 ```julia
-const Standing = Models.Model(
+Standing::Models.ModelType = Models.Model(
     id = IDField(),
     position = PositiveSmallIntegerField(default=1),
     points = PositiveSmallIntegerField(default=0)
@@ -1934,7 +1934,7 @@ engine adds or drops when a column's type transitions into or out of this field.
 
 # Examples
 ```julia
-const Lap_times = Models.Model(
+Lap_times::Models.ModelType = Models.Model(
     id = IDField(),
     lap = PositiveIntegerField(default=1),
     milliseconds = PositiveIntegerField()
@@ -2010,7 +2010,7 @@ The `BigIntegerField` stores large whole numbers within the 64-bit signed intege
 
 Large identifier field:
 ```julia
-const Analytics = Models.Model(
+Analytics::Models.ModelType = Models.Model(
     id = IDField(),
     user_id = BigIntegerField(db_index=true),
     session_id = BigIntegerField(),
@@ -2020,7 +2020,7 @@ const Analytics = Models.Model(
 
 Population and statistics:
 ```julia
-const Country = Models.Model(
+Country::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=100),
     population = BigIntegerField(null=true),
@@ -2031,7 +2031,7 @@ const Country = Models.Model(
 
 Large external identifiers:
 ```julia
-const SocialMedia = Models.Model(
+SocialMedia::Models.ModelType = Models.Model(
     id = IDField(),
     user = ForeignKey("User"),
     twitter_id = BigIntegerField(unique=true, null=true),
@@ -2116,7 +2116,7 @@ The `BooleanField` stores binary true/false values and is ideal for flags, switc
 
 Basic boolean flags:
 ```julia
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = IDField(),
     username = CharField(max_length=150),
     is_active = BooleanField(default=true),
@@ -2196,7 +2196,7 @@ The `DateField` stores calendar dates in YYYY-MM-DD format and is ideal for birt
 
 Basic date fields:
 ```julia
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = IDField(),
     username = CharField(max_length=150),
     birth_date = DateField(null=true, blank=true),
@@ -2207,7 +2207,7 @@ const User = Models.Model(
 
 Event and scheduling:
 ```julia
-const Event = Models.Model(
+Event::Models.ModelType = Models.Model(
     id = IDField(),
     title = CharField(max_length=200),
     event_date = DateField(db_index=true),
@@ -2218,7 +2218,7 @@ const Event = Models.Model(
 
 Business dates:
 ```julia
-const Invoice = Models.Model(
+Invoice::Models.ModelType = Models.Model(
     id = IDField(),
     customer = ForeignKey("Customer"),
     issue_date = DateField(auto_now_add=true),
@@ -2724,7 +2724,7 @@ Where:
 Basic password field:
 ```julia
 # Define a User model with password
-const User = Models.Model(
+User::Models.ModelType = Models.Model(
     id = Models.IDField(),
     username = Models.CharField(max_length=150, unique=true),
     email = Models.EmailField(unique=true),
@@ -3050,7 +3050,7 @@ as an hour, so `default = 5` was 05:00 and `default = true` was 01:00.
 
 # Examples
 ```julia
-const Team_store = Models.Model("team_store",
+Team_store::Models.ModelType = Models.Model("team_store",
   id           = Models.IDField(),
   name         = Models.CharField(max_length = 100),
   opening_time = Models.TimeField(),
@@ -3146,7 +3146,7 @@ bytes of an encoded string, decode it yourself: `hex2bytes(s)`, `base64decode(s)
 
 # Examples
 ```julia
-const Technical_document = Models.Model("technical_document",
+Technical_document::Models.ModelType = Models.Model("technical_document",
   id        = Models.IDField(),
   name      = Models.CharField(max_length = 200),
   file_data = Models.BinaryField(max_length = 5_000_000),   # BYTEA / BLOB, ≤ 5 MB
@@ -3251,7 +3251,7 @@ raises `InvalidValueError`).
 
 # Examples
 ```julia
-const Pit_task = Models.Model("pit_task",
+Pit_task::Models.ModelType = Models.Model("pit_task",
   id                 = Models.IDField(),
   name               = Models.CharField(max_length = 200),
   estimated_duration = Models.DurationField(),
@@ -3345,7 +3345,7 @@ Values are validated against the standard UUID format (8-4-4-4-12 hex digits).
 ```julia
 using UUIDs
 
-const Session = Models.Model(
+Session::Models.ModelType = Models.Model(
     id = IDField(),
     session_token = UUIDField(unique=true, db_index=true),
     user_id = ForeignKey("User")
@@ -3476,7 +3476,7 @@ belongs in a [`CIDRField`](@ref). An empty string is refused too; store `nothing
 
 # Examples
 ```julia
-const Pit_wall_session = Models.Model("pit_wall_session",
+Pit_wall_session::Models.ModelType = Models.Model("pit_wall_session",
   id          = Models.IDField(),
   team        = Models.CharField(max_length = 100),
   client_ip   = Models.GenericIPAddressField(),
@@ -3562,7 +3562,7 @@ it: `10.0.0.1/24` is a host inside `10.0.0.0/24`, and the message names that net
 
 # Examples
 ```julia
-const Team_network = Models.Model("team_network",
+Team_network::Models.ModelType = Models.Model("team_network",
   id       = Models.IDField(),
   team     = Models.CharField(max_length = 100),
   subnet   = Models.CIDRField(unique = true),
@@ -3697,7 +3697,7 @@ a missing or invalid `config`, `weights` of another length or with another label
 
 # Examples
 ```julia
-const Race = Models.Model("race",
+Race::Models.ModelType = Models.Model("race",
   raceid = Models.IDField(),
   name   = Models.CharField(max_length = 255),
   search_vector = Models.SearchVectorField(null = true),
@@ -3705,7 +3705,7 @@ const Race = Models.Model("race",
 )
 
 # Generated: PostgreSQL computes the document from `name` on every write.
-const Race = Models.Model("race",
+Race::Models.ModelType = Models.Model("race",
   raceid = Models.IDField(),
   name   = Models.CharField(max_length = 255),
   search_vector = Models.SearchVectorField(generated_from = ("name",), config = "english"),
@@ -3874,7 +3874,7 @@ with `http://`, `https://`, or `ftp://`.
 
 # Examples
 ```julia
-const Circuit = Models.Model(
+Circuit::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=200),
     wiki_url = URLField(null=true, blank=true, verbose_name="Wikipedia Link")
@@ -3955,7 +3955,7 @@ human-readable URL fragments derived from titles or names.
 
 # Examples
 ```julia
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=200),
     slug = SlugField(unique=true, verbose_name="URL Slug")
@@ -4035,7 +4035,7 @@ being sent to the database.
 
 # Examples
 ```julia
-const Race = Models.Model(
+Race::Models.ModelType = Models.Model(
     id = IDField(),
     name = CharField(max_length=200),
     metadata = JSONField(null=true, blank=true, verbose_name="Extra Data")
@@ -4307,7 +4307,7 @@ is not supported.
 
 # Examples
 ```julia
-const Race_strategy = Models.Model("race_strategy",
+Race_strategy::Models.ModelType = Models.Model("race_strategy",
   id             = Models.IDField(),
   raceid         = Models.ForeignKey("Race"),
   tyre_compounds = Models.ArrayField(Models.CharField(max_length = 12); size = 6),

@@ -718,7 +718,7 @@ function fetch(connection::MockSyncPerCall, sql::String; conn = nothing, params 
 end
 PormG.backend_num_affected_rows(::MockSyncPerCall, r::SyncPerCallResult) = r.n
 
-const Seq704Driver = Model("seq704_driver", id = IDField(), forename = CharField())
+Seq704Driver::PormG.Models.ModelType = Model("seq704_driver", id = IDField(), forename = CharField())
 Seq704Driver.connect_key = "seq704_pg"
 
 # ─────────────────────────────────────────────────────────────────────────────

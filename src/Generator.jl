@@ -320,7 +320,7 @@ import PormG.Models: $(reserved_import)
 
 # Define your models here
 # Example:
-# const Driver = Models.Model("drivers",
+# Driver::Models.ModelType = Models.Model("drivers",
 #     id        = Models.IDField(),
 #     forename  = Models.CharField(max_length=255),
 #     surname   = Models.CharField(max_length=255),

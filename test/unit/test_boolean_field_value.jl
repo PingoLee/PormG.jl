@@ -136,7 +136,7 @@ end
 # mock pool inside a transaction context, as `test_bulk_copy_cell_errors.jl` does.
 struct BfvMockPg <: PormG.PormGPostgres end
 PormG.config["bfv1290_copy"] = PormG.Configuration.Settings(connections = BfvMockPg(), change_data = true)
-const _BFV_COPY = PormG.Models.Model("bfv1290_copy", id = PormG.Models.IDField(), finished = PormG.Models.BooleanField(null = true))
+_BFV_COPY::PormG.Models.ModelType = PormG.Models.Model("bfv1290_copy", id = PormG.Models.IDField(), finished = PormG.Models.BooleanField(null = true))
 _BFV_COPY.connect_key = "bfv1290_copy"
 
 @testset "bulk_copy: a non-boolean cell is the same refusal, with its row (#1290)" begin

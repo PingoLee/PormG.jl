@@ -1096,7 +1096,7 @@ end
         class Meta:
             indexes = [models.Index(fields=['id'])]
     """, "ix_pk.jl")
-    @test occursin("\nconst Volta = Models.Model(", pk)
+    @test occursin("\nVolta::Models.ModelType = Models.Model(", pk)
     @test !occursin("Models.Index(", pk)
     @test !occursin("was dropped", pk)      # redundant, not lost — reporting it would be noise
 
@@ -1106,7 +1106,7 @@ end
         class Meta:
             index_together = (('id',),)
     """, "ix_pk2.jl")
-    @test occursin("\nconst Volta1b = Models.Model(", pk2)   # the index_together path too
+    @test occursin("\nVolta1b::Models.ModelType = Models.Model(", pk2)   # the index_together path too
 
     # (2) An `index_together` group whose members collapse to ONE imported column. Both spellings of
     #     a foreign key resolve to `race_id`, so the Index constructor rejects the duplicate — and
@@ -1119,7 +1119,7 @@ end
         class Meta:
             index_together = (('race','race_id'),)
     """, "ix_dupfield.jl")
-    @test occursin("\nconst Volta2 = Models.Model(", dup)
+    @test occursin("\nVolta2::Models.ModelType = Models.Model(", dup)
     @test occursin("an index on 'Volta2' was dropped", dup)
     @test occursin("Index has duplicate fields", dup)
     @test !occursin("Models.Index(", dup)

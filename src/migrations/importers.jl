@@ -1719,7 +1719,7 @@ end
 Rewrite every FK/O2O/M2M target in `fields_dict` to the Julia BINDING of the model it names, and
 degrade the ones that name nothing in this import.
 
-Runs on the field `Dict` rather than on a built `Model_Type` so that degrading a field is a plain
+Runs on the field `Dict` rather than on a built `ModelType` so that degrading a field is a plain
 replace-or-`delete!`, and so `model.field_names` is computed once from the final set.
 
 Resolution order is Django's: `"self"` → `settings.AUTH_USER_MODEL` → `"<app>.<Class>"` → a bare

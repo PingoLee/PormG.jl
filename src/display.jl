@@ -19,7 +19,7 @@
 #   2. **A `show` never takes a connection.** `show_query`/`inspect_query` reach `get_settings`,
 #      which checks a connection out of the pool. Typing a variable name at the REPL must not do
 #      that — see *Query display* below.
-#   3. **A `show` reads slots with `getfield`.** `Model_Type`, `ObjectHandler` and `PormGRow` all
+#   3. **A `show` reads slots with `getfield`.** `ModelType`, `ObjectHandler` and `PormGRow` all
 #      overload `Base.getproperty` (`src/querybuilder/object_manager.jl`, `src/querybuilder/types.jl`);
 #      `m.objects` from inside a display call would run `ensure_model_initialized`, and `row.x`
 #      would run the many-to-many/lazy-traversal dispatch.
@@ -27,15 +27,15 @@
 # ## Why the file exists at all
 #
 # Julia's `show_default` walks a struct's slots with the **2-argument** `show(io, x)`. PormG's model
-# graph is cyclic and total: `Model_Type.fields` holds an `sForeignKey`, whose `.to` is another
-# `Model_Type`, whose `related_objects` hold a `ReverseRelation`, whose `model_resolved` is another
-# `Model_Type`. With no 2-arg method anywhere on that cycle, printing ANY handle serialized the
+# graph is cyclic and total: `ModelType.fields` holds an `sForeignKey`, whose `.to` is another
+# `ModelType`, whose `related_objects` hold a `ReverseRelation`, whose `model_resolved` is another
+# `ModelType`. With no 2-arg method anywhere on that cycle, printing ANY handle serialized the
 # entire schema. Measured on the 14-model F1 fixture before this file existed: `M.Driver` rendered
 # 1,623,608 characters on one line, a single `PormGRow` 1,623,696, a filtered query 1,356,112. The
 # `sCharField` control came out at 146 — the one struct in the group holding no model reference.
 #
 # The corollary is what makes the fix cheap: because `show_default` calls the 2-arg method, a
-# one-line `show` on `Model_Type` and on `PormGField` bounds the output of every container that
+# one-line `show` on `ModelType` and on `PormGField` bounds the output of every container that
 # holds one, whether or not that container has a method here.
 #
 # ## Query display: structural, never a database round-trip
@@ -232,21 +232,21 @@ _d_func_name(::Nothing) = "nothing"
 # on a 4 MB text column is the same stall as `show` on a 4 MB blob.
 _d_value(x::AbstractString) = _d_trunc(repr(_d_trunc(String(x), 40)), 40)
 _d_value(x::Function) = _d_func_name(x)
-_d_value(x::Models.Model_Type) = repr(_d_trunc(getfield(x, :name), 40))
+_d_value(x::Models.ModelType) = repr(_d_trunc(getfield(x, :name), 40))
 _d_value(x) = _d_trunc(_d_render(x), 40)
 
-# ── Models.Model_Type ────────────────────────────────────────────────────────
+# ── Models.ModelType ────────────────────────────────────────────────────────
 
 # The 2-arg method. This is the one that bounds every container: `show_default` on
 # `SQLObjectQuery`, `PathJoin`, `AliasJoin`, `ReverseRelation` and `PormGRow` reaches a model
 # through it, so those types need no method of their own to stop dumping the schema.
-function Base.show(io::IO, m::Models.Model_Type)
+function Base.show(io::IO, m::Models.ModelType)
   n = length(getfield(m, :fields))
   print(io, "Model(", repr(getfield(m, :name)), ", ", n, " field", n == 1 ? "" : "s", ")")
 end
 
 # The card: what you get when you type `M.Driver` at the REPL.
-function Base.show(io::IO, ::MIME"text/plain", m::Models.Model_Type)
+function Base.show(io::IO, ::MIME"text/plain", m::Models.ModelType)
   name       = getfield(m, :name)
   db_table   = getfield(m, :db_table)
   fields     = getfield(m, :fields)
@@ -468,7 +468,7 @@ function _d_field_detail(fname::AbstractString, f::Kernel.PormGField)
     # A relation says where it points before it says anything else.
     if hasfield(typeof(f), :to)
       to = getfield(f, :to)
-      target = to isa Models.Model_Type ? getfield(to, :name) : (to === nothing ? "?" : String(to))
+      target = to isa Models.ModelType ? getfield(to, :name) : (to === nothing ? "?" : String(to))
       pkf = hasfield(typeof(f), :pk_field) ? getfield(f, :pk_field) : nothing
       push!(parts, "→ " * _d_trunc(target, 28) * (pkf === nothing ? "" : "." * String(pkf)))
       od = hasfield(typeof(f), :on_delete) ? getfield(f, :on_delete) : nothing
@@ -525,11 +525,11 @@ end
 
 # ── Query objects ────────────────────────────────────────────────────────────
 
-# `SQLObjectQuery.model` and `AliasJoin.target` are typed `PormGModel`, and `Model_Type` is its sole
+# `SQLObjectQuery.model` and `AliasJoin.target` are typed `PormGModel`, and `ModelType` is its sole
 # concrete subtype today — but "today" is not a bound. The fallback goes through `_d_trunc` rather
 # than bare `string(m)`, which would call `show` on an unknown model type and reintroduce exactly the
 # unbounded rendering this file exists to prevent.
-_d_model_name(m::Models.Model_Type) = getfield(m, :name)
+_d_model_name(m::Models.ModelType) = getfield(m, :name)
 _d_model_name(m) = _d_trunc(_d_render(m), 40)
 
 # Column/label rendering for the query card. Each of these can hold a model or a nested handler, so
@@ -589,7 +589,7 @@ function Base.show(io::IO, ::MIME"text/plain", h::QueryBuilder.ObjectHandler)
   name  = _d_model_name(model)
 
   print(io, "PormG query · ", name)
-  if model isa Models.Model_Type
+  if model isa Models.ModelType
     db_table = getfield(model, :db_table)
     db_table !== nothing && db_table != name && print(io, " (", db_table, ")")
   end
@@ -714,7 +714,7 @@ end
 function Base.show(io::IO, row::PormGRow)
   data = getfield(row, :_data)
   model = getfield(row, :_model)
-  print(io, "Row(", model isa Models.Model_Type ? getfield(model, :name) : "?", ": ")
+  print(io, "Row(", model isa Models.ModelType ? getfield(model, :name) : "?", ": ")
   print(io, _d_join_capped(("$k=$(_d_value(v))" for (k, v) in _d_row_pairs(data, model)), 6))
   print(io, ")")
 end
@@ -722,7 +722,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", row::PormGRow)
   data = getfield(row, :_data)
   model = getfield(row, :_model)
-  println(io, "PormG row · ", model isa Models.Model_Type ? getfield(model, :name) : "?",
+  println(io, "PormG row · ", model isa Models.ModelType ? getfield(model, :name) : "?",
           " · ", length(data), " column", length(data) == 1 ? "" : "s")
   pairs_ = _d_row_pairs(data, model)
   isempty(pairs_) && return print(io, "  (no columns projected)")
@@ -754,7 +754,7 @@ end
 # session on the (legal) model that marks two columns `primary_key`. Sorted keys make the choice
 # deterministic — a display that reorders itself between runs is its own small defect.
 function _d_pk_name(model)
-  model isa Models.Model_Type || return nothing
+  model isa Models.ModelType || return nothing
   fields = getfield(model, :fields)
   for fname in sort!(collect(keys(fields)))
     f = fields[fname]

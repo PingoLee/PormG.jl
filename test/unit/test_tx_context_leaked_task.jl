@@ -45,9 +45,9 @@ function _pool_839(dir, name, key)
 end
 
 # The same `drivers` table as an ORM model, bound to each scratch database by key.
-const ORM_DRIVERS_A_839 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_A_839::PormG.Models.ModelType = Model("drivers", id = IDField(), surname = CharField())
 ORM_DRIVERS_A_839.connect_key = POOL_A_KEY_839
-const ORM_DRIVERS_B_839 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_B_839::PormG.Models.ModelType = Model("drivers", id = IDField(), surname = CharField())
 ORM_DRIVERS_B_839.connect_key = POOL_B_KEY_839
 
 # Spawn `work` inside the current block, held back until `gate` is notified. Returns the task

@@ -5,7 +5,7 @@ Unit coverage for the connection registry's public names (#1229): `Configuration
 Before these, the registry had no public names: asking which keys are loaded meant iterating
 `PormG.config`, rendering SQL with no database meant defining a backend type and building a
 `Settings` by hand, and asking which connection a model uses meant reading a struct field. Those
-were the layout of `Settings` and `Model_Type`, not an API. No live database; every connection here is offline or SQLite `:memory:`.
+were the layout of `Settings` and `ModelType`, not an API. No live database; every connection here is offline or SQLite `:memory:`.
 """
 
 using Test

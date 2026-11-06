@@ -888,7 +888,7 @@ end
       m = Mo603.Model(probe("drivers"), surname = Mo603.CharField(max_length = 100))
       @test m.name == "drivers"
       @test length(m.fields) == 1
-      # …and the name is NORMALIZED, not merely accepted (#612 review). `Model_Type.name` is an
+      # …and the name is NORMALIZED, not merely accepted (#612 review). `ModelType.name` is an
       # `AbstractString` slot, so an unconverted view is retained for the model's process lifetime
       # together with its whole parent buffer — a name sliced out of a request string keeps the
       # request. This is the same seam rule the header calls mandatory rather than stylistic.

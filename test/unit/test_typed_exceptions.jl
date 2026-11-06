@@ -26,7 +26,7 @@ const QB = PormG.QueryBuilder
 # Minimal in-memory model — mirrors the mock-model pattern from
 # test_field_validation_and_operations.jl. No connection, no settings needed:
 # all the misuse below is rejected before any DB work.
-typed_errs_model = Models.Model_Type(
+typed_errs_model = Models.ModelType(
     name = "typed_errs_test",
     fields = PormG.OrderedCollections.OrderedDict(
         "id" => Models.IDField(),
@@ -123,8 +123,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # cjoin() on an unknown main-model field → UnknownFieldError
 # The guard existed and built the right exception, but its message interpolated
-# `q.model.table_name` — a property `Model_Type` does not have and has no getproperty overload
-# for. So constructing the message raised `FieldError: type Model_Type has no field table_name`
+# `q.model.table_name` — a property `ModelType` does not have and has no getproperty overload
+# for. So constructing the message raised `FieldError: type ModelType has no field table_name`
 # BEFORE the intended `UnknownFieldError` could be thrown: an untyped error, naming an internal
 # struct, for ordinary user misuse. The canonical accessor is `Models.model_table_name(model)`.
 # Found while working #433; the fix is a one-token change in `ctes.jl`.

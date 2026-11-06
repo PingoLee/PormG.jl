@@ -219,7 +219,7 @@ end
 
     # A model with no connection is enough — every assertion below fires at
     # build/validation time, before any DB work.
-    taxo_model = Models.Model_Type(
+    taxo_model = Models.ModelType(
         name = "taxonomy_test",
         fields = PormG.OrderedCollections.OrderedDict("id" => Models.IDField(), "points" => Models.IntegerField()),
         field_names = ["id", "points"],
@@ -246,7 +246,7 @@ end
 
         # Config entry exists but its pool was never built → typed, not a downstream MethodError.
         PormG.config["docerr_nopool"] = PormG.Configuration.Settings(change_data = true)
-        nopool = Models.Model_Type(name = "np_probe",
+        nopool = Models.ModelType(name = "np_probe",
             fields = PormG.OrderedCollections.OrderedDict("id" => Models.IDField()), field_names = ["id"])
         nopool.connect_key = "docerr_nopool"
         err = try; object(nopool).filter("id" => 1).list(show_query = :dict); nothing; catch e; e; end

@@ -1899,7 +1899,7 @@ end
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION: related_objects Coverage Tests
-# Tests exercising the `related_objects` dictionary on Model_Type, which powers
+# Tests exercising the `related_objects` dictionary on ModelType, which powers
 # reverse-join resolution in build_joins.jl.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2124,7 +2124,7 @@ end
     # #62 restructured set_models' resolution (try/catch → _resolve_target_model + explicit
     # throw); the strict error must remain — a string target naming a model that is not
     # defined in the module raises ModelDefinitionError rather than silently skipping.
-    BadChild = PormG.Models.Model_Type(
+    BadChild = PormG.Models.ModelType(
         name = "bad_fk_child",
         fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField(),
@@ -2156,12 +2156,12 @@ end
     # no default renders a bare NULL) or a database constraint violation. #287 made them throws.
     # Nothing pinned either behaviour before this testset.
     function _on_delete_mod(modname::Symbol, make_fk)
-        parent = PormG.Models.Model_Type(
+        parent = PormG.Models.ModelType(
             name = "od_parent_$(modname)",
             fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField()),
             field_names = ["id"]
         )
-        child = PormG.Models.Model_Type(
+        child = PormG.Models.ModelType(
             name = "od_child_$(modname)",
             fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField(), "parent" => make_fk(parent)),
             field_names = ["id", "parent"]
@@ -2210,14 +2210,14 @@ end
 # nothing.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "set_models reports every on_delete contradiction at once (#303)" begin
-    parent = PormG.Models.Model_Type(
+    parent = PormG.Models.ModelType(
         name = "od303_parent",
         fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField()),
         field_names = ["id"]
     )
     # Model A: TWO contradictions on ONE model — one of each rule. Proves the walk does not stop
     # at the first offending FIELD. `ok_fk` is the discrimination control (assertion 5).
-    child_a = PormG.Models.Model_Type(
+    child_a = PormG.Models.ModelType(
         name = "od303_child_a",
         fields = PormG.OrderedCollections.OrderedDict(
             "id"        => PormG.Models.IDField(),
@@ -2232,7 +2232,7 @@ end
     )
     # Model B: a THIRD contradiction on a DIFFERENT model. Proves the walk does not stop at the
     # first offending MODEL either — the two axes fail independently.
-    child_b = PormG.Models.Model_Type(
+    child_b = PormG.Models.ModelType(
         name = "od303_child_b",
         fields = PormG.OrderedCollections.OrderedDict(
             "id"       => PormG.Models.IDField(),
@@ -2381,7 +2381,7 @@ end
 @testset "Related Objects - Duplicate related_name rejection" begin
     # Creating two ForeignKeys to the same target model with the same related_name
     # should raise a ModelDefinitionError during set_models.
-    DupParent = PormG.Models.Model_Type(
+    DupParent = PormG.Models.ModelType(
         name = "dup_parent",
         fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField()
@@ -2389,7 +2389,7 @@ end
         field_names = ["id"]
     )
 
-    DupChild = PormG.Models.Model_Type(
+    DupChild = PormG.Models.ModelType(
         name = "dup_child",
         fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField(),
@@ -2445,7 +2445,7 @@ end
     @test err isa PormGError
     @test occursin("circular dependency", lowercase(sprint(showerror, err)))
 
-    # Pin the dispatch contract: Julia infers Dict{Model_Type,...} (concrete) when keys are
+    # Pin the dispatch contract: Julia infers Dict{ModelType,...} (concrete) when keys are
     # constructed without an explicit type annotation. topological_sort must NOT have a method
     # for the concrete type — callers must supply the abstract-typed dict or get a MethodError.
     @test_throws MethodError PormG.QueryBuilder.topological_sort(

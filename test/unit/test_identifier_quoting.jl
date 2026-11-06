@@ -93,7 +93,7 @@ end
 # Asserting each side in isolation is what let the split survive — both halves were individually
 # "correct". This compares them.
 # ─────────────────────────────────────────────────────────────────────────────
-const OddIdent = Model("odd_ident_scratch",
+OddIdent::PormG.Models.ModelType = Model("odd_ident_scratch",
   db_table  = "Odd Identifier",
   id        = IDField(),
   driverref = CharField(max_length = 30, db_column = "driver ref"),
@@ -149,7 +149,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. The query-time surfaces that must NOT have been loosened along with the rest.
 # ─────────────────────────────────────────────────────────────────────────────
-const IdentDriver = Model("ident_driver_scratch",
+IdentDriver::PormG.Models.ModelType = Model("ident_driver_scratch",
   id       = IDField(),
   surname  = CharField(max_length = 30),
   points   = IntegerField(null = true),

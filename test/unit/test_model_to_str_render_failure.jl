@@ -30,9 +30,9 @@ struct _ThrowingRenderField <: PormG.PormGField
   payload::Any
 end
 
-# Bare Model_Type around a fields dict — bypasses the Model() constructor (and any config/FK
+# Bare ModelType around a fields dict — bypasses the Model() constructor (and any config/FK
 # resolution) so the test isolates the rendering loop only, mirroring test_migration_diff_failsafe.jl.
-# `AbstractDict` in, `OrderedDict` out (#544). `Model_Type.fields` is an `OrderedDict`, and callers
+# `AbstractDict` in, `OrderedDict` out (#544). `ModelType.fields` is an `OrderedDict`, and callers
 # here pass a plain `Dict` because these cases are about the RENDERING loop, not about order.
 #
 # The conversion has to be explicit: OrderedCollections 2.0 removed `convert(::OrderedDict, ::Dict)`
@@ -40,7 +40,7 @@ end
 # `@kwdef` to convert works on OC1 and throws on OC2. `[compat]` narrowed to `"2"` in #549, so OC2 is
 # now the only supported version and the explicit conversion is required rather than merely safer.
 _mk_render_model(fields::AbstractDict{String, PormG.PormGField}) =
-  PormG.Models.Model_Type(name = "drivers_render_scratch",
+  PormG.Models.ModelType(name = "drivers_render_scratch",
                           fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(fields))
 
 # Model_to_str only reads settings.django_prefix (nothing by default) — an all-default
@@ -95,7 +95,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
 
     @test !occursin("# PormG:", s_ok)
     @test occursin("surname = Models.CharField", s_ok)
-    @test startswith(s_ok, "const Drivers_render_scratch = Models.Model(")   # #1650
+    @test startswith(s_ok, "Drivers_render_scratch::Models.ModelType = Models.Model(")   # #1650, #1672
   end
 
 end
@@ -136,9 +136,9 @@ end
     @test occursin("# PormG: model 'drivers_render_scratch' had no renderable fields", s)
     # CRUCIAL (#134): no bare, top-level `Var = Models.Model(...)` call — that line would throw at
     # include time. The (?m) anchors ^ to line starts so the commented `# Drivers... ` doesn't match.
-    @test !occursin(r"(?m)^(const )?Drivers_render_scratch = Models\.Model\("m, s)   # either form (#1650)
+    @test !occursin(r"(?m)^(const )?Drivers_render_scratch(::Models\.ModelType)? = Models\.Model\("m, s)   # any form (#1650, #1672)
     # The definition survives, commented out, for the user to fix by hand.
-    @test occursin("# const Drivers_render_scratch = Models.Model(\"drivers_render_scratch\")", s)
+    @test occursin("# Drivers_render_scratch::Models.ModelType = Models.Model(\"drivers_render_scratch\")", s)
 
     # End-to-end load gate: the real #134 failure is at include time. Evaluate the generated string
     # in a fresh module exactly as @import_models `include`s the generated file, and assert it does

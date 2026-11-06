@@ -46,7 +46,7 @@ _doccov_files(dir) = isdir(dir) ? sort!([joinpath(root, f)
 _doccov_rel(path) = replace(relpath(path, DOCCOV_REPO_ROOT), '\\' => '/')
 
 # Isolate the body of `Base.getproperty(q::ObjectHandler, …)` — shared by the two scans below.
-# The file holds a SECOND getproperty (on `Models.Model_Type`, for `.objects`) whose branches are
+# The file holds a SECOND getproperty (on `Models.ModelType`, for `.objects`) whose branches are
 # not fluent query methods, so a whole-file scan would demand docs for `:objects` and fail wrongly.
 # The `"\nend\n"` stop works only because every nested `end` inside the chain is indented.
 # Returns "" when either anchor is missing, so the callers' floors turn a broken scan into a
@@ -353,15 +353,15 @@ end
             # `CheckConstraint` (#742), the two network-address fields (#28), `ArrayField` (#28),
             # `search_vector_expression` (#1021), the text a full-text index is declared with, and
             # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
-            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39.
-            # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
-            # as `M.Driver`, never name it.
+            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39, and
+            # `ModelType` (#1672) = 40: the concrete model type, which every models file names in
+            # its typed binding (`Race::Models.ModelType = Models.Model(…)`, #1663).
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
                                    :CharField, :CheckConstraint, :CIDRField, :DateField, :DateTimeField,
                                    :DecimalField, :DurationField, :EmailField, :FileField, :FloatField,
                                    :ForeignKey, :GenericIPAddressField, :IDField, :ImageField, :Index,
                                    :IntegerField,
-                                   :JSONField, :ManyToManyField, :Model, :OneToOneField,
+                                   :JSONField, :ManyToManyField, :Model, :ModelType, :OneToOneField,
                                    :PasswordField, :PositiveIntegerField,
                                    :PositiveSmallIntegerField, :search_vector_expression, :SearchVectorField, :SlugField,
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,

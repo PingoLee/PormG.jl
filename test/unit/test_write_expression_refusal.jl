@@ -151,7 +151,7 @@ end
 # mock pool inside a transaction context, as `test_bulk_copy_cell_errors.jl` does.
 struct WerMockPg <: PormG.PormGPostgres end
 PormG.config["wer1283_copy"] = PormG.Configuration.Settings(connections = WerMockPg(), change_data = true)
-const _WER_COPY = PormG.Models.Model("wer1283_copy", id = PormG.Models.IDField(), grid = PormG.Models.IntegerField(null = true))
+_WER_COPY::PormG.Models.ModelType = PormG.Models.Model("wer1283_copy", id = PormG.Models.IDField(), grid = PormG.Models.IntegerField(null = true))
 _WER_COPY.connect_key = "wer1283_copy"
 
 @testset "bulk_copy: an expression cell is the same refusal, with its row (#1283)" begin

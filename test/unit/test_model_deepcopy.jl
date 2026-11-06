@@ -1,20 +1,20 @@
 """
-Unit coverage for `deepcopy` of a relation-bearing Model_Type (#157).
+Unit coverage for `deepcopy` of a relation-bearing ModelType (#157).
 
 `deepcopy(model)` used to CLONE the model's containers while sharing `_module`, but the custom
 top-level method never intercepted a model reached *nested* during recursion. So the moment a
-relation field's resolved `.to` (another Model_Type) was deep-copied — e.g. via `deepcopy(model.fields)`
-— it fell to the GENERIC `deepcopy_internal(::Model_Type)`, descended into `_module::Module`, and threw
+relation field's resolved `.to` (another ModelType) was deep-copied — e.g. via `deepcopy(model.fields)`
+— it fell to the GENERIC `deepcopy_internal(::ModelType)`, descended into `_module::Module`, and threw
 `"deepcopy of Modules not supported"`. Every realistic model has an FK/O2O/M2M, so this was latent but real.
 
-The fix (`Base.deepcopy_internal(::Model_Type, ::IdDict)` in src/Models.jl) treats a Model_Type as the
+The fix (`Base.deepcopy_internal(::ModelType, ::IdDict)` in src/Models.jl) treats a ModelType as the
 immutable, SHARED schema reference the rest of the codebase already assumes (`SQLObjectQuery` deepcopy
 shares `model` verbatim): the recursion hook returns the same model. So `deepcopy(model) === model`, and
 any container/field that holds a model shares it instead of cloning the schema graph into a Module it
 can't traverse.
 
 Deterministic and DB-free: a mock PostgreSQL connection + an inline F1-flavored model whose FK `.to` is a
-resolved Model_Type carrying `_module` (the exact throwing input). `sForeignKey`, `ManyToManyField` and
+resolved ModelType carrying `_module` (the exact throwing input). `sForeignKey`, `ManyToManyField` and
 `OneToOneField` all hold `.to::PormGModel`, so the FK case exercises the shared mechanism for all three.
 """
 
@@ -32,7 +32,7 @@ PormG.config["mdc_mock"] = PormG.Configuration.Settings(
 )
 
 # Inline models in their own module so `set_models` binds `_module` and resolves the FK `.to` to the
-# Mdc_driver Model_Type — reproducing the "a field's .to is a model carrying a Module" hazard.
+# Mdc_driver ModelType — reproducing the "a field's .to is a model carrying a Module" hazard.
 module ModelDeepcopyModels
 import PormG
 import PormG.Models
@@ -53,19 +53,19 @@ end
 
 const MDC = ModelDeepcopyModels
 
-@testset "deepcopy of a relation-bearing Model_Type (#157)" begin
+@testset "deepcopy of a relation-bearing ModelType (#157)" begin
   results = MDC.Mdc_results
   driver  = MDC.Mdc_driver
 
   # Precondition: the setup actually reproduces the throwing shape — the FK `.to` is a resolved
-  # Model_Type carrying a bound `_module` (otherwise the test would pass vacuously).
+  # ModelType carrying a bound `_module` (otherwise the test would pass vacuously).
   fk = results.fields["driverid"]
   @test fk.to isa PormG.PormGModel
   @test fk.to === driver
   @test results._module !== nothing
 
   # ── The core regression: deep-copying the model no longer throws, and shares it ──
-  # Pre-fix `deepcopy(model)` cloned containers; now a Model_Type is an immutable shared reference.
+  # Pre-fix `deepcopy(model)` cloned containers; now a ModelType is an immutable shared reference.
   model_copy = deepcopy(results)
   @test model_copy === results                 # shared, not cloned (the new contract)
   @test model_copy._module === results._module # never a fresh/traversed Module
@@ -75,7 +75,7 @@ const MDC = ModelDeepcopyModels
   # "deepcopy of Modules not supported" on the FK's `.to._module`. It must now succeed and SHARE the
   # nested target model rather than clone the schema graph. (Revert the share hook → this throws.)
   fields_copy = deepcopy(results.fields)
-  # FIELDS are still deep-copied — the share hook dispatches on the concrete Model_Type only, so a field
+  # FIELDS are still deep-copied — the share hook dispatches on the concrete ModelType only, so a field
   # (a sibling of PormGModel since #186) stays cloneable and copy-isolation, #43/#112, holds…
   @test fields_copy["driverid"] !== results.fields["driverid"]
   # …while the resolved target model reached through the cloned field is SHARED (Module never traversed).

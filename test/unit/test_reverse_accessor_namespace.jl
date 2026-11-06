@@ -15,7 +15,7 @@ import PormG: PormGModel
 #
 # What was wrong. `set_models` walked `pairs(model.fields)` and accumulated a per-target counter as
 # it went, so in a group of N relations to one target the field VISITED FIRST kept the bare model
-# name and the rest were suffixed `<model>_<field>`. `Model_Type.fields` is an unordered `Dict`, so
+# name and the rest were suffixed `<model>_<field>`. `ModelType.fields` is an unordered `Dict`, so
 # which one that was is hash order — and adding an unrelated field to the model rehashed it.
 # ManyToManyField never entered the counter at all, so a self-ForeignKey and a self-ManyToManyField
 # on one model both derived the bare model name; whichever registered first won, and the other
@@ -109,7 +109,7 @@ end
 # 2. The accessor is a function of (model, field, group size) and of nothing else.
 #
 # The old derivation read one more input that is not on that list: where the field fell in the walk
-# over `pairs(model.fields)`. `Model_Type.fields` is an unordered `Dict`, so hash order decided which
+# over `pairs(model.fields)`. `ModelType.fields` is an unordered `Dict`, so hash order decided which
 # relation kept the bare model name, and adding an unrelated field to the model could rehash it and
 # silently rename a lookup path.
 #
@@ -571,14 +571,14 @@ end
 # choosing a better `related_name` before the fact, because the user never wrote a name at all — so
 # the message has to say where the name came from and offer BOTH remedies.
 #
-# The `Model_Type(; fields = PormG.OrderedCollections.OrderedDict(...))` spelling is deliberate: it is the shape `inspectdb`
+# The `ModelType(; fields = PormG.OrderedCollections.OrderedDict(...))` spelling is deliberate: it is the shape `inspectdb`
 # introspection and the Django importer build, and it is the reason this route is reachable without
 # anyone hand-writing a `__` field name.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a derived accessor containing __ is refused and names the whole accessor (#420)" begin
   err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepDerivedModels, quote
     Driver = Models.Model("ransd_driver", id = Models.IDField(), surname = Models.CharField())
-    Incident = Models.Model_Type(name = "ransd_incident",
+    Incident = Models.ModelType(name = "ransd_incident",
       fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"             => Models.IDField(),
         "lap"            => Models.IntegerField(),
@@ -605,7 +605,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # 15. CONTROL — an `a__b` COLUMN still loads. This pins the #317 exemption.
 #
-# #420's own issue text proposed applying `format_fild_name`'s `__` check to the `Model_Type` Dict
+# #420's own issue text proposed applying `format_fild_name`'s `__` check to the `ModelType` Dict
 # constructor. That is exactly what #317 deliberately removed: an `a__b` column used to abort the
 # whole import from inside that loop, before `Model_to_str` could render it (and `Model_to_str` DOES
 # handle it — `_julia_field_identifier` renames the field and pins `db_column`). The guard is on the
@@ -618,7 +618,7 @@ end
 @testset "a column named a__b still loads when its accessor has no separator (#420, pins #317)" begin
   CTL = _ran_module(:RanSepControlModels, quote
     Driver = Models.Model("ransc_driver", id = Models.IDField(), surname = Models.CharField())
-    Incident = Models.Model_Type(name = "ransc_incident",
+    Incident = Models.ModelType(name = "ransc_incident",
       fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"            => Models.IDField(),
         "caused__by_id" => Models.ForeignKey("Driver", pk_field = "id")),
@@ -677,7 +677,7 @@ end
 @testset "a derived accessor whose separator is at the model/field boundary (#420)" begin
   err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepBoundaryModels, quote
     Driver = Models.Model("ransb_driver", id = Models.IDField(), surname = Models.CharField())
-    Incident = Models.Model_Type(name = "ransb_incident",
+    Incident = Models.ModelType(name = "ransb_incident",
       fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"   => Models.IDField(),
         "_id"  => Models.ForeignKey("Driver", pk_field = "id"),

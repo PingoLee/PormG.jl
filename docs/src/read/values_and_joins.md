@@ -148,7 +148,7 @@ When a model declares **two or more** relations to the same target, one name can
 
 ```julia
 # Incident points at Driver twice, so neither reverse accessor is the bare `incident`:
-const Incident = Models.Model("incident",
+Incident::Models.ModelType = Models.Model("incident",
   id = Models.IDField(),
   causing_driver_id  = Models.ForeignKey(Driver, pk_field="id"),
   affected_driver_id = Models.ForeignKey(Driver, pk_field="id"),
@@ -221,7 +221,7 @@ query.values("resultid", "test_deletion__name")
     illegal. `Model_to_str` renames such a column to a legal Julia identifier and pins the real name
     with `db_column`, so a *generated* model file never carries a `__` field identifier at all; the
     field-derived row above is reachable only from a hand-written
-    `Model_Type(; fields = Dict(...))` — the same shape introspection builds in memory, though
+    `ModelType(; fields = Dict(...))` — the same shape introspection builds in memory, though
     introspection never registers those models, so it cannot trip this by itself.
 
     The **trailing-underscore** rows are the other way round. `Model_to_str` escapes a column

@@ -33,7 +33,7 @@ PormG.config["bcce869_pg"] = PormG.Configuration.Settings(
   connections = BulkCopyCellErrorsMockPg(), change_data = true)
 
 # F1 results: `code` is a three-letter driver code, so it carries the bounded text column.
-const BCCE869_RESULT = Model("bcce869_result",
+BCCE869_RESULT::PormG.Models.ModelType = Model("bcce869_result",
   id = IDField(), code = CharField(max_length = 3), year = IntegerField())
 BCCE869_RESULT.connect_key = "bcce869_pg"
 
@@ -108,7 +108,7 @@ end
 # names the field; any other `PormGError` is not about the value, so it passes through as raised —
 # neither re-typed nor re-worded.
 # ─────────────────────────────────────────────────────────────────────────────
-const BCCE869_HOOKED = Model("bcce869_hooked", id = IDField(), code = CharField(max_length = 3))
+BCCE869_HOOKED::PormG.Models.ModelType = Model("bcce869_hooked", id = IDField(), code = CharField(max_length = 3))
 BCCE869_HOOKED.connect_key = "bcce869_pg"
 
 # The refusal `bulk_copy` raises for a one-row frame when `code`'s formatter throws `thrown`.

@@ -313,7 +313,7 @@ end
   # exclude it), so without this synthetic input the filter itself is never exercised: every
   # `field_names` *content* assertion above holds just as well for a function that drops the filter
   # and copies `field_names` verbatim. This is the assertion that catches that.
-  dirty = Models.Model_Type(
+  dirty = Models.ModelType(
     name = "dirty_championships",
     fields = copy(source.fields),
     field_names = ["id", "drivers", "name"],
@@ -371,7 +371,7 @@ end
 # Detach a registered model from its module, keeping everything else. Severing `_module` cuts EVERY
 # module-reflection route at once, which is the hostile input for the guard below.
 function _m2m_detach_module(model::PormGModel)
-  return Models.Model_Type(
+  return Models.ModelType(
     name = model.name,
     db_table = Models.model_has_db_table(model) ? Models.model_table_name(model) : nothing,
     fields = model.fields,
@@ -614,7 +614,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Regression (#108, now guaranteed by #186): the Model_Type getproperty override dispatches M2M
+# Regression (#108, now guaranteed by #186): the ModelType getproperty override dispatches M2M
 # accessors via has_many_to_many_accessor(m, …), which reads m.cache / m.related_objects. When fields
 # were `<: PormGModel`, a FIELD object hit that method and re-entered getproperty on its absent `.cache`,
 # recursing forever (a StackOverflowError on ANY absent-property access to a field). #108 papered over it
@@ -624,11 +624,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PormGModel.getproperty: absent property on a field object doesn't recurse (#108)" begin
   # A field object. Since #186, PormGField is a SIBLING of PormGModel (not a subtype), so a field no
-  # longer satisfies ::PormGModel and never reaches PormGModel/Model_Type getproperty at all.
+  # longer satisfies ::PormGModel and never reaches PormGModel/ModelType getproperty at all.
   cf = Models.CharField(max_length = 5)
 
   # #186 regression: a field is NOT a model. This is now what makes the #108 StackOverflow impossible —
-  # field property access uses Julia's default getproperty, not the Model_Type M2M-accessor path.
+  # field property access uses Julia's default getproperty, not the ModelType M2M-accessor path.
   @test !(cf isa PormG.PormGModel)
   @test cf isa PormG.PormGField
 
@@ -645,7 +645,7 @@ end
   end
   @test field_err isa FieldError   # the #108 regression signal (was StackOverflowError)
 
-  # Model_Type still raises a clean FieldError on an absent property too (it HAS
+  # ModelType still raises a clean FieldError on an absent property too (it HAS
   # cache/related_objects, so it was never affected — assert it to pin the guard's discrimination).
   model_err = try
     getproperty(M2M.Driver_championship, :nonexistent_xyz)
@@ -684,7 +684,7 @@ end
   # a Module — so without sharing, deep-copying a relation (e.g. via deepcopy(model.related_objects))
   # would throw "deepcopy of Modules not supported".
   #
-  # The sharing comes from the `Model_Type` deepcopy hook (#157), NOT from a hook on this struct.
+  # The sharing comes from the `ModelType` deepcopy hook (#157), NOT from a hook on this struct.
   # #65 shipped a hand-written `deepcopy_internal(::ManyToManyRelation, …)`; #157 later made it
   # redundant (a relation is immutable, so Base rebuilds one whose every field is `===` the
   # original's once the model slots share), and #343 removed it. These assertions are unchanged and

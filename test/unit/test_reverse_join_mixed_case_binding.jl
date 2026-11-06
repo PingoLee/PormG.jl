@@ -244,7 +244,7 @@ end
     copy_rel = deepcopy(rel)
 
     # An immutable whose every field is `===`-stable is itself `===`-stable: the Symbols are
-    # interned and the model routes through the Model_Type share hook (#157) rather than descending
+    # interned and the model routes through the ModelType share hook (#157) rather than descending
     # into `_module::Module`, which would throw.
     @test copy_rel.model_resolved === MC.Dim_CNES
     @test copy_rel === rel

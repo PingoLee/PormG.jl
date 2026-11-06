@@ -46,7 +46,7 @@ Base.eval(FKU_MOD, :(using PormG))
 function fku_register!(binding::Symbol, model)
   model._module = FKU_MOD
   model.connect_key = "fk_unres_mock"
-  Base.eval(FKU_MOD, :(const $binding = $model))
+  Base.eval(FKU_MOD, :($binding::$(PormG.Models.ModelType) = $model))
   return model
 end
 

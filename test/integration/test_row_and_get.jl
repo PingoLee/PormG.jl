@@ -174,7 +174,7 @@ end
     _su = PormG.QueryBuilder.JSON.StructUtils
     # `methods(...)`, not `which(...)` — see the #641 testset above. `PormG`, not `PormG.QueryBuilder`:
     # `src/json_lower.jl` is a plain include, so its methods report the package module.
-    has_graph_lower = all((PormG.Models.Model_Type, PormG.PormGField,
+    has_graph_lower = all((PormG.Models.ModelType, PormG.PormGField,
                            PormG.Models.ReverseRelation,
                            PormG.QueryBuilder.InstructionObject)) do T
         any(m -> m.module === PormG, methods(_su.lower, Tuple{Any, T}))

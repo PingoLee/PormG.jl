@@ -26,7 +26,7 @@ for (key, name) in (("f_agg_pg", :FAggPgLap), ("f_agg_sl", :FAggSlLap))
             milliseconds = IntegerField(), points = FloatField(), surname = CharField(),
             recorded_at = DateTimeField())
   m.connect_key = key
-  @eval const $name = $m
+  @eval $name::$(PormG.Models.ModelType) = $m
 end
 
 const _F_AGG_MODELS = ((:postgres, FAggPgLap), (:sqlite, FAggSlLap))
@@ -485,7 +485,7 @@ for (key, name) in (("f_agg_pg", :FAggPgFlag), ("f_agg_sl", :FAggSlFlag))
   m = Model("f_agg_flags", id = IDField(), lap = IntegerField(), points = IntegerField(),
             finished = BooleanField())
   m.connect_key = key
-  @eval const $name = $m
+  @eval $name::$(PormG.Models.ModelType) = $m
 end
 
 # The exception the construction or the build raises, or `nothing` when both succeed. Unlike
@@ -569,7 +569,7 @@ for (key, name) in (("f_agg_pg", :FAggPgFn), ("f_agg_sl", :FAggSlFn))
   m = Model("f_agg_fn", id = IDField(), lap = IntegerField(), points = IntegerField(),
             surname = CharField(), recorded = DateField(), finished = BooleanField())
   m.connect_key = key
-  @eval const $name = $m
+  @eval $name::$(PormG.Models.ModelType) = $m
 end
 
 @testset "#942: a non-boolean function as a When condition is refused" begin
@@ -702,7 +702,7 @@ for (key, name, parent) in (("f_agg_pg", :FAggPgEntry, FAggPgFn), ("f_agg_sl", :
             fnid = ForeignKey(parent, pk_field = "id", related_name = "f_agg_entries"))
   m.connect_key = key
   m._module = Main
-  @eval const $name = $m
+  @eval $name::$(PormG.Models.ModelType) = $m
 end
 
 _f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
@@ -858,7 +858,7 @@ for (key, name) in (("f_agg_pg", :FAggPgDur), ("f_agg_sl", :FAggSlDur))
   m = Model("f_agg_dur", id = IDField(), lap = IntegerField(), finished = BooleanField(),
             dur = PormG.Models.DurationField())
   m.connect_key = key
-  @eval const $name = $m
+  @eval $name::$(PormG.Models.ModelType) = $m
 end
 
 @testset "#965: a boolean-valued expression is typed a boolean" begin

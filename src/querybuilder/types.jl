@@ -246,7 +246,7 @@ const CTEDict = Dict{String,Union{SQLObjectHandler,Pair,String,Nothing}}
 #   * `unapplied` — the columns whose read kind is a declared decimal the engine left unapplied (#1110);
 #   * `body_kinds` — the body build's read kind per column (`projection_kinds`, #564).
 struct CTEState
-  model::Models.Model_Type
+  model::Models.ModelType
   kinds::Dict{String,CanonicalType}
   divisions::Dict{String,CTEDivision}
   unapplied::Set{String}
@@ -869,7 +869,7 @@ SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, 
 #     `deepcopy_internal` hook, so this specialisation applies to a TOP-LEVEL `deepcopy(::OperObject)`
 #     only. Reached nested — under an `FObject`, or under an `FExpression` — the generic walk runs
 #     instead and the handler IS cloned, where the deleted methods used to keep it shared. Cost, not
-#     correctness: `Base.deepcopy_internal(::Model_Type, …)` still returns the model itself, so the
+#     correctness: `Base.deepcopy_internal(::ModelType, …)` still returns the model itself, so the
 #     #157 sharing contract holds through the generic walk (pinned in `test_model_deepcopy.jl` and by
 #     the chain testset in `test_f_expression_immutability.jl`);
 #   - `WindowSpec` — still a mutable container.
@@ -1093,7 +1093,7 @@ end
 #
 # What stays shared, deliberately: the vector's `FilterType` ELEMENTS (every writer replaces the
 # whole vector; none edits an element), and `PathJoin.field` / `AliasJoin.target`, which hold a
-# Model_Type → Module that `deepcopy` cannot traverse — the very reason the original copy was shallow.
+# ModelType → Module that `deepcopy` cannot traverse — the very reason the original copy was shallow.
 #
 # Both containers are ORDERED (#449) and rebuilt by insertion, so declaration order survives a
 # `.copy()`; an unordered accumulator here would silently re-hash it out on every copy.

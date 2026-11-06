@@ -110,7 +110,7 @@ function PormG.backend_copy_in!(::Nul951MockPg, conn, sql::String, data_itr)
   throw(Nul951Reached())
 end
 
-const NUL951_PG = Model("nul951_result",
+NUL951_PG::PormG.Models.ModelType = Model("nul951_result",
   id = IDField(), code = CharField(max_length = 20), year = IntegerField(), blob = BinaryField(null = true))
 NUL951_PG.connect_key = "nul951_pg"
 

@@ -153,7 +153,7 @@ end
       struct Odd end
       Base.:(==)(::Odd, ::AbstractString) = throw(MethodError(==, (Odd(), "")))
       const __pormg_init_path__ = Odd()
-      const Circuit = Models.Model("swe_circuit", circuitid = Models.IDField(), name = Models.CharField())
+      Circuit::Models.ModelType = Models.Model("swe_circuit", circuitid = Models.IDField(), name = Models.CharField())
     end)
     @test_throws MethodError Base.invokelatest(Models.set_models, mod, "swe_mock")
   end
@@ -167,7 +167,7 @@ end
     Core.eval(mod, quote
       import PormG; import PormG.Models
       global __pormg_init_path__::Int
-      const Circuit = Models.Model("swe_circuit2", circuitid = Models.IDField(), name = Models.CharField())
+      Circuit::Models.ModelType = Models.Model("swe_circuit2", circuitid = Models.IDField(), name = Models.CharField())
     end)
     @test Base.invokelatest(Models.set_models, mod, "swe_mock") === nothing
     @test !isdefined(mod, :__pormg_init_path__)

@@ -25,11 +25,12 @@ using PormG: PormGField
 
 const MTS_SETTINGS = PormG.Configuration.Settings()
 
-# #1650: a generated model line is `const <Binding> = Models.Model(…)`. Reads the binding, and fails
-# when the line is not `const`, so every round-trip below also pins the form the Generator writes.
+# #1650, #1672: a generated model line is `<Binding>::Models.ModelType = Models.Model(…)`. Reads the
+# binding, and fails when the line is not that typed global, so every round-trip below also pins the
+# form the Generator writes.
 function _mts_binding(generated::AbstractString)::String
-    m = match(r"(?m)^const (.+?) = Models\.Model\(", generated)
-    m === nothing && error("not a const model binding: " * first(generated, 120))
+    m = match(r"(?m)^(.+?)::Models\.ModelType = Models\.Model\(", generated)
+    m === nothing && error("not a typed model binding: " * first(generated, 120))
     return String(m.captures[1])
 end
 
@@ -405,9 +406,9 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       m2 = Model("driver", Dict{String, PormGField}("id" => IDField()))
       g1 = Model_to_str(m1; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
       g2 = Model_to_str(m2; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
-      @test occursin("Driver = Models.Model(\"driver\"", g1)
+      @test occursin("Driver::Models.ModelType = Models.Model(\"driver\"", g1)
       @test occursin("db_table = \"Driver\"", g1)
-      @test occursin("Driver2 = Models.Model(\"driver2\"", g2)    # binding ALSO collided — suffixed too
+      @test occursin("Driver2::Models.ModelType = Models.Model(\"driver2\"", g2)    # binding ALSO collided — suffixed too
       @test occursin("db_table = \"driver\"", g2)                 # re-pinned to the pre-dedup name
       @test PormG.model_table_name(_reload(g2)) == "driver"       # NOT "driver2"
     end
@@ -426,7 +427,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     @testset "a caller-supplied binding is emitted verbatim" begin
       m = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
       g = Model_to_str(m; name_is_physical_table = true, binding = "Driver_profile2")
-      @test occursin("Driver_profile2 = Models.Model(\"driver_profile\"", g)
+      @test occursin("Driver_profile2::Models.ModelType = Models.Model(\"driver_profile\"", g)
       # The POSITIONAL name and `db_table` are untouched by the binding override — only the Julia
       # handle moved, so the model still addresses its own real table.
       @test PormG.model_table_name(_reload(g)) == "driver_profile"

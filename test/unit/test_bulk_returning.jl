@@ -395,23 +395,23 @@ function fetch(connection::BulkReturningMockPg, sql::String;
   return DataFrame()   # SAVEPOINT / RELEASE and anything else
 end
 
-const BR671_PG_RESULT = Model("br671_pg_result",
+BR671_PG_RESULT::PormG.Models.ModelType = Model("br671_pg_result",
   id = IDField(), driver = CharField(), year = IntegerField(), points = IntegerField())
 BR671_PG_RESULT.connect_key = "br671_pg"
-const BR671_PG_ALWAYS = Model("br671_pg_always",
+BR671_PG_ALWAYS::PormG.Models.ModelType = Model("br671_pg_always",
   id = IDField(generated_always = true), driver = CharField())
 BR671_PG_ALWAYS.connect_key = "br671_pg"
 # A db_column rename and an INTERVAL, the one PostgreSQL type with a read parser (#581).
-const BR671_PG_STINT = Model("br671_pg_stint",
+BR671_PG_STINT::PormG.Models.ModelType = Model("br671_pg_stint",
   id = IDField(), position = IntegerField(db_column = "pos"), duration = DurationField())
 BR671_PG_STINT.connect_key = "br671_pg"
 # Crossing names: `grid` is stored as "laps", and `laps` as "l". Renaming one column at a time
 # collides — "l" => "laps" while the "laps" column still holds `grid`'s values.
-const BR671_PG_CROSS = Model("br671_pg_cross",
+BR671_PG_CROSS::PormG.Models.ModelType = Model("br671_pg_cross",
   id = IDField(), grid = IntegerField(db_column = "laps"), laps = IntegerField(db_column = "l"))
 BR671_PG_CROSS.connect_key = "br671_pg"
 # A DECIMAL target: PostgreSQL hands back 1.50 for an input of 1.5.
-const BR671_PG_PRICE = Model("br671_pg_price",
+BR671_PG_PRICE::PormG.Models.ModelType = Model("br671_pg_price",
   id = IDField(), price = DecimalField(max_digits = 10, decimal_places = 2), label = CharField())
 BR671_PG_PRICE.connect_key = "br671_pg"
 

@@ -116,7 +116,7 @@ dev:
 module models
 import PormG.Models
 
-const Driver = Models.Model("drivers",
+Driver::Models.ModelType = Models.Model("drivers",
     driverid    = Models.IDField(),
     forename    = Models.CharField(max_length=50),
     surname     = Models.CharField(max_length=50),
@@ -124,20 +124,20 @@ const Driver = Models.Model("drivers",
     dob         = Models.DateField(null=true),
 )
 
-const Constructor = Models.Model("constructors",
+Constructor::Models.ModelType = Models.Model("constructors",
     constructorid = Models.IDField(),
     name          = Models.CharField(max_length=50),
     nationality   = Models.CharField(max_length=50),
 )
 
-const Race = Models.Model("races",
+Race::Models.ModelType = Models.Model("races",
     raceid = Models.IDField(),
     name   = Models.CharField(max_length=255),
     year   = Models.IntegerField(),
     date   = Models.DateField(),
 )
 
-const Result = Models.Model("results",
+Result::Models.ModelType = Models.Model("results",
     resultid      = Models.IDField(),
     raceid        = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
     driverid      = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),

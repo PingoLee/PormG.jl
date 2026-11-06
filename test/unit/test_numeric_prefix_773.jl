@@ -24,7 +24,7 @@ import PormG.QueryBuilder: validate_field_data, bulk_insert, bulk_update
 struct Mock773Postgres <: PormG.PormGPostgres end
 PormG.config["mock773"] = PormG.Configuration.Settings(connections = Mock773Postgres(), change_data = true, db_def_folder = "mock773")
 
-const Lap773 = Models.Model_Type(
+const Lap773 = Models.ModelType(
     name = "fu_lap773",
     fields = PormG.OrderedCollections.OrderedDict(
         "id"       => Models.IDField(),

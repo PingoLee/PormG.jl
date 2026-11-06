@@ -51,7 +51,7 @@ function PormG.backend_execute_async(::UsageMockPg1238, conn, sql::String, param
   throw(UsageReached1238())
 end
 
-const USAGE1238_RESULT = Model("usage1238_result",
+USAGE1238_RESULT::PormG.Models.ModelType = Model("usage1238_result",
   resultid = IDField(), grid = IntegerField(), points = FloatField())
 USAGE1238_RESULT.connect_key = "usage1238_pg"
 

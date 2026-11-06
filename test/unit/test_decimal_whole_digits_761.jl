@@ -27,7 +27,7 @@ PormG.config["mock761"] = PormG.Configuration.Settings(connections = Mock761Post
 
 # `amount` is NUMERIC(5, 2): 3 whole digits and 2 fractional. `rate` is NUMERIC(2, 2): no whole
 # digit at all, which is where a counted leading zero shows.
-const Invoice761 = Models.Model_Type(
+const Invoice761 = Models.ModelType(
     name = "fu_invoice",
     fields = PormG.OrderedCollections.OrderedDict(
         "id"     => Models.IDField(),

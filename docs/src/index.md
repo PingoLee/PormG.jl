@@ -145,7 +145,7 @@ Create `db/models.jl` with your model definitions.
 module models
 import PormG.Models
 
-const Driver = Models.Model("drivers",
+Driver::Models.ModelType = Models.Model("drivers",
     driverid    = Models.IDField(),
     forename    = Models.CharField(max_length=50),
     surname     = Models.CharField(max_length=50),
@@ -153,14 +153,14 @@ const Driver = Models.Model("drivers",
     dob         = Models.DateField(null=true),
 )
 
-const Circuit = Models.Model("circuits",
+Circuit::Models.ModelType = Models.Model("circuits",
     circuitid   = Models.IDField(),
     name        = Models.CharField(max_length=100),
     location    = Models.CharField(max_length=100),
     country     = Models.CharField(max_length=100),
 )
 
-const Race = Models.Model("races",
+Race::Models.ModelType = Models.Model("races",
     raceid      = Models.IDField(),
     name        = Models.CharField(max_length=255),
     year        = Models.IntegerField(),
@@ -168,13 +168,13 @@ const Race = Models.Model("races",
     circuitid   = Models.ForeignKey(Circuit, pk_field="circuitid", on_delete="CASCADE"),
 )
 
-const Constructor = Models.Model("constructors",
+Constructor::Models.ModelType = Models.Model("constructors",
     constructorid = Models.IDField(),
     name          = Models.CharField(max_length=50),
     nationality   = Models.CharField(max_length=50),
 )
 
-const Result = Models.Model("results",
+Result::Models.ModelType = Models.Model("results",
     resultid      = Models.IDField(),
     raceid        = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
     driverid      = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),

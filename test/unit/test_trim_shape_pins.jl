@@ -266,6 +266,22 @@ struct _TspStandInPool <: PormG.PormGSQLite end
     @test Configuration._resolve_postgres_driver("libpq"; source = "test") === :libpq
   end
 
+  # What: the pool's calls into code that may be defined later than the task making them (the SQLite
+  #   worker's `backend_execute`, a deferred or reaped `close`).
+  # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its
+  #   arguments and result and holds no dynamic call (the builtin is not one).
+  # Why: six call sites each carried their own copy of the world-age reason (#1609, I11). One owner
+  #   keeps the reason in one place, and the one place a trimmed build would change: `juliac --trim`
+  #   does not verify the `invokelatest` builtin (#1609's trim item, still open).
+  @testset "invokelatest has one owner in ConnectionPool.jl (#1609)" begin
+    path = joinpath(pkgdir(PormG), "src", "ConnectionPool.jl")
+    sites = [l for l in eachline(path) if occursin("invokelatest(", l) && !startswith(lstrip(l), "#")]
+    @test length(sites) == 1
+    @test occursin("_call_latest(", only(sites))
+    @test PormG.ConnectionPool._call_latest(+, 1, 2) === 3
+    @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

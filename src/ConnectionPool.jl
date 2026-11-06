@@ -681,6 +681,18 @@ _no_pool_error() = InvalidConfigurationError(
   return f(pool, args...)
 end
 
+# ── The latest world, for a task that outlives its own (#1609) ──────────────
+#
+# A task runs in the world age it was created in, so a long-lived one cannot see methods defined after
+# it started: a driver extension loaded later, a Revise reload, a unit test's mock handle. The SQLite
+# worker lives forever, and a deferred or reaped close can run long after the code that scheduled it.
+# Every call they make into code that may be redefined goes through here, so the reason is written
+# once. A static image has no later world, and `juliac --trim` does not verify the builtin: the #1622
+# probe's verifier flags this call ("trim verification not yet implemented for builtin
+# `Core.invokelatest`"), even on a concrete signature (#1609, still open). A trimmed build that needs a
+# direct call changes it here, in one place. `Vararg{Any,N}` so the tail is specialized.
+@inline _call_latest(f::F, args::Vararg{Any,N}) where {F,N} = Base.invokelatest(f, args...)
+
 # ── Direct-handoff wait (#124) ───────────────────────────────────────────────
 # Replaces acquire_connection's busy-poll. Instead of sleeping 100ms and rescanning, a task with
 # no available slot parks as a PoolWaiter; the next capacity-freeing op (release / discard) hands
@@ -1347,7 +1359,7 @@ function _reap_pool!(pool)
   # Close OUTSIDE the pool lock (a driver close can block on I/O), like `_discard_connection!`.
   for conn in to_close
     try
-      Base.invokelatest(close, conn)
+      _call_latest(close, conn)
     catch e
       @debug "Error closing reaped connection" exception=e
     end
@@ -2190,7 +2202,7 @@ function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
-    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
+    try; _call_latest(close, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
   end
   found && return true
   @warn "$(_backend_name(pool)) connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
@@ -2222,7 +2234,7 @@ function release_connection(pool::PormGSQLite, conn)
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
-    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
+    try; _call_latest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
   end
   found && return true
   @warn "SQLite Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
@@ -2375,11 +2387,9 @@ function _close_driver_handle!(pool::_SQLEngine, conn;
       # `_wait_settled` polls on its own Timer and never touches the driver, so a connection whose
       # work never drains costs a bounded wait rather than a wedged task.
       _wait_settled(() -> _sqlite_outstanding(conn) == 0, close_seconds)
-      # invokelatest, like `_recover_abandoned_connection!`'s deferred close: this task is created
-      # at one world age and may outlive the definition of the `close` method it needs (Revise, and
-      # the unit suite's mock handles).
+      # A deferred task: the latest world, see `_call_latest`.
       try
-        Base.invokelatest(close, conn)
+        _call_latest(close, conn)
       catch close_error
         @debug "Error closing a deferred SQLite handle" exception=close_error
       end
@@ -2844,11 +2854,9 @@ function _ensure_sqlite_async_worker!()
         # `backend_execute` returns: the worker is off the handle, and the `put!` below touches only
         # the response channel.
         response = try
-          # Dispatches into the SQLite extension's backend_execute (materialized + retry).
-          # invokelatest: this task lives forever and Julia tasks run in the world age
-          # they were created in, so without it the worker cannot see backend_execute
-          # methods defined after it spawned (Revise hot-reloads, test mocks).
-          SQLiteAsyncResponse(true, Base.invokelatest(backend_execute, item.pool, item.conn, item.sql, item.params))
+          # Dispatches into the SQLite extension's backend_execute (materialized + retry), in the
+          # latest world: this task lives forever (see `_call_latest`).
+          SQLiteAsyncResponse(true, _call_latest(backend_execute, item.pool, item.conn, item.sql, item.params))
         catch e
           SQLiteAsyncResponse(false, e)
         finally
@@ -3137,7 +3145,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
         if _discard_connection!(pool, conn; close_handle = false)
           _wait_settled(probe, close_seconds)
           try
-            Base.invokelatest(close, conn)
+            _call_latest(close, conn)
           catch close_failure
             @debug "Error closing an abandoned connection" exception=close_failure
           end

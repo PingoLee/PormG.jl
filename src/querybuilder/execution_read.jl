@@ -722,7 +722,7 @@ function _render_select(q::SQLObjectHandler;
   if q.object.distinct
     print(io, "DISTINCT ")
   end
-  print(io, _query_select(instruction.select, instruction.connection))
+  _query_select(io, instruction.select, instruction.connection)
   print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
   
   for j in instruction.join
@@ -1003,7 +1003,12 @@ _keeps_order(object::SQLObject, keep_values::Bool)::Bool = keep_values && _conta
 # `distinct()` probed past an offset skips the model's rows, as `count()` counts them (#1359): the base
 # table's columns, `DISTINCT "Tb".*`, since `1` repeats a row once per related row across a to-many join.
 function _exists_projection(object::SQLObject, instruction::SQLInstruction, keep::Bool)::String
-  keep && return string(object.distinct ? "DISTINCT " : "", _query_select(instruction.select, instruction.connection))
+  if keep
+    io = IOBuffer()
+    object.distinct && print(io, "DISTINCT ")
+    _query_select(io, instruction.select, instruction.connection)
+    return String(take!(io))
+  end
   object.distinct && object.offset > 0 && return "DISTINCT $(quote_identifier(instruction.alias, instruction.connection)).*"
   return "1"
 end

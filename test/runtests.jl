@@ -254,6 +254,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")
     @testset "ORDER BY Join Emission (#404)" include("unit/test_order_by_joins.jl")
+    @testset "_query_select prints into the caller's buffer (#1594)" include("unit/test_query_select_buffer_1594.jl")
     @testset "Typed Join Rows (#487)" include("unit/test_join_rows.jl")
     @testset "ORDER BY a values() Alias (#423)" include("unit/test_order_by_alias.jl")
     @testset "Aggregate/Window ORDER BY Term Not Grouped (#1115)" include("unit/test_order_by_aggregate_group.jl")

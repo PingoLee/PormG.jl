@@ -223,6 +223,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migrations applied_at Canonical Form (#570)" include("unit/test_migrations_applied_at.jl")
     @testset "Migration History Writes Bind Values (#846)" include("unit/test_migration_history_binding.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
+    @testset "Plain Model Binding Warning (#1664)" include("unit/test_plain_model_binding_warning.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "Connection-String Redaction (#649)" include("unit/test_redact_secret.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")

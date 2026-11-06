@@ -131,8 +131,10 @@ end
   compiler can rely on, so every `M.Race` your application writes starts with an untyped read: a
   dynamic call under the JIT, and an error row for every such call under `juliac --trim`. A
   `const` binding is typed. A file without `const` is still accepted and works the same, only
-  slower; `generate_models_from_db` and the Django importer write `const` (#1650). Hot reload
-  works over a `const` binding (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions)).
+  slower; `generate_models_from_db` and the Django importer write `const` (#1650). `set_models`
+  warns once per session when it registers a model bound by a plain global, naming the binding;
+  a typed global (`Race::Models.Model_Type = …`) is typed too and passes without a warning (#1664).
+  Hot reload works over a `const` binding (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions)).
 
 ## Composite Uniqueness (`unique_together`)
 

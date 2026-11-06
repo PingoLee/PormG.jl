@@ -1118,7 +1118,9 @@ end
 with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = "dev")`.
 
 Each model is bound with `const`, so `M.Race` is a typed read rather than a dynamic one (#1650). A
-module that binds its models without `const` is accepted and registered the same way.
+module that binds its models without `const` is accepted and registered the same way, with one
+warning, once per session, naming the first plain binding (#1664). A typed global
+(`Race::Models.Model_Type = …`) is not warned about.
 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
@@ -1179,6 +1181,57 @@ function set_models(_module::Module, path::String;
   return nothing
 end
 
+# #1664: the model bindings `set_models` has already reported as plain globals, keyed by the module
+# that OWNS the binding (an imported model is reported under its owner, where the fix belongs).
+# Process-wide, so a second registration of the same module — a reload, the self-heal — is silent
+# under any logger, including the fresh `TestLogger` every `@test_logs` block installs.
+const _REPORTED_PLAIN_BINDINGS = Set{Tuple{Module, Symbol}}()
+const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
+
+# #1664: warn when a model binding has no type the compiler can know — neither `const` nor a typed
+# global (`Race::Models.Model_Type = …`, #1663). Such a binding works, but every `M.Race` read is
+# untyped: a dynamic call under the JIT, an error under `juliac --trim`. The check runs here, at
+# registration, never on the query path.
+#
+# Cadence: one `@warn` per registration that finds bindings not reported before, naming the first
+# (in `names` order) and counting the rest, with `maxlog = 1`, so the console shows it once per
+# session however many models modules a process registers (the unit suite registers hundreds). The
+# seen set above is what keeps a re-registration silent under a logger whose `maxlog` count is fresh.
+#
+# `Core.get_binding_type` is not public in Julia 1.13 (`test_plain_model_binding_warning.jl` pins
+# it); it returns the declared type of a typed global and `Any` for a plain or `const` one, and like
+# `isconst` it follows an import to the owner's binding. Skipped while generating output: the SQLite
+# extension's precompile workload registers plain models on purpose, and a package's models are
+# registered again at run time (`_bind_if_loaded`, `_rebind_from_record`), where the author sees it.
+function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
+                                    bindings::IdDict{PormGModel, Symbol})::Nothing
+  ccall(:jl_generating_output, Cint, ()) == 0 || return nothing
+  plain = Tuple{Module, Symbol}[]
+  @lock _REPORTED_PLAIN_BINDINGS_LOCK begin
+    for model in models
+      binding = bindings[model]
+      owner = something(_binding_owner_or_nothing(_module, binding), _module)
+      isconst(owner, binding) && continue
+      Core.get_binding_type(owner, binding) === Any || continue
+      entry = (owner, binding)
+      (entry in _REPORTED_PLAIN_BINDINGS || entry in plain) && continue
+      push!(plain, entry)
+    end
+    union!(_REPORTED_PLAIN_BINDINGS, plain)
+  end
+  isempty(plain) && return nothing
+  owner, binding = plain[1]
+  more = length(plain) - 1
+  rest = more == 0 ? "" : more == 1 ? " 1 more model binding registered here is plain too." :
+         " $(more) more model bindings registered here are plain too."
+  @warn("PormG: `$(owner).$(binding)` is a plain global, so every `$(owner).$(binding)` read is " *
+        "untyped (a dynamic call under the JIT, an error under `juliac --trim`); bind it with " *
+        "`const $(binding) = Models.Model(…)`.$(rest) This warning is shown once per session. See " *
+        "`upgrade_guide(from = v\"0.9\")` → \"The generated models file binds each model with " *
+        "`const`; a file without `const` still loads (#1650)\".", maxlog = 1)
+  return nothing
+end
+
 # The half of `set_models` after the key is decided: record the module, then bind and wire every
 # model in it to `connect_key`. Split out (#1227) so `ensure_model_initialized` can rebind a module
 # to the key `__pormg_binding__` recorded without resolving the folder again — resolving is a scan
@@ -1187,6 +1240,7 @@ function _register_models!(_module::Module, path::String, connect_key::String)::
   # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
   # from a model — `name` is validated lowercase (#300) — so it is captured here or it is lost.
   models, bindings = _collect_models_and_bindings(_module)
+  _warn_plain_model_bindings(_module, models, bindings)
 
   # Register for lazy loading / self-healing
   REGISTERED_MODULES[_module] = path

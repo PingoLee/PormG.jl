@@ -202,7 +202,8 @@ end
         # Through the real `set_models`, as `@import_models`'s `__init__` reaches it.
         scratch = Module(:ScratchLoadRoot857)
         Core.eval(scratch, :(import PormG.Models))
-        Core.eval(scratch, :(Driver857 = Models.Model("driver857", id = Models.IDField())))
+        # `const`: a plain binding would add #1664's warning to the warn-free log asserted below.
+        Core.eval(scratch, :(const Driver857 = Models.Model("driver857", id = Models.IDField())))
         @test_logs(min_level = Logging.Warn,
                    Base.invokelatest(PormG.Models.set_models, scratch, imported))
         @test Base.invokelatest(getfield, scratch, :Driver857).connect_key == "db"

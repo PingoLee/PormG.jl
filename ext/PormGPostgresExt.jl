@@ -886,52 +886,19 @@ end
 # Out-of-band, on its own socket, safe while another task is inside `execute`. Never `isopen(conn)`
 # here: it takes the connection lock the running statement holds.
 #
-# A statement interrupted while it reads its result has a closed socket and a server that may still be
-# running it (#1577). Postgres.jl closes the socket when an interrupt lands in its read loop, and
-# `cancel_query!` then refuses ("connection not open"). PostgreSQL does not notice the closed client
-# until it next writes to it, so a `pg_sleep` or an autocommit UPDATE runs on and commits. The
-# interrupt lands there whenever the statement's task is the one parked on thread 1, which is the
-# interactive thread under plain `julia`, `-t N` and `-t auto`: a statement awaited by the main task
-# or the REPL. PostgreSQL's cancel needs no open socket (it is a separate connection carrying the
-# backend's pid and secret key, which the connection keeps after closing), so the cancel is then sent
-# by key. The key cannot reach another statement: the backend's client is gone, so it runs nothing new,
-# and the connection never takes a new key, because PormG refuses Postgres.jl's `reconnect` (see
-# `_checked_params`), which would reassign `socket`, `pid` and `skey` in place. Relaxing that refusal
-# makes reading the key here unsafe.
+# Since Postgres.jl 2.6 (JuliaDatabases/Postgres.jl#45) `cancel_query!` also cancels after an interrupt
+# closed the socket inside the driver's read (#1577): the request carries only the backend's pid and
+# secret key, which the connection keeps. That key is only ever this statement's, because PormG refuses
+# `reconnect` (`_checked_params`), which would open a new session under the same handle.
 #
 # Two callers reach it: the detached abandoned-await recovery, and a transaction's cleanup when its
 # `ROLLBACK` after an interrupt found the socket closed (#1588, `_cancel_abandoned_statement!`), which
-# sends it before the slot is renewed.
+# sends it before the slot is renewed. Never throws: the driver raises when the cancel is not delivered.
 function PormG.backend_cancel_query!(pool::_Pool, conn::Postgres.Connection)
   try
     Postgres.cancel_query!(conn)
   catch e
-    closed = try
-      !isopen(conn.socket)
-    catch
-      false
-    end
-    closed ? _cancel_by_key(conn) : @debug("PostgreSQL refused the cancel request", exception = e)
-  end
-  return nothing
-end
-
-# `Postgres.cancel_query!` without its open-socket check. The TLS and GSSAPI policy is the driver's own
-# (`cancel_sslmode`, `cancel_gssencmode`): the cancel key is a credential, so the cancel connection is
-# encrypted as the connection it cancels was. Every name and field here is pinned in
-# `test/unit/test_driver_internals.jl`. Never throws: its callers are a detached recovery task and a
-# transaction's cleanup while the transaction's error propagates.
-function _cancel_by_key(conn::Postgres.Connection)
-  try
-    transport = conn.socket.transport
-    sslmode = Postgres.cancel_sslmode(transport isa Postgres.Reseau.TLS.Conn, conn.sslmode)
-    gssencmode = Postgres.cancel_gssencmode(transport isa Postgres.API.GSSConn, conn.gssencmode)
-    delivered = Postgres.API.cancel_request(conn.host, conn.port, conn.pid, conn.skey, conn.debug, sslmode,
-      conn.sslrootcert, conn.sslcert, conn.sslkey, conn.sslcapath, conn.sslservername, conn.connect_timeout,
-      gssencmode, conn.krbsrvname, conn.gssdelegation, conn.style)
-    delivered || @debug "PostgreSQL did not accept the cancel request sent by key"
-  catch e
-    @debug "Sending the cancel request by key failed" exception = e
+    @debug "PostgreSQL refused the cancel request" exception = e
   end
   return nothing
 end

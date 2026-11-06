@@ -228,11 +228,20 @@ end
 #          retry could apply an autocommit write twice. Measured before narrowing: this PormG
 #          resolves with LibPQ 1.18.0 and MySQL 2.2.0 or 2.2.1, and an add pinned to MySQL 2.1.0 no
 #          longer resolves.
+#          Then "2.2" -> "2.2.2" (#1648). Below 2.2.2 MySQL.jl's reaper task caught around its
+#          timer `wait`, so a Ctrl-C that Julia threw into it (the task that last parked on thread 1)
+#          ended the reaper and was dropped: the statement ran to its end and PormG never sent
+#          `KILL QUERY` (#1520). 2.2.2 (JuliaDatabases/MySQL.jl#255) lets the interrupt leave the
+#          reaper and runs the reaper on the default pool, so with an interactive thread (`-t 2,1`)
+#          it reaches the awaiting task. Checked end to end on MySQL 8.4: 2.2.2 raised and killed the
+#          statement in 4 of 4 rounds, 2.2.1 ran it to its end. Measured before narrowing: this PormG
+#          resolves with LibPQ 1.18.0 and MySQL 2.2.2, and an add pinned to MySQL 2.2.1 no longer
+#          resolves.
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the
 # six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.2.2
-# or MySQL below 2.2.0 fails the matching assertion here.
+# or MySQL below 2.2.2 fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Measured floors that PormG cannot go below (#574)" begin
   # Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
@@ -264,7 +273,7 @@ end
     ("Aqua", v"0.8.14"),
     ("PrecompileTools", v"1.2.0"),
     ("Postgres", v"2.2.2"),
-    ("MySQL", v"2.2.0"),
+    ("MySQL", v"2.2.2"),
   )
     entry = _compat_entry(name)
     @test entry !== nothing

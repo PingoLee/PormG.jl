@@ -28,8 +28,10 @@ statement now runs again on a renewed connection, where it used to raise `Operat
 warning "it may already have run".
 
 The `[compat]` bound for MySQL.jl rises from `"2"` to `"2.2"`, since below 2.2.0 a 2006 can be a
-statement that ran. A caret bound in your own `Project.toml` (`MySQL = "2"`, `"2.1"`) already admits
-2.2, so it needs no change; only something that holds MySQL.jl below 2.2 does.
+statement that ran. The same release raises it again, to `"2.2.2"`, for the `Ctrl+C` fix
+(`2026-11-05-1520-mysql-ctrl-c-raises.md`). A caret bound in your own `Project.toml` (`MySQL = "2"`,
+`"2.1"`) already admits 2.2.2, so it needs no change; only something that holds MySQL.jl below 2.2.2
+does.
 
 | call | before | now |
 |---|---|---|
@@ -38,7 +40,7 @@ statement that ran. A caret bound in your own `Project.toml` (`MySQL = "2"`, `"2
 | MySQL: an `INSERT` whose connection is killed while it runs | `OperationalError` (2013), not retried | unchanged |
 | MySQL: a statement inside `atomic` / `run_in_transaction` when the connection is lost | `OperationalError` | unchanged: never retried |
 | an environment that holds MySQL.jl at 2.0.x or 2.1.x (`Pkg.pin`, `MySQL = "~2.1"`, `"=2.1.0"`), plus this PormG | resolves | `Pkg` cannot resolve it |
-| an environment with a caret bound, `MySQL = "2"` or `"2.1"`, plus this PormG | resolves | resolves, on MySQL.jl 2.2 or newer |
+| an environment with a caret bound, `MySQL = "2"` or `"2.1"`, plus this PormG | resolves | resolves, on MySQL.jl 2.2.2 or newer |
 
 ### Who this affects
 

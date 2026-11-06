@@ -2544,7 +2544,9 @@ key would still be right afterwards, since a Postgres.jl renewal opens a new `Co
 the old one's key alone, but the order keeps that from mattering. On the other drivers it is the
 ordinary best-effort cancel: LibPQ's has no cancel handle once libpq dropped the socket, and MySQL's
 `KILL QUERY` (sent by the connection's id, which MySQL.jl keeps after an interrupt closed its
-socket) stops a statement the server is still running for a client that left. Never throws: the
+socket) stops a statement the server is still running for a client that left. A `KILL QUERY` that
+arrives after the statement ended does no harm: MySQL discards one that reaches an idle session, and
+the cleanup statement after it runs (checked live on MySQL 8.4.11, #1651). Never throws: the
 lifecycle's original error is propagating.
 """
 function _cancel_abandoned_statement!(pool::_SQLEngine, conn)

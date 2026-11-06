@@ -600,6 +600,26 @@ function _binding_owner_or_nothing(modules::Module, name::Symbol)::Union{Module,
   end
 end
 
+# #1671: the name under which `owner` binds `model`. An import can rename the model
+# (`import .Owner: Circuit as Track`), so the importer's `binding` may not exist in `owner`. Fast path:
+# `owner` holds the model under the same name. Otherwise the owned name whose value is this model, the
+# first in `names` order if `owner` binds it twice. Public calls only: the binding-partition API names
+# just the immediate hop of a chained import, and it is not public. `invokelatest` for the world-age
+# reason `_collect_models_and_bindings` gives. Returns `nothing` when no owned name holds the model.
+function _owner_binding_name(owner::Module, binding::Symbol, model::PormGModel)::Union{Symbol,Nothing}
+  _owner_holds(owner, binding, model) && return binding
+  for name in names(owner; all = true)
+    _owner_holds(owner, name, model) && return name
+  end
+  return nothing
+end
+
+function _owner_holds(owner::Module, name::Symbol, model::PormGModel)::Bool
+  _binding_owner_or_nothing(owner, name) === owner || return false
+  Base.invokelatest(isdefinedglobal, owner, name)::Bool || return false
+  return Base.invokelatest(getglobal, owner, name) === model
+end
+
 """
 Returns a vector containing all the models defined in the given module.
 
@@ -1216,8 +1236,12 @@ const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
 # seen set above is what keeps a re-registration silent under a logger whose `maxlog` count is fresh.
 #
 # `Core.get_binding_type` is not public in Julia 1.13 (`test_plain_model_binding_warning.jl` pins
-# it); it returns the declared type of a typed global and `Any` for a plain or `const` one, and like
-# `isconst` it follows an import to the owner's binding. Skipped while generating output: the SQLite
+# it); it returns the declared type of a typed global and `Any` for a plain or `const` one. Both it and
+# `isconst` are asked of `_module`, the module that has the name: there they follow an import, renamed
+# or chained, to the owner's binding. Asked of the owner under the importer's name, they read a binding
+# that a renamed import (`import .Owner: Circuit as Track`) does not have, and a `const` model was
+# reported as the plain global `Owner.Track` (#1671). The report names the owner's own binding
+# (`_owner_binding_name`), the line to fix. Skipped while generating output: the SQLite
 # extension's precompile workload registers plain models on purpose, and a package's models are
 # registered again at run time (`_bind_if_loaded`, `_rebind_from_record`), where the author sees it.
 function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
@@ -1227,10 +1251,11 @@ function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
   @lock _REPORTED_PLAIN_BINDINGS_LOCK begin
     for model in models
       binding = bindings[model]
+      isconst(_module, binding) && continue
+      Core.get_binding_type(_module, binding) === Any || continue
       owner = something(_binding_owner_or_nothing(_module, binding), _module)
-      isconst(owner, binding) && continue
-      Core.get_binding_type(owner, binding) === Any || continue
-      entry = (owner, binding)
+      owner_name = owner === _module ? binding : _owner_binding_name(owner, binding, model)
+      entry = owner_name === nothing ? (_module, binding) : (owner, owner_name)
       (entry in _REPORTED_PLAIN_BINDINGS || entry in plain) && continue
       push!(plain, entry)
     end

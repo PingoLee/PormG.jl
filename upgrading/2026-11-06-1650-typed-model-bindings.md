@@ -59,11 +59,13 @@ switching the file. Every reload after that is an assignment.
 ### How to find the calls to migrate
 
 ```
-grep -nE "^\s*(const\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*Models\.Model\(" db/*.jl
+grep -nE "^[[:space:]]*(const[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*((PormG\.)?Models\.)?Model\(" db/*.jl
 ```
 
 Run it on every models folder the application loads. It finds plain and `const` bindings, at the
-start of a line or indented inside the module body. A line it does not report is already typed.
+start of a line or indented inside the module body, in the three spellings of the call:
+`Models.Model(`, `PormG.Models.Model(` and a bare `Model(` after `using PormG.Models`. A line it
+does not report is already typed.
 
 ### Migrate your app
 
@@ -99,10 +101,15 @@ Race::Models.ModelType = Models.Model(
 end
 ```
 
-One `sed` does it for plain and `const` bindings (review the diff before committing):
+One `sed` does it for plain and `const` bindings written `Models.Model(` or `PormG.Models.Model(`,
+keeping the spelling (review the diff before committing):
 
 ```
-sed -i -E 's/^(\s*)(const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*Models\.Model\(/\1\3::Models.ModelType = Models.Model(/' db/models.jl
+sed -i -E 's/^([[:space:]]*)(const[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*((PormG\.)?Models\.)Model\(/\1\3::\4ModelType = \4Model(/' db/models.jl
 ```
+
+GNU sed takes `-i` as written; BSD and macOS sed take `-i ''`. A binding written with a bare
+`Model(` is edited by hand: `Race::ModelType = Model(…)` once `ModelType` is imported beside
+`Model` (`using PormG.Models: Model, ModelType`), or `Race::PormG.Models.ModelType = Model(…)`.
 
 Then restart any session that has the file loaded.

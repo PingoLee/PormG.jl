@@ -115,7 +115,7 @@ _iv_block(content, binding) = match(Regex("(?ms)^$(binding)::Models\\.ModelType 
     content = read(outfile, String)
     @test occursin("Driver_points::Models.ModelType = Models.Model(", content)
     @test !occursin("senna_results", content)
-    @test !occursin("Result::Models.ModelType = Models.Model(", content)
+    @test !occursin(r"(const )?Result(::Models\.ModelType)? = Models\.Model\(", content)
 
     PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_views = true,
                                                ignore_schema = ["senna_"])
@@ -190,7 +190,7 @@ end
     @test occursin("Driver::Models.ModelType = Models.Model(\"driver\"", content)
     @test occursin("Driver_points::Models.ModelType = Models.Model(\"driver_points\"", content)
     @test occursin("# PormG: a view could not be read, so it is not imported — stale_stops: ", content)
-    @test !occursin("Stale_stops::Models.ModelType = Models.Model(", content)
+    @test !occursin(r"(const )?Stale_stops(::Models\.ModelType)? = Models\.Model\(", content)
 
     # The reader reports it through `unreadable`, and warns.
     unreadable = String[]

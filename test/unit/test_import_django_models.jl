@@ -188,7 +188,7 @@ class SupportedThing(models.Model):
         # somewhere the importer cannot see — which is equally the shape of a real model and of a
         # helper. It is still not emitted as a table, but dropping it in silence is how a genuine
         # model disappears without a trace, so it now says so (#370).
-        @test !occursin("ProxyUser::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?ProxyUser(::Models\.ModelType)? = Models\.Model", generated)
         @test occursin("# PormG: class 'ProxyUser' inherits 'CustomUser'", generated)
         @test occursin("declares no field of its own", generated)
     finally
@@ -367,7 +367,7 @@ class Lap_note(TimeStampedModel):
     try
         @test occursin("Lap_log::Models.ModelType = Models.Model(", gated)
         @test occursin("sectors = Models.ArrayField(Models.IntegerField())", gated)
-        @test !occursin("Lap_note::Models.ModelType = Models.Model(", gated)
+        @test !occursin(r"(const )?Lap_note(::Models\.ModelType)? = Models\.Model\(", gated)
     finally
         cleanup_import_test!(key5, existed5)
     end
@@ -2038,7 +2038,7 @@ end
 
         # The abstract base emits no TABLE. It is named in the file — in the marker explaining that
         # its `db_table` is not inherited — so the assertion is on the declaration, not the word.
-        @test !occursin("Auditavel::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?Auditavel(::Models\.ModelType)? = Models\.Model\(", generated)
         @test !occursin("Models.Model(\"auditavel\"", generated)
 
         # Its columns reach EVERY child — Matricula, Ocorrencia and SoDocstring. A count rather than
@@ -2129,8 +2129,8 @@ end
         generated = read(generated_path, String)
 
         # Neither child is declared...
-        @test !occursin("Pedido::Models.ModelType = Models.Model(", generated)
-        @test !occursin("ServidorAtivo::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?Pedido(::Models\.ModelType)? = Models\.Model\(", generated)
+        @test !occursin(r"(const )?ServidorAtivo(::Models\.ModelType)? = Models\.Model\(", generated)
         # ...nor do the MTI child's own fields leak into any other model.
         @test !occursin("desconto", generated)
 
@@ -2202,7 +2202,7 @@ end
         # A module-level enum is skipped in silence. Note this is carried by the field gate above,
         # not by `_NON_MODEL_BASES` — a TextChoices declares no field-shaped members either way.
         # The blacklist's own coverage comes from `PlainHelper(object)`, which DOES declare a field.
-        @test !occursin("Source::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?Source(::Models\.ModelType)? = Models\.Model\(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -2238,7 +2238,7 @@ end
 
         # The mixin itself is not a table, and contributes nothing — matching Django, which only
         # collects fields from bases that carry `_meta`.
-        @test !occursin("ExportMixin::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?ExportMixin(::Models\.ModelType)? = Models\.Model\(", generated)
         @test !occursin("to_csv", generated)
 
         # A class this file DEFINES outranks the non-model name list. `Manager` is a perfectly good
@@ -2805,7 +2805,7 @@ end
         # ...and no marker claims the base's enum is missing.
         @test !occursin("`Estado`, which this file does not define", generated)
         # The abstract base itself emits no table.
-        @test !occursin("Auditavel::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?Auditavel(::Models\.ModelType)? = Models\.Model\(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

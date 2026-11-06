@@ -1074,7 +1074,7 @@ class ImportBatch(TimeStampedModel):
         # ...and the marker that used to send the reader in a circle is gone.
         @test !occursin("not defined in", generated)
         # The abstract base itself still emits no table of its own.
-        @test !occursin("TimeStampedModel::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?TimeStampedModel(::Models\.ModelType)? = Models\.Model", generated)
         @test occursin("\nImportBatch::Models.ModelType = Models.Model(db_table = \"imports_importbatch\"", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -1113,7 +1113,7 @@ class Pedido(Venda):
                                                         output_file = "crossapp_mti.jl")
     try
         @test occursin("Django multi-table inheritance", generated2)
-        @test !occursin("Pedido::Models.ModelType = Models.Model", generated2)
+        @test !occursin(r"(const )?Pedido(::Models\.ModelType)? = Models\.Model", generated2)
     finally
         cleanup_project_test!(config_key3, existed3)
     end
@@ -1274,7 +1274,7 @@ class Thing(models.Model):
         @test !occursin("'BaseProxy' is not in the imported app set", generated)
         # The proxy itself is still not emitted — it has no table to declare.
         @test occursin("is a Django proxy", generated)
-        @test !occursin("BaseProxy::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?BaseProxy(::Models\.ModelType)? = Models\.Model", generated)
 
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
@@ -2477,7 +2477,7 @@ class _thing(models.Model):
         # The ONLY class in the project has nothing to collide with, so it keeps its derived binding.
         # It used to app-qualify itself to `Racing__thing` for nothing.
         @test occursin("_thing::Models.ModelType = Models.Model(\"thing\", db_table = \"racing__thing\"", generated)
-        @test !occursin("Racing__thing::Models.ModelType = Models.Model(", generated)
+        @test !occursin(r"(const )?Racing__thing(::Models\.ModelType)? = Models\.Model\(", generated)
 
         # The table is Django's either way — this one is about not inventing a rename, so assert the
         # binding survived rather than only that the table is right.
@@ -3417,7 +3417,7 @@ class Pedido(Venda):
                                                 output_file = "gate_mti.jl")
     try
         @test occursin("Django multi-table inheritance", generated2)
-        @test !occursin("Pedido::Models.ModelType = Models.Model", generated2)
+        @test !occursin(r"(const )?Pedido(::Models\.ModelType)? = Models\.Model", generated2)
     finally
         cleanup_project_test!(key2, existed2)
     end
@@ -3523,7 +3523,7 @@ class Foo(Bar):
         @test occursin("a = Models.IntegerField()", generated)
         # Both `core` classes are abstract, so neither emits a table of its own.
         @test !occursin("core_foo", generated)
-        @test !occursin("Bar::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?Bar(::Models\.ModelType)? = Models\.Model", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -3753,7 +3753,7 @@ class Real(models.Model):
     generated, key, existed = import_project(["app" => src]; output_file = "silent_drop.jl")
     try
         @test occursin("Real::Models.ModelType = Models.Model(", generated)
-        @test !occursin("Perfil::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?Perfil(::Models\.ModelType)? = Models\.Model", generated)
         # `app.`, not bare — this import carries an app label, so the marker names the class
         # app-qualified like every other report (#371). The BASE stays verbatim: it is quoted from
         # the source, not the class being reported on.
@@ -4458,7 +4458,7 @@ class Real(models.Model):
         # ...and a base with no import line at all says exactly that instead.
         @test occursin("# PormG: class 'app.Perfil' inherits 'CustomUser', which nothing in this " *
                        "import defines and this models.py does not import", generated)
-        @test !occursin("Perfil::Models.ModelType = Models.Model", generated)
+        @test !occursin(r"(const )?Perfil(::Models\.ModelType)? = Models\.Model", generated)
     finally
         cleanup_project_test!(key, existed)
     end

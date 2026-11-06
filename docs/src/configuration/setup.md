@@ -19,6 +19,12 @@ PormG.setup("db_bs")
 ### What Setup Does
 - Creates the configuration folder (e.g., `db/` or `db_bs/`).
 - Generates a template `connection.yml` with `dev`, `test`, and `prod` sections.
+- For a PostgreSQL adapter, asks which driver opens the connections: LibPQ (the default) or
+  Postgres (Postgres.jl). The driver you type is written as `postgres_driver:` into each section.
+  An empty answer writes no key, so the file is the same as before the question existed and the
+  driver is chosen when the file is loaded (`PORMG_POSTGRES_DRIVER`, then LibPQ). See
+  [Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver) for what each
+  choice costs.
 - Creates a **customizable models file** (e.g., `models.jl` or `my_models.jl`) with the correct module boilerplate.
 - Optionally installs AI-assisted developer skills (`pormg-usage`) into the project, under
   `.github/skills/` and `.claude/skills/`. The prompt names the folder it will write to.

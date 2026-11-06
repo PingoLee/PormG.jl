@@ -522,11 +522,12 @@ end
   @test count(!, pool.available) == 0
 end
 
-@testset "with_read_retry: a retry sleeps `backoff` and logs the error with its count (#1148)" begin
+@testset "with_read_retry: a retry sleeps `backoff` and logs the error with its count (#1148, #1675)" begin
   # What: one codeless drop under `backoff = 0.2`, with the log captured. Expected: the call takes at
-  # least the backoff, and the retry's warn carries the `OperationalError` as `exception`, `retry = 1`
-  # and `attempts = 1`. Why: the structured fields are what a log pipeline keys on, and a backoff that
-  # never sleeps hammers the database the moment it is struggling.
+  # least the backoff, and the retry's warn carries the error's type as `error`, its SQLSTATE, its
+  # `error_message` as `msg`, `retry = 1` and `attempts = 1` — and no `exception` (#1675). Why: the
+  # structured fields are what a log pipeline keys on, and a backoff that never sleeps hammers the
+  # database the moment it is struggling.
   pool = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1)
   logger = Test.TestLogger(; min_level = Base.CoreLogging.Warn)
   elapsed = Base.CoreLogging.with_logger(logger) do
@@ -538,7 +539,62 @@ end
   retry_logs = filter(r -> occursin(READ_RETRIED_1148, string(r.message)), logger.logs)
   @test length(retry_logs) == 1
   rec = only(retry_logs)
-  @test rec.kwargs[:exception] isa PormG.OperationalError
+  @test rec.kwargs[:error] === :OperationalError
+  @test rec.kwargs[:sqlstate] === nothing                 # a codeless drop carries none
+  @test rec.kwargs[:msg] isa String && !isempty(rec.kwargs[:msg])
+  @test !haskey(rec.kwargs, :exception)
   @test rec.kwargs[:retry] == 1
   @test rec.kwargs[:attempts] == 1
+end
+
+# A unique marker in the driver's text, where a real driver puts the value it refused (#1675).
+const SECRET1675 = "s3cr3t1675"
+
+# Every keyword value of a record, rendered as a sink could: `string` for a plain value, and for an
+# exception its `showerror` plus — recursively — its `.cause`, which a structured sink that walks the
+# object's fields reaches even though `showerror(::DatabaseError)` never prints it (#987).
+function _rendered1675(v)
+  v isa Exception || return string(v)
+  s = sprint(showerror, v)
+  hasproperty(v, :cause) && (s *= " " * _rendered1675(getproperty(v, :cause)))
+  return s
+end
+
+@testset "with_read_retry: the retry warning carries the error's type and message, never its cause (#1675)" begin
+  # What: the first run raises an `OperationalError` whose driver cause quotes a marker (a refused
+  # value, as a PostgreSQL DETAIL does); the second run reads through the mock pool. Expected: the
+  # block's second result is returned, and the one retry warning carries `error = :OperationalError`,
+  # the SQLSTATE, `msg == error_message(err)`, `retry` and `attempts`, no `exception` key, no value
+  # that is an exception, and the marker nowhere in any rendering of the record. Why: `exception = e`
+  # handed every log sink the live error, whose `.cause` can quote the statement's values (#984), so a
+  # host library that logs only a value-free view of an error could not wrap its reads in the helper.
+  # Restoring `exception = e` fails the `haskey`, the `isa Exception` and the marker assertions.
+  pool = MockPGPool1042(1)
+  err = PormG.OperationalError("PostgreSQL",
+    ErrorException("ERROR:  deadlock detected\nDETAIL:  Key (code)=($(SECRET1675)) is locked");
+    sqlstate = "40P01", message = "deadlock detected")         # the primary message, as the funnel reads it (#987)
+  runs = 0
+  logs, result = Test.collect_test_logs(; min_level = Base.CoreLogging.Warn) do
+    with_read_retry() do
+      runs += 1
+      runs == 1 && throw(err)
+      CP.fetch(pool, SELECT_1148)
+    end
+  end
+  @test runs == 2
+  @test result == NamedTuple[]                            # the second run's rows reach the caller
+  rec = only(filter(r -> occursin(READ_RETRIED_1148, string(r.message)), logs))
+  @test rec.level == Base.CoreLogging.Warn
+  kw = Dict(rec.kwargs)
+  @test kw[:error] === :OperationalError
+  @test kw[:sqlstate] == "40P01"
+  @test kw[:msg] == PormG.error_message(err)
+  @test occursin("deadlock detected", kw[:msg])            # the reason is still in the record
+  @test kw[:retry] == 1 && kw[:attempts] == 1
+  @test !haskey(kw, :exception)
+  @test !any(v -> v isa Exception, values(kw))
+  text = join((string(k, "=", _rendered1675(v)) for (k, v) in kw), " ")
+  @test !occursin(SECRET1675, text)
+  # The marker is still one hop away for a caller that catches the error and logs it to a trusted sink.
+  @test occursin(SECRET1675, _rendered1675(err))
 end

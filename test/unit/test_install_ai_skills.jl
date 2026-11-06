@@ -490,3 +490,162 @@ end
         @test occursin("Configuration saved successfully", out)            # the wizard finished
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# setup: a PostgreSQL adapter is asked for its driver (#1676)
+# What it tests: after the port, a PostgreSQL setup asks `PostgreSQL driver (LibPQ or Postgres)`.
+#   A typed answer (any case) writes its package's spelling as `postgres_driver:` into the dev, prod
+#   and test blocks, and the driver `load` reads from that file (`_peek_driver`, what `load` asks
+#   before it builds a pool) is that driver — `LibPQ` included, so `PORMG_POSTGRES_DRIVER` cannot
+#   override a typed choice. An empty answer or end of input writes no key, and the file is
+#   byte-identical to the writer's output without one, also when the variable is set (the prompt
+#   then says the variable decides). An unknown answer prints the text `_resolve_postgres_driver`
+#   raises and asks again. An SQLite adapter is not asked.
+# Why it matters: Postgres.jl is a supported driver (#1072), and the only ways to choose it were
+#   editing the file by hand or the environment variable, so a scaffold built on `setup` had nothing
+#   to read; and a file written by taking the default must not change. Hermetic: `setup` only writes
+#   files. The end-of-input case takes every later default too, the AI skills prompt's `Y` included,
+#   so it installs them into its temporary project.
+# PostgreSQL, f1, localhost, f1_user, f1_pass, 5432, <driver answer>, UTC, models.jl, no skills.
+_pg1676(driver_answer) = "1\nf1\n\nf1_user\nf1_pass\n\n" * driver_answer * "\n\n\nn\n"
+
+# The file the writer produces with setup's answers and no driver: what a LibPQ app's file must equal.
+function _pg1676_reference()
+    mktempdir() do ref
+        PormG.Generator.create_db_folder_and_yml(path = ref, adapter = "PostgreSQL", database = "f1",
+            host = "localhost", username = "f1_user", password = "f1_pass", port = 5432, time_zone = "UTC")
+        read(joinpath(ref, "connection.yml"), String)
+    end
+end
+
+const _PG1676_PROMPT = "PostgreSQL driver (LibPQ or Postgres) [Default: LibPQ]: "
+
+@testset "setup writes postgres_driver: Postgres when Postgres is chosen (#1676)" begin
+    for answer in ("Postgres", "postgres", " POSTGRES ")
+        mktempdir() do project
+            _, out = _ai1294_setup(_pg1676(answer), "db"; root = project)
+            yml = joinpath(project, "db", "connection.yml")
+            text = read(yml, String)
+            @test count("\n  postgres_driver: Postgres\n", text) == 3        # dev, prod and test
+            for env in ("dev", "prod", "test")
+                @test PormG.Configuration._peek_driver(yml, env) === :postgres
+            end
+            @test count(_PG1676_PROMPT, out) == 1
+            # The help line names what each choice costs.
+            @test occursin("LibPQ (the default) is needed for `passfile`", out)
+            @test occursin("Postgres (Postgres.jl, pure Julia)", out)
+            # The only difference from a LibPQ file is the three key lines.
+            @test replace(text, "  postgres_driver: Postgres\n" => "") == _pg1676_reference()
+        end
+    end
+end
+
+@testset "setup writes no postgres_driver key for an empty answer, whatever PORMG_POSTGRES_DRIVER says (#1676)" begin
+    reference = _pg1676_reference()
+    for env_value in (nothing, "Postgres")
+        mktempdir() do project
+            _, out = withenv("PORMG_POSTGRES_DRIVER" => env_value) do
+                _ai1294_setup(_pg1676(""), "db"; root = project)
+            end
+            yml = joinpath(project, "db", "connection.yml")
+            @test read(yml, String) == reference                       # byte-identical, no key
+            # Without the key the variable still decides at load time, and the prompt says so when set.
+            withenv("PORMG_POSTGRES_DRIVER" => env_value) do
+                @test PormG.Configuration._peek_driver(yml, "dev") === (env_value === nothing ? :libpq : :postgres)
+            end
+            @test occursin("PORMG_POSTGRES_DRIVER is set", out) == (env_value !== nothing)
+        end
+    end
+end
+
+@testset "setup writes postgres_driver: LibPQ when LibPQ is typed, so the variable cannot override it (#1676)" begin
+    for answer in ("LibPQ", "libpq")
+        mktempdir() do project
+            withenv("PORMG_POSTGRES_DRIVER" => "Postgres") do
+                _ai1294_setup(_pg1676(answer), "db"; root = project)
+            end
+            yml = joinpath(project, "db", "connection.yml")
+            text = read(yml, String)
+            @test count("\n  postgres_driver: LibPQ\n", text) == 3          # the package's spelling
+            @test replace(text, "  postgres_driver: LibPQ\n" => "") == _pg1676_reference()
+            withenv("PORMG_POSTGRES_DRIVER" => "Postgres") do
+                for env in ("dev", "prod", "test")
+                    @test PormG.Configuration._peek_driver(yml, env) === :libpq   # the typed choice holds
+                end
+            end
+        end
+    end
+end
+
+@testset "setup asks again for a PostgreSQL driver it does not know, with the resolver's text (#1676)" begin
+    expected = try
+        PormG.Configuration._resolve_postgres_driver("pgx"; source = "setup")
+        ""
+    catch e
+        PormG.error_message(e)
+    end
+    @test occursin("`postgres_driver` must be one of LibPQ or Postgres", expected)
+    mktempdir() do project
+        # PostgreSQL, f1, localhost, f1_user, f1_pass, 5432, `pgx` (refused), `Postgres`, UTC, models.jl, no skills.
+        _, out = _ai1294_setup("1\nf1\n\nf1_user\nf1_pass\n\npgx\nPostgres\n\n\nn\n", "db"; root = project)
+        @test count(_PG1676_PROMPT, out) == 2                          # asked again
+        @test occursin(expected, out)                                  # with the resolver's own text
+        @test count("\n  postgres_driver: Postgres\n", read(joinpath(project, "db", "connection.yml"), String)) == 3
+        @test occursin("Configuration saved successfully", out)
+    end
+end
+
+@testset "setup at end of input takes the default driver and finishes (#1676)" begin
+    # The non-interactive path: `setup` takes every answer from stdin, and at end of input `readline`
+    # returns "", the default. A script that stops after the database name gets a LibPQ file.
+    mktempdir() do project
+        _, out = _ai1294_setup("1\nf1\n", "db"; root = project)
+        text = read(joinpath(project, "db", "connection.yml"), String)
+        @test !occursin("postgres_driver", text)
+        @test occursin("  database: f1\n", text)
+        @test count(_PG1676_PROMPT, out) == 1
+        @test occursin("Configuration saved successfully", out)
+    end
+end
+
+@testset "setup does not ask an SQLite adapter for a PostgreSQL driver (#1676)" begin
+    mktempdir() do project
+        _, out = _ai1294_setup(_AI1294_SQLITE_DEFAULTS * "n\n", "db"; root = project)
+        @test !occursin("PostgreSQL driver", out)
+        @test !occursin("postgres_driver", read(joinpath(project, "db", "connection.yml"), String))
+    end
+end
+
+@testset "create_db_folder_and_yml refuses postgres_driver for a non-PostgreSQL adapter (#1676)" begin
+    for adapter in ("SQLite", "MySQL")
+        mktempdir() do dir
+            folder = joinpath(dir, "db")
+            @test_throws PormG.InvalidConfigurationError PormG.Generator.create_db_folder_and_yml(
+                path = folder, adapter = adapter, postgres_driver = "Postgres")
+            @test !isdir(folder)                                       # refused before anything is written
+        end
+    end
+end
+
+@testset "create_db_folder_and_yml checks postgres_driver as load does and writes its canonical spelling (#1676)" begin
+    # What: an unknown driver, an empty one, and a lowercase one, through the writer directly (a
+    # scaffold calls it without `setup`). Expected: the unknown one raises the resolver's own refusal,
+    # the empty one is refused (handed to the resolver it would read PORMG_POSTGRES_DRIVER, and write
+    # the shell's choice), neither writes a file; `postgres` is written as `Postgres`. Why: a file the
+    # writer accepts must be one `load` accepts.
+    refusal(f) = try f(); nothing catch e; e end
+    mktempdir() do dir
+        folder = joinpath(dir, "db")
+        e = refusal(() -> PormG.Generator.create_db_folder_and_yml(path = folder, postgres_driver = "pgx"))
+        @test e isa PormG.InvalidConfigurationError
+        @test occursin("`postgres_driver` must be one of LibPQ or Postgres", PormG.error_message(e))
+        e = withenv("PORMG_POSTGRES_DRIVER" => "Postgres") do
+            refusal(() -> PormG.Generator.create_db_folder_and_yml(path = folder, postgres_driver = " "))
+        end
+        @test e isa PormG.InvalidConfigurationError
+        @test occursin("`postgres_driver` is empty", PormG.error_message(e))
+        @test !isdir(folder)
+        PormG.Generator.create_db_folder_and_yml(path = folder, database = "f1", postgres_driver = "postgres")
+        @test count("\n  postgres_driver: Postgres\n", read(joinpath(folder, "connection.yml"), String)) == 3
+    end
+end

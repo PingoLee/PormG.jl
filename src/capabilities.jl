@@ -157,6 +157,27 @@ _feature_since(::Type{<:PormGPostgres}, ::Val{:drop_expression}) = 130_000      
 _feature_since(::Type{<:PormGPostgres}, ::Val{:input_validity}) = 160_000          # 16 (#828)
 _feature_since(::Type{<:PormGMySQL}, ::Val{:supported_server}) = 80_400            # MySQL 8.4 (#1264)
 
+# #1682 (#1599 row 14): the table looked a feature up as `_has_feature(T, Val(feature))`, with `feature` a
+# run-time Symbol. `Val` of a value inference does not know names no method, so every lookup was a
+# dynamic call, and a verifier row under `juliac --trim`. These two are the closed dispatch over the
+# feature set: one `feature === :x` arm per entry of `_FEATURE_NAMES`, each calling the table's own
+# `Val{:x}` method, generated once here. The `Val` methods above stay the table. `::Type{T} where T` so
+# each backend type gets its own specialization and its arms resolve.
+_unknown_feature(feature::Symbol) = throw(InvalidValueError("unknown backend feature `$(feature)`"))
+let has_arms = [:(feature === $(QuoteNode(f)) && return _has_feature(T, Val{$(QuoteNode(f))}()))
+                for f in _FEATURE_NAMES],
+    since_arms = [:(feature === $(QuoteNode(f)) && return _feature_since(T, Val{$(QuoteNode(f))}()))
+                  for f in _FEATURE_NAMES]
+  @eval function _has_feature(::Type{T}, feature::Symbol)::Bool where {T<:PormGBackend}
+    $(has_arms...)
+    _unknown_feature(feature)
+  end
+  @eval function _feature_since(::Type{T}, feature::Symbol)::Union{Int, Nothing} where {T<:PormGBackend}
+    $(since_arms...)
+    _unknown_feature(feature)
+  end
+end
+
 """
     _server_version(conn) -> Int
 
@@ -199,10 +220,10 @@ _version_at_hand(conn::PormGBackend, v::Integer)::String = _version_at_hand(type
 Whether backend type `T` has `feature` at `server_version`: the table's answer for a known version,
 with no connection to ask. `_supports` is this with the version asked of the connection.
 """
-function _feature_at(T::Type{<:PormGBackend}, feature::Symbol, server_version::Integer)::Bool
+function _feature_at(::Type{T}, feature::Symbol, server_version::Integer)::Bool where {T<:PormGBackend}
   feature in _FEATURE_NAMES || throw(InvalidValueError("unknown backend feature `$(feature)`"))
-  _has_feature(T, Val(feature)) || return false
-  since = _feature_since(T, Val(feature))
+  _has_feature(T, feature) || return false
+  since = _feature_since(T, feature)
   return since === nothing || server_version >= since
 end
 
@@ -216,8 +237,8 @@ feature name is a programming error and throws.
 function _supports(conn::PormGBackend, feature::Symbol; server_version::Union{Integer, Nothing} = nothing)::Bool
   feature in _FEATURE_NAMES || throw(InvalidValueError("unknown backend feature `$(feature)`"))
   T = typeof(conn)
-  _has_feature(T, Val(feature)) || return false
-  _feature_since(T, Val(feature)) === nothing && return true
+  _has_feature(T, feature) || return false
+  _feature_since(T, feature) === nothing && return true
   return _feature_at(T, feature, (server_version === nothing ? _server_version(conn) : server_version))
 end
 
@@ -240,7 +261,9 @@ _engine_key(::PormGPostgres) = :postgres
 _engine_key(::PormGSQLite) = :sqlite
 _engine_key(::PormGMySQL) = :mysql
 # The engines that have `feature`, by name — what a refusal offers instead.
-_supporting_backends(feature::Symbol) = [name for (name, T) in _BACKENDS if _has_feature(T, Val(feature))]
+# `map` over the tuple, not a comprehension: each backend's type is a constant in its own call.
+_supporting_backends(feature::Symbol) =
+  String[name for name in map(p -> _has_feature(last(p), feature) ? first(p) : "", _BACKENDS) if !isempty(name)]
 
 """
     _capability_error(conn, feature, what; why = nothing, server_version = nothing) -> BackendCapabilityError
@@ -256,9 +279,9 @@ function _capability_error(conn, feature::Symbol, what::AbstractString;
                            why::Union{AbstractString,Nothing} = nothing,
                            server_version::Union{Integer,Nothing} = nothing)::BackendCapabilityError
   backend = _backend_name(conn)
-  if conn isa PormGBackend && _has_feature(typeof(conn), Val(feature))
+  if conn isa PormGBackend && _has_feature(typeof(conn), feature)
     T = typeof(conn)
-    since = _feature_since(T, Val(feature))
+    since = _feature_since(T, feature)
     v = since === nothing ? nothing : (server_version === nothing ? _server_version(conn) : server_version)
     if v !== nothing && v < since
       msg = "$(what) needs $(backend) $(_version_text(T, since)) or newer, for $(_feature_description(feature)); " *
@@ -286,7 +309,7 @@ Throws `_capability_error(...)` unless `conn` has `feature` — at its server's 
 function _require_feature(conn::PormGBackend, feature::Symbol, what::AbstractString;
                           why = nothing, server_version::Union{Integer,Nothing} = nothing)::Nothing
   v = server_version
-  if v === nothing && _has_feature(typeof(conn), Val(feature)) && _feature_since(typeof(conn), Val(feature)) !== nothing
+  if v === nothing && _has_feature(typeof(conn), feature) && _feature_since(typeof(conn), feature) !== nothing
     v = _server_version(conn)   # asked once, for the check and the message
   end
   _supports(conn, feature; server_version = v) ? nothing :

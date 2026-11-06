@@ -282,6 +282,28 @@ struct _TspStandInPool <: PormG.PormGSQLite end
     @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
   end
 
+  # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
+  #   `_feature_since(T, ::Symbol)`, and its callers `_supports` and `_supporting_backends`.
+  # Expected: the same answer as the table's `Val` method for every feature on every backend; an
+  #   unknown name raises `InvalidValueError`; no dynamic call in the lookup or in `_supports` on a
+  #   concrete pool.
+  # Why: the callers built `Val(feature)` from a run-time Symbol, which names no method: a dynamic
+  #   call per lookup, 10 verifier rows in #1600's round 3 (row 14, #1682).
+  @testset "the capability lookup is a closed dispatch (#1682, row 14)" begin
+    K = PormG.Kernel
+    for T in (PormG.PormGPostgres, PormG.PormGSQLite, PormG.PormGMySQL, PormG.ConnectionPool.SQLiteConnectionPool),
+        f in K._FEATURE_NAMES
+      @test K._has_feature(T, f) === K._has_feature(T, Val(f))
+      @test K._feature_since(T, f) === K._feature_since(T, Val(f))
+    end
+    @test_throws PormG.InvalidValueError K._has_feature(PormG.PormGSQLite, :no_such_feature)
+    @test_throws PormG.InvalidValueError K._feature_since(PormG.PormGSQLite, :no_such_feature)
+    @test K._supporting_backends(:arrays) == ["PostgreSQL"]
+    @test isempty(_dynamic_calls(K._has_feature, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
+    @test isempty(_dynamic_calls(K._feature_since, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
+    @test isempty(_dynamic_calls_kw(K._supports, (PormG.ConnectionPool.SQLiteConnectionPool, Symbol)))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.
